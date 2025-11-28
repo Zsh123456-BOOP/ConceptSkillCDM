@@ -1,0 +1,21 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.class
+
+# 虚拟环境 (防止把几百兆的库传上去)
+xph_env/
+env/
+venv/
+.env
+
+# IDE 配置
+.idea/
+.vscode/
+
+# 运行日志
+logs/
+*.log
+
+# ⚠️ 数据文件 (如果不希望上传 csv 数据，请保留下面这行；如果需要上传，请删除)
+# data/

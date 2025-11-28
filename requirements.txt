@@ -1,0 +1,5 @@
+torch>=1.12
+numpy
+pandas
+scikit-learn
+torchmetrics>=0.11
