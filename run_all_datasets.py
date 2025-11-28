@@ -1,18 +1,67 @@
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 import time
 
 from gpu_utils import get_gpu_memory_map
 
-# 固定的数据集列表
-DATASETS = ["assist_09", "assist_17", "junyi", "sample"]
-
-# 可选的按数据集追加的命令行参数（当前为空）
-DATASET_EXTRA_ARGS = {
-    # "junyi": ["--batch_size", "4096", "--epochs", "80"],
+# 全局默认超参（可被 DATASET_CONFIGS 覆盖），覆盖范围等同于 main.py 的常用配置
+GLOBAL_DEFAULTS = {
+    "batch_size": 1024,
+    "epochs": 100,
+    "patience": 10,
+    "lr": 1e-3,
+    "weight_decay": 1e-5,
+    "num_workers": 0,
+    "dim_student": 64,
+    "dim_item": 64,
+    "dim_concept": 64,
+    "num_heads": 4,
+    "graph_dropout": 0.1,
+    "graph_topk": 32,
+    "gnn_layers": 2,
+    "gnn_hidden_dim": 64,
+    "skill_dim": 8,
+    "tau": 0.5,
+    "agg_type": "softmin",
+    "lambda_graph_sparse": 1e-4,
+    "lambda_graph_sym": 1e-4,
+    "lambda_graph_dag": 1e-5,
+    "lambda_graph_trans": 1e-4,
+    "lambda_de_orth": 1e-3,
+    "lambda_de_mi": 1e-3,
 }
+
+# 按数据集指定超参，便于调参与复现；未列出的参数走 GLOBAL_DEFAULTS
+DATASET_CONFIGS = {
+    "assist_09": {
+        "batch_size": 512,
+        "gnn_hidden_dim": 128,
+        "graph_dropout": 0.2,
+    },
+    "assist_17": {
+        "batch_size": 128,
+        "gnn_hidden_dim": 128,
+        "graph_dropout": 0.2,
+    },
+    "junyi": {
+        "batch_size": 4096,
+        "gnn_hidden_dim": 256,
+        "graph_dropout": 0.2,
+    },
+    "sample": {
+        "batch_size": 2048,
+        "epochs": 60,
+        "patience": 8,
+        "gnn_hidden_dim": 128,
+        "graph_dropout": 0.2,
+    },
+}
+
+# 默认跑的顺序（需在 DATASET_CONFIGS 中有条目）
+DATASETS = list(DATASET_CONFIGS.keys())
 
 
 def get_balanced_gpu(running_procs, candidates, memory_threshold=2000):
@@ -49,18 +98,23 @@ def get_balanced_gpu(running_procs, candidates, memory_threshold=2000):
     return best_gpu
 
 
-def launch_dataset(dataset_name, gpu_id, base_python=sys.executable, seed=888):
+def launch_dataset(dataset_name, gpu_id, base_python=sys.executable, seed=888, extra_args=None):
     """
     Launch main.py for a given dataset on a specific GPU via CUDA_VISIBLE_DEVICES.
     """
-    cmd = [
-        base_python,
-        "main.py",
-        "--dataset", dataset_name,
-        "--seed", str(seed),
-    ]
-    extra = DATASET_EXTRA_ARGS.get(dataset_name, [])
-    cmd.extend(extra)
+    cmd = [base_python, "main.py", "--dataset", dataset_name, "--seed", str(seed)]
+
+    # 合并全局默认与数据集特定超参
+    cfg = dict(GLOBAL_DEFAULTS)
+    cfg.update(DATASET_CONFIGS.get(dataset_name, {}))
+
+    # 将配置映射为命令行参数
+    for k, v in cfg.items():
+        cmd.extend([f"--{k}", str(v)])
+
+    # 额外命令行片段（可用于临时调参）
+    if extra_args:
+        cmd.extend(extra_args)
 
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
@@ -90,6 +144,14 @@ def main():
         "--seed", type=int, default=888,
         help="Seed passed to each main.py run."
     )
+    parser.add_argument(
+        "--cooldown", type=int, default=10,
+        help="Seconds to wait after launching a job to avoid GPU spikes."
+    )
+    parser.add_argument(
+        "--extra_args", type=str, default="",
+        help='额外传递给 main.py 的参数片段，例如 "--dim_student 128 --dim_item 128"'
+    )
     args = parser.parse_args()
 
     # 确定允许使用的 GPU 列表
@@ -116,7 +178,8 @@ def main():
 
     running_procs = []
     todo = list(DATASETS)
-    COOLDOWN_SECONDS = 10
+    COOLDOWN_SECONDS = args.cooldown
+    extra_args_list = shlex.split(args.extra_args) if args.extra_args else []
 
     while todo or running_procs:
         # 清理已完成的子进程
@@ -137,7 +200,7 @@ def main():
                 break
 
             todo.pop(0)
-            proc = launch_dataset(current_ds, best_gpu, seed=args.seed)
+            proc = launch_dataset(current_ds, best_gpu, seed=args.seed, extra_args=extra_args_list)
             running_procs.append((proc, current_ds, best_gpu))
             time.sleep(COOLDOWN_SECONDS)
 
