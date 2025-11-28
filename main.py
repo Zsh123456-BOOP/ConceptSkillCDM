@@ -67,6 +67,7 @@ def save_results(config, metrics, trainer: Trainer, filepath: str = None):
         "dim_item": config.dim_item,
         "dim_concept": config.dim_concept,
         "num_heads": config.num_heads,
+        "head_role_assign": getattr(config, "head_role_assign", None),
         "graph_dropout": config.graph_dropout,
         "graph_topk": config.graph_topk,
         "gnn_layers": config.gnn_layers,
