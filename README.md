@@ -57,8 +57,10 @@ python main.py --dataset assist_17 --seed 42
 python main.py --dataset junyi     --seed 42
 python main.py --dataset sample    --seed 42   # junyi 的小规模子集快速调试
 
-# Run all four (默认 assist_09, assist_17, junyi, sample，跳过 junyi copy)
+# Run all four并行调度（默认 assist_09, assist_17, junyi, sample，跳过 junyi copy）
 python run_all_datasets.py
+# 或指定可用卡和并行上限
+python run_all_datasets.py --gpus 0,1,2,3 --max_jobs 3
 ```
 
 Logs include per-epoch train loss and valid AUC/ACC/RMSE, plus final best-model metrics on test. Saved checkpoints are written to `logs/{dataset}_best.pt`.
@@ -71,6 +73,14 @@ Logs include per-epoch train loss and valid AUC/ACC/RMSE, plus final best-model 
 ## Device Auto-Selection
 - 当 `--device auto`（默认，未传 device 时）时：如果检测到 CUDA，则调用 `gpu_utils.get_best_gpu()` 自动选择剩余显存最多的 GPU；否则自动退回 CPU。
 - 也可以显式指定：`--device cpu`、`--device cuda`、`--device cuda:1` 等。
+
+## Multi-GPU Scheduler
+- `run_all_datasets.py` 是一个多 GPU 任务调度脚本，会并行在多个 GPU 上跑 assist_09 / assist_17 / junyi / sample 四个数据集。
+- 通过 `CUDA_VISIBLE_DEVICES` 为每个子进程绑定 GPU，子进程内仍使用 main.py 的 `--device auto` 逻辑。
+- 示例：
+  - `python run_all_datasets.py`（使用所有可见 GPU，上限 3 并发）
+  - `python run_all_datasets.py --gpus 0,1 --max_jobs 2`
+  - `python run_all_datasets.py --memory_threshold 8000` 确保每块卡至少 8G 空闲再接新任务
 
 ## Target Performance Reference (for guidance)
 - Assist09: AUC ≈ 0.782 / ACC ≈ 0.744 / RMSE ≈ 0.415
