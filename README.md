@@ -51,14 +51,14 @@ conda create -n conceptskillcdm python=3.10
 conda activate conceptskillcdm
 pip install -r requirements.txt
 
-# Single dataset
-python main.py --dataset assist_09 --device auto --seed 42
-python main.py --dataset assist_17 --device auto --seed 42
-python main.py --dataset junyi     --device auto --seed 42
-python main.py --dataset sample    --device auto --seed 42   # junyi 的小规模子集快速调试
+# Single dataset（不传 device 默认使用 auto）
+python main.py --dataset assist_09 --seed 42
+python main.py --dataset assist_17 --seed 42
+python main.py --dataset junyi     --seed 42
+python main.py --dataset sample    --seed 42   # junyi 的小规模子集快速调试
 
 # Run all four (默认 assist_09, assist_17, junyi, sample，跳过 junyi copy)
-python run_all_datasets.py --device auto
+python run_all_datasets.py
 ```
 
 Logs include per-epoch train loss and valid AUC/ACC/RMSE, plus final best-model metrics on test. Saved checkpoints are written to `logs/{dataset}_best.pt`.
@@ -69,7 +69,7 @@ Logs include per-epoch train loss and valid AUC/ACC/RMSE, plus final best-model 
 - `junyi copy` 只是人工备份目录，任何脚本默认都不会使用；仅当你手动指定 `--dataset "junyi copy"` 时才会加载。
 
 ## Device Auto-Selection
-- 当 `--device auto`（默认）时：如果检测到 CUDA，则调用 `gpu_utils.get_best_gpu()` 自动选择剩余显存最多的 GPU；否则自动退回 CPU。
+- 当 `--device auto`（默认，未传 device 时）时：如果检测到 CUDA，则调用 `gpu_utils.get_best_gpu()` 自动选择剩余显存最多的 GPU；否则自动退回 CPU。
 - 也可以显式指定：`--device cpu`、`--device cuda`、`--device cuda:1` 等。
 
 ## Target Performance Reference (for guidance)
