@@ -95,7 +95,8 @@ def save_results(config, metrics, trainer: Trainer, filepath: str = None):
 def run_experiment(config):
     set_seed(config.seed)
     ensure_dir(config.log_dir)
-    logger = get_logger(config.log_dir, filename=f"{config.dataset}.log")
+    log_name = f"{config.dataset}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    logger = get_logger(config.log_dir, filename=log_name)
     device = resolve_device(config.device)
     config.device = str(device)
 
