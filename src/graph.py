@@ -3,7 +3,7 @@ import numpy as np
 
 def build_interaction_graph(triplets, num_students, num_exercises):
     """
-    Builds a single, unified interaction graph from all student-exercise interactions.
+    将所有学生-题目的交互构建成一张统一的二分图。
     """
     exer_offset = num_students
     
@@ -15,7 +15,7 @@ def build_interaction_graph(triplets, num_students, num_exercises):
     s_ids = triplets_arr[:, 0]
     e_ids = triplets_arr[:, 1] + exer_offset
     
-    # Create edges for the bipartite graph (student -> exercise and exercise -> student)
+    # 构建二分图的边（学生 -> 题目 以及 题目 -> 学生）
     src = np.concatenate([s_ids, e_ids])
     dst = np.concatenate([e_ids, s_ids])
     

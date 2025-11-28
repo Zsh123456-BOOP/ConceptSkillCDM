@@ -13,10 +13,10 @@ class MICritic(nn.Module):
 
     def forward(self, z_know: torch.Tensor, z_skill: torch.Tensor) -> torch.Tensor:
         """
-        Args:
+        参数:
             z_know: [batch, dim]
             z_skill: [batch, dim]
-        Returns:
+        返回:
             scores: [batch, batch]
         """
         B = z_know.size(0)
@@ -54,7 +54,7 @@ def disentangle_loss(
     critic: Optional[nn.Module] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Returns:
+    返回:
         L_de, L_orth, L_mi
     """
     if S_prop.size(0) == 0:
@@ -62,7 +62,7 @@ def disentangle_loss(
         zero = torch.tensor(0.0, device=device)
         return zero, zero, zero
     if z_know is None:
-        # Fallback: project to skill_dim by truncation or mean pooling.
+        # 兜底：通过截断或均值池化投影到 skill_dim。
         if S_prop.size(1) >= z_skill.size(1):
             z_know = S_prop[:, : z_skill.size(1)]
         else:
@@ -73,12 +73,12 @@ def disentangle_loss(
                 align_corners=False,
             ).squeeze(1)
 
-    # L_orth: encourage z_know and z_skill to be orthogonal (decorrelated)
+    # L_orth：鼓励 z_know 与 z_skill 正交（去相关）
     dot = torch.sum(z_know * z_skill, dim=1)
     L_orth = torch.mean(dot * dot)
 
-    # Approximate mutual information minimization via an InfoNCE-style loss:
-    # positive = diagonal pairs (same student), negatives = all mismatched pairs.
+    # 采用 InfoNCE 风格损失近似最小化互信息：
+    # positive = 对角（同一学生），negative = 其它配对。
     if critic is None:
         scores = torch.matmul(
             F.normalize(z_know, dim=-1),
@@ -92,7 +92,7 @@ def disentangle_loss(
     log_den = torch.logsumexp(scores, dim=1)
     L_mi = torch.mean(-(positive - log_den))
 
-    # L_de: total disentanglement loss; L_orth: orthogonality; L_mi: InfoNCE MI surrogate
+    # L_de：总解耦损失；L_orth：正交约束；L_mi：InfoNCE 风格的互信息替代
     L_de = config.lambda_de_orth * L_orth + config.lambda_de_mi * L_mi
     return L_de, L_orth, L_mi
 

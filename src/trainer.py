@@ -32,8 +32,10 @@ class Trainer:
         self.best_state = None
         self.best_valid_auc = -1.0
         self.best_epoch = 0
+        self.patience = getattr(config, "patience", 0)
 
     def train(self):
+        no_improve = 0
         for epoch in range(1, self.config.epochs + 1):
             start_time = time.time()
             train_stats = self._train_one_epoch()
@@ -62,6 +64,7 @@ class Trainer:
                 self.best_epoch = epoch
                 self.best_state = copy.deepcopy(self.model.state_dict())
                 torch.save(self.best_state, self.save_path)
+                no_improve = 0
 
                 if prev_best < 0:
                     self._log(f"*** New Best Valid AUC: {val_auc:.4f} (epoch={epoch}) ***")
@@ -69,6 +72,14 @@ class Trainer:
                     self._log(
                         f"*** New Best Valid AUC: {val_auc:.4f} (epoch={epoch}, prev={prev_best:.4f}) ***"
                     )
+            else:
+                no_improve += 1
+                if self.patience and self.patience > 0 and no_improve >= self.patience:
+                    self._log(
+                        f"Early stopping triggered: no AUC improvement for {no_improve} epochs "
+                        f"(patience={self.patience})."
+                    )
+                    break
 
         if self.best_state is not None:
             self.model.load_state_dict(self.best_state)

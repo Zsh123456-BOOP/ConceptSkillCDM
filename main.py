@@ -109,7 +109,7 @@ def run_experiment(config):
     trainer = Trainer(model, config, train_loader, valid_loader, test_loader, device, logger=logger)
     trainer.train()
 
-    # Evaluate on all splits with best checkpoint loaded
+    # 评估所有数据集划分（已加载最佳验证模型）
     train_metrics = trainer.evaluate(train_loader, split_name="train")
     valid_metrics = trainer.evaluate(valid_loader, split_name="valid")
     test_metrics = trainer.evaluate(test_loader, split_name="test")

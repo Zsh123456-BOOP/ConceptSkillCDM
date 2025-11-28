@@ -8,7 +8,7 @@ from torch.utils.data import Dataset, DataLoader
 
 class InteractionDataset(Dataset):
     """
-    A dataset of student-item interactions with associated concept sets.
+    学生-题目交互数据集，同时包含对应的概念集合。
     """
 
     def __init__(

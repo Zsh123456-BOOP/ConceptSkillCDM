@@ -9,19 +9,19 @@ ConceptSkillCDM/
 │   ├── assist_09/{train,valid,test}.csv
 │   ├── junyi/{train,valid,test}.csv
 │   └── assist_17/{train,valid,test}.csv
-├── logs/                  # logs and saved checkpoints
+├── logs/                  # 日志与模型保存
 ├── src/
-│   ├── config.py          # hyperparameters and CLI
-│   ├── dataset.py         # CSV loading and variable-length batching
-│   ├── graph_learner.py   # multi-head attention concept graph
-│   ├── gnn_layers.py      # concept propagation
-│   ├── model.py           # ConceptSkillCDM core model
-│   ├── losses.py          # BCE + graph regularizers + disentanglement
-│   ├── trainer.py         # train/validation/test loops
+│   ├── config.py          # 超参配置与 CLI
+│   ├── dataset.py         # CSV 读取与变长批处理
+│   ├── graph_learner.py   # 多头注意力构建概念图
+│   ├── gnn_layers.py      # 概念图传播
+│   ├── model.py           # ConceptSkillCDM 核心模型
+│   ├── losses.py          # BCE + 图正则 + 解耦损失
+│   ├── trainer.py         # 训练 / 验证 / 测试循环
 │   ├── metrics.py         # AUC / ACC / RMSE
-│   └── utils.py           # seeds, logging, device helpers
-├── main.py                # single-dataset training entry
-├── run_all_datasets.py    # run assist_09, assist_17, junyi, sample sequentially
+│   └── utils.py           # 随机种子、日志、设备工具
+├── main.py                # 单数据集训练入口
+├── run_all_datasets.py    # assist_09/assist_17/junyi/sample 的多卡调度脚本
 └── requirements.txt
 ```
 
@@ -51,13 +51,14 @@ conda create -n conceptskillcdm python=3.10
 conda activate conceptskillcdm
 pip install -r requirements.txt
 
-# Single dataset（不传 device 默认使用 auto）
+# 单数据集运行（不传 device 默认使用 auto）
 python main.py --dataset assist_09 --seed 42
 python main.py --dataset assist_17 --seed 42
 python main.py --dataset junyi     --seed 42
-python main.py --dataset sample    --seed 42   # junyi 的小规模子集快速调试
+# junyi 的小规模子集快速调试
+python main.py --dataset sample    --seed 42
 
-# Run all four并行调度（默认 assist_09, assist_17, junyi, sample，跳过 junyi copy）
+# 并行调度四个数据集（默认 assist_09, assist_17, junyi, sample，跳过 junyi copy）
 python run_all_datasets.py
 # 或指定可用卡和并行上限
 python run_all_datasets.py --gpus 0,1,2,3 --max_jobs 3

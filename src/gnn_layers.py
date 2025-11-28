@@ -10,10 +10,10 @@ class ConceptGNN(nn.Module):
 
     def forward(self, A_norm: torch.Tensor, S: torch.Tensor) -> torch.Tensor:
         """
-        Args:
-            A_norm: [num_concepts, num_concepts] normalized adjacency
-            S: [batch_size, num_concepts] initial knowledge states
-        Returns:
+        参数:
+            A_norm: [num_concepts, num_concepts] 归一化邻接矩阵
+            S: [batch_size, num_concepts] 初始知识状态
+        返回:
             S_prop: [batch_size, num_concepts]
         """
         S_l = S

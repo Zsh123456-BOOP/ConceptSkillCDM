@@ -14,7 +14,7 @@ class ConceptSkillCDM(nn.Module):
         self.config = config
         self.num_concepts = num_concepts
 
-        # Embeddings
+        # 各类嵌入
         self.student_emb = nn.Embedding(num_students, config.dim_student)
         self.item_emb = nn.Embedding(num_items, config.dim_item)
         self.concept_emb = nn.Embedding(num_concepts, config.dim_concept)
@@ -23,7 +23,7 @@ class ConceptSkillCDM(nn.Module):
         else:
             self.student_to_concept = nn.Identity()
 
-        # Graph learner
+        # 概念图学习器
         self.graph_learner = MultiHeadConceptGraphLearner(
             num_concepts=num_concepts,
             dim_concept=config.dim_concept,
@@ -33,10 +33,10 @@ class ConceptSkillCDM(nn.Module):
         self.head_types = self._init_head_types(config.num_heads)
         self.head_weights = nn.Parameter(torch.ones(config.num_heads))
 
-        # GNN propagation
+        # GNN 传播层
         self.gnn = ConceptGNN(num_layers=config.gnn_layers)
 
-        # Disentangled skill branch
+        # 解耦的技能分支
         self.skill_mlp = nn.Sequential(
             nn.Linear(config.dim_student, config.gnn_hidden_dim),
             nn.ReLU(),
@@ -44,7 +44,7 @@ class ConceptSkillCDM(nn.Module):
         )
         self.know_proj = nn.Linear(num_concepts, config.skill_dim)
 
-        # Guess/slip offset
+        # 猜测/失误偏置
         self.guess_slip_mlp = nn.Sequential(
             nn.Linear(config.skill_dim + config.dim_item, config.gnn_hidden_dim),
             nn.ReLU(),
@@ -102,8 +102,8 @@ class ConceptSkillCDM(nn.Module):
     def _aggregate_knowledge(
         self, S_prop: torch.Tensor, batch_concept_ids: torch.Tensor, concept_ptr: torch.Tensor
     ) -> torch.Tensor:
-        # Soft-min aggregation over concepts; if a sample has no concepts, knowledge score is 0.0
-        # (prediction then relies solely on the skill offset delta)
+        # 概念层面做 soft-min 聚合；若样本无概念则知识得分为 0.0
+        # （此时预测仅依赖技能偏置 delta）
         scores = []
         B = S_prop.size(0)
         for i in range(B):

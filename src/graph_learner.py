@@ -18,10 +18,10 @@ class MultiHeadConceptGraphLearner(nn.Module):
 
     def forward(self, concept_emb: torch.Tensor) -> List[torch.Tensor]:
         """
-        Args:
+        参数:
             concept_emb: [num_concepts, dim_concept]
-        Returns:
-            A_list: list of adjacency matrices per head, each [num_concepts, num_concepts]
+        返回:
+            A_list: 每个头对应的邻接矩阵列表，尺寸 [num_concepts, num_concepts]
         """
         A_list: List[torch.Tensor] = []
         for q_linear, k_linear in zip(self.q_linears, self.k_linears):
@@ -50,10 +50,10 @@ class MultiHeadConceptGraphLearner(nn.Module):
                 B = A * A
                 h_val = torch.trace(torch.matrix_exp(B)) - self.num_concepts
                 L_dag = L_dag + h_val * h_val
-        # Normalize scale to prevent explosion on large concept graphs
+        # 缩放以防概念数过大时正则项数值爆炸
         L_sparse = L_sparse / norm_factor
         L_sym = L_sym / norm_factor
-        # Optional mild scaling for DAG term to avoid overly large values on big graphs
+        # 对 DAG 项做轻微缩放，避免大图时数值过大
         L_dag = L_dag / max(N, 1)
 
         return {"sparse": L_sparse, "sym": L_sym, "dag": L_dag}

@@ -6,10 +6,10 @@ import time
 
 from gpu_utils import get_gpu_memory_map
 
-# Fixed dataset list
+# 固定的数据集列表
 DATASETS = ["assist_09", "assist_17", "junyi", "sample"]
 
-# Optional per-dataset extra CLI args (currently empty)
+# 可选的按数据集追加的命令行参数（当前为空）
 DATASET_EXTRA_ARGS = {
     # "junyi": ["--batch_size", "4096", "--epochs", "80"],
 }
@@ -17,8 +17,8 @@ DATASET_EXTRA_ARGS = {
 
 def get_balanced_gpu(running_procs, candidates, memory_threshold=2000):
     """
-    Choose a GPU based on current free memory and number of running jobs.
-    Returns best gpu_id or None if none meet the threshold.
+    根据当前空闲显存和正在运行的任务数选择一块 GPU。
+    返回最佳 gpu_id；若都不满足阈值则返回 None。
     """
     gpu_map = get_gpu_memory_map()
     if not gpu_map:
@@ -30,7 +30,7 @@ def get_balanced_gpu(running_procs, candidates, memory_threshold=2000):
             gpu_load[gpu_id] += 1
 
     best_gpu = None
-    best_score = (999, -1)  # (jobs, -free_mem)
+    best_score = (999, -1)  # (任务数, -空闲显存)
 
     print("🔍 Load Balancing Status:")
     for gpu_id in candidates:
@@ -92,7 +92,7 @@ def main():
     )
     args = parser.parse_args()
 
-    # Determine allowed GPUs
+    # 确定允许使用的 GPU 列表
     if args.gpus is None:
         try:
             import torch
@@ -119,14 +119,14 @@ def main():
     COOLDOWN_SECONDS = 10
 
     while todo or running_procs:
-        # Clean finished processes
+        # 清理已完成的子进程
         for p_info in running_procs[:]:
             proc, ds_name, gpu_id = p_info
             if proc.poll() is not None:
                 print(f"✅ Finished: {ds_name} on GPU {gpu_id}")
                 running_procs.remove(p_info)
 
-        # Launch new jobs if slots available
+        # 若有空闲槽位则启动新任务
         while len(running_procs) < max_concurrent and todo:
             current_ds = todo[0]
             req_mem = args.memory_threshold * 4 if current_ds in ("junyi", "sample") else args.memory_threshold

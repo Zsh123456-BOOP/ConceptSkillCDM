@@ -25,8 +25,8 @@ def get_gpu_memory_map():
             
         return gpu_memory
     except FileNotFoundError:
-        print("❌ Error: nvidia-smi not found. Assuming CPU only or manual assignment.")
-        return {0: 0} # Fallback
+        print("❌ 错误：未找到 nvidia-smi，假定当前仅有 CPU 或需手动指定。")
+        return {0: 0}  # 兜底返回
     except Exception as e:
         print(f"❌ Error reading GPU stats: {e}")
         return {}
@@ -41,14 +41,14 @@ def get_best_gpu(candidates=None, memory_threshold=2000):
     gpu_map = get_gpu_memory_map()
     
     if not gpu_map:
-        return 0 # Default fallback
+        return 0  # 默认兜底
     
     best_gpu = None
     max_free = -1
     
     # 筛选候选 GPU
     target_gpus = candidates if candidates is not None else list(gpu_map.keys())
-    
+
     # 打印当前状态供调试
     status_msg = " | ".join([f"GPU {k}: {v}MiB free" for k, v in gpu_map.items() if k in target_gpus])
     print(f"🔍 GPU Status: [{status_msg}]")
@@ -63,9 +63,9 @@ def get_best_gpu(candidates=None, memory_threshold=2000):
         if free_mem > max_free:
             max_free = free_mem
             best_gpu = gpu_id
-            
+
     if max_free < memory_threshold:
         print(f"⚠️ Warning: All candidate GPUs are busy (Max free: {max_free} MiB). Waiting might be needed.")
-        # 这里可以选择让外部循环继续等待，或者返回最不忙的那个
+        # 可以选择让外部循环等待，或返回当前显存最多的一张卡
     
     return best_gpu
