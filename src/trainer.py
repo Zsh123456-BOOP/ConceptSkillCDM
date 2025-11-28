@@ -49,8 +49,8 @@ class Trainer:
             self._log(
                 f"Epoch {epoch:02d} | T: {epoch_time:.1f}s | "
                 f"Train: Loss={train_stats['loss']:.4f} "
-                f"(BCE={train_stats['bce']:.4f}, Graph={train_stats['graph']:.4f}, "
-                f"De={train_stats['de']:.4f}, Orth={train_stats['orth']:.4f}, MI={train_stats['mi']:.4f})"
+                f"(BCE={train_stats['bce']:.4f}, Graph={train_stats['graph']:.6f}, "
+                f"De={train_stats['de']:.6f}, Orth={train_stats['orth']:.6f}, MI={train_stats['mi']:.4f})"
             )
             self._log(
                 f"[Valid] AUC={val_auc:.4f} | ACC={val_acc:.4f} | RMSE={val_rmse:.4f} | "

@@ -56,34 +56,30 @@ class MultiHeadConceptGraphLearner(nn.Module):
         L_contain = torch.tensor(0.0, device=A_list[0].device)
         L_confuse = torch.tensor(0.0, device=A_list[0].device)
         N = self.num_concepts
-        norm_factor = max(N * N, 1)
 
         for idx, A in enumerate(A_list):
-            L_sparse = L_sparse + torch.sum(torch.abs(A))
+            L_sparse = L_sparse + torch.mean(torch.abs(A))
             h_type = head_types[idx] if idx < len(head_types) else "other"
             if h_type == "similarity":
-                L_sym = L_sym + torch.norm(A - A.transpose(0, 1), p="fro") ** 2
+                L_sym = L_sym + torch.mean((A - A.transpose(0, 1)) ** 2)
             if h_type == "precedence":
                 B = A * A
                 h_val = torch.trace(torch.matrix_exp(B)) - self.num_concepts
                 L_dag = L_dag + h_val * h_val
                 # 传递性/层次性软约束：A@A 不应显著强于 A
                 trans_gap = torch.relu(torch.matmul(A, A) - A)
-                L_trans = L_trans + torch.sum(trans_gap * trans_gap) / norm_factor
+                L_trans = L_trans + torch.mean(trans_gap * trans_gap)
             if h_type == "contain":
                 # 近似包含：鼓励 A_ij 与 A_ik*A_kj 的一致性（传递闭包收缩）
                 closure = torch.matmul(A, A)
-                L_contain = L_contain + torch.sum((closure - A) * (closure - A)) / norm_factor
+                L_contain = L_contain + torch.mean((closure - A) * (closure - A))
             if h_type == "confuse":
                 # 混淆关系：鼓励对称且行/列接近均值，避免过于集中（类似均衡混淆）
-                sym_part = torch.norm(A - A.transpose(0, 1), p="fro") ** 2
+                sym_part = torch.mean((A - A.transpose(0, 1)) ** 2)
                 row_mean = A.mean(dim=1, keepdim=True)
                 col_mean = A.mean(dim=0, keepdim=True)
-                balance = torch.sum((A - row_mean) ** 2) + torch.sum((A - col_mean) ** 2)
-                L_confuse = L_confuse + sym_part / norm_factor + balance / norm_factor
-        # 缩放以防概念数过大时正则项数值爆炸
-        L_sparse = L_sparse / norm_factor
-        L_sym = L_sym / norm_factor
+                balance = torch.mean((A - row_mean) ** 2) + torch.mean((A - col_mean) ** 2)
+                L_confuse = L_confuse + sym_part + balance
         # 对 DAG 项做轻微缩放，避免大图时数值过大
         L_dag = L_dag / max(N, 1)
 

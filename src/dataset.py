@@ -146,7 +146,7 @@ def get_dataloaders(config):
     loader_kwargs = {
         "batch_size": config.batch_size,
         "num_workers": config.num_workers,
-        "pin_memory": False,
+        "pin_memory": True,
         "collate_fn": _collate_fn,
     }
 
