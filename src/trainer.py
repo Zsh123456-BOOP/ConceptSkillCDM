@@ -1,5 +1,6 @@
 import copy
 import os
+import time
 from typing import Dict, Tuple
 
 import torch
@@ -30,28 +31,57 @@ class Trainer:
         )
         self.best_state = None
         self.best_valid_auc = -1.0
+        self.best_epoch = 0
 
     def train(self):
         for epoch in range(1, self.config.epochs + 1):
+            start_time = time.time()
             train_stats = self._train_one_epoch()
+            epoch_time = time.time() - start_time
+
             val_metrics = self.evaluate(self.valid_loader, split_name="valid")
             val_auc = val_metrics["AUC"]
+            val_acc = val_metrics["ACC"]
+            val_rmse = val_metrics["RMSE"]
+
+            self._log(
+                f"Epoch {epoch:02d} | T: {epoch_time:.1f}s | "
+                f"Train: Loss={train_stats['loss']:.4f} "
+                f"(BCE={train_stats['bce']:.4f}, Graph={train_stats['graph']:.4f}, "
+                f"De={train_stats['de']:.4f}, Orth={train_stats['orth']:.4f}, MI={train_stats['mi']:.4f})"
+            )
+            self._log(
+                f"[Valid] AUC={val_auc:.4f} | ACC={val_acc:.4f} | RMSE={val_rmse:.4f} | "
+                f"Best AUC={(self.best_valid_auc if self.best_valid_auc >= 0 else float('nan')):.4f} "
+                f"(epoch={self.best_epoch if self.best_epoch > 0 else '-'})"
+            )
+
             if val_auc > self.best_valid_auc:
+                prev_best = self.best_valid_auc
                 self.best_valid_auc = val_auc
+                self.best_epoch = epoch
                 self.best_state = copy.deepcopy(self.model.state_dict())
                 torch.save(self.best_state, self.save_path)
-            self._log(
-                f"[Epoch {epoch}] TrainLoss={train_stats['loss']:.4f} "
-                f"(BCE={train_stats['bce']:.4f}, Graph={train_stats['graph']:.4f}, "
-                f"De={train_stats['de']:.4f}, Orth={train_stats['orth']:.4f}, MI={train_stats['mi']:.4f}) "
-                f"Valid AUC={val_metrics['AUC']:.4f} ACC={val_metrics['ACC']:.4f} RMSE={val_metrics['RMSE']:.4f}"
-            )
+
+                if prev_best < 0:
+                    self._log(f"*** New Best Valid AUC: {val_auc:.4f} (epoch={epoch}) ***")
+                else:
+                    self._log(
+                        f"*** New Best Valid AUC: {val_auc:.4f} (epoch={epoch}, prev={prev_best:.4f}) ***"
+                    )
 
         if self.best_state is not None:
             self.model.load_state_dict(self.best_state)
         test_metrics = self.evaluate(self.test_loader, split_name="test")
+        test_auc = test_metrics["AUC"]
+        test_acc = test_metrics["ACC"]
+        test_rmse = test_metrics["RMSE"]
         self._log(
-            f"[Test] AUC={test_metrics['AUC']:.4f} ACC={test_metrics['ACC']:.4f} RMSE={test_metrics['RMSE']:.4f}"
+            f"[Test] AUC={test_auc:.4f} | ACC={test_acc:.4f} | RMSE={test_rmse:.4f}"
+        )
+        self._log(
+            f"[Summary] Best Valid AUC={self.best_valid_auc:.4f} at epoch={self.best_epoch}; "
+            f"Final Test AUC={test_auc:.4f}, ACC={test_acc:.4f}, RMSE={test_rmse:.4f}"
         )
         return test_metrics
 
@@ -59,6 +89,7 @@ class Trainer:
         self.model.train()
         total_loss = 0.0
         total_bce = total_graph = total_de = total_orth = total_mi = 0.0
+        num_batches = 0
         for batch in self.train_loader:
             batch = self._to_device(batch)
             labels = batch["labels"]
@@ -83,8 +114,9 @@ class Trainer:
             total_de += L_de.item()
             total_orth += L_orth.item()
             total_mi += L_mi.item()
-        denom = max(len(self.train_loader), 1)
-        stats = {
+            num_batches += 1
+        denom = max(num_batches, 1)
+        return {
             "loss": total_loss / denom,
             "bce": total_bce / denom,
             "graph": total_graph / denom,
@@ -92,8 +124,6 @@ class Trainer:
             "orth": total_orth / denom,
             "mi": total_mi / denom,
         }
-        self.last_train_stats = stats
-        return stats
 
     def evaluate(self, loader, split_name: str = "valid") -> Dict[str, float]:
         self.model.eval()
