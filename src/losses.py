@@ -42,6 +42,7 @@ def graph_loss(
         config.lambda_graph_sparse * reg["sparse"]
         + config.lambda_graph_sym * reg["sym"]
         + config.lambda_graph_dag * reg["dag"]
+        + config.lambda_graph_trans * reg.get("trans", 0.0)
     )
     return L_graph, reg
 

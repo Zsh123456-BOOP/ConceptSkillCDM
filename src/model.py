@@ -29,6 +29,7 @@ class ConceptSkillCDM(nn.Module):
             dim_concept=config.dim_concept,
             num_heads=config.num_heads,
             graph_dropout=config.graph_dropout,
+            graph_topk=config.graph_topk,
         )
         self.head_types = self._init_head_types(config.num_heads)
         self.head_weights = nn.Parameter(torch.ones(config.num_heads))
@@ -48,10 +49,12 @@ class ConceptSkillCDM(nn.Module):
         self.guess_slip_mlp = nn.Sequential(
             nn.Linear(config.skill_dim + config.dim_item, config.gnn_hidden_dim),
             nn.ReLU(),
-            nn.Linear(config.gnn_hidden_dim, 1),
         )
+        self.guess_head = nn.Linear(config.gnn_hidden_dim, 1)
+        self.slip_head = nn.Linear(config.gnn_hidden_dim, 1)
 
         self.tau = config.tau
+        self.agg_type = getattr(config, "agg_type", "softmin")
 
     @staticmethod
     def _init_head_types(num_heads: int) -> List[str]:
@@ -89,7 +92,10 @@ class ConceptSkillCDM(nn.Module):
         z_know = self.know_proj(S_prop)
 
         score_knowledge = self._aggregate_knowledge(S_prop, batch_concept_ids, concept_ptr)
-        delta = self.guess_slip_mlp(torch.cat([z_skill, e_item], dim=-1)).squeeze(-1)
+        feat_gs = self.guess_slip_mlp(torch.cat([z_skill, e_item], dim=-1))
+        guess = torch.sigmoid(self.guess_head(feat_gs)).squeeze(-1)  # 猜对概率上浮
+        slip = torch.sigmoid(self.slip_head(feat_gs)).squeeze(-1)    # 失误概率下压
+        delta = guess - slip
 
         logits = score_knowledge + delta
         return logits, A_list, S_prop, z_skill, z_know
@@ -102,8 +108,7 @@ class ConceptSkillCDM(nn.Module):
     def _aggregate_knowledge(
         self, S_prop: torch.Tensor, batch_concept_ids: torch.Tensor, concept_ptr: torch.Tensor
     ) -> torch.Tensor:
-        # 概念层面做 soft-min 聚合；若样本无概念则知识得分为 0.0
-        # （此时预测仅依赖技能偏置 delta）
+        # 概念层面做聚合；若样本无概念则知识得分为 0.0（此时预测仅依赖技能偏置）
         scores = []
         B = S_prop.size(0)
         for i in range(B):
@@ -114,7 +119,13 @@ class ConceptSkillCDM(nn.Module):
                 scores.append(torch.tensor(0.0, device=S_prop.device))
                 continue
             s_sub = S_prop[i, idx]
-            score = -self.tau * torch.logsumexp(-s_sub / self.tau, dim=0)
+            if self.agg_type == "min":
+                score = torch.min(s_sub)
+            elif self.agg_type == "mean":
+                score = torch.mean(s_sub)
+            else:
+                # softmin，tau 控制非补偿程度
+                score = -self.tau * torch.logsumexp(-s_sub / self.tau, dim=0)
             scores.append(score)
         return torch.stack(scores)
 

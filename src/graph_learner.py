@@ -7,10 +7,18 @@ import torch.nn.functional as F
 
 
 class MultiHeadConceptGraphLearner(nn.Module):
-    def __init__(self, num_concepts: int, dim_concept: int, num_heads: int, graph_dropout: float = 0.0):
+    def __init__(
+        self,
+        num_concepts: int,
+        dim_concept: int,
+        num_heads: int,
+        graph_dropout: float = 0.0,
+        graph_topk: int = 0,
+    ):
         super().__init__()
         self.num_concepts = num_concepts
         self.num_heads = num_heads
+        self.graph_topk = graph_topk
 
         self.q_linears = nn.ModuleList([nn.Linear(dim_concept, dim_concept, bias=False) for _ in range(num_heads)])
         self.k_linears = nn.ModuleList([nn.Linear(dim_concept, dim_concept, bias=False) for _ in range(num_heads)])
@@ -31,6 +39,12 @@ class MultiHeadConceptGraphLearner(nn.Module):
             A = F.softmax(scores, dim=-1)
             A = self.dropout(A)
             A = F.relu(A)
+            if self.graph_topk and self.graph_topk > 0 and self.graph_topk < A.size(-1):
+                # 按行保留 top-k 边以进一步稀疏化
+                topk_val, topk_idx = torch.topk(A, k=self.graph_topk, dim=-1)
+                mask = torch.zeros_like(A)
+                mask.scatter_(dim=-1, index=topk_idx, src=torch.ones_like(topk_val))
+                A = A * mask
             A_list.append(A)
         return A_list
 
@@ -38,6 +52,7 @@ class MultiHeadConceptGraphLearner(nn.Module):
         L_sparse = torch.tensor(0.0, device=A_list[0].device)
         L_sym = torch.tensor(0.0, device=A_list[0].device)
         L_dag = torch.tensor(0.0, device=A_list[0].device)
+        L_trans = torch.tensor(0.0, device=A_list[0].device)
         N = self.num_concepts
         norm_factor = max(N * N, 1)
 
@@ -50,13 +65,16 @@ class MultiHeadConceptGraphLearner(nn.Module):
                 B = A * A
                 h_val = torch.trace(torch.matrix_exp(B)) - self.num_concepts
                 L_dag = L_dag + h_val * h_val
+                # 传递性/层次性软约束：A@A 不应显著强于 A
+                trans_gap = torch.relu(torch.matmul(A, A) - A)
+                L_trans = L_trans + torch.sum(trans_gap * trans_gap) / norm_factor
         # 缩放以防概念数过大时正则项数值爆炸
         L_sparse = L_sparse / norm_factor
         L_sym = L_sym / norm_factor
         # 对 DAG 项做轻微缩放，避免大图时数值过大
         L_dag = L_dag / max(N, 1)
 
-        return {"sparse": L_sparse, "sym": L_sym, "dag": L_dag}
+        return {"sparse": L_sparse, "sym": L_sym, "dag": L_dag, "trans": L_trans}
 
 
 __all__ = ["MultiHeadConceptGraphLearner"]
