@@ -21,6 +21,7 @@ GLOBAL_DEFAULTS = {
     "num_heads": 4,
     "graph_dropout": 0.1,
     "graph_topk": 32,
+    "head_role_assign": "precedence,similarity,contain,confuse",
     "gnn_layers": 2,
     "gnn_hidden_dim": 64,
     "skill_dim": 8,
@@ -30,6 +31,8 @@ GLOBAL_DEFAULTS = {
     "lambda_graph_sym": 1e-4,
     "lambda_graph_dag": 1e-5,
     "lambda_graph_trans": 1e-4,
+    "lambda_graph_contain": 1e-4,
+    "lambda_graph_confuse": 1e-4,
     "lambda_de_orth": 1e-3,
     "lambda_de_mi": 1e-3,
 }

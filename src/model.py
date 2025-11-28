@@ -31,7 +31,7 @@ class ConceptSkillCDM(nn.Module):
             graph_dropout=config.graph_dropout,
             graph_topk=config.graph_topk,
         )
-        self.head_types = self._init_head_types(config.num_heads)
+        self.head_types = self._init_head_types(config.num_heads, getattr(config, "head_role_assign", None))
         self.head_weights = nn.Parameter(torch.ones(config.num_heads))
 
         # GNN 传播层
@@ -57,16 +57,22 @@ class ConceptSkillCDM(nn.Module):
         self.agg_type = getattr(config, "agg_type", "softmin")
 
     @staticmethod
-    def _init_head_types(num_heads: int) -> List[str]:
-        head_types = []
-        for h in range(num_heads):
-            if h == 0:
-                head_types.append("precedence")
-            elif h == 1:
-                head_types.append("similarity")
-            else:
-                head_types.append("other")
-        return head_types
+    def _init_head_types(num_heads: int, role_assign: str = None) -> List[str]:
+        """
+        根据配置分配多头语义，支持 precedence/similarity/contain/confuse/other。
+        未指定或长度不够时补齐为 other。
+        """
+        default_roles = ["precedence", "similarity"]
+        if role_assign:
+            roles = [r.strip() for r in role_assign.split(",") if r.strip()]
+        else:
+            roles = default_roles
+        # 补齐或截断
+        if len(roles) < num_heads:
+            roles += ["other"] * (num_heads - len(roles))
+        else:
+            roles = roles[:num_heads]
+        return roles
 
     def forward(self, batch) -> Tuple[torch.Tensor, List[torch.Tensor], torch.Tensor, torch.Tensor, torch.Tensor]:
         student_ids = batch["student_ids"]

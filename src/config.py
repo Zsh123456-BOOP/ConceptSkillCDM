@@ -39,6 +39,8 @@ def get_config(args=None):
     parser.add_argument("--graph_dropout", type=float, default=0.1)
     parser.add_argument("--graph_topk", type=int, default=32,
                         help="图学习阶段每行保留的 Top-K 边，<=0 表示不裁剪，依赖 softmax+稀疏正则。")
+    parser.add_argument("--head_role_assign", type=str, default="precedence,similarity,contain,confuse",
+                        help="多头语义分配，逗号分隔，支持 precedence/similarity/contain/confuse/other；长度不足时其余为 other。")
 
     # GNN 传播
     parser.add_argument("--gnn_layers", type=int, default=2)
@@ -53,6 +55,10 @@ def get_config(args=None):
     parser.add_argument("--lambda_graph_dag", type=float, default=1e-5)
     parser.add_argument("--lambda_graph_trans", type=float, default=1e-4,
                         help="概念前置关系的传递性/层次性软约束权重，0 表示关闭。")
+    parser.add_argument("--lambda_graph_contain", type=float, default=1e-4,
+                        help="包含关系约束（closure 一致性）权重，0 表示关闭。")
+    parser.add_argument("--lambda_graph_confuse", type=float, default=1e-4,
+                        help="混淆关系约束（对称+均衡）权重，0 表示关闭。")
     parser.add_argument("--lambda_de_orth", type=float, default=1e-3)
     parser.add_argument("--lambda_de_mi", type=float, default=1e-3)
 

@@ -53,6 +53,8 @@ class MultiHeadConceptGraphLearner(nn.Module):
         L_sym = torch.tensor(0.0, device=A_list[0].device)
         L_dag = torch.tensor(0.0, device=A_list[0].device)
         L_trans = torch.tensor(0.0, device=A_list[0].device)
+        L_contain = torch.tensor(0.0, device=A_list[0].device)
+        L_confuse = torch.tensor(0.0, device=A_list[0].device)
         N = self.num_concepts
         norm_factor = max(N * N, 1)
 
@@ -68,13 +70,31 @@ class MultiHeadConceptGraphLearner(nn.Module):
                 # 传递性/层次性软约束：A@A 不应显著强于 A
                 trans_gap = torch.relu(torch.matmul(A, A) - A)
                 L_trans = L_trans + torch.sum(trans_gap * trans_gap) / norm_factor
+            if h_type == "contain":
+                # 近似包含：鼓励 A_ij 与 A_ik*A_kj 的一致性（传递闭包收缩）
+                closure = torch.matmul(A, A)
+                L_contain = L_contain + torch.sum((closure - A) * (closure - A)) / norm_factor
+            if h_type == "confuse":
+                # 混淆关系：鼓励对称且行/列接近均值，避免过于集中（类似均衡混淆）
+                sym_part = torch.norm(A - A.transpose(0, 1), p="fro") ** 2
+                row_mean = A.mean(dim=1, keepdim=True)
+                col_mean = A.mean(dim=0, keepdim=True)
+                balance = torch.sum((A - row_mean) ** 2) + torch.sum((A - col_mean) ** 2)
+                L_confuse = L_confuse + sym_part / norm_factor + balance / norm_factor
         # 缩放以防概念数过大时正则项数值爆炸
         L_sparse = L_sparse / norm_factor
         L_sym = L_sym / norm_factor
         # 对 DAG 项做轻微缩放，避免大图时数值过大
         L_dag = L_dag / max(N, 1)
 
-        return {"sparse": L_sparse, "sym": L_sym, "dag": L_dag, "trans": L_trans}
+        return {
+            "sparse": L_sparse,
+            "sym": L_sym,
+            "dag": L_dag,
+            "trans": L_trans,
+            "contain": L_contain,
+            "confuse": L_confuse,
+        }
 
 
 __all__ = ["MultiHeadConceptGraphLearner"]
