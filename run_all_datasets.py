@@ -37,12 +37,12 @@ GLOBAL_DEFAULTS = {
 # 按数据集指定超参，便于调参与复现；未列出的参数走 GLOBAL_DEFAULTS
 DATASET_CONFIGS = {
     "assist_09": {
-        "batch_size": 512,
+        "batch_size": 256,
         "gnn_hidden_dim": 128,
         "graph_dropout": 0.2,
     },
     "assist_17": {
-        "batch_size": 128,
+        "batch_size": 256,
         "gnn_hidden_dim": 128,
         "graph_dropout": 0.2,
     },
@@ -52,7 +52,7 @@ DATASET_CONFIGS = {
         "graph_dropout": 0.2,
     },
     "sample": {
-        "batch_size": 2048,
+        "batch_size": 1024,
         "epochs": 60,
         "patience": 8,
         "gnn_hidden_dim": 128,
