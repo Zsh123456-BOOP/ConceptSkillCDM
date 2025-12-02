@@ -1,173 +1,121 @@
-import copy
-import os
 import time
-from typing import Dict, Tuple
-
+import numpy as np
 import torch
-import torch.nn as nn
 import torch.optim as optim
-
-from .losses import bce_loss, graph_loss, disentangle_loss
-from .metrics import compute_auc, compute_acc, compute_rmse
-from .utils import ensure_dir
+from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error
 
 
 class Trainer:
-    def __init__(self, model: nn.Module, config, train_loader, valid_loader, test_loader, device, logger=None):
-        self.model = model.to(device)
-        self.config = config
-        self.train_loader = train_loader
-        self.valid_loader = valid_loader
-        self.test_loader = test_loader
-        self.device = device
+    """
+    适配 DisentangledCDM 的 Trainer：
+    - 训练使用 CDMLoss（BCE + DAG + Sparse + HSIC）
+    - DataLoader batch 期望格式：
+        (student_ids, exercise_ids, labels, q_mask)
+    """
+    def __init__(self, model, loss_fn, loaders, args, logger):
+        self.model = model
+        self.loss_fn = loss_fn
+        self.args = args
         self.logger = logger
-        ensure_dir(config.save_dir)
-        self.save_path = os.path.join(config.save_dir, f"{config.dataset}_best.pt")
 
+        (self.train_loader,
+         self.val_loader,
+         self.test_loader,
+         self.high_loader,
+         self.med_loader,
+         self.low_loader) = loaders
+
+        self.device = next(self.model.parameters()).device
         self.optimizer = optim.Adam(
             self.model.parameters(),
-            lr=config.lr,
-            weight_decay=config.weight_decay,
+            lr=args.lr,
+            weight_decay=args.weight_decay
         )
-        self.best_state = None
-        self.best_valid_auc = -1.0
-        self.best_epoch = 0
-        self.patience = getattr(config, "patience", 0)
 
-    def train(self):
-        no_improve = 0
-        for epoch in range(1, self.config.epochs + 1):
-            start_time = time.time()
-            train_stats = self._train_one_epoch()
-            epoch_time = time.time() - start_time
+    def _move_batch_to_device(self, batch):
+        """假定 batch = (stu_ids, exer_ids, labels, q_mask)"""
+        stu_ids, exer_ids, labels, q_mask = batch
+        stu_ids = stu_ids.to(self.device)
+        exer_ids = exer_ids.to(self.device)
+        labels = labels.float().to(self.device)
+        q_mask = q_mask.float().to(self.device)
+        return stu_ids, exer_ids, labels, q_mask
 
-            val_metrics = self.evaluate(self.valid_loader, split_name="valid")
-            val_auc = val_metrics["AUC"]
-            val_acc = val_metrics["ACC"]
-            val_rmse = val_metrics["RMSE"]
-
-            self._log(
-                f"Epoch {epoch:02d} | T: {epoch_time:.1f}s | "
-                f"Train: Loss={train_stats['loss']:.4f} "
-                f"(BCE={train_stats['bce']:.4f}, Graph={train_stats['graph']:.6f}, "
-                f"De={train_stats['de']:.6f}, Orth={train_stats['orth']:.6f}, MI={train_stats['mi']:.4f})"
-            )
-            self._log(
-                f"[Valid] AUC={val_auc:.4f} | ACC={val_acc:.4f} | RMSE={val_rmse:.4f} | "
-                f"Best AUC={(self.best_valid_auc if self.best_valid_auc >= 0 else float('nan')):.4f} "
-                f"(epoch={self.best_epoch if self.best_epoch > 0 else '-'})"
-            )
-
-            if val_auc > self.best_valid_auc:
-                prev_best = self.best_valid_auc
-                self.best_valid_auc = val_auc
-                self.best_epoch = epoch
-                self.best_state = copy.deepcopy(self.model.state_dict())
-                torch.save(self.best_state, self.save_path)
-                no_improve = 0
-
-                if prev_best < 0:
-                    self._log(f"*** New Best Valid AUC: {val_auc:.4f} (epoch={epoch}) ***")
-                else:
-                    self._log(
-                        f"*** New Best Valid AUC: {val_auc:.4f} (epoch={epoch}, prev={prev_best:.4f}) ***"
-                    )
-            else:
-                no_improve += 1
-                if self.patience and self.patience > 0 and no_improve >= self.patience:
-                    self._log(
-                        f"Early stopping triggered: no AUC improvement for {no_improve} epochs "
-                        f"(patience={self.patience})."
-                    )
-                    break
-
-        if self.best_state is not None:
-            self.model.load_state_dict(self.best_state)
-        test_metrics = self.evaluate(self.test_loader, split_name="test")
-        test_auc = test_metrics["AUC"]
-        test_acc = test_metrics["ACC"]
-        test_rmse = test_metrics["RMSE"]
-        self._log(
-            f"[Test] AUC={test_auc:.4f} | ACC={test_acc:.4f} | RMSE={test_rmse:.4f}"
-        )
-        self._log(
-            f"[Summary] Best Valid AUC={self.best_valid_auc:.4f} at epoch={self.best_epoch}; "
-            f"Final Test AUC={test_auc:.4f}, ACC={test_acc:.4f}, RMSE={test_rmse:.4f}"
-        )
-        return test_metrics
-
-    def _train_one_epoch(self):
+    def train_epoch(self, epoch):
         self.model.train()
         total_loss = 0.0
-        total_bce = total_graph = total_de = total_orth = total_mi = 0.0
-        num_batches = 0
-        for batch in self.train_loader:
-            batch = self._to_device(batch)
-            labels = batch["labels"]
-            logits, A_list, S_prop, z_skill, z_know = self.model(batch)
+        total_pred_loss = 0.0
+        total_dag_loss = 0.0
+        total_sparse_loss = 0.0
+        total_hsic_loss = 0.0
 
-            L_bce = bce_loss(logits, labels)
-            L_graph, graph_regs = graph_loss(
-                A_list, self.model.head_types, self.config, self.model.graph_learner
-            )
-            L_de, L_orth, L_mi = disentangle_loss(
-                S_prop, z_skill, self.config, z_know=z_know, critic=None
-            )
-            loss = L_bce + L_graph + L_de
+        start = time.time()
+
+        for batch in self.train_loader:
+            stu_ids, exer_ids, labels, q_mask = self._move_batch_to_device(batch)
 
             self.optimizer.zero_grad()
+
+            pred, adj_dag, h_knowledge, z_skill = self.model(
+                stu_ids, exer_ids, q_mask
+            )
+            loss, loss_dict = self.loss_fn(
+                pred, labels, adj_dag, h_knowledge, z_skill
+            )
+
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
 
             total_loss += loss.item()
-            total_bce += L_bce.item()
-            total_graph += L_graph.item()
-            total_de += L_de.item()
-            total_orth += L_orth.item()
-            total_mi += L_mi.item()
-            num_batches += 1
-        denom = max(num_batches, 1)
-        return {
-            "loss": total_loss / denom,
-            "bce": total_bce / denom,
-            "graph": total_graph / denom,
-            "de": total_de / denom,
-            "orth": total_orth / denom,
-            "mi": total_mi / denom,
-        }
+            total_pred_loss += loss_dict.get("pred", 0.0)
+            total_dag_loss += loss_dict.get("dag", 0.0)
+            total_sparse_loss += loss_dict.get("sparse", 0.0)
+            total_hsic_loss += loss_dict.get("hsic", 0.0)
 
-    def evaluate(self, loader, split_name: str = "valid") -> Dict[str, float]:
+        n = len(self.train_loader) or 1
+        avg_total = total_loss / n
+        avg_pred = total_pred_loss / n
+        avg_dag = total_dag_loss / n
+        avg_sparse = total_sparse_loss / n
+        avg_hsic = total_hsic_loss / n
+
+        self.logger.info(
+            f"Epoch {epoch} | T: {time.time() - start:.1f}s | "
+            f"Loss: {avg_total:.4f} "
+            f"(Pred={avg_pred:.4f}, DAG={avg_dag:.4f}, "
+            f"Sparse={avg_sparse:.4f}, HSIC={avg_hsic:.4f})"
+        )
+
+        return avg_total
+
+    def evaluate(self, loader, name):
+        if loader is None:
+            return 0.0, 0.0, 0.0
+
         self.model.eval()
-        logits_all = []
-        labels_all = []
+        preds, labels = [], []
+
         with torch.no_grad():
             for batch in loader:
-                batch = self._to_device(batch)
-                labels = batch["labels"]
-                logits, _, _, _, _ = self.model(batch)
-                logits_all.append(logits.detach().cpu())
-                labels_all.append(labels.detach().cpu())
+                stu_ids, exer_ids, lbls, q_mask = self._move_batch_to_device(batch)
+                pred, _, _, _ = self.model(stu_ids, exer_ids, q_mask)
+                preds.extend(pred.detach().cpu().numpy().tolist())
+                labels.extend(lbls.detach().cpu().numpy().tolist())
 
-        logits_all = torch.cat(logits_all).view(-1)
-        labels_all = torch.cat(labels_all).view(-1)
-        probs = torch.sigmoid(logits_all).numpy()
-        labels_np = labels_all.numpy()
+        if len(labels) == 0:
+            return 0.0, 0.0, 0.0
 
-        metrics = {
-            "AUC": compute_auc(labels_np, probs),
-            "ACC": compute_acc(labels_np, probs),
-            "RMSE": compute_rmse(labels_np, probs),
-        }
-        return metrics
+        preds = np.array(preds)
+        labels = np.array(labels)
 
-    def _to_device(self, batch):
-        return {k: v.to(self.device) for k, v in batch.items()}
+        try:
+            auc = roc_auc_score(labels, preds)
+        except ValueError:
+            auc = 0.5
 
-    def _log(self, msg: str):
-        if self.logger is None:
-            print(msg)
-        else:
-            self.logger.info(msg)
+        acc = accuracy_score(labels, preds > 0.5)
+        rmse = np.sqrt(mean_squared_error(labels, preds))
 
-
-__all__ = ["Trainer"]
+        self.logger.info(f"[{name}] AUC: {auc:.4f} | ACC: {acc:.4f} | RMSE: {rmse:.4f}")
+        return auc, acc, rmse

@@ -1,53 +1,51 @@
-import logging
 import os
-import random
-from datetime import datetime
-
-import numpy as np
 import torch
+import logging
+from datetime import datetime
+import numpy as np
+import random
 
 
-def set_seed(seed: int):
+def get_device():
+    # 跟随 CUDA_VISIBLE_DEVICES 自动选 GPU
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    return device
+
+
+def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
 
 
-def ensure_dir(path: str):
-    if path and not os.path.exists(path):
-        os.makedirs(path, exist_ok=True)
+def setup_logger(log_dir='./logs'):
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
 
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    pid = os.getpid()
+    log_file = os.path.join(log_dir, f'run_{timestamp}_pid{pid}.log')
 
-def get_logger(log_dir: str, filename: str = None):
-    ensure_dir(log_dir)
-    if filename is None:
-        filename = f"train_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-    logger = logging.getLogger(filename)
+    logger = logging.getLogger(f'DisentangledCDM_{pid}')
     logger.setLevel(logging.INFO)
-    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 
-    fh = logging.FileHandler(os.path.join(log_dir, filename))
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+    # File Handler
+    fh = logging.FileHandler(log_file, encoding='utf-8')
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
-    sh = logging.StreamHandler()
-    sh.setFormatter(formatter)
-    logger.addHandler(sh)
+    # Console Handler
+    ch = logging.StreamHandler()
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
 
     return logger
-
-
-def count_parameters(model) -> int:
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-
-def get_device(device_str: str):
-    if device_str.startswith("cuda") and torch.cuda.is_available():
-        return torch.device(device_str)
-    return torch.device("cpu")
-
-
-__all__ = ["set_seed", "ensure_dir", "get_logger", "count_parameters", "get_device"]

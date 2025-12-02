@@ -1,78 +1,88 @@
 import argparse
 
 
-def get_config(args=None):
-    """
-    Parse command line arguments and return a config namespace.
-    """
+def parse_args():
     parser = argparse.ArgumentParser(
-        description="ConceptSkillCDM: Graph-based Concept & Skill Disentangled Cognitive Diagnosis"
+        description='Disentangled Cognitive Diagnosis with Learned Concept Graphs'
     )
 
-    # 基础参数
-    parser.add_argument("--dataset", type=str, default="assist_09",
-                        choices=["assist_09", "assist_17", "junyi", "sample", "junyi copy"])
+    # ===== 路径相关 =====
+    parser.add_argument('--data_root', type=str, default='./data/', help='Root data directory')
+    parser.add_argument('--log_dir', type=str, default='./logs', help='Log directory')
+    parser.add_argument('--result_dir', type=str, default='./results', help='Results directory')
+
+    parser.add_argument('--dataset', type=str, default='assist_09',
+                        choices=['assist_09', 'assist_17', 'junyi'],
+                        help='Dataset name')
+    parser.add_argument('--train_file', type=str, default='train.csv')
+    parser.add_argument('--valid_file', type=str, default='valid.csv')
+    parser.add_argument('--test_file', type=str, default='test.csv')
+    parser.add_argument('--high_test_file', type=str, default='high_performance_test.csv')
+    parser.add_argument('--medium_test_file', type=str, default='medium_performance_test.csv')
+    parser.add_argument('--low_test_file', type=str, default='low_performance_test.csv')
+
+    # ===== 模型参数 (DisentangledCDM) =====
+    parser.add_argument('--dim_emb', type=int, default=64,
+                        help='Student / concept embedding dimension')
+    parser.add_argument('--dim_skill', type=int, default=4,
+                        help='Skill latent dimension for guess/slip')
+
+    # ===== 训练参数 =====
+    parser.add_argument('--lr', type=float, default=0.001)
+    parser.add_argument('--weight_decay', type=float, default=1e-5)
+    parser.add_argument('--batch_size', type=int, default=512)
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--patience', type=int, default=10)
+    parser.add_argument('--seed', type=int, default=888, help='Random seed')
+
+    # ===== Loss 参数 (CDMLoss) =====
+    parser.add_argument('--lambda_dag', type=float, default=0.5,
+                        help='DAG constraint weight')
+    parser.add_argument('--lambda_sparse', type=float, default=0.01,
+                        help='Adjacency L1 sparsity weight')
+    parser.add_argument('--lambda_hsic', type=float, default=0.1,
+                        help='Disentanglement (HSIC) weight')
+
+    # ===== 数据清洗相关 =====
     parser.add_argument(
-        "--device",
-        type=str,
-        default="auto",
-        help='Device to use: "auto" (default, picks best GPU if available), "cpu", "cuda", "cuda:0", "cuda:1", ...',
+        "--min_stu_interactions",
+        type=int,
+        default=10,
+        help="学生最少交互次数阈值，< 该值的学生会被过滤；设为 0 或负数表示不做学生过滤。"
     )
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--num_workers", type=int, default=0)
+    parser.add_argument(
+        "--min_exer_interactions",
+        type=int,
+        default=10,
+        help="题目最少交互次数阈值，< 该值的题目会被过滤；设为 0 或负数表示不做题目过滤。"
+    )
+    parser.add_argument(
+        "--min_poison_count",
+        type=int,
+        default=10,
+        help="毒题检测所需的最少作答次数（count >= 该值 且 正答率=0 或 1 时视为毒题）；设为 0 或负数表示关闭毒题过滤。"
+    )
 
-    # 训练相关
-    parser.add_argument("--batch_size", type=int, default=1024)
-    parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--patience", type=int, default=10,
-                        help="Early stopping patience based on validation AUC; set <=0 to disable.")
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--weight_decay", type=float, default=1e-5)
+    # ===== 学生分组相关 =====
+    parser.add_argument(
+        "--low_quantile",
+        type=float,
+        default=0.33,
+        help="用于划分低表现学生的分位数阈值（基于训练集历史正确率）"
+    )
+    parser.add_argument(
+        "--high_quantile",
+        type=float,
+        default=0.67,
+        help="用于划分高表现学生的分位数阈值（基于训练集历史正确率）"
+    )
 
-    # 各嵌入维度
-    parser.add_argument("--dim_student", type=int, default=64)
-    parser.add_argument("--dim_item", type=int, default=64)
-    parser.add_argument("--dim_concept", type=int, default=64)
+    # ===== 实验标记 =====
+    parser.add_argument(
+        "--tag",
+        type=str,
+        default="",
+        help="实验标签，用于 CSV / 日志区分不同配置（如 base/ablation 等）"
+    )
 
-    # 图学习器
-    parser.add_argument("--num_heads", type=int, default=4)
-    parser.add_argument("--graph_dropout", type=float, default=0.1)
-    parser.add_argument("--graph_topk", type=int, default=32,
-                        help="图学习阶段每行保留的 Top-K 边，<=0 表示不裁剪，依赖 softmax+稀疏正则。")
-    parser.add_argument("--head_role_assign", type=str, default="precedence,similarity,contain,confuse",
-                        help="多头语义分配，逗号分隔，支持 precedence/similarity/contain/confuse/other；长度不足时其余为 other。")
-
-    # GNN 传播
-    parser.add_argument("--gnn_layers", type=int, default=2)
-    parser.add_argument("--gnn_hidden_dim", type=int, default=64)
-
-    # 解耦相关
-    parser.add_argument("--skill_dim", type=int, default=8)
-
-    # 损失项权重
-    parser.add_argument("--lambda_graph_sparse", type=float, default=1e-4)
-    parser.add_argument("--lambda_graph_sym", type=float, default=1e-4)
-    parser.add_argument("--lambda_graph_dag", type=float, default=1e-5)
-    parser.add_argument("--lambda_graph_trans", type=float, default=1e-4,
-                        help="概念前置关系的传递性/层次性软约束权重，0 表示关闭。")
-    parser.add_argument("--lambda_graph_contain", type=float, default=1e-4,
-                        help="包含关系约束（closure 一致性）权重，0 表示关闭。")
-    parser.add_argument("--lambda_graph_confuse", type=float, default=1e-4,
-                        help="混淆关系约束（对称+均衡）权重，0 表示关闭。")
-    parser.add_argument("--lambda_de_orth", type=float, default=1e-3)
-    parser.add_argument("--lambda_de_mi", type=float, default=1e-3)
-
-    # 其他
-    parser.add_argument("--data_dir", type=str, default="data")
-    parser.add_argument("--log_dir", type=str, default="logs")
-    parser.add_argument("--save_dir", type=str, default="logs")
-    parser.add_argument("--tau", type=float, default=0.5,
-                        help="Temperature for soft-min aggregation")
-    parser.add_argument("--agg_type", type=str, default="softmin",
-                        choices=["softmin", "min", "mean"],
-                        help="题目概念聚合方式：softmin（可调 tau）、min、mean。")
-
-    return parser.parse_args(args=args)
-
-
-__all__ = ["get_config"]
+    return parser.parse_args()
