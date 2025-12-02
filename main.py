@@ -12,56 +12,56 @@ from src.cdm_loss import CDMLoss
 
 
 def save_results(args, metrics, result_file):
-    """将实验结果追加保存到 CSV，包含所有关键超参数（已改为适配 DisentangledCDM）"""
+    """将实验结果追加保存到 CSV，包含所有关键超参数（已与当前 config 对齐）"""
     if not os.path.exists(args.result_dir):
         os.makedirs(args.result_dir)
-
+        
     filepath = os.path.join(args.result_dir, result_file)
-
+    
     row = {
         "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "Dataset": args.dataset,
         "Seed": args.seed,
         "Tag": getattr(args, "tag", ""),
 
-        # 核心指标
+        # 1. 核心指标
         "Test_AUC": metrics.get("Test_AUC", "N/A"),
         "Test_ACC": metrics.get("Test_ACC", "N/A"),
         "Test_RMSE": metrics.get("Test_RMSE", "N/A"),
 
-        # 分组指标
-        "High_AUC": metrics.get("High_AUC", "N/A"),
-        "Medium_AUC": metrics.get("Medium_AUC", "N/A"),
-        "Low_AUC": metrics.get("Low_AUC", "N/A"),
-        "High_RMSE": metrics.get("High_RMSE", "N/A"),
-        "Medium_RMSE": metrics.get("Medium_RMSE", "N/A"),
-        "Low_RMSE": metrics.get("Low_RMSE", "N/A"),
-
-        # 模型与优化超参数
+        # 2. 与当前模型真正相关的超参
+        "Batch": args.batch_size,
         "DimEmb": args.dim_emb,
         "DimSkill": args.dim_skill,
         "LR": args.lr,
-        "Batch": args.batch_size,
         "WeightDecay": args.weight_decay,
-        "Epochs": args.epochs,
-        "Patience": args.patience,
 
-        # Loss 超参数
         "Lambda_DAG": args.lambda_dag,
         "Lambda_Sparse": args.lambda_sparse,
         "Lambda_HSIC": args.lambda_hsic,
 
-        # 数据清洗与分组相关
+        # 数据清洗相关
         "MinStu": getattr(args, "min_stu_interactions", -1),
         "MinExer": getattr(args, "min_exer_interactions", -1),
         "MinPoison": getattr(args, "min_poison_count", -1),
+
+        # 学生分组阈值（dataset 会写回 q_low/q_high）
         "LowQuantile": getattr(args, "low_quantile", "N/A"),
         "HighQuantile": getattr(args, "high_quantile", "N/A"),
-    }
+        "q_low": getattr(args, "q_low", "N/A"),
+        "q_high": getattr(args, "q_high", "N/A"),
 
+        # 3. 分组指标（如果有）
+        "High_AUC": metrics.get("High_AUC", "N/A"),
+        "Med_AUC": metrics.get("Medium_AUC", "N/A"),
+        "Low_AUC": metrics.get("Low_AUC", "N/A"),
+        "High_RMSE": metrics.get("High_RMSE", "N/A"),
+        "Med_RMSE": metrics.get("Medium_RMSE", "N/A"),
+        "Low_RMSE": metrics.get("Low_RMSE", "N/A"),
+    }
+    
     df_new = pd.DataFrame([row])
 
-    # 智能写入：如果列有变化，自动重新对齐
     if not os.path.exists(filepath):
         df_new.to_csv(filepath, index=False)
     else:
@@ -75,22 +75,23 @@ def save_results(args, metrics, result_file):
                 df_new.to_csv(filepath, mode='a', header=False, index=False)
         except Exception:
             df_new.to_csv(filepath, mode='a', header=False, index=False)
-
+    
     print(f"✅ Results saved to {filepath}")
 
 
 def build_model_save_path(args):
     """
     根据 dataset / batch_size / dim_emb / tag 构造模型保存路径，
-    适配新的 DisentangledCDM。
+    不再使用旧的 hidden_dim / dropout。
     """
-    name = f"best_{args.dataset}_bs{args.batch_size}_dim{args.dim_emb}"
+    name = f"best_{args.dataset}_bs{args.batch_size}_emb{args.dim_emb}"
     tag = getattr(args, "tag", "")
     if tag:
         safe_tag = str(tag).replace(" ", "_")
         name += f"_{safe_tag}"
     filename = name + ".pth"
     return os.path.join(args.log_dir, filename)
+
 
 
 def main():

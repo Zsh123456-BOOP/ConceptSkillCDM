@@ -28,7 +28,8 @@ class CognitiveDataProcessor:
     """
     数据处理与清洗：
     - 读取 train/valid/test 以及可选的分层测试集
-    - 按数据集执行特定的清洗策略 (assist_17 / junyi)
+    - 按 config 中的阈值统一执行清洗策略（所有数据集一致）
+    - junyi 额外做 Transductive 用户对齐
     - 统一 ID 映射，构建 Q-matrix
     - 生成 triplets 和 DataLoader
     """
@@ -74,150 +75,94 @@ class CognitiveDataProcessor:
                         dropped_count += (before - after)
             self.logger.info(f"[DataClean] {log_desc}: Dropped {dropped_count} rows across all splits.")
 
-        # ============ 数据集特定清洗逻辑 ============
+        # ============ 统一的清洗逻辑（由 config 控制） ============
+        combined = pd.concat(
+            [self.train_data, self.valid_data, self.test_data],
+            ignore_index=True
+        )
 
-        # 1) assist_17: 双向过滤 (User & Item) + 毒题清洗
-        if self.args.dataset == "assist_17":
-            self.logger.info("[DataClean] Starting cleaning pipeline for assist_17...")
+        # --- 学生冷启动过滤（所有数据集生效） ---
+        if self.args.min_stu_interactions > 0:
+            stu_counts = combined.groupby("stu_id").size()
+            keep_users = set(
+                stu_counts[stu_counts >= self.args.min_stu_interactions].index
+            )
+            self.logger.info(
+                f"[DataClean] Filtering Students < {self.args.min_stu_interactions} interactions "
+                f"(Removed {len(stu_counts) - len(keep_users)} users)"
+            )
+            apply_filter_to_all_splits(
+                keep_users, "stu_id",
+                f"Cold-Start Users (<{self.args.min_stu_interactions})"
+            )
+        else:
+            self.logger.info(
+                "[DataClean] [Skip] Student cold-start filtering disabled "
+                "(min_stu_interactions <= 0)."
+            )
 
-            # 学生冷启动过滤
-            if self.args.min_stu_interactions > 0:
-                combined = pd.concat(
-                    [self.train_data, self.valid_data, self.test_data],
-                    ignore_index=True
-                )
-                stu_counts = combined.groupby("stu_id").size()
-                keep_users = set(
-                    stu_counts[stu_counts >= self.args.min_stu_interactions].index
-                )
+        # --- 题目冷门过滤（所有数据集生效） ---
+        if self.args.min_exer_interactions > 0:
+            combined = pd.concat(
+                [self.train_data, self.valid_data, self.test_data],
+                ignore_index=True
+            )
+            exer_counts = combined.groupby("exer_id").size()
+            keep_items = set(
+                exer_counts[exer_counts >= self.args.min_exer_interactions].index
+            )
+            self.logger.info(
+                f"[DataClean] Filtering Items < {self.args.min_exer_interactions} interactions "
+                f"(Removed {len(exer_counts) - len(keep_items)} items)"
+            )
+            apply_filter_to_all_splits(
+                keep_items, "exer_id",
+                f"Cold Items (<{self.args.min_exer_interactions})"
+            )
+        else:
+            self.logger.info(
+                "[DataClean] [Skip] Item cold filtering disabled "
+                "(min_exer_interactions <= 0)."
+            )
+
+        # --- 毒题清洗（所有数据集生效，是否开启由 min_poison_count 控制） ---
+        if self.args.min_poison_count > 0:
+            combined = pd.concat(
+                [self.train_data, self.valid_data, self.test_data],
+                ignore_index=True
+            )
+            item_stats = combined.groupby("exer_id")["label"].agg(
+                count="count", correct_rate="mean"
+            ).reset_index()
+
+            poison_mask = (
+                (item_stats["count"] >= self.args.min_poison_count)
+                & ((item_stats["correct_rate"] <= 0.0)
+                   | (item_stats["correct_rate"] >= 1.0))
+            )
+            poison_items = item_stats.loc[poison_mask, :]
+            poison_ids = set(poison_items["exer_id"].tolist())
+
+            if len(poison_ids) > 0:
                 self.logger.info(
-                    f"   -> Filtering Students < {self.args.min_stu_interactions} interactions "
-                    f"(Removed {len(stu_counts) - len(keep_users)} users)"
+                    f"[DataClean] Detected {len(poison_ids)} toxic items "
+                    f"(count >= {self.args.min_poison_count} & Acc=0.0 or 1.0). Removing..."
+                )
+                keep_non_toxic = set(
+                    item_stats[~item_stats["exer_id"].isin(poison_ids)]["exer_id"]
                 )
                 apply_filter_to_all_splits(
-                    keep_users, "stu_id",
-                    f"Cold-Start Users (<{self.args.min_stu_interactions})"
+                    keep_non_toxic, "exer_id", "Toxic Items"
                 )
             else:
                 self.logger.info(
-                    "   -> [Skip] Student cold-start filtering disabled "
-                    "(min_stu_interactions <= 0)."
+                    "[DataClean] No toxic items detected under current min_poison_count."
                 )
-
-            # 题目冷门过滤
-            if self.args.min_exer_interactions > 0:
-                combined = pd.concat(
-                    [self.train_data, self.valid_data, self.test_data],
-                    ignore_index=True
-                )
-                exer_counts = combined.groupby("exer_id").size()
-                keep_items = set(
-                    exer_counts[exer_counts >= self.args.min_exer_interactions].index
-                )
-                self.logger.info(
-                    f"   -> Filtering Items < {self.args.min_exer_interactions} interactions "
-                    f"(Removed {len(exer_counts) - len(keep_items)} items)"
-                )
-                apply_filter_to_all_splits(
-                    keep_items, "exer_id",
-                    f"Cold Items (<{self.args.min_exer_interactions})"
-                )
-            else:
-                self.logger.info(
-                    "   -> [Skip] Item cold filtering disabled "
-                    "(min_exer_interactions <= 0)."
-                )
-
-            # 毒题清洗
-            if self.args.min_poison_count > 0:
-                combined = pd.concat(
-                    [self.train_data, self.valid_data, self.test_data],
-                    ignore_index=True
-                )
-                item_stats = combined.groupby("exer_id")["label"].agg(
-                    count="count", correct_rate="mean"
-                ).reset_index()
-
-                poison_mask = (
-                    (item_stats["count"] >= self.args.min_poison_count)
-                    & ((item_stats["correct_rate"] <= 0.0)
-                       | (item_stats["correct_rate"] >= 1.0))
-                )
-                poison_items = item_stats.loc[poison_mask, :]
-                poison_ids = set(poison_items["exer_id"].tolist())
-
-                if len(poison_ids) > 0:
-                    self.logger.info(
-                        f"   -> Detected {len(poison_ids)} toxic items "
-                        f"(count >= {self.args.min_poison_count} & Acc=0.0 or 1.0). Removing..."
-                    )
-                    keep_non_toxic = set(
-                        item_stats[~item_stats["exer_id"].isin(poison_ids)]["exer_id"]
-                    )
-                    apply_filter_to_all_splits(
-                        keep_non_toxic, "exer_id", "Toxic Items"
-                    )
-                else:
-                    self.logger.info(
-                        "   -> No toxic items detected under current min_poison_count."
-                    )
-            else:
-                self.logger.info(
-                    "   -> [Skip] Toxic item filtering disabled "
-                    "(min_poison_count <= 0)."
-                )
-
-        # 2) junyi: 双向过滤 (User & Item) + Transductive 对齐
-        if self.args.dataset == "junyi":
-            self.logger.info("[DataClean] Starting cleaning pipeline for Junyi...")
-
-            # 学生冷启动过滤
-            if self.args.min_stu_interactions > 0:
-                combined = pd.concat(
-                    [self.train_data, self.valid_data, self.test_data],
-                    ignore_index=True
-                )
-                stu_counts = combined.groupby("stu_id").size()
-                keep_users = set(
-                    stu_counts[stu_counts >= self.args.min_stu_interactions].index
-                )
-                self.logger.info(
-                    f"   -> Filtering Students < {self.args.min_stu_interactions} interactions "
-                    f"(Removed {len(stu_counts) - len(keep_users)} users)"
-                )
-                apply_filter_to_all_splits(
-                    keep_users, "stu_id",
-                    f"Cold-Start Users (<{self.args.min_stu_interactions})"
-                )
-            else:
-                self.logger.info(
-                    "   -> [Skip] Student cold-start filtering disabled "
-                    "(min_stu_interactions <= 0)."
-                )
-
-            # 题目冷门过滤
-            if self.args.min_exer_interactions > 0:
-                combined = pd.concat(
-                    [self.train_data, self.valid_data, self.test_data],
-                    ignore_index=True
-                )
-                exer_counts = combined.groupby("exer_id").size()
-                keep_items = set(
-                    exer_counts[exer_counts >= self.args.min_exer_interactions].index
-                )
-                self.logger.info(
-                    f"   -> Filtering Items < {self.args.min_exer_interactions} interactions "
-                    f"(Removed {len(exer_counts) - len(keep_items)} items)"
-                )
-                apply_filter_to_all_splits(
-                    keep_items, "exer_id",
-                    f"Cold Items (<{self.args.min_exer_interactions})"
-                )
-            else:
-                self.logger.info(
-                    "   -> [Skip] Item cold filtering disabled "
-                    "(min_exer_interactions <= 0)."
-                )
+        else:
+            self.logger.info(
+                "[DataClean] [Skip] Toxic item filtering disabled "
+                "(min_poison_count <= 0)."
+            )
 
         # ============ 统一 Student ID 类型 ============
         self.logger.info("Normalizing Student IDs to strings...")
@@ -227,7 +172,7 @@ class CognitiveDataProcessor:
             if df is not None and not df.empty:
                 df['stu_id'] = df['stu_id'].astype(str)
 
-        # ============ Junyi 用户对齐 (Transductive) ============
+        # ============ Junyi 用户对齐 (Transductive，仅 junyi) ============
         if self.args.dataset == "junyi":
             self.logger.info(
                 "[Alignment] Filtering unseen users in Valid/Test sets "
