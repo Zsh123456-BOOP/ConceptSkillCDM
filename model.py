@@ -181,7 +181,7 @@ class ConceptGraphConv(nn.Module):
 
 
 class StudentKnowledgeEncoder(nn.Module):
-    """学生知识状态编码器 - 使用GNN进行知识传播"""
+    """学生知识状态编码器 - 使用GNN进行知识传播（轻量版：学生向量 + 概念向量 因子分解）"""
 
     def __init__(
             self,
@@ -197,13 +197,13 @@ class StudentKnowledgeEncoder(nn.Module):
         self.num_concepts = num_concepts
         self.knowledge_dim = knowledge_dim
 
-        # 学生在每个知识点上的初始状态嵌入
-        self.student_knowledge_emb = nn.Embedding(
-            num_students,
-            num_concepts * knowledge_dim
-        )
+        # 学生级别的知识向量（不再为每个概念单独存一串巨大的向量）
+        self.student_emb = nn.Embedding(num_students, knowledge_dim)
 
-        # GNN层
+        # 概念级别的知识偏置向量（所有学生共享的概念特征）
+        self.concept_emb = nn.Embedding(num_concepts, knowledge_dim)
+
+        # GNN层：在学生 × 概念的初始状态上做图传播
         self.gnn_layers = nn.ModuleList([
             ConceptGraphConv(
                 knowledge_dim,
@@ -223,7 +223,8 @@ class StudentKnowledgeEncoder(nn.Module):
 
     def _initialize_weights(self):
         """初始化权重"""
-        nn.init.xavier_normal_(self.student_knowledge_emb.weight)
+        nn.init.xavier_normal_(self.student_emb.weight)
+        nn.init.xavier_normal_(self.concept_emb.weight)
 
     def forward(
             self,
@@ -242,26 +243,22 @@ class StudentKnowledgeEncoder(nn.Module):
         """
         batch_size = student_ids.size(0)
 
-        # 获取学生的初始知识状态
-        student_knowledge = self.student_knowledge_emb(student_ids)
-        # (batch_size, num_concepts * knowledge_dim)
+        # 学生向量: (batch_size, knowledge_dim)
+        student_vec = self.student_emb(student_ids)  # 每个学生一个向量
 
+        # 概念向量: (1, num_concepts, knowledge_dim) -> (batch_size, num_concepts, knowledge_dim)
+        concept_vec = self.concept_emb.weight.unsqueeze(0).expand(batch_size, -1, -1)
 
-        student_knowledge = student_knowledge.view(
-            batch_size, self.num_concepts, self.knowledge_dim
-        )
-        # (batch_size, num_concepts, knowledge_dim)
+        # 扩展学生向量到每个概念: (batch_size, 1, knowledge_dim) -> (batch_size, num_concepts, knowledge_dim)
+        student_vec_expanded = student_vec.unsqueeze(1).expand(-1, self.num_concepts, -1)
+
+        # 学生 × 概念 的初始知识状态
+        h = student_vec_expanded + concept_vec  # (batch_size, num_concepts, knowledge_dim)
 
         # 通过GNN层传播
-        h = student_knowledge
         for gnn, norm in zip(self.gnn_layers, self.layer_norms):
-            # GNN传播
             h_new = gnn(h, relation_matrices)
-
-            # 残差连接 + 层归一化
             h = norm(h + h_new)
-
-            # 激活
             h = F.relu(h)
 
         return h

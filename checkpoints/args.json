@@ -21,7 +21,7 @@
     "save_dir": "./checkpoints",
     "log_dir": "./logs",
     "save_interval": 10,
-    "min_stu_interactions": 10,
-    "min_exer_interactions": 10,
-    "min_poison_count": 5
+    "min_stu_interactions": 15,
+    "min_exer_interactions": 0,
+    "min_poison_count": 0
 }

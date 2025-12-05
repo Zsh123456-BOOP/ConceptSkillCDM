@@ -10,6 +10,7 @@ import json
 from datetime import datetime
 import logging
 from tqdm import tqdm
+import pandas as pd
 
 from dataset import CognitiveDiagnosisDataset, create_dataloaders, build_id_mappings, build_q_matrix
 from model import CognitiveDiagnosisModel
@@ -69,18 +70,6 @@ def compute_metrics(labels, predictions, probs):
 def train_epoch(model, train_loader, optimizer, device, lambda_sparse, lambda_independence, logger):
     """
     训练一个epoch
-
-    Args:
-        model: 模型
-        train_loader: 训练数据加载器
-        optimizer: 优化器
-        device: 设备
-        lambda_sparse: 稀疏性正则化系数
-        lambda_independence: 独立性正则化系数
-        logger: 日志记录器
-
-    Returns:
-        平均损失和指标
     """
     model.train()
 
@@ -92,8 +81,9 @@ def train_epoch(model, train_loader, optimizer, device, lambda_sparse, lambda_in
     all_predictions = []
     all_probs = []
 
-    pbar = tqdm(train_loader, desc="Training", leave=False)
-    for batch_idx, batch in enumerate(pbar):
+    # 原来是：pbar = tqdm(train_loader, desc="Training", leave=False)
+    # for batch_idx, batch in enumerate(pbar):
+    for batch_idx, batch in enumerate(train_loader):
         student_ids, exercise_ids, _, labels = batch
         student_ids = student_ids.to(device)
         exercise_ids = exercise_ids.to(device)
@@ -120,10 +110,7 @@ def train_epoch(model, train_loader, optimizer, device, lambda_sparse, lambda_in
         # 反向传播
         optimizer.zero_grad()
         loss.backward()
-
-        # 梯度裁剪（防止梯度爆炸）
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-
         optimizer.step()
 
         # 统计
@@ -137,19 +124,15 @@ def train_epoch(model, train_loader, optimizer, device, lambda_sparse, lambda_in
         all_predictions.extend(predictions.cpu().detach().numpy())
         all_probs.extend(pred_probs.cpu().detach().numpy())
 
-        # 更新进度条
-        pbar.set_postfix({
-            'Loss': f'{loss.item():.4f}',
-            'BCE': f'{bce_loss.item():.4f}',
-            'Reg': f'{reg_loss.item():.4f}'
-        })
+        # 如果你想，可以加一个很轻量的 batch 级别 log（可选）
+        # if (batch_idx + 1) % 200 == 0:
+        #     logger.info(f"  [Train] Batch {batch_idx+1}/{len(train_loader)} "
+        #                 f"Loss={loss.item():.4f}, BCE={bce_loss.item():.4f}, Reg={reg_loss.item():.4f}")
 
-    # 计算平均损失
     avg_loss = total_loss / len(train_loader)
     avg_bce_loss = total_bce_loss / len(train_loader)
     avg_reg_loss = total_reg_loss / len(train_loader)
 
-    # 计算指标
     metrics = compute_metrics(all_labels, all_predictions, all_probs)
 
     return {
@@ -159,21 +142,9 @@ def train_epoch(model, train_loader, optimizer, device, lambda_sparse, lambda_in
         **metrics
     }
 
-
 def validate(model, val_loader, device, lambda_sparse, lambda_independence, logger):
     """
     验证模型
-
-    Args:
-        model: 模型
-        val_loader: 验证数据加载器
-        device: 设备
-        lambda_sparse: 稀疏性正则化系数
-        lambda_independence: 独立性正则化系数
-        logger: 日志记录器
-
-    Returns:
-        验证损失和指标
     """
     model.eval()
 
@@ -186,8 +157,7 @@ def validate(model, val_loader, device, lambda_sparse, lambda_independence, logg
     all_probs = []
 
     with torch.no_grad():
-        pbar = tqdm(val_loader, desc="Validating", leave=False)
-        for batch in pbar:
+        for batch_idx, batch in enumerate(val_loader):
             student_ids, exercise_ids, _, labels = batch
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)
@@ -196,10 +166,10 @@ def validate(model, val_loader, device, lambda_sparse, lambda_independence, logg
             # 前向传播
             pred_probs, details = model(student_ids, exercise_ids, return_details=True)
 
-            # 计算BCE损失
+            # BCE
             bce_loss = nn.BCELoss()(pred_probs, labels)
 
-            # 计算正则化损失
+            # 正则
             reg_loss = model.get_regularization_loss(
                 details['relation_matrices'],
                 details['skill_vector'],
@@ -208,29 +178,26 @@ def validate(model, val_loader, device, lambda_sparse, lambda_independence, logg
                 lambda_independence=lambda_independence
             )
 
-            # 总损失
             loss = bce_loss + reg_loss
 
-            # 统计
             total_loss += loss.item()
             total_bce_loss += bce_loss.item()
             total_reg_loss += reg_loss.item()
 
-            # 收集预测结果
+            # 预测统计
             predictions = (pred_probs > 0.5).float()
             all_labels.extend(labels.cpu().numpy())
             all_predictions.extend(predictions.cpu().numpy())
             all_probs.extend(pred_probs.cpu().numpy())
 
-            # 更新进度条
-            pbar.set_postfix({'Loss': f'{loss.item():.4f}'})
+            # 可选的详细 batch 级日志（不需要可以删掉）
+            # if (batch_idx + 1) % 200 == 0:
+            #     logger.info(f"[Val] Batch {batch_idx+1}/{len(val_loader)} Loss={loss.item():.4f}")
 
-    # 计算平均损失
     avg_loss = total_loss / len(val_loader)
     avg_bce_loss = total_bce_loss / len(val_loader)
     avg_reg_loss = total_reg_loss / len(val_loader)
 
-    # 计算指标
     metrics = compute_metrics(all_labels, all_predictions, all_probs)
 
     return {
@@ -239,6 +206,7 @@ def validate(model, val_loader, device, lambda_sparse, lambda_independence, logg
         'reg_loss': avg_reg_loss,
         **metrics
     }
+
 
 
 def train(args, logger):
@@ -269,8 +237,13 @@ def train(args, logger):
         test_file=test_file,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        shuffle_train=True
+        shuffle_train=True,
+        min_stu_interactions=args.min_stu_interactions,
+        min_exer_interactions=args.min_exer_interactions,
+        min_poison_count=args.min_poison_count,
+        logger=logger
     )
+
 
     logger.info(f'Train samples: {info_dict["train_size"]}, Val samples: {info_dict["val_size"]}')
     logger.info(f'Number of students: {info_dict["num_students"]}')
@@ -423,7 +396,6 @@ def train(args, logger):
     logger.info(f'Best validation AUC: {best_val_auc:.4f} at epoch {best_epoch}')
     logger.info(f'{"=" * 50}')
 
-
 def inference(args, logger):
     """
     测试模型
@@ -436,28 +408,10 @@ def inference(args, logger):
     device = torch.device('cuda' if torch.cuda.is_available() and not args.no_cuda else 'cpu')
     logger.info(f'Using device: {device}')
 
-    # 确定文件路径
     data_dir = args.data_dir
-    train_file = os.path.join(data_dir, 'train.csv')
-    val_file = os.path.join(data_dir, 'valid.csv')
     test_file = os.path.join(data_dir, 'test.csv')
 
-    # 加载测试数据集
-    logger.info('Loading test dataset...')
-
-    # 使用dataset.py中的函数创建数据加载器
-    _, _, test_loader, info_dict = create_dataloaders(
-        train_file=train_file,
-        val_file=val_file,
-        test_file=test_file,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        shuffle_train=False
-    )
-
-    logger.info(f'Test samples: {info_dict["test_size"]}')
-
-    # 加载模型
+    # 1. 先加载模型 checkpoint（里面有 info_dict 和 q_matrix）
     model_path = os.path.join(args.save_dir, 'best_model.pth')
     logger.info(f'Loading model from {model_path}...')
 
@@ -467,13 +421,71 @@ def inference(args, logger):
 
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     loaded_args = checkpoint.get('args', {})
+    info_dict = checkpoint.get('info_dict', None)
 
-    # 创建模型
+    if info_dict is None:
+        logger.error('info_dict not found in checkpoint. Please retrain the model with the current code.')
+        return
+
+    # 从 checkpoint 中取出映射和 Q 矩阵（完全复用训练时的）
+    stu_id_map = info_dict['stu_id_map']
+    exer_id_map = info_dict['exer_id_map']
+    cpt_id_map = info_dict['cpt_id_map']
+    q_matrix = info_dict['q_matrix']
+
+    # 2. 用保存好的映射构建测试数据集（不再调用 create_dataloaders，不会重复打印/构建 Q 矩阵）
+    logger.info('Building test dataloader with saved ID mappings...')
+
+    # 2.1 读取原始 test.csv
+    raw_test_df = pd.read_csv(test_file)
+
+    # 2.2 按照训练阶段的 ID 映射过滤一遍，避免出现“冷启动学生/题目”导致 KeyError
+    valid_stu_ids = set(stu_id_map.keys())
+    valid_exer_ids = set(exer_id_map.keys())
+
+    before_rows = len(raw_test_df)
+    filtered_test_df = raw_test_df[
+        raw_test_df['stu_id'].isin(valid_stu_ids)
+        & raw_test_df['exer_id'].isin(valid_exer_ids)
+    ].reset_index(drop=True)
+    after_rows = len(filtered_test_df)
+
+    dropped_rows = before_rows - after_rows
+    if dropped_rows > 0:
+        logger.info(
+            f"[推理阶段数据过滤] 原始测试集共有 {before_rows} 条记录；"
+            f"由于学生/题目在训练阶段被清洗或未出现，本次测试集实际保留 {after_rows} 条记录，"
+            f"共丢弃 {dropped_rows} 条。"
+        )
+    else:
+        logger.info("[推理阶段数据过滤] 测试集中所有学生与题目均在训练阶段出现，无需额外过滤。")
+
+    # 2.3 使用过滤后的 DataFrame 构建 Dataset（不会再出现 stu_id_map 的 KeyError）
+    test_dataset = CognitiveDiagnosisDataset(
+        csv_file=filtered_test_df,   # 这里传入的是 DataFrame，不是路径
+        stu_id_map=stu_id_map,
+        exer_id_map=exer_id_map,
+        cpt_id_map=cpt_id_map
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True
+    )
+
+    test_size = len(test_dataset)
+    logger.info(f'Test samples: {test_size}')
+
+
+    # 3. 创建模型，使用保存的超参数和 Q 矩阵
     model = CognitiveDiagnosisModel(
         num_students=info_dict['num_students'],
         num_exercises=info_dict['num_exercises'],
         num_concepts=info_dict['num_concepts'],
-        q_matrix=info_dict['q_matrix'],
+        q_matrix=q_matrix,
         knowledge_dim=loaded_args.get('knowledge_dim', args.knowledge_dim),
         skill_dim=loaded_args.get('skill_dim', args.skill_dim),
         exercise_dim=loaded_args.get('exercise_dim', args.exercise_dim),
@@ -485,7 +497,7 @@ def inference(args, logger):
     model.load_state_dict(checkpoint['model_state_dict'])
     logger.info(f'Model loaded from epoch {checkpoint["epoch"]}')
 
-    # 测试
+    # 4. 测试
     logger.info('Starting testing...')
     model.eval()
 
@@ -510,9 +522,9 @@ def inference(args, logger):
             all_predictions.extend(predictions.cpu().numpy())
             all_probs.extend(pred_probs.cpu().numpy())
 
-            pbar.set_postfix({'Processed': f'{len(all_labels)}/{info_dict["test_size"]}'})
+            pbar.set_postfix({'Processed': f'{len(all_labels)}/{test_size}'})
 
-    # 计算指标
+    # 5. 计算指标
     metrics = compute_metrics(all_labels, all_predictions, all_probs)
 
     logger.info(f'\n{"=" * 50}')
@@ -536,18 +548,17 @@ def inference(args, logger):
 
     logger.info(f'Test results saved to {result_path}')
 
-    # 可选的：生成一些学生的诊断报告
+    # 6. 学生诊断（仍然复用 checkpoint 的映射）
     if args.generate_diagnosis:
         logger.info('\nGenerating student diagnosis reports...')
 
-        # 选择前5个学生进行分析
         num_students_to_diagnose = min(5, info_dict['num_students'])
         diagnosis_results = []
 
         for stu_id in range(num_students_to_diagnose):
             diagnosis = model.get_student_diagnosis(stu_id)
             diagnosis_results.append({
-                'student_id': int(stu_id),  # 确保是Python int类型
+                'student_id': int(stu_id),
                 'original_student_id': int(info_dict['stu_id_reverse_map'].get(stu_id, stu_id)),
                 'knowledge_mastery': [float(x) for x in diagnosis['knowledge_mastery'].cpu().numpy().tolist()],
                 'skill_level': [float(x) for x in diagnosis['skill_level'].cpu().numpy().tolist()]
@@ -565,7 +576,7 @@ def main():
     parser = argparse.ArgumentParser(description='Cognitive Diagnosis Model Training and Testing')
 
     # 数据参数
-    parser.add_argument('--data_dir', type=str, default='./data/assist-09/process_data',)
+    parser.add_argument('--data_dir', type=str, default='./data/assist_09/process_data',)
 
     # 模型参数
     parser.add_argument('--knowledge_dim', type=int, default=128,
@@ -618,6 +629,15 @@ def main():
                         help='Directory to save logs (default: ./logs)')
     parser.add_argument('--save_interval', type=int, default=10,
                         help='Save checkpoint every N epochs (default: 10)')
+    
+        # 数据清洗参数
+    parser.add_argument('--min_stu_interactions', type=int, default=15,
+                        help='Minimum interactions for students to keep (0 = disable)')
+    parser.add_argument('--min_exer_interactions', type=int, default=0,
+                        help='Minimum interactions for exercises to keep (0 = disable)')
+    parser.add_argument('--min_poison_count', type=int, default=0,
+                        help='Minimum count for detecting toxic items with acc=0 or 1 (0 = disable)')
+
 
     args = parser.parse_args()
 
