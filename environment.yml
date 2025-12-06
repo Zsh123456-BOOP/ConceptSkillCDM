@@ -1,0 +1,8 @@
+name: xph_env
+channels:
+  - defaults
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.10
+prefix: /home/zsh/anaconda3/envs/xph_env

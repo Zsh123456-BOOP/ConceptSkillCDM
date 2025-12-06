@@ -9,10 +9,9 @@ from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error
 import json
 from datetime import datetime
 import logging
-from tqdm import tqdm
 import pandas as pd
 
-from dataset import CognitiveDiagnosisDataset, create_dataloaders, build_id_mappings, build_q_matrix
+from dataset import CognitiveDiagnosisDataset, create_dataloaders
 from model import CognitiveDiagnosisModel
 
 
@@ -35,36 +34,20 @@ def setup_logging(log_dir):
 def compute_metrics(labels, predictions, probs):
     """
     计算评估指标
-
-    Args:
-        labels: 真实标签 (numpy array)
-        predictions: 预测标签 (numpy array)
-        probs: 预测概率 (numpy array)
-
-    Returns:
-        metrics: 包含各项指标的字典
     """
-    # 确保是numpy数组
     labels = np.array(labels)
     predictions = np.array(predictions)
     probs = np.array(probs)
 
-    # AUC
     auc = roc_auc_score(labels, probs)
-
-    # ACC
     acc = accuracy_score(labels, predictions)
-
-    # RMSE
     rmse = np.sqrt(mean_squared_error(labels, probs))
 
-    metrics = {
+    return {
         'auc': float(auc),
         'acc': float(acc),
         'rmse': float(rmse)
     }
-
-    return metrics
 
 
 def train_epoch(model, train_loader, optimizer, device, lambda_sparse, lambda_independence, logger):
@@ -81,16 +64,20 @@ def train_epoch(model, train_loader, optimizer, device, lambda_sparse, lambda_in
     all_predictions = []
     all_probs = []
 
-    # 原来是：pbar = tqdm(train_loader, desc="Training", leave=False)
-    # for batch_idx, batch in enumerate(pbar):
     for batch_idx, batch in enumerate(train_loader):
-        student_ids, exercise_ids, _, labels = batch
+        student_ids, exercise_ids, concept_vector, labels = batch
         student_ids = student_ids.to(device)
         exercise_ids = exercise_ids.to(device)
+        concept_vector = concept_vector.to(device)
         labels = labels.to(device).float()
 
-        # 前向传播
-        pred_probs, details = model(student_ids, exercise_ids, return_details=True)
+        # 前向传播：把 concept_vector 也传给模型
+        pred_probs, details = model(
+            student_ids,
+            exercise_ids,
+            concept_vector=concept_vector,
+            return_details=True
+        )
 
         # 计算BCE损失
         bce_loss = nn.BCELoss()(pred_probs, labels)
@@ -124,10 +111,12 @@ def train_epoch(model, train_loader, optimizer, device, lambda_sparse, lambda_in
         all_predictions.extend(predictions.cpu().detach().numpy())
         all_probs.extend(pred_probs.cpu().detach().numpy())
 
-        # 如果你想，可以加一个很轻量的 batch 级别 log（可选）
+        # 轻量 batch 日志（可选）
         # if (batch_idx + 1) % 200 == 0:
-        #     logger.info(f"  [Train] Batch {batch_idx+1}/{len(train_loader)} "
-        #                 f"Loss={loss.item():.4f}, BCE={bce_loss.item():.4f}, Reg={reg_loss.item():.4f}")
+        #     logger.info(
+        #         f"[Train] Batch {batch_idx+1}/{len(train_loader)} "
+        #         f"Loss={loss.item():.4f}, BCE={bce_loss.item():.4f}, Reg={reg_loss.item():.4f}"
+        #     )
 
     avg_loss = total_loss / len(train_loader)
     avg_bce_loss = total_bce_loss / len(train_loader)
@@ -141,6 +130,7 @@ def train_epoch(model, train_loader, optimizer, device, lambda_sparse, lambda_in
         'reg_loss': avg_reg_loss,
         **metrics
     }
+
 
 def validate(model, val_loader, device, lambda_sparse, lambda_independence, logger):
     """
@@ -158,13 +148,19 @@ def validate(model, val_loader, device, lambda_sparse, lambda_independence, logg
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(val_loader):
-            student_ids, exercise_ids, _, labels = batch
+            student_ids, exercise_ids, concept_vector, labels = batch
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)
+            concept_vector = concept_vector.to(device)
             labels = labels.to(device).float()
 
             # 前向传播
-            pred_probs, details = model(student_ids, exercise_ids, return_details=True)
+            pred_probs, details = model(
+                student_ids,
+                exercise_ids,
+                concept_vector=concept_vector,
+                return_details=True
+            )
 
             # BCE
             bce_loss = nn.BCELoss()(pred_probs, labels)
@@ -190,7 +186,6 @@ def validate(model, val_loader, device, lambda_sparse, lambda_independence, logg
             all_predictions.extend(predictions.cpu().numpy())
             all_probs.extend(pred_probs.cpu().numpy())
 
-            # 可选的详细 batch 级日志（不需要可以删掉）
             # if (batch_idx + 1) % 200 == 0:
             #     logger.info(f"[Val] Batch {batch_idx+1}/{len(val_loader)} Loss={loss.item():.4f}")
 
@@ -208,29 +203,21 @@ def validate(model, val_loader, device, lambda_sparse, lambda_independence, logg
     }
 
 
-
 def train(args, logger):
     """
     训练模型
-
-    Args:
-        args: 命令行参数
-        logger: 日志记录器
     """
-    # 设置设备
     device = torch.device('cuda' if torch.cuda.is_available() and not args.no_cuda else 'cpu')
     logger.info(f'Using device: {device}')
 
-    # 加载数据集
     logger.info('Loading datasets...')
 
-    # 确定文件路径
     data_dir = args.data_dir
     train_file = os.path.join(data_dir, 'train.csv')
     val_file = os.path.join(data_dir, 'valid.csv')
     test_file = os.path.join(data_dir, 'test.csv')
 
-    # 创建数据加载器
+    # 创建数据加载器（内部已做清洗 + Q 矩阵构建，并有中文日志）
     train_loader, val_loader, test_loader, info_dict = create_dataloaders(
         train_file=train_file,
         val_file=val_file,
@@ -243,7 +230,6 @@ def train(args, logger):
         min_poison_count=args.min_poison_count,
         logger=logger
     )
-
 
     logger.info(f'Train samples: {info_dict["train_size"]}, Val samples: {info_dict["val_size"]}')
     logger.info(f'Number of students: {info_dict["num_students"]}')
@@ -270,30 +256,25 @@ def train(args, logger):
     logger.info(f'Total parameters: {total_params:,}')
     logger.info(f'Trainable parameters: {trainable_params:,}')
 
-    # 创建优化器
     optimizer = optim.Adam(
         model.parameters(),
         lr=args.learning_rate,
         weight_decay=args.weight_decay
     )
 
-    # 学习率调度器
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode='min',
         factor=0.5,
         patience=args.patience,
-        # verbose=True
     )
 
-    # 训练循环
     best_val_auc = 0.0
     best_epoch = 0
     patience_counter = 0
 
     logger.info('Starting training...')
 
-    # 保存训练历史
     history = {
         'train': [],
         'val': [],
@@ -313,12 +294,16 @@ def train(args, logger):
         )
 
         logger.info(f'\nTraining Results:')
-        logger.info(f'Loss: {train_metrics["loss"]:.4f}, '
-                    f'BCE: {train_metrics["bce_loss"]:.4f}, '
-                    f'Reg: {train_metrics["reg_loss"]:.4f}')
-        logger.info(f'AUC: {train_metrics["auc"]:.4f}, '
-                    f'ACC: {train_metrics["acc"]:.4f}, '
-                    f'RMSE: {train_metrics["rmse"]:.4f}')
+        logger.info(
+            f'Loss: {train_metrics["loss"]:.4f}, '
+            f'BCE: {train_metrics["bce_loss"]:.4f}, '
+            f'Reg: {train_metrics["reg_loss"]:.4f}'
+        )
+        logger.info(
+            f'AUC: {train_metrics["auc"]:.4f}, '
+            f'ACC: {train_metrics["acc"]:.4f}, '
+            f'RMSE: {train_metrics["rmse"]:.4f}'
+        )
 
         # 验证
         val_metrics = validate(
@@ -327,17 +312,20 @@ def train(args, logger):
         )
 
         logger.info(f'\nValidation Results:')
-        logger.info(f'Loss: {val_metrics["loss"]:.4f}, '
-                    f'BCE: {val_metrics["bce_loss"]:.4f}, '
-                    f'Reg: {val_metrics["reg_loss"]:.4f}')
-        logger.info(f'AUC: {val_metrics["auc"]:.4f}, '
-                    f'ACC: {val_metrics["acc"]:.4f}, '
-                    f'RMSE: {val_metrics["rmse"]:.4f}')
+        logger.info(
+            f'Loss: {val_metrics["loss"]:.4f}, '
+            f'BCE: {val_metrics["bce_loss"]:.4f}, '
+            f'Reg: {val_metrics["reg_loss"]:.4f}'
+        )
+        logger.info(
+            f'AUC: {val_metrics["auc"]:.4f}, '
+            f'ACC: {val_metrics["acc"]:.4f}, '
+            f'RMSE: {val_metrics["rmse"]:.4f}'
+        )
 
         # 更新学习率
         scheduler.step(val_metrics['loss'])
 
-        # 保存训练历史
         history['train'].append(train_metrics)
         history['val'].append(val_metrics)
 
@@ -347,7 +335,6 @@ def train(args, logger):
             best_epoch = epoch
             patience_counter = 0
 
-            # 保存模型
             model_path = os.path.join(args.save_dir, 'best_model.pth')
             torch.save({
                 'epoch': epoch,
@@ -364,12 +351,10 @@ def train(args, logger):
             patience_counter += 1
             logger.info(f'\nNo improvement for {patience_counter} epochs')
 
-        # 早停
         if patience_counter >= args.early_stop_patience:
             logger.info(f'\nEarly stopping triggered after {epoch} epochs')
             break
 
-        # 定期保存检查点
         if epoch % args.save_interval == 0:
             checkpoint_path = os.path.join(args.save_dir, f'checkpoint_epoch_{epoch}.pth')
             torch.save({
@@ -382,13 +367,11 @@ def train(args, logger):
             }, checkpoint_path)
             logger.info(f'Checkpoint saved: {checkpoint_path}')
 
-    # 保存训练历史
     history['best_epoch'] = best_epoch
     history['best_val_auc'] = best_val_auc
 
     history_path = os.path.join(args.save_dir, 'training_history.json')
     with open(history_path, 'w') as f:
-        # 转换tensor为可序列化的格式
         json.dump(history, f, indent=4, default=lambda x: float(x) if torch.is_tensor(x) else x)
 
     logger.info(f'\n{"=" * 50}')
@@ -396,15 +379,11 @@ def train(args, logger):
     logger.info(f'Best validation AUC: {best_val_auc:.4f} at epoch {best_epoch}')
     logger.info(f'{"=" * 50}')
 
+
 def inference(args, logger):
     """
     测试模型
-
-    Args:
-        args: 命令行参数
-        logger: 日志记录器
     """
-    # 设置设备
     device = torch.device('cuda' if torch.cuda.is_available() and not args.no_cuda else 'cpu')
     logger.info(f'Using device: {device}')
 
@@ -427,19 +406,16 @@ def inference(args, logger):
         logger.error('info_dict not found in checkpoint. Please retrain the model with the current code.')
         return
 
-    # 从 checkpoint 中取出映射和 Q 矩阵（完全复用训练时的）
     stu_id_map = info_dict['stu_id_map']
     exer_id_map = info_dict['exer_id_map']
     cpt_id_map = info_dict['cpt_id_map']
     q_matrix = info_dict['q_matrix']
 
-    # 2. 用保存好的映射构建测试数据集（不再调用 create_dataloaders，不会重复打印/构建 Q 矩阵）
+    # 2. 构建测试集（使用保存的 ID 映射，避免 KeyError）
     logger.info('Building test dataloader with saved ID mappings...')
 
-    # 2.1 读取原始 test.csv
     raw_test_df = pd.read_csv(test_file)
 
-    # 2.2 按照训练阶段的 ID 映射过滤一遍，避免出现“冷启动学生/题目”导致 KeyError
     valid_stu_ids = set(stu_id_map.keys())
     valid_exer_ids = set(exer_id_map.keys())
 
@@ -460,9 +436,9 @@ def inference(args, logger):
     else:
         logger.info("[推理阶段数据过滤] 测试集中所有学生与题目均在训练阶段出现，无需额外过滤。")
 
-    # 2.3 使用过滤后的 DataFrame 构建 Dataset（不会再出现 stu_id_map 的 KeyError）
+    # 注意：这里要求 CognitiveDiagnosisDataset 支持传入 DataFrame
     test_dataset = CognitiveDiagnosisDataset(
-        csv_file=filtered_test_df,   # 这里传入的是 DataFrame，不是路径
+        csv_file=filtered_test_df,
         stu_id_map=stu_id_map,
         exer_id_map=exer_id_map,
         cpt_id_map=cpt_id_map
@@ -479,8 +455,7 @@ def inference(args, logger):
     test_size = len(test_dataset)
     logger.info(f'Test samples: {test_size}')
 
-
-    # 3. 创建模型，使用保存的超参数和 Q 矩阵
+    # 3. 创建模型
     model = CognitiveDiagnosisModel(
         num_students=info_dict['num_students'],
         num_exercises=info_dict['num_exercises'],
@@ -497,7 +472,7 @@ def inference(args, logger):
     model.load_state_dict(checkpoint['model_state_dict'])
     logger.info(f'Model loaded from epoch {checkpoint["epoch"]}')
 
-    # 4. 测试
+    # 4. 测试（无 tqdm，改为轻量日志）
     logger.info('Starting testing...')
     model.eval()
 
@@ -506,35 +481,41 @@ def inference(args, logger):
     all_probs = []
 
     with torch.no_grad():
-        pbar = tqdm(test_loader, desc="Testing", leave=False)
-        for batch_idx, batch in enumerate(pbar):
-            student_ids, exercise_ids, _, labels = batch
+        for batch_idx, batch in enumerate(test_loader):
+            student_ids, exercise_ids, concept_vector, labels = batch
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)
+            concept_vector = concept_vector.to(device)
             labels = labels.to(device).float()
 
-            # 前向传播
-            pred_probs = model(student_ids, exercise_ids, return_details=False)
+            pred_probs = model(
+                student_ids,
+                exercise_ids,
+                concept_vector=concept_vector,
+                return_details=False
+            )
 
-            # 收集预测结果
             predictions = (pred_probs > 0.5).float()
             all_labels.extend(labels.cpu().numpy())
             all_predictions.extend(predictions.cpu().numpy())
             all_probs.extend(pred_probs.cpu().numpy())
 
-            pbar.set_postfix({'Processed': f'{len(all_labels)}/{test_size}'})
+            if (batch_idx + 1) % 200 == 0:
+                logger.info(
+                    f"[Test] 已完成 {batch_idx + 1} / {len(test_loader)} 个 batch，"
+                    f"累计样本数 {len(all_labels)}/{test_size}"
+                )
 
     # 5. 计算指标
     metrics = compute_metrics(all_labels, all_predictions, all_probs)
 
     logger.info(f'\n{"=" * 50}')
-    logger.info(f'Test Results:')
+    logger.info('Test Results:')
     logger.info(f'AUC: {metrics["auc"]:.4f}')
     logger.info(f'ACC: {metrics["acc"]:.4f}')
     logger.info(f'RMSE: {metrics["rmse"]:.4f}')
     logger.info(f'{"=" * 50}')
 
-    # 保存测试结果
     results = {
         'metrics': metrics,
         'num_samples': len(all_labels),
@@ -548,7 +529,7 @@ def inference(args, logger):
 
     logger.info(f'Test results saved to {result_path}')
 
-    # 6. 学生诊断（仍然复用 checkpoint 的映射）
+    # 6. 学生诊断
     if args.generate_diagnosis:
         logger.info('\nGenerating student diagnosis reports...')
 
@@ -576,68 +557,46 @@ def main():
     parser = argparse.ArgumentParser(description='Cognitive Diagnosis Model Training and Testing')
 
     # 数据参数
-    parser.add_argument('--data_dir', type=str, default='./data/assist_09/process_data',)
+    parser.add_argument('--data_dir', type=str, default='./data/assist_09/process_data')
 
     # 模型参数
-    parser.add_argument('--knowledge_dim', type=int, default=128,
-                        help='Dimension of knowledge state (default: 32)')
-    parser.add_argument('--skill_dim', type=int, default=2,
-                        help='Dimension of test-taking skill ')
-    parser.add_argument('--exercise_dim', type=int, default=128,
-                        help='Dimension of exercise embedding (default: 64)')
-    parser.add_argument('--num_relation_heads', type=int, default=4,
-                        help='Number of relation heads (default: 4)')
-    parser.add_argument('--num_gnn_layers', type=int, default=2,
-                        help='Number of GNN layers')
-    parser.add_argument('--dropout', type=float, default=0.1,
-                        help='Dropout rate (default: 0.1)')
+    parser.add_argument('--knowledge_dim', type=int, default=128)
+    parser.add_argument('--skill_dim', type=int, default=2)
+    parser.add_argument('--exercise_dim', type=int, default=128)
+    parser.add_argument('--num_relation_heads', type=int, default=4)
+    parser.add_argument('--num_gnn_layers', type=int, default=2)
+    parser.add_argument('--dropout', type=float, default=0.1)
 
     # 训练参数
-    parser.add_argument('--batch_size', type=int, default=256,
-                        help='Batch size (default: 256)')
-    parser.add_argument('--epochs', type=int, default=100,
-                        help='Number of training epochs (default: 100)')
-    parser.add_argument('--learning_rate', type=float, default=0.0001,
-                        help='Learning rate (default: 0.001)')
-    parser.add_argument('--weight_decay', type=float, default=1e-5,
-                        help='Weight decay (default: 1e-5)')
-    parser.add_argument('--lambda_sparse', type=float, default=0.1,
-                        help='Sparse regularization coefficient (default: 0.01)')
-    parser.add_argument('--lambda_independence', type=float, default=0.1,
-                        help='Independence regularization coefficient (default: 0.01)')
+    parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--learning_rate', type=float, default=0.0001)
+    parser.add_argument('--weight_decay', type=float, default=1e-5)
+    parser.add_argument('--lambda_sparse', type=float, default=0.1)
+    parser.add_argument('--lambda_independence', type=float, default=0.1)
 
     # 早停和调度器参数
-    parser.add_argument('--patience', type=int, default=5,
-                        help='Patience for learning rate scheduler (default: 5)')
-    parser.add_argument('--early_stop_patience', type=int, default=5,
-                        help='Patience for early stopping (default: 15)')
+    parser.add_argument('--patience', type=int, default=5)
+    parser.add_argument('--early_stop_patience', type=int, default=5)
 
     # 其他参数
-    parser.add_argument('--num_workers', type=int, default=4,
-                        help='Number of data loading workers (default: 4)')
-    parser.add_argument('--no_cuda', action='store_true',
-                        help='Disable CUDA training')
-    parser.add_argument('--seed', type=int, default=42,
-                        help='Random seed (default: 42)')
-    parser.add_argument('--generate_diagnosis', default=True,
-                        help='Generate student diagnosis reports after testing')
+    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--no_cuda', action='store_true')
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--generate_diagnosis', default=True)
 
     # 保存参数
-    parser.add_argument('--save_dir', type=str, default='./checkpoints',
-                        help='Directory to save models (default: ./checkpoints)')
-    parser.add_argument('--log_dir', type=str, default='./logs',
-                        help='Directory to save logs (default: ./logs)')
-    parser.add_argument('--save_interval', type=int, default=10,
-                        help='Save checkpoint every N epochs (default: 10)')
-    
-        # 数据清洗参数
+    parser.add_argument('--save_dir', type=str, default='./checkpoints')
+    parser.add_argument('--log_dir', type=str, default='./logs')
+    parser.add_argument('--save_interval', type=int, default=10)
+
+    # 数据清洗参数
     parser.add_argument('--min_stu_interactions', type=int, default=15,
                         help='Minimum interactions for students to keep (0 = disable)')
     parser.add_argument('--min_exer_interactions', type=int, default=0,
                         help='Minimum interactions for exercises to keep (0 = disable)')
     parser.add_argument('--min_poison_count', type=int, default=0,
                         help='Minimum count for detecting toxic items with acc=0 or 1 (0 = disable)')
-
 
     args = parser.parse_args()
 
@@ -650,24 +609,19 @@ def main():
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-    # 创建保存目录
     os.makedirs(args.save_dir, exist_ok=True)
     os.makedirs(args.log_dir, exist_ok=True)
 
-    # 设置日志
     logger = setup_logging(args.log_dir)
 
-    # 保存参数
     args_file = os.path.join(args.save_dir, 'args.json')
     with open(args_file, 'w') as f:
         json.dump(vars(args), f, indent=4)
 
-    # 打印参数
     logger.info('Arguments:')
     for arg, value in sorted(vars(args).items()):
         logger.info(f'  {arg}: {value}')
 
-    # 训练和测试
     train(args, logger)
     inference(args, logger)
 

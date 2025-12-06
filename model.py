@@ -387,7 +387,6 @@ class ExerciseDifficultyEncoder(nn.Module):
         return exercise_emb, difficulty, discrimination
 
 
-
 class ResponsePredictionHead(nn.Module):
     """作答预测头 - 结合知识状态、技巧和习题特征"""
 
@@ -400,7 +399,6 @@ class ResponsePredictionHead(nn.Module):
     ):
         super().__init__()
 
-        # 知识匹配网络
         self.knowledge_net = nn.Sequential(
             nn.Linear(knowledge_dim, hidden_dim),
             nn.ReLU(),
@@ -408,7 +406,6 @@ class ResponsePredictionHead(nn.Module):
             nn.Linear(hidden_dim, 1)
         )
 
-        # 技巧影响网络
         self.skill_net = nn.Sequential(
             nn.Linear(skill_dim + exercise_dim, hidden_dim // 2),
             nn.ReLU(),
@@ -419,7 +416,6 @@ class ResponsePredictionHead(nn.Module):
         self._initialize_weights()
 
     def _initialize_weights(self):
-        """初始化权重"""
         for module in [self.knowledge_net, self.skill_net]:
             for layer in module:
                 if isinstance(layer, nn.Linear):
@@ -434,53 +430,46 @@ class ResponsePredictionHead(nn.Module):
             exercise_emb: torch.Tensor,
             difficulty: torch.Tensor,
             discrimination: torch.Tensor,
-            q_vector: torch.Tensor
+            concept_mask: torch.Tensor,   # ✅ 不再叫 q_vector
     ) -> torch.Tensor:
         """
-        前向传播
-
-        Args:
-            knowledge_state: (batch_size, num_concepts, knowledge_dim)
-            skill_vector: (batch_size, skill_dim)
-            exercise_emb: (batch_size, exercise_dim)
-            difficulty: (batch_size, num_concepts)
-            discrimination: (batch_size, num_concepts)
-            q_vector: (batch_size, num_concepts) - Q矩阵的行向量
-
-        Returns:
-            预测概率 (batch_size,)
+        concept_mask: (batch_size, num_concepts)
+            - 可以是纯 Q 行向量
+            - 可以是纯 concept_matrix
+            - 可以是二者的融合
         """
         batch_size = knowledge_state.size(0)
 
-        # 1. 计算知识掌握程度（基于IRT）
-        # 对每个知识点计算掌握得分
+        # 1. 每个知识点掌握得分
         knowledge_scores = []
-        for i in range(knowledge_state.size(1)):  # 遍历每个知识点
-            k = knowledge_state[:, i, :]  # (batch_size, knowledge_dim)
-            score = self.knowledge_net(k).squeeze(-1)  # (batch_size,)
+        for i in range(knowledge_state.size(1)):
+            k = knowledge_state[:, i, :]
+            score = self.knowledge_net(k).squeeze(-1)
             knowledge_scores.append(score)
+        knowledge_scores = torch.stack(knowledge_scores, dim=1)
 
-        knowledge_scores = torch.stack(knowledge_scores, dim=1)  # (batch_size, num_concepts)
+        # IRT logits
+        irt_logits = discrimination * (knowledge_scores - difficulty)
 
+        # 归一化 concept_mask，防止全 0
+        mask_sum = concept_mask.sum(dim=1, keepdim=True) + 1e-12
+        concept_norm = concept_mask / mask_sum
 
-        irt_logits = discrimination * (knowledge_scores - difficulty)  # (batch_size, num_concepts)
+        knowledge_prob = torch.sigmoid((irt_logits * concept_norm).sum(dim=1))
 
-        # 使用Q矩阵加权聚合相关知识点
-        # 归一化Q矩阵的行
-        q_norm = q_vector / (q_vector.sum(dim=1, keepdim=True) + 1e-12)
-
-        # 加权求和
-        knowledge_prob = torch.sigmoid((irt_logits * q_norm).sum(dim=1))  # (batch_size,)
-
-        # 2. 计算技巧影响（猜测和失误）
+        # 2. 技巧影响
         skill_input = torch.cat([skill_vector, exercise_emb], dim=1)
-        skill_adjustment = self.skill_net(skill_input).squeeze(-1)  # (batch_size,)
-        skill_adjustment = torch.tanh(skill_adjustment) * 0.2  # 限制影响范围在[-0.2, 0.2]
+        skill_adjustment = self.skill_net(skill_input).squeeze(-1)
+        skill_adjustment = torch.tanh(skill_adjustment) * 0.2
 
-        # 3. 最终预测
-        final_prob = torch.clamp(knowledge_prob + skill_adjustment, min=1e-6, max=1 - 1e-6)
+        final_prob = torch.clamp(
+            knowledge_prob + skill_adjustment,
+            min=1e-6,
+            max=1 - 1e-6
+        )
 
         return final_prob
+
 
 
 class CognitiveDiagnosisModel(nn.Module):
@@ -566,6 +555,7 @@ class CognitiveDiagnosisModel(nn.Module):
             self,
             student_ids: torch.Tensor,
             exercise_ids: torch.Tensor,
+            concept_vector: torch.Tensor = None,
             return_details: bool = False
     ) -> Union[torch.Tensor, Tuple]:
         """
@@ -593,16 +583,24 @@ class CognitiveDiagnosisModel(nn.Module):
         exercise_emb, difficulty, discrimination = self.exercise_encoder(exercise_ids, relation_matrices)
 
         # 5. 获取Q矩阵向量
-        q_vector = self.q_matrix[exercise_ids]
+        q_vector = self.q_matrix[exercise_ids]  # (batch_size, num_concepts)
 
-        # 6. 预测作答概率
+        # 6. 样本级 concept_matrix 与 Q 的融合
+        if concept_vector is not None:
+            concept_vector = concept_vector.to(q_vector.dtype)
+            alpha = 0.7  # 样本级标签权重
+            effective_concept = alpha * concept_vector + (1.0 - alpha) * q_vector
+        else:
+            effective_concept = q_vector
+
+        # 7. 预测
         pred_prob = self.prediction_head(
             knowledge_state,
             skill_vector,
             exercise_emb,
             difficulty,
             discrimination,
-            q_vector
+            effective_concept
         )
 
         if return_details:
@@ -611,7 +609,9 @@ class CognitiveDiagnosisModel(nn.Module):
                 'knowledge_state': knowledge_state,
                 'skill_vector': skill_vector,
                 'difficulty': difficulty,
-                'discrimination': discrimination
+                'discrimination': discrimination,
+                'q_vector': q_vector,
+                'effective_concept': effective_concept,
             }
             return pred_prob, details
         else:
