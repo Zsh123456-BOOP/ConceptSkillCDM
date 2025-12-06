@@ -1,434 +1,450 @@
-import os
 import torch
-import pandas as pd
 from torch.utils.data import Dataset, DataLoader
+import pandas as pd
+import numpy as np
+from typing import Tuple, Optional, Dict
 
 
-class CognitiveDataset(Dataset):
-    """
-    基础 Dataset：
-    只存 (stu_idx, exer_idx, label) 三元组，
-    Q-matrix 在 DataProcessor 里统一处理并在 collate 时注入。
-    """
-    def __init__(self, triplets):
+class CognitiveDiagnosisDataset(Dataset):
+    """认知诊断数据集类"""
+
+    def __init__(
+            self,
+            csv_file: str,
+            stu_id_map: Dict[int, int],
+            exer_id_map: Dict[int, int],
+            cpt_id_map: Dict[int, int]
+    ):
         """
-        triplets: List[(stu_idx, exer_idx, label)]
+        初始化数据集
+
+        Args:
+            csv_file: CSV文件路径 或 已经读取好的 DataFrame
+            stu_id_map: 学生ID映射字典 {原始ID: 新ID}
+            exer_id_map: 习题ID映射字典 {原始ID: 新ID}
+            cpt_id_map: 知识点ID映射字典 {原始ID: 新ID}
         """
-        self.triplets = triplets
+        self.stu_id_map = stu_id_map
+        self.exer_id_map = exer_id_map
+        self.cpt_id_map = cpt_id_map
+        self.num_concepts = len(cpt_id_map)
 
-    def __len__(self):
-        return len(self.triplets)
-
-    def __getitem__(self, idx):
-        stu_idx, exer_idx, label = self.triplets[idx]
-        return stu_idx, exer_idx, label
-
-
-class CognitiveDataProcessor:
-    """
-    数据处理与清洗：
-    - 读取 train/valid/test 以及可选的分层测试集
-    - 按 config 中的阈值统一执行清洗策略（所有数据集一致）
-    - junyi 额外做 Transductive 用户对齐
-    - 统一 ID 映射，构建 Q-matrix
-    - 生成 triplets 和 DataLoader
-    """
-    def __init__(self, args, logger):
-        self.data_dir = os.path.join(args.data_root, args.dataset)
-        self.args = args
-        self.logger = logger
-
-        self.logger.info(f">>> Processing Data for Dataset: {args.dataset} ...")
-        self._load_and_process()
-
-    # ================== 主流程 ==================
-    def _load_and_process(self):
-        # 1. 读取原始 CSV
-        self.train_data = self._safe_read_csv(self.args.train_file)
-        self.test_data = self._safe_read_csv(self.args.test_file)
-
-        valid_path = os.path.join(self.data_dir, self.args.valid_file)
-        if not os.path.exists(valid_path):
-            valid_path = os.path.join(self.data_dir, 'val.csv')
-        if os.path.exists(valid_path):
-            self.valid_data = pd.read_csv(valid_path)
+        # 读取数据：支持路径或 DataFrame
+        if isinstance(csv_file, str):
+            self.data = pd.read_csv(csv_file)
         else:
-            raise FileNotFoundError(f"Validation file not found in {self.data_dir}")
+            # 认为是 DataFrame
+            self.data = csv_file.copy().reset_index(drop=True)
 
-        # 分层测试集（可选）
-        self.high_test = self._safe_read_csv(self.args.high_test_file, optional=True)
-        self.med_test = self._safe_read_csv(self.args.medium_test_file, optional=True)
-        self.low_test = self._safe_read_csv(self.args.low_test_file, optional=True)
+        # 重新映射ID并转换为tensor
+        self.student_ids = torch.LongTensor([
+            stu_id_map[sid] for sid in self.data['stu_id'].values
+        ])
+        self.exercise_ids = torch.LongTensor([
+            exer_id_map[eid] for eid in self.data['exer_id'].values
+        ])
+        self.labels = torch.FloatTensor(self.data['label'].values)
 
-        # ============ 辅助函数：批量过滤 ============
-        def apply_filter_to_all_splits(keep_ids, col_name, log_desc):
-            dropped_count = 0
-            for attr in ['train_data', 'valid_data', 'test_data',
-                         'high_test', 'med_test', 'low_test']:
-                df = getattr(self, attr)
-                if df is not None:
-                    before = len(df)
-                    df_new = df[df[col_name].isin(keep_ids)].reset_index(drop=True)
-                    after = len(df_new)
-                    setattr(self, attr, df_new)
-                    if before != after:
-                        dropped_count += (before - after)
-            self.logger.info(f"[DataClean] {log_desc}: Dropped {dropped_count} rows across all splits.")
+        # 处理知识点序列，转换为one-hot编码
+        self.concept_matrix = self._process_concepts(self.data['cpt_seq'].values)
 
-        # ============ 统一的清洗逻辑（由 config 控制） ============
-        combined = pd.concat(
-            [self.train_data, self.valid_data, self.test_data],
-            ignore_index=True
+    def _process_concepts(self, concept_seqs) -> torch.Tensor:
+        """
+        将知识点序列转换为one-hot编码矩阵
+
+        Args:
+            concept_seqs: 知识点序列数组
+
+        Returns:
+            形状为 (数据长度, 知识点总数) 的one-hot张量
+        """
+        batch_size = len(concept_seqs)
+        concept_matrix = torch.zeros(batch_size, self.num_concepts)
+
+        for i, seq in enumerate(concept_seqs):
+            # 处理字符串格式的知识点序列
+            if pd.isna(seq):  # 处理可能的NaN值
+                continue
+
+            # 将字符串分割为知识点ID列表
+            if isinstance(seq, str):
+                concept_ids = [int(cid) for cid in seq.split(',')]
+            else:
+                concept_ids = [int(seq)]
+
+            # 使用映射后的ID设置one-hot编码
+            for cid in concept_ids:
+                mapped_cid = self.cpt_id_map.get(cid)
+                if mapped_cid is not None:
+                    concept_matrix[i, mapped_cid] = 1
+
+        return concept_matrix
+
+    def __len__(self) -> int:
+        """返回数据集大小"""
+        return len(self.data)
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        获取单个样本
+
+        Args:
+            idx: 样本索引
+
+        Returns:
+            (student_id, exercise_id, concept_vector, label) 元组
+        """
+        return (
+            self.student_ids[idx],
+            self.exercise_ids[idx],
+            self.concept_matrix[idx],
+            self.labels[idx]
         )
 
-        # --- 学生冷启动过滤（所有数据集生效） ---
-        if self.args.min_stu_interactions > 0:
-            stu_counts = combined.groupby("stu_id").size()
-            keep_users = set(
-                stu_counts[stu_counts >= self.args.min_stu_interactions].index
-            )
-            self.logger.info(
-                f"[DataClean] Filtering Students < {self.args.min_stu_interactions} interactions "
-                f"(Removed {len(stu_counts) - len(keep_users)} users)"
-            )
-            apply_filter_to_all_splits(
-                keep_users, "stu_id",
-                f"Cold-Start Users (<{self.args.min_stu_interactions})"
-            )
+
+def build_id_mappings(sources: list) -> Tuple[Dict[int, int], Dict[int, int], Dict[int, int]]:
+    """
+    从所有数据源中构建ID映射
+
+    Args:
+        sources: 列表，每个元素可以是 CSV 文件路径(str) 或 pandas.DataFrame
+
+    Returns:
+        (stu_id_map, exer_id_map, cpt_id_map) 三个映射字典
+    """
+    all_stu_ids = set()
+    all_exer_ids = set()
+    all_cpt_ids = set()
+
+    # 收集所有唯一ID
+    for src in sources:
+        if isinstance(src, str):
+            df = pd.read_csv(src)
         else:
-            self.logger.info(
-                "[DataClean] [Skip] Student cold-start filtering disabled "
-                "(min_stu_interactions <= 0)."
-            )
+            df = src
 
-        # --- 题目冷门过滤（所有数据集生效） ---
-        if self.args.min_exer_interactions > 0:
-            combined = pd.concat(
-                [self.train_data, self.valid_data, self.test_data],
-                ignore_index=True
-            )
-            exer_counts = combined.groupby("exer_id").size()
-            keep_items = set(
-                exer_counts[exer_counts >= self.args.min_exer_interactions].index
-            )
-            self.logger.info(
-                f"[DataClean] Filtering Items < {self.args.min_exer_interactions} interactions "
-                f"(Removed {len(exer_counts) - len(keep_items)} items)"
-            )
-            apply_filter_to_all_splits(
-                keep_items, "exer_id",
-                f"Cold Items (<{self.args.min_exer_interactions})"
-            )
+        # 收集学生ID和习题ID
+        all_stu_ids.update(df['stu_id'].unique())
+        all_exer_ids.update(df['exer_id'].unique())
+
+        # 收集知识点ID
+        for seq in df['cpt_seq'].values:
+            if pd.isna(seq):
+                continue
+            if isinstance(seq, str):
+                concept_ids = [int(cid) for cid in seq.split(',')]
+            else:
+                concept_ids = [int(seq)]
+            all_cpt_ids.update(concept_ids)
+
+    # 创建映射字典：原始ID -> 连续的新ID (从0开始)
+    stu_id_map = {old_id: new_id for new_id, old_id in enumerate(sorted(all_stu_ids))}
+    exer_id_map = {old_id: new_id for new_id, old_id in enumerate(sorted(all_exer_ids))}
+    cpt_id_map = {old_id: new_id for new_id, old_id in enumerate(sorted(all_cpt_ids))}
+
+    return stu_id_map, exer_id_map, cpt_id_map
+
+
+def build_q_matrix(
+        sources: list,
+        exer_id_map: Dict[int, int],
+        cpt_id_map: Dict[int, int]
+) -> torch.Tensor:
+    """
+    构建Q矩阵 (习题-知识点关联矩阵)
+
+    Args:
+        sources: 列表，每个元素可以是 CSV 文件路径(str) 或 pandas.DataFrame
+        exer_id_map: 习题ID映射字典 {原始ID: 新ID}
+        cpt_id_map: 知识点ID映射字典 {原始ID: 新ID}
+
+    Returns:
+        Q矩阵，形状为 (习题总数, 知识点总数)
+    """
+    num_exercises = len(exer_id_map)
+    num_concepts = len(cpt_id_map)
+
+    # 初始化Q矩阵
+    q_matrix = torch.zeros(num_exercises, num_concepts)
+
+    # 用于存储习题和知识点的对应关系
+    exercise_concepts = {}
+
+    # 从所有文件 / DataFrame 中收集习题-知识点关系
+    for src in sources:
+        if isinstance(src, str):
+            df = pd.read_csv(src)
         else:
-            self.logger.info(
-                "[DataClean] [Skip] Item cold filtering disabled "
-                "(min_exer_interactions <= 0)."
-            )
+            df = src
 
-        # --- 毒题清洗（所有数据集生效，是否开启由 min_poison_count 控制） ---
-        if self.args.min_poison_count > 0:
-            combined = pd.concat(
-                [self.train_data, self.valid_data, self.test_data],
-                ignore_index=True
-            )
-            item_stats = combined.groupby("exer_id")["label"].agg(
-                count="count", correct_rate="mean"
-            ).reset_index()
+        for _, row in df.iterrows():
+            exer_id = row['exer_id']
+            cpt_seq = row['cpt_seq']
 
-            poison_mask = (
-                (item_stats["count"] >= self.args.min_poison_count)
+            # 获取映射后的习题ID
+            mapped_exer_id = exer_id_map[exer_id]
+
+            # 解析知识点序列
+            if pd.isna(cpt_seq):
+                continue
+
+            if isinstance(cpt_seq, str):
+                concept_ids = [int(cid) for cid in cpt_seq.split(',')]
+            else:
+                concept_ids = [int(cpt_seq)]
+
+            # 存储该习题对应的知识点
+            if mapped_exer_id not in exercise_concepts:
+                exercise_concepts[mapped_exer_id] = set()
+
+            for cid in concept_ids:
+                if cid in cpt_id_map:
+                    exercise_concepts[mapped_exer_id].add(cpt_id_map[cid])
+
+    # 填充Q矩阵
+    for exer_id, concepts in exercise_concepts.items():
+        for cpt_id in concepts:
+            q_matrix[exer_id, cpt_id] = 1
+
+    return q_matrix
+
+def create_dataloaders(
+        train_file: str,
+        val_file: str,
+        test_file: str,
+        batch_size: int = 32,
+        num_workers: int = 4,
+        shuffle_train: bool = True,
+        min_stu_interactions: int = 0,
+        min_exer_interactions: int = 0,
+        min_poison_count: int = 0,
+        logger=None
+) -> Tuple[DataLoader, DataLoader, DataLoader, dict]:
+    """
+    创建训练、验证和测试的数据加载器，并执行统一的数据清洗
+
+    Args:
+        train_file: 训练集CSV文件路径
+        val_file: 验证集CSV文件路径
+        test_file: 测试集CSV文件路径
+        batch_size: 批次大小
+        num_workers: 数据加载的工作进程数
+        shuffle_train: 是否打乱训练集
+        min_stu_interactions: 学生最小答题数阈值（<该值的学生将被过滤，0 表示不启用）
+        min_exer_interactions: 习题最小被作答数阈值（<该值的题目将被过滤，0 表示不启用）
+        min_poison_count: 毒题检测所需的最小作答次数（0 表示不启用）
+        logger: 可选的 logger，对清洗过程进行记录
+
+    Returns:
+        (train_loader, val_loader, test_loader, info_dict) 元组
+        info_dict包含数据集的统计信息和映射字典
+    """
+    def log(msg: str):
+        if logger is not None:
+            logger.info(msg)
+        else:
+            print(msg)
+
+    # 1. 读取原始 CSV
+    train_df = pd.read_csv(train_file)
+    val_df = pd.read_csv(val_file)
+    test_df = pd.read_csv(test_file)
+
+    # ============ 统一的清洗逻辑 ============
+
+    # --- 学生冷启动过滤 ---
+    if min_stu_interactions > 0:
+        combined = pd.concat([train_df, val_df, test_df], ignore_index=True)
+        stu_counts = combined.groupby("stu_id").size()
+        keep_users = set(
+            stu_counts[stu_counts >= min_stu_interactions].index
+        )
+        removed_users = len(stu_counts) - len(keep_users)
+        log(
+            f"[数据清洗] 学生交互次数 < {min_stu_interactions} 次的学生：共移除 {removed_users} 个学生（仅统计用户数）"
+        )
+
+        def _filter_by_students(df):
+            before = len(df)
+            df_new = df[df["stu_id"].isin(keep_users)].reset_index(drop=True)
+            return df_new, before - len(df_new)
+
+        dropped_total = 0
+        train_df, d = _filter_by_students(train_df); dropped_total += d
+        val_df, d = _filter_by_students(val_df); dropped_total += d
+        test_df, d = _filter_by_students(test_df); dropped_total += d
+
+        log(f"[数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 {dropped_total} 条记录。")
+    else:
+        log("[数据清洗] 跳过学生冷启动过滤（min_stu_interactions <= 0）。")
+
+
+    # --- 题目冷门过滤 ---
+    if min_exer_interactions > 0:
+        combined = pd.concat([train_df, val_df, test_df], ignore_index=True)
+        exer_counts = combined.groupby("exer_id").size()
+        keep_items = set(
+            exer_counts[exer_counts >= min_exer_interactions].index
+        )
+        removed_items = len(exer_counts) - len(keep_items)
+        log(
+            f"[数据清洗] 题目作答次数 < {min_exer_interactions} 次的题目：共移除 {removed_items} 道题（仅统计题目数）"
+        )
+
+        def _filter_by_items(df):
+            before = len(df)
+            df_new = df[df["exer_id"].isin(keep_items)].reset_index(drop=True)
+            return df_new, before - len(df_new)
+
+        dropped_total = 0
+        train_df, d = _filter_by_items(train_df); dropped_total += d
+        val_df, d = _filter_by_items(val_df); dropped_total += d
+        test_df, d = _filter_by_items(test_df); dropped_total += d
+
+        log(f"[数据清洗] 题目冷门过滤：在 train/valid/test 中共删除 {dropped_total} 条记录。")
+    else:
+        log("[数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。")
+
+
+    # --- 毒题清洗（Acc=0 或 1 且作答数 >= min_poison_count） ---
+    if min_poison_count > 0:
+        combined = pd.concat([train_df, val_df, test_df], ignore_index=True)
+        item_stats = combined.groupby("exer_id")["label"].agg(
+            count="count", correct_rate="mean"
+        ).reset_index()
+
+        poison_mask = (
+                (item_stats["count"] >= min_poison_count)
                 & ((item_stats["correct_rate"] <= 0.0)
                    | (item_stats["correct_rate"] >= 1.0))
-            )
-            poison_items = item_stats.loc[poison_mask, :]
-            poison_ids = set(poison_items["exer_id"].tolist())
+        )
+        poison_items = item_stats.loc[poison_mask, :]
+        poison_ids = set(poison_items["exer_id"].tolist())
 
-            if len(poison_ids) > 0:
-                self.logger.info(
-                    f"[DataClean] Detected {len(poison_ids)} toxic items "
-                    f"(count >= {self.args.min_poison_count} & Acc=0.0 or 1.0). Removing..."
-                )
-                keep_non_toxic = set(
-                    item_stats[~item_stats["exer_id"].isin(poison_ids)]["exer_id"]
-                )
-                apply_filter_to_all_splits(
-                    keep_non_toxic, "exer_id", "Toxic Items"
-                )
-            else:
-                self.logger.info(
-                    "[DataClean] No toxic items detected under current min_poison_count."
-                )
+        if len(poison_ids) > 0:
+            log(
+                f"[数据清洗] 检测到 {len(poison_ids)} 道“毒题”"
+                f"（作答次数 ≥ {min_poison_count} 且正确率为 0 或 1），将从所有数据集中移除。"
+            )
+            keep_non_toxic = set(
+                item_stats[~item_stats["exer_id"].isin(poison_ids)]["exer_id"]
+            )
+
+            def _filter_non_toxic(df):
+                before = len(df)
+                df_new = df[df["exer_id"].isin(keep_non_toxic)].reset_index(drop=True)
+                return df_new, before - len(df_new)
+
+            dropped_total = 0
+            train_df, d = _filter_non_toxic(train_df); dropped_total += d
+            val_df, d = _filter_non_toxic(val_df); dropped_total += d
+            test_df, d = _filter_non_toxic(test_df); dropped_total += d
+
+            log(f"[数据清洗] 毒题清洗：在 train/valid/test 中共删除 {dropped_total} 条记录。")
         else:
-            self.logger.info(
-                "[DataClean] [Skip] Toxic item filtering disabled "
-                "(min_poison_count <= 0)."
-            )
+            log("[数据清洗] 在当前 min_poison_count 设置下未检测到“毒题”。")
+    else:
+        log("[数据清洗] 跳过毒题清洗（min_poison_count <= 0）。")
 
-        # ============ 统一 Student ID 类型 ============
-        self.logger.info("Normalizing Student IDs to strings...")
-        for attr in ['train_data', 'valid_data', 'test_data',
-                     'high_test', 'med_test', 'low_test']:
-            df = getattr(self, attr)
-            if df is not None and not df.empty:
-                df['stu_id'] = df['stu_id'].astype(str)
 
-        # ============ Junyi 用户对齐 (Transductive，仅 junyi) ============
-        if self.args.dataset == "junyi":
-            self.logger.info(
-                "[Alignment] Filtering unseen users in Valid/Test sets "
-                "(Transductive Setting)..."
-            )
-            train_users = set(self.train_data['stu_id'].unique())
+    # 2. 构建ID映射 & Q矩阵（基于清洗后的 DataFrame）
+    csv_sources = [train_df, val_df, test_df]
 
-            def filter_unseen(df, name):
-                if df is None or df.empty:
-                    return df
-                original_len = len(df)
-                df_filtered = df[df['stu_id'].isin(train_users)].reset_index(drop=True)
-                new_len = len(df_filtered)
-                if original_len != new_len:
-                    self.logger.info(
-                        f"   -> [{name}] Dropped {original_len - new_len} rows "
-                        "from unseen users."
-                    )
-                return df_filtered
+    print("正在构建ID映射...")
+    stu_id_map, exer_id_map, cpt_id_map = build_id_mappings(csv_sources)
 
-            self.valid_data = filter_unseen(self.valid_data, "valid")
-            self.test_data = filter_unseen(self.test_data, "test")
-            if self.high_test is not None:
-                self.high_test = filter_unseen(self.high_test, "high")
-            if self.med_test is not None:
-                self.med_test = filter_unseen(self.med_test, "med")
-            if self.low_test is not None:
-                self.low_test = filter_unseen(self.low_test, "low")
+    print("正在构建Q矩阵...")
+    q_matrix = build_q_matrix(csv_sources, exer_id_map, cpt_id_map)
 
-        # ============ 构建 ID 映射与概念集合 ============
-        all_data = pd.concat([self.train_data, self.valid_data, self.test_data])
+    # 3. 创建数据集（直接传 DataFrame，避免重复读盘）
+    print("正在加载数据集...")
+    train_dataset = CognitiveDiagnosisDataset(train_df, stu_id_map, exer_id_map, cpt_id_map)
+    val_dataset = CognitiveDiagnosisDataset(val_df, stu_id_map, exer_id_map, cpt_id_map)
+    test_dataset = CognitiveDiagnosisDataset(test_df, stu_id_map, exer_id_map, cpt_id_map)
 
-        self.stu_ids = sorted(all_data['stu_id'].unique())
-        self.exer_ids = sorted(all_data['exer_id'].unique())
+    # 4. 创建 DataLoader
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=shuffle_train,
+        num_workers=num_workers,
+        pin_memory=True
+    )
 
-        all_concepts = set()
-        if 'cpt_seq' in all_data.columns:
-            cpt_series = all_data['cpt_seq'].dropna().astype(str)
-            for cpt_seq in cpt_series:
-                clean_seq = cpt_seq.strip('"').strip("'")
-                if clean_seq:
-                    try:
-                        concepts = list(map(int, clean_seq.split(',')))
-                        all_concepts.update(concepts)
-                    except Exception:
-                        pass
-        self.cpt_ids = sorted(all_concepts)
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True
+    )
 
-        self.stu2idx = {id_: i for i, id_ in enumerate(self.stu_ids)}
-        self.exer2idx = {id_: i for i, id_ in enumerate(self.exer_ids)}
-        self.cpt2idx = {id_: i for i, id_ in enumerate(self.cpt_ids)}
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True
+    )
 
-        self.num_students = len(self.stu_ids)
-        self.num_exercises = len(self.exer_ids)
-        self.num_concepts = len(self.cpt_ids)
+    # 5. 收集信息
+    info_dict = {
+        'num_students': len(stu_id_map),
+        'num_exercises': len(exer_id_map),
+        'num_concepts': len(cpt_id_map),
+        'train_size': len(train_dataset),
+        'val_size': len(val_dataset),
+        'test_size': len(test_dataset),
+        'stu_id_map': stu_id_map,
+        'exer_id_map': exer_id_map,
+        'cpt_id_map': cpt_id_map,
+        'stu_id_reverse_map': {v: k for k, v in stu_id_map.items()},
+        'exer_id_reverse_map': {v: k for k, v in exer_id_map.items()},
+        'cpt_id_reverse_map': {v: k for k, v in cpt_id_map.items()},
+        'q_matrix': q_matrix
+    }
 
-        self.logger.info(
-            f"Final Stats: Stu={self.num_students}, "
-            f"Exer={self.num_exercises}, Cpt={self.num_concepts}"
-        )
+    return train_loader, val_loader, test_loader, info_dict
 
-        # ============ 三元组构建 ============
-        self.logger.info("Processing Triplets...")
-        self.train_triplets = self._process_triplets_fast(self.train_data)
-        self.valid_triplets = self._process_triplets_fast(self.valid_data)
-        self.test_triplets = self._process_triplets_fast(self.test_data)
 
-        self.high_triplets = self._process_triplets_fast(self.high_test) if self.high_test is not None else []
-        self.med_triplets = self._process_triplets_fast(self.med_test) if self.med_test is not None else []
-        self.low_triplets = self._process_triplets_fast(self.low_test) if self.low_test is not None else []
 
-        # ============ Q-matrix ============
-        self.logger.info("Building Q-Matrix...")
-        self.Q_matrix = self._build_q_matrix(all_data)  # (num_exercises, num_concepts)
+# 使用示例
+if __name__ == "__main__":
+    # 创建数据加载器
+    train_loader, val_loader, test_loader, info = create_dataloaders(
+        train_file='./data/assist-09/process_data/train.csv',
+        val_file='./data/assist-09/process_data/valid.csv',
+        test_file='./data/assist-09/process_data/test.csv',
+        batch_size=64,
+        num_workers=4
+    )
 
-        # 学生统计（用于日志 & 分位数）
-        self.student_stats = self._compute_student_stats()
+    # 测试数据加载
+    print("\n" + "=" * 50)
+    print("测试数据加载:")
+    for batch_idx, (stu_ids, exer_ids, concepts, labels) in enumerate(train_loader):
+        print(f"\n批次 {batch_idx + 1}:")
+        print(f"学生ID形状: {stu_ids.shape}")
+        print(f"习题ID形状: {exer_ids.shape}")
+        print(f"知识点矩阵形状: {concepts.shape}")
+        print(f"标签形状: {labels.shape}")
 
-    # ================== 工具函数 ==================
-    def _safe_read_csv(self, filename, optional=False):
-        path = os.path.join(self.data_dir, filename)
-        if os.path.exists(path):
-            return pd.read_csv(path)
-        if optional:
-            return None
-        raise FileNotFoundError(f"Required file not found: {path}")
+        # 验证Q矩阵和concept矩阵的一致性
+        for i in range(min(3, len(exer_ids))):
+            exer_id = exer_ids[i].item()
+            q_concepts = info['q_matrix'][exer_id].nonzero().squeeze()
+            data_concepts = concepts[i].nonzero().squeeze()
 
-    def _build_q_matrix(self, all_data):
-        """
-        构建 Q-matrix: (num_exercises, num_concepts)
-        Q[e_idx, c_idx] = 1 表示该题目涉及该知识点。
-        """
-        Q = torch.zeros(self.num_exercises, self.num_concepts)
-        if 'cpt_seq' not in all_data.columns:
-            return Q
-        unique_exer = all_data[['exer_id', 'cpt_seq']].dropna().drop_duplicates('exer_id')
-        for _, row in unique_exer.iterrows():
-            e_idx = self.exer2idx.get(row['exer_id'])
-            if e_idx is None:
-                continue
-            clean_seq = str(row['cpt_seq']).strip('"').strip("'")
-            if not clean_seq:
-                continue
-            try:
-                concepts = list(map(int, clean_seq.split(',')))
-                for c in concepts:
-                    c_idx = self.cpt2idx.get(c)
-                    if c_idx is not None:
-                        Q[e_idx, c_idx] = 1
-            except Exception:
-                continue
-        return Q
+            if q_concepts.dim() == 0:
+                q_concepts = q_concepts.unsqueeze(0)
+            if data_concepts.dim() == 0:
+                data_concepts = data_concepts.unsqueeze(0)
 
-    def _process_triplets_fast(self, data):
-        """
-        将 DataFrame 转为 (stu_idx, exer_idx, label) 列表。
-        """
-        if data is None or data.empty:
-            return []
-        s_idxs = data['stu_id'].map(self.stu2idx)
-        e_idxs = data['exer_id'].map(self.exer2idx)
+            print(f"\n样本 {i + 1}:")
+            print(f"  习题ID: {exer_id}")
+            print(f"  Q矩阵中的知识点: {q_concepts.tolist()}")
+            print(f"  数据中的知识点: {data_concepts.tolist()}")
+            print(f"  是否一致: {torch.equal(q_concepts.sort()[0], data_concepts.sort()[0])}")
 
-        mask = s_idxs.notna() & e_idxs.notna()
-        s_list = s_idxs[mask].astype(int).tolist()
-        e_list = e_idxs[mask].astype(int).tolist()
-        l_list = data.loc[mask, 'label'].astype(int).tolist()
-
-        return list(zip(s_list, e_list, l_list))
-
-    def _compute_student_stats(self):
-        """
-        统计每个学生的 (correct_count, wrong_count, total_count)，
-        并基于训练集历史正确率估计分位数阈值 q_low / q_high（写入 args）。
-        """
-        stats = torch.zeros(self.num_students, 3)
-        if not self.train_triplets:
-            self.q_low = 0.4
-            self.q_high = 0.7
-            setattr(self.args, "q_low", self.q_low)
-            setattr(self.args, "q_high", self.q_high)
-            self.logger.warning(
-                "[Grouping] No train_triplets found. "
-                "Using default thresholds q_low=0.4, q_high=0.7"
-            )
-            return stats
-
-        triplets_arr = torch.tensor(self.train_triplets, dtype=torch.long)
-        s_ids = triplets_arr[:, 0]
-        labels = triplets_arr[:, 2]
-        ones = torch.ones_like(labels, dtype=torch.float32)
-
-        # total
-        stats[:, 2].scatter_add_(0, s_ids, ones)
-        # correct
-        correct_mask = (labels == 1)
-        stats[:, 0].scatter_add_(0, s_ids[correct_mask], ones[correct_mask])
-        # wrong
-        wrong_mask = (labels == 0)
-        stats[:, 1].scatter_add_(0, s_ids[wrong_mask], ones[wrong_mask])
-
-        total = stats[:, 2]
-        valid_mask = total > 0
-        if valid_mask.sum() >= 3:
-            acc = stats[:, 0] / (total + 1e-6)
-            valid_acc = acc[valid_mask]
-
-            low_q = float(torch.quantile(
-                valid_acc,
-                torch.tensor(self.args.low_quantile, dtype=torch.float32)
-            ))
-            high_q = float(torch.quantile(
-                valid_acc,
-                torch.tensor(self.args.high_quantile, dtype=torch.float32)
-            ))
-
-            self.q_low = low_q
-            self.q_high = high_q
-            self.logger.info(
-                f"[Grouping] Using accuracy quantiles for groups: "
-                f"low_q={self.q_low:.3f} (p={self.args.low_quantile}), "
-                f"high_q={self.q_high:.3f} (p={self.args.high_quantile})"
-            )
-        else:
-            self.q_low = 0.4
-            self.q_high = 0.7
-            self.logger.warning(
-                "[Grouping] Not enough students with interactions to estimate quantiles. "
-                "Fallback to fixed thresholds q_low=0.4, q_high=0.7"
-            )
-
-        setattr(self.args, "q_low", self.q_low)
-        setattr(self.args, "q_high", self.q_high)
-
-        return stats
-
-    # ================== DataLoader 接口 ==================
-    def get_loaders(self):
-        """
-        返回：
-            train_loader, valid_loader, test_loader,
-            high_loader, med_loader, low_loader
-
-        每个 batch: (stu_ids, exer_ids, labels, q_mask)
-        """
-        Q_matrix = self.Q_matrix  # (num_exercises, num_concepts)
-
-        def collate(batch, q_matrix=Q_matrix):
-            """
-            batch: List[(stu_idx, exer_idx, label)]
-            """
-            stu_ids = torch.tensor([x[0] for x in batch], dtype=torch.long)
-            exer_ids = torch.tensor([x[1] for x in batch], dtype=torch.long)
-            labels = torch.tensor([x[2] for x in batch], dtype=torch.float32)
-
-            # q_mask: (B, num_concepts) = Q_matrix[exer_ids]
-            q_mask = q_matrix[exer_ids] if q_matrix is not None else None
-
-            return stu_ids, exer_ids, labels, q_mask
-
-        kw = {
-            'batch_size': self.args.batch_size,
-            'collate_fn': collate,
-            'num_workers': 0,
-            'pin_memory': False,
-        }
-
-        train_loader = DataLoader(
-            CognitiveDataset(self.train_triplets),
-            shuffle=True,
-            **kw
-        )
-        valid_loader = DataLoader(
-            CognitiveDataset(self.valid_triplets),
-            shuffle=False,
-            **kw
-        )
-        test_loader = DataLoader(
-            CognitiveDataset(self.test_triplets),
-            shuffle=False,
-            **kw
-        )
-
-        high_loader = DataLoader(
-            CognitiveDataset(self.high_triplets),
-            shuffle=False,
-            **kw
-        ) if self.high_triplets else None
-        med_loader = DataLoader(
-            CognitiveDataset(self.med_triplets),
-            shuffle=False,
-            **kw
-        ) if self.med_triplets else None
-        low_loader = DataLoader(
-            CognitiveDataset(self.low_triplets),
-            shuffle=False,
-            **kw
-        ) if self.low_triplets else None
-
-        return train_loader, valid_loader, test_loader, high_loader, med_loader, low_loader
+        # 只显示第一个批次
+        break
