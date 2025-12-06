@@ -13,6 +13,7 @@ import pandas as pd
 
 from dataset import CognitiveDiagnosisDataset, create_dataloaders
 from model import CognitiveDiagnosisModel
+from gpu_utils import get_best_gpu
 
 
 def setup_logging(log_dir):
@@ -50,7 +51,17 @@ def compute_metrics(labels, predictions, probs):
     }
 
 
-def train_epoch(model, train_loader, optimizer, device, lambda_sparse, lambda_independence, logger):
+def train_epoch(
+        model,
+        train_loader,
+        optimizer,
+        device,
+        lambda_sparse,
+        lambda_independence,
+        lambda_proto_div,
+        lambda_proto_usage,
+        logger
+):
     """
     训练一个epoch
     """
@@ -82,13 +93,17 @@ def train_epoch(model, train_loader, optimizer, device, lambda_sparse, lambda_in
         # 计算BCE损失
         bce_loss = nn.BCELoss()(pred_probs, labels)
 
-        # 计算正则化损失
+        # 计算正则化损失（包含 soft prototype 部分）
+        proto_assign = details.get('prototype_assign', None)
         reg_loss = model.get_regularization_loss(
             details['relation_matrices'],
             details['skill_vector'],
             details['knowledge_state'],
+            prototype_assign=proto_assign,
             lambda_sparse=lambda_sparse,
-            lambda_independence=lambda_independence
+            lambda_independence=lambda_independence,
+            lambda_proto_div=lambda_proto_div,
+            lambda_proto_usage=lambda_proto_usage
         )
 
         # 总损失
@@ -111,13 +126,6 @@ def train_epoch(model, train_loader, optimizer, device, lambda_sparse, lambda_in
         all_predictions.extend(predictions.cpu().detach().numpy())
         all_probs.extend(pred_probs.cpu().detach().numpy())
 
-        # 轻量 batch 日志（可选）
-        # if (batch_idx + 1) % 200 == 0:
-        #     logger.info(
-        #         f"[Train] Batch {batch_idx+1}/{len(train_loader)} "
-        #         f"Loss={loss.item():.4f}, BCE={bce_loss.item():.4f}, Reg={reg_loss.item():.4f}"
-        #     )
-
     avg_loss = total_loss / len(train_loader)
     avg_bce_loss = total_bce_loss / len(train_loader)
     avg_reg_loss = total_reg_loss / len(train_loader)
@@ -132,7 +140,16 @@ def train_epoch(model, train_loader, optimizer, device, lambda_sparse, lambda_in
     }
 
 
-def validate(model, val_loader, device, lambda_sparse, lambda_independence, logger):
+def validate(
+        model,
+        val_loader,
+        device,
+        lambda_sparse,
+        lambda_independence,
+        lambda_proto_div,
+        lambda_proto_usage,
+        logger
+):
     """
     验证模型
     """
@@ -166,12 +183,16 @@ def validate(model, val_loader, device, lambda_sparse, lambda_independence, logg
             bce_loss = nn.BCELoss()(pred_probs, labels)
 
             # 正则
+            proto_assign = details.get('prototype_assign', None)
             reg_loss = model.get_regularization_loss(
                 details['relation_matrices'],
                 details['skill_vector'],
                 details['knowledge_state'],
+                prototype_assign=proto_assign,
                 lambda_sparse=lambda_sparse,
-                lambda_independence=lambda_independence
+                lambda_independence=lambda_independence,
+                lambda_proto_div=lambda_proto_div,
+                lambda_proto_usage=lambda_proto_usage
             )
 
             loss = bce_loss + reg_loss
@@ -186,9 +207,6 @@ def validate(model, val_loader, device, lambda_sparse, lambda_independence, logg
             all_predictions.extend(predictions.cpu().numpy())
             all_probs.extend(pred_probs.cpu().numpy())
 
-            # if (batch_idx + 1) % 200 == 0:
-            #     logger.info(f"[Val] Batch {batch_idx+1}/{len(val_loader)} Loss={loss.item():.4f}")
-
     avg_loss = total_loss / len(val_loader)
     avg_bce_loss = total_bce_loss / len(val_loader)
     avg_reg_loss = total_reg_loss / len(val_loader)
@@ -202,13 +220,44 @@ def validate(model, val_loader, device, lambda_sparse, lambda_independence, logg
         **metrics
     }
 
+def select_device(args, logger):
+    """
+    统一选择 device：
+    - 如果 no_cuda 为 True 或者没有 GPU，就用 CPU
+    - 否则在 candidates 里用 get_best_gpu 挑一块
+    """
+    if not torch.cuda.is_available() or args.no_cuda:
+        device = torch.device('cpu')
+        logger.info('Using device: cpu')
+        return device
+
+    # 解析候选 GPU 列表
+    try:
+        candidates = [
+            int(x.strip()) for x in args.gpu_candidates.split(',')
+            if x.strip() != ''
+        ]
+        if len(candidates) == 0:
+            candidates = None  # 退回：所有 GPU 都可选
+    except Exception:
+        candidates = None
+
+    best_gpu = get_best_gpu(candidates=[0, 1, 2, 3], memory_threshold=2000)
+    if best_gpu is None:
+        # 没有合适的，就退回 0
+        best_gpu = 0
+
+    device = torch.device(f'cuda:{best_gpu}')
+    torch.cuda.set_device(best_gpu)
+    logger.info(f'Using device: cuda:{best_gpu}')
+    return device
+
 
 def train(args, logger):
     """
     训练模型
     """
-    device = torch.device('cuda' if torch.cuda.is_available() and not args.no_cuda else 'cpu')
-    logger.info(f'Using device: {device}')
+    device = select_device(args, logger)
 
     logger.info('Loading datasets...')
 
@@ -217,7 +266,7 @@ def train(args, logger):
     val_file = os.path.join(data_dir, 'valid.csv')
     test_file = os.path.join(data_dir, 'test.csv')
 
-    # 创建数据加载器（内部已做清洗 + Q 矩阵构建，并有中文日志）
+    # 创建数据加载器
     train_loader, val_loader, test_loader, info_dict = create_dataloaders(
         train_file=train_file,
         val_file=val_file,
@@ -238,6 +287,9 @@ def train(args, logger):
 
     # 创建模型
     logger.info('Creating model...')
+
+    use_soft_prototype = not args.disable_soft_prototype
+
     model = CognitiveDiagnosisModel(
         num_students=info_dict['num_students'],
         num_exercises=info_dict['num_exercises'],
@@ -248,7 +300,11 @@ def train(args, logger):
         exercise_dim=args.exercise_dim,
         num_relation_heads=args.num_relation_heads,
         num_gnn_layers=args.num_gnn_layers,
-        dropout=args.dropout
+        dropout=args.dropout,
+        num_prototypes=args.num_prototypes,
+        proto_tau=args.proto_tau,
+        proto_lambda=args.proto_lambda,
+        use_soft_prototype=use_soft_prototype
     ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
@@ -290,7 +346,9 @@ def train(args, logger):
         # 训练
         train_metrics = train_epoch(
             model, train_loader, optimizer, device,
-            args.lambda_sparse, args.lambda_independence, logger
+            args.lambda_sparse, args.lambda_independence,
+            args.lambda_proto_div, args.lambda_proto_usage,
+            logger
         )
 
         logger.info(f'\nTraining Results:')
@@ -308,7 +366,9 @@ def train(args, logger):
         # 验证
         val_metrics = validate(
             model, val_loader, device,
-            args.lambda_sparse, args.lambda_independence, logger
+            args.lambda_sparse, args.lambda_independence,
+            args.lambda_proto_div, args.lambda_proto_usage,
+            logger
         )
 
         logger.info(f'\nValidation Results:')
@@ -384,8 +444,7 @@ def inference(args, logger):
     """
     测试模型
     """
-    device = torch.device('cuda' if torch.cuda.is_available() and not args.no_cuda else 'cpu')
-    logger.info(f'Using device: {device}')
+    device = select_device(args, logger)
 
     data_dir = args.data_dir
     test_file = os.path.join(data_dir, 'test.csv')
@@ -436,7 +495,6 @@ def inference(args, logger):
     else:
         logger.info("[推理阶段数据过滤] 测试集中所有学生与题目均在训练阶段出现，无需额外过滤。")
 
-    # 注意：这里要求 CognitiveDiagnosisDataset 支持传入 DataFrame
     test_dataset = CognitiveDiagnosisDataset(
         csv_file=filtered_test_df,
         stu_id_map=stu_id_map,
@@ -455,7 +513,13 @@ def inference(args, logger):
     test_size = len(test_dataset)
     logger.info(f'Test samples: {test_size}')
 
-    # 3. 创建模型
+    # 3. 创建模型（从 checkpoint 的 args 恢复配置）
+    num_prototypes = loaded_args.get('num_prototypes', args.num_prototypes)
+    proto_tau = loaded_args.get('proto_tau', args.proto_tau)
+    proto_lambda = loaded_args.get('proto_lambda', args.proto_lambda)
+    disable_soft_prototype = loaded_args.get('disable_soft_prototype', args.disable_soft_prototype)
+    use_soft_prototype = not disable_soft_prototype
+
     model = CognitiveDiagnosisModel(
         num_students=info_dict['num_students'],
         num_exercises=info_dict['num_exercises'],
@@ -466,13 +530,17 @@ def inference(args, logger):
         exercise_dim=loaded_args.get('exercise_dim', args.exercise_dim),
         num_relation_heads=loaded_args.get('num_relation_heads', args.num_relation_heads),
         num_gnn_layers=loaded_args.get('num_gnn_layers', args.num_gnn_layers),
-        dropout=loaded_args.get('dropout', args.dropout)
+        dropout=loaded_args.get('dropout', args.dropout),
+        num_prototypes=num_prototypes,
+        proto_tau=proto_tau,
+        proto_lambda=proto_lambda,
+        use_soft_prototype=use_soft_prototype
     ).to(device)
 
     model.load_state_dict(checkpoint['model_state_dict'])
     logger.info(f'Model loaded from epoch {checkpoint["epoch"]}')
 
-    # 4. 测试（无 tqdm，改为轻量日志）
+    # 4. 测试
     logger.info('Starting testing...')
     model.eval()
 
@@ -567,13 +635,29 @@ def main():
     parser.add_argument('--num_gnn_layers', type=int, default=2)
     parser.add_argument('--dropout', type=float, default=0.1)
 
+    # === soft prototype 相关参数（新增） ===
+    parser.add_argument('--num_prototypes', type=int, default=3,
+                        help='Number of soft prototypes for students')
+    parser.add_argument('--proto_tau', type=float, default=1.0,
+                        help='Temperature for soft prototype assignment')
+    parser.add_argument('--proto_lambda', type=float, default=0.5,
+                        help='Residual weight for prototype correction on knowledge state')
+    parser.add_argument('--disable_soft_prototype', action='store_true',
+                        help='Disable soft prototype module')
+
     # 训练参数
-    parser.add_argument('--batch_size', type=int, default=256)
+    parser.add_argument('--batch_size', type=int, default=512)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--learning_rate', type=float, default=0.0001)
     parser.add_argument('--weight_decay', type=float, default=1e-5)
     parser.add_argument('--lambda_sparse', type=float, default=0.1)
     parser.add_argument('--lambda_independence', type=float, default=0.1)
+
+    # soft prototype 正则权重（新增）
+    parser.add_argument('--lambda_proto_div', type=float, default=0.01,
+                        help='Weight for prototype diversity regularization')
+    parser.add_argument('--lambda_proto_usage', type=float, default=0.01,
+                        help='Weight for prototype usage balance regularization')
 
     # 早停和调度器参数
     parser.add_argument('--patience', type=int, default=5)
@@ -584,6 +668,14 @@ def main():
     parser.add_argument('--no_cuda', action='store_true')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--generate_diagnosis', default=True)
+
+    # ✅ 新增：候选 GPU 列表，比如 "0" 或 "0,1"
+    parser.add_argument(
+        '--gpu_candidates',
+        type=str,
+        default='0',
+        help='Comma-separated GPU ids to choose from, e.g. "0" or "0,1"'
+    )
 
     # 保存参数
     parser.add_argument('--save_dir', type=str, default='./checkpoints')
