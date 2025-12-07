@@ -384,13 +384,13 @@ class ResponsePredictionHead(nn.Module):
     ):
         super().__init__()
 
-        self.knowledge_net = nn.Sequential(
-            nn.Linear(knowledge_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(hidden_dim, 1)
-        )
+        # -------【改动 1】知识部分：改为单调线性打分-------
+        # 原来是一个 MLP，现在改成一个向量 w ∈ R^D + 一个偏置 b
+        # 在 forward 里通过 softplus(w_raw) 保证权重 ≥ 0，满足单调性
+        self.knowledge_weight_raw = nn.Parameter(torch.randn(knowledge_dim))
+        self.knowledge_bias = nn.Parameter(torch.zeros(1))
 
+        # -------【保留】技巧部分先不动-------
         self.skill_net = nn.Sequential(
             nn.Linear(skill_dim + exercise_dim, hidden_dim // 2),
             nn.ReLU(),
@@ -401,44 +401,56 @@ class ResponsePredictionHead(nn.Module):
         self._initialize_weights()
 
     def _initialize_weights(self):
-        for module in [self.knowledge_net, self.skill_net]:
-            for layer in module:
-                if isinstance(layer, nn.Linear):
-                    nn.init.xavier_normal_(layer.weight)
-                    if layer.bias is not None:
-                        nn.init.zeros_(layer.bias)
+        # 知识权重初始化
+        nn.init.normal_(self.knowledge_weight_raw, mean=0.0, std=0.1)
+        nn.init.zeros_(self.knowledge_bias)
+
+        # 技巧网络初始化
+        for layer in self.skill_net:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_normal_(layer.weight)
+                if layer.bias is not None:
+                    nn.init.zeros_(layer.bias)
 
     def forward(
             self,
-            knowledge_state: torch.Tensor,
-            skill_vector: torch.Tensor,
-            exercise_emb: torch.Tensor,
-            difficulty: torch.Tensor,
-            discrimination: torch.Tensor,
-            concept_mask: torch.Tensor,
+            knowledge_state: torch.Tensor,   # (B, C, D)
+            skill_vector: torch.Tensor,      # (B, S)
+            exercise_emb: torch.Tensor,      # (B, E)
+            difficulty: torch.Tensor,        # (B, C)
+            discrimination: torch.Tensor,    # (B, C)
+            concept_mask: torch.Tensor,      # (B, C)
     ) -> torch.Tensor:
         """返回作答概率 (B,)。concept_mask 为 Q 行或样本级概念掩码或两者融合。"""
         batch_size, num_concepts, knowledge_dim = knowledge_state.size()
 
-        # ✅ 向量化：一次性对所有 (学生, 知识点) 计算掌握得分
-        # 原来是对每个概念单独跑 MLP，现在把 (B, C, D) 展平成 (B*C, D) 一次过
-        h_flat = knowledge_state.view(batch_size * num_concepts, knowledge_dim)  # (B*C, D)
-        scores_flat = self.knowledge_net(h_flat).view(batch_size, num_concepts) # (B, C)
-        knowledge_scores = scores_flat
+        # -------【改动 2】知识打分：单调线性-------
+        # 先把知识维度权重限制为非负，保证「知识越高，得分不降」
+        w_pos = F.softplus(self.knowledge_weight_raw)  # (D,)
 
-        # IRT logits
-        irt_logits = discrimination * (knowledge_scores - difficulty)
+        # (B, C, D) · (D,) -> (B, C)
+        knowledge_scores = torch.matmul(
+            knowledge_state,              # (B, C, D)
+            w_pos.view(-1, 1)            # (D, 1)
+        ).squeeze(-1)                    # (B, C)
+
+        # 加上一个全局偏置（不影响单调性）
+        knowledge_scores = knowledge_scores + self.knowledge_bias  # (B, C)
+
+        # ------- IRT logits -------
+        irt_logits = discrimination * (knowledge_scores - difficulty)  # (B, C)
 
         # 归一化 concept_mask，防止全 0
         mask_sum = concept_mask.sum(dim=1, keepdim=True) + 1e-12
-        concept_norm = concept_mask / mask_sum
+        concept_norm = concept_mask / mask_sum  # (B, C)
 
-        knowledge_prob = torch.sigmoid((irt_logits * concept_norm).sum(dim=1))
+        # 聚合到题目层
+        knowledge_prob = torch.sigmoid((irt_logits * concept_norm).sum(dim=1))  # (B,)
 
-        # 2. 技巧影响
-        skill_input = torch.cat([skill_vector, exercise_emb], dim=1)
-        skill_adjustment = self.skill_net(skill_input).squeeze(-1)
-        skill_adjustment = torch.tanh(skill_adjustment) * 0.2
+        # ------- 技巧影响 -------
+        skill_input = torch.cat([skill_vector, exercise_emb], dim=1)  # (B, S+E)
+        skill_adjustment = self.skill_net(skill_input).squeeze(-1)    # (B,)
+        skill_adjustment = torch.tanh(skill_adjustment) * 0.2         # 控制影响幅度
 
         final_prob = torch.clamp(
             knowledge_prob + skill_adjustment,
@@ -447,7 +459,6 @@ class ResponsePredictionHead(nn.Module):
         )
 
         return final_prob
-
 
 class SoftPrototypeModule(nn.Module):
     """软原型模块：维护 K 个原型，对学生表示做 soft assignment 并生成混合原型。"""
@@ -843,16 +854,20 @@ class CognitiveDiagnosisModel(nn.Module):
                 skill_vector = torch.zeros_like(self.skill_encoder(student_ids).squeeze(0))
 
             # 计算每个知识点的掌握程度
-            knowledge_scores = []
-            for i in range(self.num_concepts):
-                k = knowledge_state[i:i + 1, :]
-                score = self.prediction_head.knowledge_net(k).squeeze()
-                knowledge_scores.append(torch.sigmoid(score).item())
+            # 计算每个知识点的掌握程度（与预测头保持一致的线性单调打分）
+            # knowledge_state: (num_concepts, D)
+            w_pos = F.softplus(self.prediction_head.knowledge_weight_raw)  # (D,)
+            scores = torch.matmul(
+                knowledge_state,                  # (C, D)
+                w_pos.view(-1, 1)                 # (D, 1)
+            ).squeeze(-1) + self.prediction_head.knowledge_bias  # (C,)
+
+            knowledge_mastery = torch.sigmoid(scores)  # (C,)
 
             diagnosis = {
-                'knowledge_mastery': torch.tensor(knowledge_scores, device=device),  # (num_concepts,)
-                'skill_level': skill_vector,  # (skill_dim,)
-                'relation_matrices': relation_matrices  # (num_heads, num_concepts, num_concepts)
+                'knowledge_mastery': knowledge_mastery,  # (num_concepts,)
+                'skill_level': skill_vector,             # (skill_dim,)
+                'relation_matrices': relation_matrices   # (num_heads, num_concepts, num_concepts)
             }
 
         return diagnosis

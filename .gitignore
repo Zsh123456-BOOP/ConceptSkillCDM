@@ -17,6 +17,9 @@ venv/
 logs/
 *.log
 
-# ⚠️ 数据文件 (如果不希望上传 csv 数据，请保留下面这行；如果需要上传，请删除)
-# data/
-checkpoints/*.pth
+# 忽略所有的 .pth 和 .pt 模型文件
+*.pth
+*.pt
+
+# 忽略 checkpoints 文件夹下的所有内容（如果你不希望任何 checkpoints 被提交）
+checkpoints/
