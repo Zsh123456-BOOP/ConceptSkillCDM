@@ -42,19 +42,31 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--learning_rate", type=float, default=0.0001)
     parser.add_argument("--weight_decay", type=float, default=1e-5)
-    parser.add_argument("--lambda_sparse", type=float, default=0.1)
-    parser.add_argument("--lambda_independence", type=float, default=0.1)
+    parser.add_argument("--lambda_sparse", type=float, default=0.01)
+    parser.add_argument("--lambda_independence", type=float, default=0.01)
     parser.add_argument(
         "--lambda_proto_div",
         type=float,
-        default=0.01,
+        default=0.0,
         help="Weight for prototype diversity regularization",
     )
     parser.add_argument(
         "--lambda_proto_usage",
         type=float,
-        default=0.01,
+        default=0.0,
         help="Weight for prototype usage balance regularization",
+    )
+    parser.add_argument(
+        "--lambda_sparse_personal",
+        type=float,
+        default=0.0,
+        help="Weight for personalized relation sparsity (G-PDS hook).",
+    )
+    parser.add_argument(
+        "--lambda_alpha",
+        type=float,
+        default=0.0,
+        help="Penalty for gate alpha to favor global graph (G-PDS hook).",
     )
 
     # 早停和调度器参数
@@ -66,6 +78,7 @@ def parse_args():
     parser.add_argument("--no_cuda", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--generate_diagnosis", default=True)
+    parser.add_argument("--use_personal_graph", action="store_true", help="Enable personalized relation graph (G-PDS hook).")
     parser.add_argument(
         "--model_variant",
         type=str,
@@ -127,6 +140,7 @@ def main():
     args.use_skill_encoder = not getattr(args, "ablate_skill_encoder", False)
     args.use_exercise_graph = not getattr(args, "ablate_exercise_graph", False)
     args.use_concept_fusion = not getattr(args, "ablate_concept_fusion", False)
+    args.use_personal_graph = getattr(args, "use_personal_graph", False)
 
     # 设置随机种子
     torch.manual_seed(args.seed)

@@ -695,10 +695,10 @@ class CognitiveDiagnosisModel(nn.Module):
             knowledge_state = (1.0 - self.proto_lambda) * knowledge_state + self.proto_lambda * proto_broadcast
 
         # === G-PDS hook：个性化关系图（暂不替换主路径，仅返回诊断信息） ===
-        alpha = None
+        gate_alpha = None
         personal_matrices = None
         if self.use_personal_graph:
-            alpha = self.adaptive_gate(student_repr)  # (B,1,1)
+            gate_alpha = self.adaptive_gate(student_repr)  # (B,1,1)
             personal_matrices = self.personal_generator(student_repr)  # (B, C, C)
 
         # 3. 编码学生应试技巧
@@ -717,8 +717,8 @@ class CognitiveDiagnosisModel(nn.Module):
         # 6. 样本级 concept_matrix 与 Q 的融合
         if concept_vector is not None and self.use_concept_fusion:
             concept_vector = concept_vector.to(q_vector.dtype)
-            alpha = 0.7  # 样本级标签权重
-            effective_concept = alpha * concept_vector + (1.0 - alpha) * q_vector
+            fusion_alpha = 0.7  # 样本级标签权重
+            effective_concept = fusion_alpha * concept_vector + (1.0 - fusion_alpha) * q_vector
         else:
             # 消融：仅使用结构性 Q 矩阵
             effective_concept = q_vector
@@ -748,7 +748,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 details['prototype_assign'] = proto_assign  # (B, K)
                 details['prototype_mix'] = proto_mix        # (B, D)
             if self.use_personal_graph:
-                details['alpha'] = alpha
+                details['alpha'] = gate_alpha
                 details['personal_matrices'] = personal_matrices
             return pred_prob, details
         else:
