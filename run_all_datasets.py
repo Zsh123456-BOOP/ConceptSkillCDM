@@ -74,7 +74,7 @@ BEST_CFG = {
     },
     "assist_09": {
         "seed": 42,
-        "batch_size": 512,
+        "batch_size": 128,
         "disable_soft_prototype": False,
         "dropout": 0.1,
         "early_stop_patience": 5,
