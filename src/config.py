@@ -14,7 +14,6 @@ DATASET_DEFAULTS = {
         "learning_rate": 1e-4,
         "weight_decay": 1e-5,
         "lambda_sparse": 0.01,
-        "lambda_independence": 0.01,
         "lambda_proto_div": 0.0,
         "lambda_proto_usage": 0.0,
         "lambda_sparse_personal": 0.0,
@@ -29,7 +28,6 @@ DATASET_DEFAULTS = {
         "batch_size": 512,
         "learning_rate": 1e-4,
         "lambda_sparse": 0.01,
-        "lambda_independence": 0.01,
         "lambda_proto_div": 0.0,
         "lambda_proto_usage": 0.0,
         "lambda_sparse_personal": 0.0,
@@ -42,7 +40,6 @@ DATASET_DEFAULTS = {
         "batch_size": 512,
         "learning_rate": 1e-4,
         "lambda_sparse": 0.01,
-        "lambda_independence": 0.01,
         "lambda_proto_div": 0.0,
         "lambda_proto_usage": 0.0,
         "lambda_sparse_personal": 0.0,
@@ -58,13 +55,11 @@ GRID_SEARCH_SPACE = {
         "search": {
             "learning_rate": [1e-4, 3e-4],
             "lambda_sparse": [0.05, 0.1],
-            "lambda_independence": [0.05, 0.1],
             "dropout": [0.1, 0.2],
             # 消融参数预留（当前单一取值）
             "ablate_soft_prototype": [False],
             "ablate_skill_encoder": [False],
             "ablate_exercise_graph": [False],
-            "ablate_concept_fusion": [False],
         },
     },
     "assist_17": {
@@ -81,13 +76,11 @@ GRID_SEARCH_SPACE = {
             # 🔎 这里参考你之前 best 的 lr=1e-3，给一个 [3e-4, 1e-3] 的小窗口
             "learning_rate": [3e-4, 1e-3],
             "lambda_sparse": [0.05, 0.1],
-            "lambda_independence": [0.05, 0.1],
             "dropout": [0.1, 0.2],
             # 消融参数预留（当前单一取值，保证组合数还是 16）
             "ablate_soft_prototype": [False],
             "ablate_skill_encoder": [False],
             "ablate_exercise_graph": [False],
-            "ablate_concept_fusion": [False],
         },
     },
 }

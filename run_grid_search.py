@@ -29,8 +29,6 @@ def build_variant_from_flags(params: dict) -> str:
         parts.append("skill")
     if params.get("ablate_exercise_graph"):
         parts.append("graph")
-    if params.get("ablate_concept_fusion"):
-        parts.append("fusion")
     if not parts:
         return "full"
     return "no_" + "_".join(parts)

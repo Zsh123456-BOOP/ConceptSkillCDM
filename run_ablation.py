@@ -7,7 +7,6 @@ run_ablation.py
 - soft prototype
 - skill encoder
 - exercise graph
-- concept fusion
 
 一次命令同时跑 assist_09 和 junyi，
 同一数据集的所有 ablation 先跑完，再进入下一个数据集。
@@ -30,7 +29,6 @@ DATASET_BASE_PARAMS: Dict[str, Dict] = {
         "learning_rate": 3e-4,      # 来自当前最优行
         "dropout": 0.1,
         "lambda_sparse": 0.1,
-        "lambda_independence": 0.05,
         "lambda_proto_div": 0.0,
         "lambda_proto_usage": 0.0,
         "lambda_sparse_personal": 0.0,
@@ -42,7 +40,6 @@ DATASET_BASE_PARAMS: Dict[str, Dict] = {
         "learning_rate": 1e-3,     # 来自当前最优行
         "dropout": 0.1,
         "lambda_sparse": 0.1,
-        "lambda_independence": 0.1,
         "lambda_proto_div": 0.0,
         "lambda_proto_usage": 0.0,
         "lambda_sparse_personal": 0.0,
@@ -78,12 +75,6 @@ ABLATIONS: List[Dict] = [
             "ablate_exercise_graph": True,
         },
     },
-    {
-        "name": "no_cfuse",
-        "flags": {
-            "ablate_concept_fusion": True,
-        },
-    },
 ]
 
 
@@ -98,7 +89,6 @@ def build_run_tag(dataset: str, ablation_name: str, overrides: Dict) -> str:
         "learning_rate": "lr",
         "dropout": "dp",
         "lambda_sparse": "ls",
-        "lambda_independence": "li",
     }
     for k, short_name in key_short.items():
         if k in overrides:

@@ -556,7 +556,6 @@ class CognitiveDiagnosisModel(nn.Module):
             use_soft_prototype: bool = True,
             use_skill_encoder: bool = True,
             use_exercise_graph: bool = True,
-            use_concept_fusion: bool = True,
             # ====== 个性化关系图（G-PDS hook） ======
             use_personal_graph: bool = False,
             personal_rank: int = 4,
@@ -571,14 +570,10 @@ class CognitiveDiagnosisModel(nn.Module):
         self.knowledge_dim = knowledge_dim
         self.use_skill_encoder = bool(use_skill_encoder)
         self.use_exercise_graph = bool(use_exercise_graph)
-        self.use_concept_fusion = bool(use_concept_fusion)
         self.use_personal_graph = bool(use_personal_graph)
         self.personal_rank = int(personal_rank)
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
-
-        # 用于知识-技巧独立性正则的投影
-        self.knowledge_projector = nn.Linear(num_concepts * knowledge_dim, skill_dim)
 
         # ===== 概念关系学习 =====
         self.relation_learning = MultiHeadRelationLearning(
@@ -663,7 +658,7 @@ class CognitiveDiagnosisModel(nn.Module):
         前向计算作答概率。
         - student_ids: (B,) 学生索引
         - exercise_ids: (B,) 习题索引
-        - concept_vector: 可选样本级概念掩码 (B, C)，与 Q 行融合
+        - concept_vector: 为兼容保留（当前版本直接使用结构性 Q，不再融合）
         - return_details: 若为 True，返回中间张量诊断信息
         返回：pred_prob (B,)；如 return_details=True，同时返回 details 字典，包含关系矩阵、知识状态、技巧向量、习题难度/区分度、融合概念向量与原型分配等。
 
@@ -672,8 +667,7 @@ class CognitiveDiagnosisModel(nn.Module):
         2) 学生知识编码 (GNN) 得到 knowledge_state；
         3) soft prototype（如启用）对 knowledge_state 做残差校正；
         4) 学生技巧与习题难度/区分度编码；
-        5) 融合样本级 concept_vector 与 Q 矩阵 (alpha=0.7)；
-        6) 通过预测头计算 IRT 风格概率。
+        5) 直接使用 Q 矩阵；通过预测头计算 IRT 风格概率（concept_vector 仅保留接口兼容，当前不参与融合）。
         """
         # 1. 学习概念关系图
         relation_matrices, concept_emb = self.relation_learning()
@@ -711,17 +705,9 @@ class CognitiveDiagnosisModel(nn.Module):
         # 4. 编码习题特征
         exercise_emb, difficulty, discrimination = self.exercise_encoder(exercise_ids, relation_matrices)
 
-        # 5. 获取Q矩阵向量
+        # 5. 获取Q矩阵向量（当前版本直接使用结构性 Q，不再融合 concept_vector）
         q_vector = self.q_matrix[exercise_ids]  # (batch_size, num_concepts)
-
-        # 6. 样本级 concept_matrix 与 Q 的融合
-        if concept_vector is not None and self.use_concept_fusion:
-            concept_vector = concept_vector.to(q_vector.dtype)
-            fusion_alpha = 0.7  # 样本级标签权重
-            effective_concept = fusion_alpha * concept_vector + (1.0 - fusion_alpha) * q_vector
-        else:
-            # 消融：仅使用结构性 Q 矩阵
-            effective_concept = q_vector
+        effective_concept = q_vector
 
         # 7. 预测
         pred_prob = self.prediction_head(
@@ -761,7 +747,6 @@ class CognitiveDiagnosisModel(nn.Module):
             knowledge_state: torch.Tensor,
             prototype_assign: Optional[torch.Tensor] = None,
             lambda_sparse: float = 0.01,
-            lambda_independence: float = 0.01,
             lambda_proto_div: float = 0.0,
             lambda_proto_usage: float = 0.0,
             personal_matrices: Optional[torch.Tensor] = None,
@@ -772,7 +757,6 @@ class CognitiveDiagnosisModel(nn.Module):
         """
         计算正则项：
         - 稀疏 (lambda_sparse)：关系矩阵 L1
-        - 独立性 (lambda_independence)：知识投影与技巧向量正交
         - 原型多样性 (lambda_proto_div)：原型间相似度去相关
         - 原型使用均衡 (lambda_proto_usage)：平均分配接近均匀
         - 个性化稀疏 (lambda_sparse_personal)：个性化图的稀疏惩罚
@@ -787,17 +771,7 @@ class CognitiveDiagnosisModel(nn.Module):
         # 1) 稀疏性：关系矩阵 L1 约束
         sparse_loss = self.relation_learning.get_sparsity_loss(relation_matrices)
 
-        # 2) 独立性：知识投影与技巧向量的点积接近 0
-        batch_size = knowledge_state.size(0)
-        knowledge_flat = knowledge_state.view(batch_size, -1)  # (B, num_concepts * knowledge_dim)
-        knowledge_proj = self.knowledge_projector(knowledge_flat)  # (B, skill_dim)
-
-        knowledge_norm = knowledge_proj / (knowledge_proj.norm(dim=1, keepdim=True) + 1e-12)
-        skill_norm = skill_vector / (skill_vector.norm(dim=1, keepdim=True) + 1e-12)
-
-        independence_loss = torch.abs((knowledge_norm * skill_norm).sum(dim=1)).mean()
-
-        reg_loss = lambda_sparse * sparse_loss + lambda_independence * independence_loss
+        reg_loss = lambda_sparse * sparse_loss
 
         # 3) 原型相关正则（可选）
         proto_div_loss = torch.tensor(0.0, device=knowledge_state.device)

@@ -4,7 +4,7 @@
 """
 专门跑 G-PDS / 正则项消融的脚本。
 - 固定为上一轮 grid search 的“较优”超参
-- 在 independence / personal graph 上做小规模消融
+- 在个人图相关正则上做小规模消融
 """
 
 import argparse
@@ -19,13 +19,11 @@ BASE_CFG = {
         "learning_rate": 3e-4,
         "dropout": 0.1,
         "lambda_sparse": 0.10,
-        "lambda_independence": 0.05,
     },
     "junyi": {
         "learning_rate": 1e-3,
         "dropout": 0.1,
         "lambda_sparse": 0.10,
-        "lambda_independence": 0.10,
     },
 }
 
@@ -33,13 +31,6 @@ BASE_CFG = {
 ABLATIONS = {
     # name: overrides
     "base": {
-        # 保留 BASE_CFG 的 lambda_independence
-        "use_personal_graph": False,
-        "lambda_sparse_personal": 0.0,
-        "lambda_alpha": 0.0,
-    },
-    "no_indep": {
-        "lambda_independence": 0.0,
         "use_personal_graph": False,
         "lambda_sparse_personal": 0.0,
         "lambda_alpha": 0.0,

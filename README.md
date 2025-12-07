@@ -62,7 +62,6 @@
   - 预测损失：`BCE(pred, label)`。
   - DAG 约束：`dag_constraint_loss(adj_dag) = tr(exp(A)) - d`，鼓励无环前置图。
   - 稀疏约束：`L1` 正则在 `adj_dag` 上。
-  - 解耦约束：`HSIC(h_knowledge, z_skill)`，鼓励知识掌握与技巧向量独立。
   - 总损失：`loss = pred + λ_dag * dag + λ_sparse * sparse + λ_hsic * hsic`，超参来自 config。
 - 训练循环（`src/trainer.py`）：  
   - `train_epoch`：前向得到 `(pred, adj_dag, h_knowledge, z_skill)`，计算总损失，梯度裁剪 `max_norm=1.0`，Adam 更新。日志中分别打印 pred/dag/sparse/hsic 分项。  

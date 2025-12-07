@@ -43,7 +43,6 @@ def parse_args():
     parser.add_argument("--learning_rate", type=float, default=0.0001)
     parser.add_argument("--weight_decay", type=float, default=1e-5)
     parser.add_argument("--lambda_sparse", type=float, default=0.01)
-    parser.add_argument("--lambda_independence", type=float, default=0.01)
     parser.add_argument(
         "--lambda_proto_div",
         type=float,
@@ -122,7 +121,6 @@ def parse_args():
     parser.add_argument("--ablate_soft_prototype", action="store_true", help="关闭 soft prototype 模块")
     parser.add_argument("--ablate_skill_encoder", action="store_true", help="关闭应试技巧编码器")
     parser.add_argument("--ablate_exercise_graph", action="store_true", help="关闭习题侧图传播")
-    parser.add_argument("--ablate_concept_fusion", action="store_true", help="关闭样本级 concept_vector 与 Q 的融合")
 
     return parser
 
@@ -139,7 +137,6 @@ def main():
     )
     args.use_skill_encoder = not getattr(args, "ablate_skill_encoder", False)
     args.use_exercise_graph = not getattr(args, "ablate_exercise_graph", False)
-    args.use_concept_fusion = not getattr(args, "ablate_concept_fusion", False)
     args.use_personal_graph = getattr(args, "use_personal_graph", False)
 
     # 设置随机种子

@@ -24,7 +24,6 @@ def train_epoch(
     optimizer: optim.Optimizer,
     device: torch.device,
     lambda_sparse: float,
-    lambda_independence: float,
     lambda_proto_div: float,
     lambda_proto_usage: float,
     lambda_sparse_personal: float,
@@ -41,47 +40,12 @@ def train_epoch(
     all_predictions = []
     all_probs = []
 
-    # 给 model 挂一个属性，标记是否已经打印过 debug
-    has_debugged_cfuse = getattr(model, "_logged_cfuse_debug", False)
-
-
     for batch_idx, batch in enumerate(train_loader):
         student_ids, exercise_ids, concept_vector, labels = batch
         student_ids = student_ids.to(device)
         exercise_ids = exercise_ids.to(device)
         concept_vector = concept_vector.to(device)
         labels = labels.to(device).float()
-
-        # ===== DEBUG: 检查 concept_vector 和 q_vector 是否真的有差异 =====
-        if (not has_debugged_cfuse) and batch_idx == 0:
-            try:
-                with torch.no_grad():
-                    q_vec = model.q_matrix[exercise_ids.to(model.q_matrix.device)]  # (B, C)
-
-                    cv = concept_vector.to(q_vec.device, dtype=q_vec.dtype)
-
-                    diff = (cv - q_vec).abs()
-                    nonzero_frac = (diff > 1e-6).float().mean().item()
-
-                    logger.info(
-                        "[DEBUG cfuse] concept_vector stats: mean=%.6f, std=%.6f; "
-                        "q_vector stats: mean=%.6f, std=%.6f; "
-                        "L1 diff mean=%.6f, nonzero_frac=%.6f",
-                        cv.mean().item(),
-                        cv.std().item(),
-                        q_vec.mean().item(),
-                        q_vec.std().item(),
-                        diff.mean().item(),
-                        nonzero_frac,
-                    )
-
-                # 打完一次就记住，下次不再打
-                model._logged_cfuse_debug = True
-                has_debugged_cfuse = True
-
-            except Exception as e:
-                logger.error(f"[DEBUG cfuse] failed to compare concept_vector and q_vector: {e}")
-        # ===== DEBUG END =====
 
         pred_probs, details = model(
             student_ids,
@@ -101,7 +65,6 @@ def train_epoch(
             details["knowledge_state"],
             prototype_assign=proto_assign,
             lambda_sparse=lambda_sparse,
-            lambda_independence=lambda_independence,
             lambda_proto_div=lambda_proto_div,
             lambda_proto_usage=lambda_proto_usage,
             personal_matrices=personal_matrices,
@@ -145,7 +108,6 @@ def validate(
     val_loader: DataLoader,
     device: torch.device,
     lambda_sparse: float,
-    lambda_independence: float,
     lambda_proto_div: float,
     lambda_proto_usage: float,
     lambda_sparse_personal: float,
@@ -188,7 +150,6 @@ def validate(
                 details["knowledge_state"],
                 prototype_assign=proto_assign,
                 lambda_sparse=lambda_sparse,
-                lambda_independence=lambda_independence,
                 lambda_proto_div=lambda_proto_div,
                 lambda_proto_usage=lambda_proto_usage,
                 personal_matrices=personal_matrices,
@@ -234,20 +195,18 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
 
     logger.info("%s Loading datasets...", run_tag)
     logger.info(
-        "%s [Ablation] model_variant=%s | soft_proto=%s, skill=%s, exercise_graph=%s, concept_fusion=%s",
+        "%s [Ablation] model_variant=%s | soft_proto=%s, skill=%s, exercise_graph=%s",
         run_tag,
         getattr(args, "model_variant", "full"),
         str(getattr(args, "use_soft_prototype", True)),
         str(getattr(args, "use_skill_encoder", True)),
         str(getattr(args, "use_exercise_graph", True)),
-        str(getattr(args, "use_concept_fusion", True)),
     )
     logger.info(
-        "%s Regularization: sparse=%.4f, indep=%.4f, proto_div=%.4f, proto_usage=%.4f, "
+        "%s Regularization: sparse=%.4f, proto_div=%.4f, proto_usage=%.4f, "
         "personal_sparse=%.4f, alpha_penalty=%.4f",
         run_tag,
         args.lambda_sparse,
-        args.lambda_independence,
         args.lambda_proto_div,
         args.lambda_proto_usage,
         args.lambda_sparse_personal,
@@ -255,11 +214,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     )
 
     logger.info(
-        "[Config] dataset=%s | use_concept_fusion=%s | lambda_sparse=%.4f, lambda_indep=%.4f",
+        "[Config] dataset=%s | lambda_sparse=%.4f",
         getattr(args, "dataset_name", "N/A"),
-        str(getattr(args, "use_concept_fusion", True)),
         args.lambda_sparse,
-        args.lambda_independence,
     )
 
 
@@ -309,7 +266,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         use_soft_prototype=getattr(args, "use_soft_prototype", True),
         use_skill_encoder=getattr(args, "use_skill_encoder", True),
         use_exercise_graph=getattr(args, "use_exercise_graph", True),
-        use_concept_fusion=getattr(args, "use_concept_fusion", True),
         use_personal_graph=getattr(args, "use_personal_graph", False),
         lambda_sparse_personal=args.lambda_sparse_personal,
         lambda_alpha=args.lambda_alpha,
@@ -353,7 +309,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             optimizer,
             device,
             args.lambda_sparse,
-            args.lambda_independence,
             args.lambda_proto_div,
             args.lambda_proto_usage,
             args.lambda_sparse_personal,
@@ -366,7 +321,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             val_loader,
             device,
             args.lambda_sparse,
-            args.lambda_independence,
             args.lambda_proto_div,
             args.lambda_proto_usage,
             args.lambda_sparse_personal,
@@ -544,12 +498,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     )
     loaded_use_skill = loaded_args.get("use_skill_encoder", True)
     loaded_use_ex_graph = loaded_args.get("use_exercise_graph", True)
-    loaded_use_concept_fusion = loaded_args.get("use_concept_fusion", True)
-
     use_soft_prototype = loaded_use_soft and getattr(args, "use_soft_prototype", True)
     use_skill_encoder = loaded_use_skill and getattr(args, "use_skill_encoder", True)
     use_exercise_graph = loaded_use_ex_graph and getattr(args, "use_exercise_graph", True)
-    use_concept_fusion = loaded_use_concept_fusion and getattr(args, "use_concept_fusion", True)
     use_personal_graph = loaded_args.get("use_personal_graph", getattr(args, "use_personal_graph", False))
 
     lambda_sparse_personal = loaded_args.get("lambda_sparse_personal", args.lambda_sparse_personal)
@@ -558,7 +509,6 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     args.use_soft_prototype = use_soft_prototype
     args.use_skill_encoder = use_skill_encoder
     args.use_exercise_graph = use_exercise_graph
-    args.use_concept_fusion = use_concept_fusion
     args.use_personal_graph = use_personal_graph
 
     model = CognitiveDiagnosisModel(
@@ -578,7 +528,6 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         use_soft_prototype=use_soft_prototype,
         use_skill_encoder=use_skill_encoder,
         use_exercise_graph=use_exercise_graph,
-        use_concept_fusion=use_concept_fusion,
         use_personal_graph=use_personal_graph,
         lambda_sparse_personal=lambda_sparse_personal,
         lambda_alpha=lambda_alpha,
