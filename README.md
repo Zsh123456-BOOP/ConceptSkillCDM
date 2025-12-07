@@ -100,3 +100,36 @@
 - 可视化与日志：增加图结构与知识分布的可视化（tensorboard 或保存邻接矩阵热力图）。  
 - 训练策略：尝试学习式 `impact_factor` 或多步图传播，检验对单调性与性能的影响。  
 - 评估丰富性：增加分组指标的可选输出（如按题目难度分层）并记录到结果 CSV。
+
+
+1. 新建一个 tmux 会话
+tmux new -s cd_ablation
+
+
+进到这个会话后，做平时的操作：
+
+cd /你的项目路径/ConceptSkillCDM
+conda activate xph_env    # 如果你有环境的话
+python run_ablation.py --datasets assist_09,junyi --gpus 0,1 --max_concurrent 2
+
+
+这个命令跑着就行了。
+
+2. 跑着的时候如何“挂起”？
+
+按下：
+
+Ctrl + B，然后松开，再按 D
+
+
+终端会提示类似：
+
+[detached from cd_ablation]
+说明你已经从 tmux 会话里退出了，但里面的 Python 还在跑。
+此时你就算 SSH 断了，这个 tmux 里的进程也不会停。
+
+3. 重新连上去看进度
+
+下次 SSH 连上机器后：
+tmux ls                      # 看当前有哪些 tmux 会话
+tmux attach -t cd_ablation   # 或 tmux a -t cd_ablation

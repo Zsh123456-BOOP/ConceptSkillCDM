@@ -6,6 +6,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import torch
+from typing import Dict, Any
 from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error
 from gpu_utils import get_best_gpu
 
@@ -114,56 +115,125 @@ def save_epoch_history_csv(history: dict, save_dir: str, logger):
     df.to_csv(path, index=False)
     logger.info(f"Epoch-wise metrics saved to {path}")
 
+# src/experiment_utils.py 里，替换原来的 append_summary_csv
 
-def append_summary_csv(args, metrics: dict, best_val_auc: float, model_epoch: int, logger):
-    os.makedirs("results", exist_ok=True)
-    csv_path = os.path.join("results", "all_results.csv")
-    dataset_name = getattr(args, "dataset_name", None) or os.path.basename(
-        os.path.normpath(args.data_dir)
-    )
+import os
+import json
+from datetime import datetime
 
-    ablation_flags = {
-        "ablate_soft_prototype": getattr(args, "ablate_soft_prototype", False),
-        "ablate_skill_encoder": getattr(args, "ablate_skill_encoder", False),
-        "ablate_exercise_graph": getattr(args, "ablate_exercise_graph", False),
-        "ablate_concept_fusion": getattr(args, "ablate_concept_fusion", False),
+import pandas as pd
+
+def append_summary_csv(
+    args,
+    metrics,
+    best_val_auc: float,
+    model_epoch: int,
+    logger,
+):
+    """
+    将一次实验的结果追加到统一的 summary CSV 中：
+    <project_root>/results/experiment_results.csv
+
+    - 所有数据集、所有消融实验/网格搜索共用一个文件；
+    - 指标列放前，参数列放后；
+    - 通过 pandas 自动对齐列，避免字段不匹配报错。
+    """
+
+    # === 1. 确定 results 目录和文件路径 ===
+    # 当前文件在 src/experiment_utils.py，所以项目根目录是上一级
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    results_dir = os.path.join(project_root, "results")
+    os.makedirs(results_dir, exist_ok=True)
+
+    summary_path = os.path.join(results_dir, "experiment_results.csv")
+
+    # === 2. 构造当前这一行的内容 ===
+    row = {}
+
+    # 基本信息
+    row["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    row["dataset"] = getattr(args, "dataset_name", "unknown")
+    row["model_variant"] = getattr(args, "model_variant", "full")
+
+    # 消融标记，方便后续筛选
+    ablation_flags = []
+    for flag in [
+        "ablate_soft_prototype",
+        "ablate_skill_encoder",
+        "ablate_exercise_graph",
+        "ablate_concept_fusion",
+    ]:
+        if hasattr(args, flag):
+            ablation_flags.append(f"{flag}={getattr(args, flag)}")
+    row["ablation_flags"] = ";".join(ablation_flags)
+
+    row["seed"] = getattr(args, "seed", 0)
+
+    # 指标（放在最前面的一批）
+    row["test_auc"] = float(metrics["auc"])
+    row["test_acc"] = float(metrics["acc"])
+    row["test_rmse"] = float(metrics["rmse"])
+    row["best_val_auc"] = float(best_val_auc)
+    row["model_epoch"] = int(model_epoch)
+
+    # === 3. 把 args 里的超参数摊平成后面的列 ===
+    skip_keys = {
+        "log_dir",
+        "save_dir",
+        "data_dir",
+        "gpu_candidates",
+        "generate_diagnosis",
     }
-    ablation_str = ";".join([f"{k}={v}" for k, v in ablation_flags.items()])
 
-    row = {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "dataset": dataset_name,
-        "model_variant": getattr(args, "model_variant", "full"),
-        "ablation_flags": ablation_str,
-        "seed": args.seed,
-        "batch_size": args.batch_size,
-        "knowledge_dim": args.knowledge_dim,
-        "skill_dim": args.skill_dim,
-        "exercise_dim": args.exercise_dim,
-        "num_relation_heads": args.num_relation_heads,
-        "num_gnn_layers": args.num_gnn_layers,
-        "dropout": args.dropout,
-        "learning_rate": args.learning_rate,
-        "weight_decay": args.weight_decay,
-        "lambda_sparse": args.lambda_sparse,
-        "lambda_independence": args.lambda_independence,
-        "lambda_proto_div": args.lambda_proto_div,
-        "lambda_proto_usage": args.lambda_proto_usage,
-        "use_soft_prototype": getattr(args, "use_soft_prototype", True),
-        "use_skill_encoder": getattr(args, "use_skill_encoder", True),
-        "use_exercise_graph": getattr(args, "use_exercise_graph", True),
-        "use_concept_fusion": getattr(args, "use_concept_fusion", True),
-        "num_prototypes": args.num_prototypes,
-        "proto_tau": args.proto_tau,
-        "proto_lambda": args.proto_lambda,
-        "test_auc": metrics["auc"],
-        "test_acc": metrics["acc"],
-        "test_rmse": metrics["rmse"],
-        "best_val_auc": best_val_auc,
-        "model_epoch": model_epoch,
-    }
+    for k, v in sorted(vars(args).items()):
+        if k in row or k in skip_keys:
+            continue
 
-    df = pd.DataFrame([row])
-    file_exists = os.path.exists(csv_path)
-    df.to_csv(csv_path, mode="a", header=not file_exists, index=False)
-    logger.info(f"Experiment summary appended to {csv_path}")
+        # 处理 numpy 类型，避免写 CSV 时不兼容
+        try:
+            import numpy as np
+
+            if isinstance(v, (np.floating, np.integer)):
+                v = float(v) if isinstance(v, np.floating) else int(v)
+        except Exception:
+            pass
+
+        # list/dict 转成 JSON 字符串
+        if isinstance(v, (list, dict)):
+            v = json.dumps(v, ensure_ascii=False)
+
+        row[k] = v
+
+    # === 4. 用 pandas 读旧文件 + 追加新行，自动对齐列 ===
+    if os.path.exists(summary_path):
+        try:
+            df = pd.read_csv(summary_path)
+            df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+        except Exception as e:
+            logger.warning(
+                f"Failed to read existing summary csv ({summary_path}), "
+                f"recreating a new one. Error: {e}"
+            )
+            df = pd.DataFrame([row])
+    else:
+        df = pd.DataFrame([row])
+
+    # === 5. 调整列顺序：指标和关键信息放前面 ===
+    front_cols = [
+        "timestamp",
+        "dataset",
+        "model_variant",
+        "ablation_flags",
+        "seed",
+        "test_auc",
+        "test_acc",
+        "test_rmse",
+        "best_val_auc",
+        "model_epoch",
+    ]
+    front_cols = [c for c in front_cols if c in df.columns]
+    other_cols = [c for c in df.columns if c not in front_cols]
+    df = df[front_cols + other_cols]
+
+    df.to_csv(summary_path, index=False)
+    logger.info(f"Summary appended to {summary_path}")

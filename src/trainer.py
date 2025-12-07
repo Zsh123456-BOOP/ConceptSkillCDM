@@ -41,12 +41,47 @@ def train_epoch(
     all_predictions = []
     all_probs = []
 
+    # 给 model 挂一个属性，标记是否已经打印过 debug
+    has_debugged_cfuse = getattr(model, "_logged_cfuse_debug", False)
+
+
     for batch_idx, batch in enumerate(train_loader):
         student_ids, exercise_ids, concept_vector, labels = batch
         student_ids = student_ids.to(device)
         exercise_ids = exercise_ids.to(device)
         concept_vector = concept_vector.to(device)
         labels = labels.to(device).float()
+
+        # ===== DEBUG: 检查 concept_vector 和 q_vector 是否真的有差异 =====
+        if (not has_debugged_cfuse) and batch_idx == 0:
+            try:
+                with torch.no_grad():
+                    q_vec = model.q_matrix[exercise_ids.to(model.q_matrix.device)]  # (B, C)
+
+                    cv = concept_vector.to(q_vec.device, dtype=q_vec.dtype)
+
+                    diff = (cv - q_vec).abs()
+                    nonzero_frac = (diff > 1e-6).float().mean().item()
+
+                    logger.info(
+                        "[DEBUG cfuse] concept_vector stats: mean=%.6f, std=%.6f; "
+                        "q_vector stats: mean=%.6f, std=%.6f; "
+                        "L1 diff mean=%.6f, nonzero_frac=%.6f",
+                        cv.mean().item(),
+                        cv.std().item(),
+                        q_vec.mean().item(),
+                        q_vec.std().item(),
+                        diff.mean().item(),
+                        nonzero_frac,
+                    )
+
+                # 打完一次就记住，下次不再打
+                model._logged_cfuse_debug = True
+                has_debugged_cfuse = True
+
+            except Exception as e:
+                logger.error(f"[DEBUG cfuse] failed to compare concept_vector and q_vector: {e}")
+        # ===== DEBUG END =====
 
         pred_probs, details = model(
             student_ids,
@@ -186,13 +221,21 @@ def validate(
         **metrics,
     }
 
-
 def train_one_experiment(args, logger) -> Tuple[float, int]:
     device = select_device(args, logger)
 
-    logger.info("Loading datasets...")
+    # ========= 统一前缀：把这一轮实验的身份写清楚 =========
+    run_tag = (
+        f"[{getattr(args, 'dataset_name', 'unknown')}"
+        f"|{getattr(args, 'model_variant', 'full')}"
+        f"|lr={args.learning_rate:g}"
+        f"|drop={args.dropout:.2f}]"
+    )
+
+    logger.info("%s Loading datasets...", run_tag)
     logger.info(
-        "[Ablation] model_variant=%s | soft_proto=%s, skill=%s, exercise_graph=%s, concept_fusion=%s",
+        "%s [Ablation] model_variant=%s | soft_proto=%s, skill=%s, exercise_graph=%s, concept_fusion=%s",
+        run_tag,
         getattr(args, "model_variant", "full"),
         str(getattr(args, "use_soft_prototype", True)),
         str(getattr(args, "use_skill_encoder", True)),
@@ -200,8 +243,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         str(getattr(args, "use_concept_fusion", True)),
     )
     logger.info(
-        "Regularization: sparse=%.4f, indep=%.4f, proto_div=%.4f, proto_usage=%.4f, "
+        "%s Regularization: sparse=%.4f, indep=%.4f, proto_div=%.4f, proto_usage=%.4f, "
         "personal_sparse=%.4f, alpha_penalty=%.4f",
+        run_tag,
         args.lambda_sparse,
         args.lambda_independence,
         args.lambda_proto_div,
@@ -209,6 +253,15 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         args.lambda_sparse_personal,
         args.lambda_alpha,
     )
+
+    logger.info(
+        "[Config] dataset=%s | use_concept_fusion=%s | lambda_sparse=%.4f, lambda_indep=%.4f",
+        getattr(args, "dataset_name", "N/A"),
+        str(getattr(args, "use_concept_fusion", True)),
+        args.lambda_sparse,
+        args.lambda_independence,
+    )
+
 
     data_dir = args.data_dir
     train_file = os.path.join(data_dir, "train.csv")
@@ -228,12 +281,17 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         logger=logger,
     )
 
-    logger.info(f'Train samples: {info_dict["train_size"]}, Val samples: {info_dict["val_size"]}')
-    logger.info(f'Number of students: {info_dict["num_students"]}')
-    logger.info(f'Number of exercises: {info_dict["num_exercises"]}')
-    logger.info(f'Number of concepts: {info_dict["num_concepts"]}')
+    logger.info(
+        "%s Train samples: %d, Val samples: %d",
+        run_tag,
+        info_dict["train_size"],
+        info_dict["val_size"],
+    )
+    logger.info("%s Number of students: %d", run_tag, info_dict["num_students"])
+    logger.info("%s Number of exercises: %d", run_tag, info_dict["num_exercises"])
+    logger.info("%s Number of concepts: %d", run_tag, info_dict["num_concepts"])
 
-    logger.info("Creating model...")
+    logger.info("%s Creating model...", run_tag)
     model = CognitiveDiagnosisModel(
         num_students=info_dict["num_students"],
         num_exercises=info_dict["num_exercises"],
@@ -259,8 +317,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
 
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"Total parameters: {total_params:,}")
-    logger.info(f"Trainable parameters: {trainable_params:,}")
+    logger.info("%s Total parameters: %s", run_tag, f"{total_params:,}")
+    logger.info("%s Trainable parameters: %s", run_tag, f"{trainable_params:,}")
 
     optimizer = optim.Adam(
         model.parameters(),
@@ -279,7 +337,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     best_epoch = 0
     patience_counter = 0
 
-    logger.info("Starting training...")
+    logger.info("%s Starting training...", run_tag)
 
     history: Dict[str, Any] = {
         "train": [],
@@ -317,7 +375,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         )
 
         summary_line = (
-            f"Epoch [{epoch:03d}/{args.epochs}] | "
+            f"{run_tag} Epoch [{epoch:03d}/{args.epochs}] | "
             f"Train: Loss={train_metrics['loss']:.4f}, BCE={train_metrics['bce_loss']:.4f}, "
             f"Reg={train_metrics['reg_loss']:.4f}, AUC={train_metrics['auc']:.4f}, "
             f"ACC={train_metrics['acc']:.4f}, RMSE={train_metrics['rmse']:.4f} | "
@@ -351,18 +409,29 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 model_path,
             )
 
-            logger.info(f"  -> New best AUC={best_val_auc:.4f} at epoch {epoch} (patience reset)")
+            logger.info(
+                "%s   -> New best AUC=%.4f at epoch %d (patience reset)",
+                run_tag,
+                best_val_auc,
+                epoch,
+            )
         else:
             patience_counter += 1
             logger.info(
-                f"  -> No improvement for {patience_counter} epoch(s) "
-                f"(best AUC={best_val_auc:.4f} @ epoch {best_epoch})"
+                "%s   -> No improvement for %d epoch(s) (best AUC=%.4f @ epoch %d)",
+                run_tag,
+                patience_counter,
+                best_val_auc,
+                best_epoch,
             )
 
         if patience_counter >= args.early_stop_patience:
             logger.info(
-                f"Early stopping triggered at epoch {epoch} "
-                f"(best AUC={best_val_auc:.4f} @ epoch {best_epoch})"
+                "%s Early stopping triggered at epoch %d (best AUC=%.4f @ epoch %d)",
+                run_tag,
+                epoch,
+                best_val_auc,
+                best_epoch,
             )
             break
 
@@ -379,7 +448,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 },
                 checkpoint_path,
             )
-            logger.info(f"Checkpoint saved: {checkpoint_path}")
+            logger.info("%s Checkpoint saved: %s", run_tag, checkpoint_path)
 
     history["best_epoch"] = best_epoch
     history["best_val_auc"] = best_val_auc
@@ -390,13 +459,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     with open(history_path, "w") as f:
         json.dump(history, f, indent=4, default=lambda x: float(x) if torch.is_tensor(x) else x)
 
-    logger.info(f'\n{"=" * 50}')
-    logger.info("Training completed!")
-    logger.info(f"Best validation AUC: {best_val_auc:.4f} at epoch {best_epoch}")
-    logger.info(f'{"=" * 50}')
+    logger.info("%s %s", run_tag, "=" * 50)
+    logger.info("%s Training completed!", run_tag)
+    logger.info("%s Best validation AUC: %.4f at epoch %d", run_tag, best_val_auc, best_epoch)
+    logger.info("%s %s", run_tag, "=" * 50)
 
     return best_val_auc, best_epoch
-
 
 def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     device = select_device(args, logger)
