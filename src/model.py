@@ -371,26 +371,33 @@ class ExerciseDifficultyEncoder(nn.Module):
 #    - （后续 hook）个性化关系图相关模块
 # ======================================================
 
-
 class ResponsePredictionHead(nn.Module):
-    """IRT 风格预测头：融合知识状态 (B, C, D)、技巧向量 (B, S) 与习题嵌入 (B, E) 计算作答概率。"""
+    """IRT 风格预测头：融合知识状态 (B, C, D)、技巧向量 (B, S) 与习题嵌入 (B, E) 计算作答概率。
+    知识部分使用 2 层单调 MLP（权重非负 + 单调激活），保证对 knowledge_state 单调。
+    """
 
     def __init__(
             self,
             knowledge_dim: int,
             skill_dim: int,
             exercise_dim: int,
-            hidden_dim: int = 128
+            hidden_dim: int = 128,
+            mono_hidden_dim: int = 32,   # 单调 MLP 隐层维
     ):
         super().__init__()
 
-        # -------【改动 1】知识部分：改为单调线性打分-------
-        # 原来是一个 MLP，现在改成一个向量 w ∈ R^D + 一个偏置 b
-        # 在 forward 里通过 softplus(w_raw) 保证权重 ≥ 0，满足单调性
-        self.knowledge_weight_raw = nn.Parameter(torch.randn(knowledge_dim))
-        self.knowledge_bias = nn.Parameter(torch.zeros(1))
+        self.knowledge_dim = knowledge_dim
+        self.mono_hidden_dim = mono_hidden_dim
 
-        # -------【保留】技巧部分先不动-------
+        # ===== 知识部分：2 层单调 MLP =====
+        # raw 权重，通过 softplus 变成非负，保证单调性
+        self.kn_w1_raw = nn.Parameter(torch.randn(mono_hidden_dim, knowledge_dim))
+        self.kn_b1 = nn.Parameter(torch.zeros(mono_hidden_dim))
+
+        self.kn_w2_raw = nn.Parameter(torch.randn(1, mono_hidden_dim))
+        self.kn_b2 = nn.Parameter(torch.zeros(1))
+
+        # ===== 技巧部分：保留你原来的结构 =====
         self.skill_net = nn.Sequential(
             nn.Linear(skill_dim + exercise_dim, hidden_dim // 2),
             nn.ReLU(),
@@ -401,16 +408,52 @@ class ResponsePredictionHead(nn.Module):
         self._initialize_weights()
 
     def _initialize_weights(self):
-        # 知识权重初始化
-        nn.init.normal_(self.knowledge_weight_raw, mean=0.0, std=0.1)
-        nn.init.zeros_(self.knowledge_bias)
+        # 知识 MLP 的 raw 权重
+        nn.init.normal_(self.kn_w1_raw, mean=0.0, std=0.1)
+        nn.init.normal_(self.kn_w2_raw, mean=0.0, std=0.1)
+        nn.init.zeros_(self.kn_b1)
+        nn.init.zeros_(self.kn_b2)
 
-        # 技巧网络初始化
+        # 技巧网络
         for layer in self.skill_net:
             if isinstance(layer, nn.Linear):
                 nn.init.xavier_normal_(layer.weight)
                 if layer.bias is not None:
                     nn.init.zeros_(layer.bias)
+
+    def _knowledge_scores(self, knowledge_state: torch.Tensor) -> torch.Tensor:
+        """
+        知识打分函数，保证对 knowledge_state 单调。
+        支持两种形状：
+        - (B, C, D)
+        - (C, D)  （诊断时单个学生）
+        返回：
+        - (B, C) 或 (C,)
+        """
+        orig_dim = knowledge_state.dim()
+        if orig_dim == 2:
+            # (C, D) -> (1, C, D)
+            knowledge_state = knowledge_state.unsqueeze(0)
+
+        B, C, D = knowledge_state.size()
+
+        # softplus(W) >= 0，保证单调性
+        W1_pos = F.softplus(self.kn_w1_raw)   # (H, D)
+        W2_pos = F.softplus(self.kn_w2_raw)   # (1, H)
+
+        x = knowledge_state.view(B * C, D)    # (B*C, D)
+
+        # 第一层：线性 + 单调激活
+        h = torch.matmul(x, W1_pos.t()) + self.kn_b1  # (B*C, H)
+        h = F.softplus(h)                             # 单调非减激活
+
+        # 第二层：线性输出
+        out = torch.matmul(h, W2_pos.t()) + self.kn_b2  # (B*C, 1)
+        scores = out.view(B, C)                         # (B, C)
+
+        if orig_dim == 2:
+            scores = scores.squeeze(0)                  # (C,)
+        return scores
 
     def forward(
             self,
@@ -423,21 +466,12 @@ class ResponsePredictionHead(nn.Module):
     ) -> torch.Tensor:
         """返回作答概率 (B,)。concept_mask 为 Q 行或样本级概念掩码或两者融合。"""
         batch_size, num_concepts, knowledge_dim = knowledge_state.size()
+        assert knowledge_dim == self.knowledge_dim
 
-        # -------【改动 2】知识打分：单调线性-------
-        # 先把知识维度权重限制为非负，保证「知识越高，得分不降」
-        w_pos = F.softplus(self.knowledge_weight_raw)  # (D,)
+        # 1) 知识打分：单调 2 层 MLP
+        knowledge_scores = self._knowledge_scores(knowledge_state)  # (B, C)
 
-        # (B, C, D) · (D,) -> (B, C)
-        knowledge_scores = torch.matmul(
-            knowledge_state,              # (B, C, D)
-            w_pos.view(-1, 1)            # (D, 1)
-        ).squeeze(-1)                    # (B, C)
-
-        # 加上一个全局偏置（不影响单调性）
-        knowledge_scores = knowledge_scores + self.knowledge_bias  # (B, C)
-
-        # ------- IRT logits -------
+        # 2) IRT logits
         irt_logits = discrimination * (knowledge_scores - difficulty)  # (B, C)
 
         # 归一化 concept_mask，防止全 0
@@ -447,10 +481,10 @@ class ResponsePredictionHead(nn.Module):
         # 聚合到题目层
         knowledge_prob = torch.sigmoid((irt_logits * concept_norm).sum(dim=1))  # (B,)
 
-        # ------- 技巧影响 -------
+        # 3) 技巧影响
         skill_input = torch.cat([skill_vector, exercise_emb], dim=1)  # (B, S+E)
         skill_adjustment = self.skill_net(skill_input).squeeze(-1)    # (B,)
-        skill_adjustment = torch.tanh(skill_adjustment) * 0.2         # 控制影响幅度
+        skill_adjustment = torch.tanh(skill_adjustment) * 0.2         # 控制幅度
 
         final_prob = torch.clamp(
             knowledge_prob + skill_adjustment,
@@ -459,6 +493,7 @@ class ResponsePredictionHead(nn.Module):
         )
 
         return final_prob
+
 
 class SoftPrototypeModule(nn.Module):
     """软原型模块：维护 K 个原型，对学生表示做 soft assignment 并生成混合原型。"""
@@ -627,7 +662,8 @@ class CognitiveDiagnosisModel(nn.Module):
         self.prediction_head = ResponsePredictionHead(
             knowledge_dim=knowledge_dim,
             skill_dim=skill_dim,
-            exercise_dim=exercise_dim
+            exercise_dim=exercise_dim,
+            mono_hidden_dim=32,   # 可以调，比如 32 / 64
         )
 
         # 注册Q矩阵
@@ -853,16 +889,11 @@ class CognitiveDiagnosisModel(nn.Module):
             else:
                 skill_vector = torch.zeros_like(self.skill_encoder(student_ids).squeeze(0))
 
-            # 计算每个知识点的掌握程度
-            # 计算每个知识点的掌握程度（与预测头保持一致的线性单调打分）
-            # knowledge_state: (num_concepts, D)
-            w_pos = F.softplus(self.prediction_head.knowledge_weight_raw)  # (D,)
-            scores = torch.matmul(
-                knowledge_state,                  # (C, D)
-                w_pos.view(-1, 1)                 # (D, 1)
-            ).squeeze(-1) + self.prediction_head.knowledge_bias  # (C,)
-
+            # 计算每个知识点的掌握程度（与预测头保持一致的单调 2 层 MLP）
+            # knowledge_state: (C, D)
+            scores = self.prediction_head._knowledge_scores(knowledge_state)  # (C,)
             knowledge_mastery = torch.sigmoid(scores)  # (C,)
+
 
             diagnosis = {
                 'knowledge_mastery': knowledge_mastery,  # (num_concepts,)
