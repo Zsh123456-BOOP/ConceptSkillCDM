@@ -26,11 +26,11 @@ import time
 # test_rmse, best_val_auc, model_epoch, ablate_skill_encoder,
 # ablate_soft_prototype, batch_size, dataset_name, disable_soft_prototype,
 # dropout, early_stop_patience, epochs, exercise_dim, knowledge_dim,
-# lambda_alpha, lambda_proto_div, lambda_proto_usage, lambda_sparse,
-# lambda_sparse_personal, learning_rate, min_exer_interactions, min_poison_count,
+# lambda_proto_div, lambda_proto_usage, lambda_sparse,
+# learning_rate, min_exer_interactions, min_poison_count,
 # min_stu_interactions, no_cuda, num_gnn_layers, num_prototypes,
 # num_relation_heads, num_workers, patience, proto_lambda, proto_tau,
-# save_interval, skill_dim, use_personal_graph,
+# save_interval, skill_dim,
 # use_skill_encoder, use_soft_prototype, weight_decay
 
 BEST_CFG = {
@@ -44,11 +44,9 @@ BEST_CFG = {
         "epochs": 100,
         "exercise_dim": 128,
         "knowledge_dim": 128,
-        "lambda_alpha": 0.0,
         "lambda_proto_div": 0.0,
         "lambda_proto_usage": 0.0,
         "lambda_sparse": 0.1,
-        "lambda_sparse_personal": 0.0,
         "learning_rate": 1e-3,
         "min_exer_interactions": 0,
         "min_poison_count": 0,
@@ -67,7 +65,6 @@ BEST_CFG = {
         # 消融/模块开关相关
         "ablate_skill_encoder": False,
         "ablate_soft_prototype": False,
-        "use_personal_graph": False,  # CSV 里是 0
         # 其他
         "model_variant": "gpd_base",
     },
@@ -80,11 +77,9 @@ BEST_CFG = {
         "epochs": 100,
         "exercise_dim": 128,
         "knowledge_dim": 128,
-        "lambda_alpha": 0.0,
         "lambda_proto_div": 0.0,
         "lambda_proto_usage": 0.0,
         "lambda_sparse": 0.05,
-        "lambda_sparse_personal": 0.0,
         "learning_rate": 3e-4,  # assist_09 的最佳行是 0.0003
         "min_exer_interactions": 0,
         "min_poison_count": 0,
@@ -102,7 +97,6 @@ BEST_CFG = {
         "weight_decay": 1e-5,
         "ablate_skill_encoder": False,
         "ablate_soft_prototype": False,
-        "use_personal_graph": False,  # CSV 里是 0
         "model_variant": "gpd_base",
     },
 }

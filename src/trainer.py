@@ -26,8 +26,6 @@ def train_epoch(
     lambda_sparse: float,
     lambda_proto_div: float,
     lambda_proto_usage: float,
-    lambda_sparse_personal: float,
-    lambda_alpha: float,
     logger,
 ) -> Dict[str, float]:
     model.train()
@@ -55,8 +53,6 @@ def train_epoch(
         bce_loss = nn.BCELoss()(pred_probs, labels)
 
         proto_assign = details.get("prototype_assign", None)
-        personal_matrices = details.get("personal_matrices", None)
-        gate_alpha = details.get("alpha", None)
         reg_loss = model.get_regularization_loss(
             details["relation_matrices"],
             details["skill_vector"],
@@ -65,10 +61,6 @@ def train_epoch(
             lambda_sparse=lambda_sparse,
             lambda_proto_div=lambda_proto_div,
             lambda_proto_usage=lambda_proto_usage,
-            personal_matrices=personal_matrices,
-            alpha=gate_alpha,
-            lambda_sparse_personal=lambda_sparse_personal,
-            lambda_alpha=lambda_alpha,
         )
 
         loss = bce_loss + reg_loss
@@ -108,8 +100,6 @@ def validate(
     lambda_sparse: float,
     lambda_proto_div: float,
     lambda_proto_usage: float,
-    lambda_sparse_personal: float,
-    lambda_alpha: float,
     logger,
 ) -> Dict[str, float]:
     model.eval()
@@ -138,8 +128,6 @@ def validate(
             bce_loss = nn.BCELoss()(pred_probs, labels)
 
             proto_assign = details.get("prototype_assign", None)
-            personal_matrices = details.get("personal_matrices", None)
-            gate_alpha = details.get("alpha", None)
             reg_loss = model.get_regularization_loss(
                 details["relation_matrices"],
                 details["skill_vector"],
@@ -148,10 +136,6 @@ def validate(
                 lambda_sparse=lambda_sparse,
                 lambda_proto_div=lambda_proto_div,
                 lambda_proto_usage=lambda_proto_usage,
-                personal_matrices=personal_matrices,
-                alpha=gate_alpha,
-                lambda_sparse_personal=lambda_sparse_personal,
-                lambda_alpha=lambda_alpha,
             )
 
             loss = bce_loss + reg_loss
@@ -198,14 +182,11 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         str(getattr(args, "use_skill_encoder", True)),
     )
     logger.info(
-        "%s Regularization: sparse=%.4f, proto_div=%.4f, proto_usage=%.4f, "
-        "personal_sparse=%.4f, alpha_penalty=%.4f",
+        "%s Regularization: sparse=%.4f, proto_div=%.4f, proto_usage=%.4f",
         run_tag,
         args.lambda_sparse,
         args.lambda_proto_div,
         args.lambda_proto_usage,
-        args.lambda_sparse_personal,
-        args.lambda_alpha,
     )
 
     logger.info(
@@ -261,10 +242,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         proto_lambda=args.proto_lambda,
         use_soft_prototype=getattr(args, "use_soft_prototype", True),
         use_skill_encoder=getattr(args, "use_skill_encoder", True),
-        # 个性化关系图
-        use_personal_graph=getattr(args, "use_personal_graph", False),
-        lambda_sparse_personal=args.lambda_sparse_personal,
-        lambda_alpha=args.lambda_alpha,
     ).to(device)
 
 
@@ -308,8 +285,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             args.lambda_sparse,
             args.lambda_proto_div,
             args.lambda_proto_usage,
-            args.lambda_sparse_personal,
-            args.lambda_alpha,
             logger,
         )
 
@@ -320,8 +295,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             args.lambda_sparse,
             args.lambda_proto_div,
             args.lambda_proto_usage,
-            args.lambda_sparse_personal,
-            args.lambda_alpha,
             logger,
         )
 
@@ -496,16 +469,8 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     loaded_use_skill = loaded_args.get("use_skill_encoder", True)
     use_soft_prototype = loaded_use_soft and getattr(args, "use_soft_prototype", True)
     use_skill_encoder = loaded_use_skill and getattr(args, "use_skill_encoder", True)
-    use_personal_graph = loaded_args.get("use_personal_graph", getattr(args, "use_personal_graph", False))
-
-    lambda_sparse_personal = loaded_args.get("lambda_sparse_personal", args.lambda_sparse_personal)
-    lambda_alpha = loaded_args.get("lambda_alpha", args.lambda_alpha)
-
-
-
     args.use_soft_prototype = use_soft_prototype
     args.use_skill_encoder = use_skill_encoder
-    args.use_personal_graph = use_personal_graph
 
     model = CognitiveDiagnosisModel(
         num_students=info_dict["num_students"],
@@ -523,10 +488,6 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         proto_lambda=proto_lambda,
         use_soft_prototype=use_soft_prototype,
         use_skill_encoder=use_skill_encoder,
-        # 个性化关系图
-        use_personal_graph=use_personal_graph,
-        lambda_sparse_personal=lambda_sparse_personal,
-        lambda_alpha=lambda_alpha,
     ).to(device)
 
 

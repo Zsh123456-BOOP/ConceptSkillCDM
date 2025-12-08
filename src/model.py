@@ -492,55 +492,6 @@ class SoftPrototypeModule(nn.Module):
 
 
 # ======================================================
-# 3.5 个性化关系图模块（G-PDS hook）
-#    - AdaptiveGate：自适应门控，控制全局图与个性化图的权重
-#    - PersonalRelationGenerator：LoRA 风格生成个性化关系矩阵
-# ======================================================
-
-
-class AdaptiveGate(nn.Module):
-    """根据学生表征输出门控系数 α（0-1），偏向全局或个性化图。"""
-
-    def __init__(self, student_dim: int):
-        super().__init__()
-        self.gate = nn.Sequential(
-            nn.Linear(student_dim, student_dim // 2),
-            nn.ReLU(),
-            nn.Linear(student_dim // 2, 1),
-            nn.Sigmoid()
-        )
-
-    def forward(self, student_repr: torch.Tensor) -> torch.Tensor:
-        alpha = self.gate(student_repr).view(-1, 1, 1)  # (B,1,1)
-        return alpha
-
-
-class PersonalRelationGenerator(nn.Module):
-    """LoRA 风格生成个性化关系矩阵，低秩近似学生特定的概念关联。"""
-
-    def __init__(self, student_dim: int, num_concepts: int, rank: int = 4):
-        super().__init__()
-        self.num_concepts = num_concepts
-        self.rank = rank
-        self.to_u = nn.Linear(student_dim, num_concepts * rank, bias=False)
-        self.to_v = nn.Linear(student_dim, num_concepts * rank, bias=False)
-
-        nn.init.xavier_normal_(self.to_u.weight)
-        nn.init.xavier_normal_(self.to_v.weight)
-
-    def forward(self, student_repr: torch.Tensor) -> torch.Tensor:
-        """
-        输入: student_repr (B, D)
-        输出: personal_matrices (B, C, C)，通过 U V^T 构造的低秩个性化关系
-        """
-        batch_size = student_repr.size(0)
-        u = self.to_u(student_repr).view(batch_size, self.num_concepts, self.rank)
-        v = self.to_v(student_repr).view(batch_size, self.num_concepts, self.rank)
-        personal = torch.matmul(u, v.transpose(-1, -2))  # (B, C, C)
-        return personal
-
-
-# ======================================================
 # 4. CognitiveDiagnosisModel (主组装)
 # ======================================================
 
@@ -566,11 +517,6 @@ class CognitiveDiagnosisModel(nn.Module):
             proto_lambda: float = 0.5,
             use_soft_prototype: bool = True,
             use_skill_encoder: bool = True,
-            # ====== 个性化关系图（G-PDS hook） ======
-            use_personal_graph: bool = False,
-            personal_rank: int = 4,
-            lambda_sparse_personal: float = 0.0,
-            lambda_alpha: float = 0.0,
     ):
         super().__init__()
 
@@ -581,10 +527,6 @@ class CognitiveDiagnosisModel(nn.Module):
 
         self.knowledge_dim = knowledge_dim
         self.use_skill_encoder = bool(use_skill_encoder)
-        self.use_personal_graph = bool(use_personal_graph)
-        self.personal_rank = int(personal_rank)
-        self.lambda_sparse_personal = float(lambda_sparse_personal)
-        self.lambda_alpha = float(lambda_alpha)
 
         # ===== 概念关系学习 =====
         self.relation_learning = MultiHeadRelationLearning(
@@ -643,18 +585,6 @@ class CognitiveDiagnosisModel(nn.Module):
         else:
             self.prototype_module = None
 
-        # ===== 个性化关系图模块（默认关闭） =====
-        if self.use_personal_graph:
-            self.adaptive_gate = AdaptiveGate(student_dim=knowledge_dim)
-            self.personal_generator = PersonalRelationGenerator(
-                student_dim=knowledge_dim,
-                num_concepts=num_concepts,
-                rank=self.personal_rank,
-            )
-        else:
-            self.adaptive_gate = None
-            self.personal_generator = None
-
     def forward(
             self,
             student_ids: torch.Tensor,
@@ -694,13 +624,6 @@ class CognitiveDiagnosisModel(nn.Module):
             proto_broadcast = proto_mix.unsqueeze(1).expand(-1, self.num_concepts, -1)
             knowledge_state = (1.0 - self.proto_lambda) * knowledge_state + self.proto_lambda * proto_broadcast
 
-        # === G-PDS hook：个性化关系图（暂不替换主路径，仅返回诊断信息） ===
-        gate_alpha = None
-        personal_matrices = None
-        if self.use_personal_graph:
-            gate_alpha = self.adaptive_gate(student_repr)  # (B,1,1)
-            personal_matrices = self.personal_generator(student_repr)  # (B, C, C)
-
         # 3. 编码学生应试技巧
         if self.use_skill_encoder:
             skill_vector = self.skill_encoder(student_ids)  # (batch_size, skill_dim)
@@ -739,9 +662,6 @@ class CognitiveDiagnosisModel(nn.Module):
             if self.use_soft_prototype:
                 details['prototype_assign'] = proto_assign  # (B, K)
                 details['prototype_mix'] = proto_mix        # (B, D)
-            if self.use_personal_graph:
-                details['alpha'] = gate_alpha
-                details['personal_matrices'] = personal_matrices
             return pred_prob, details
         else:
             return pred_prob
@@ -755,25 +675,14 @@ class CognitiveDiagnosisModel(nn.Module):
             lambda_sparse: float = 0.01,
             lambda_proto_div: float = 0.0,
             lambda_proto_usage: float = 0.0,
-            personal_matrices: Optional[torch.Tensor] = None,
-            alpha: Optional[torch.Tensor] = None,
-            lambda_sparse_personal: Optional[float] = None,
-            lambda_alpha: Optional[float] = None,
     ) -> torch.Tensor:
         """
         计算正则项：
         - 稀疏 (lambda_sparse)：关系矩阵 L1
         - 原型多样性 (lambda_proto_div)：原型间相似度去相关
         - 原型使用均衡 (lambda_proto_usage)：平均分配接近均匀
-        - 个性化稀疏 (lambda_sparse_personal)：个性化图的稀疏惩罚
-        - 门控约束 (lambda_alpha)：鼓励 α 更小偏向全局图
         输入形状：relation_matrices (H, C, C)、skill_vector (B, S)、knowledge_state (B, C, D)、prototype_assign (B, K, 可选)。
         """
-        if lambda_sparse_personal is None:
-            lambda_sparse_personal = self.lambda_sparse_personal
-        if lambda_alpha is None:
-            lambda_alpha = self.lambda_alpha
-
         # 1) 稀疏性：关系矩阵 L1 约束
         sparse_loss = self.relation_learning.get_sparsity_loss(relation_matrices)
 
@@ -802,16 +711,6 @@ class CognitiveDiagnosisModel(nn.Module):
                 proto_usage_loss = F.mse_loss(q_mean, uniform)
 
             reg_loss = reg_loss + lambda_proto_div * proto_div_loss + lambda_proto_usage * proto_usage_loss
-
-        # 4) 个性化关系图稀疏正则（仅当提供 personal_matrices 且权重大于 0 时生效）
-        if personal_matrices is not None and lambda_sparse_personal > 0:
-            sparse_personal = personal_matrices.abs().mean()
-            reg_loss = reg_loss + lambda_sparse_personal * sparse_personal
-
-        # 5) 门控 α 惩罚，鼓励更多依赖全局图
-        if alpha is not None and lambda_alpha > 0:
-            alpha_mean = alpha.mean()
-            reg_loss = reg_loss + lambda_alpha * alpha_mean
 
         return reg_loss
 
