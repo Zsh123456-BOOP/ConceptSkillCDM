@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import numpy as np
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Dict
 
 
 class CognitiveDiagnosisDataset(Dataset):
@@ -45,46 +45,11 @@ class CognitiveDiagnosisDataset(Dataset):
         ])
         self.labels = torch.FloatTensor(self.data['label'].values)
 
-        # 处理知识点序列，转换为one-hot编码
-        self.concept_matrix = self._process_concepts(self.data['cpt_seq'].values)
-
-    def _process_concepts(self, concept_seqs) -> torch.Tensor:
-        """
-        将知识点序列转换为one-hot编码矩阵
-
-        Args:
-            concept_seqs: 知识点序列数组
-
-        Returns:
-            形状为 (数据长度, 知识点总数) 的one-hot张量
-        """
-        batch_size = len(concept_seqs)
-        concept_matrix = torch.zeros(batch_size, self.num_concepts)
-
-        for i, seq in enumerate(concept_seqs):
-            # 处理字符串格式的知识点序列
-            if pd.isna(seq):  # 处理可能的NaN值
-                continue
-
-            # 将字符串分割为知识点ID列表
-            if isinstance(seq, str):
-                concept_ids = [int(cid) for cid in seq.split(',')]
-            else:
-                concept_ids = [int(seq)]
-
-            # 使用映射后的ID设置one-hot编码
-            for cid in concept_ids:
-                mapped_cid = self.cpt_id_map.get(cid)
-                if mapped_cid is not None:
-                    concept_matrix[i, mapped_cid] = 1
-
-        return concept_matrix
-
     def __len__(self) -> int:
         """返回数据集大小"""
         return len(self.data)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         获取单个样本
 
@@ -92,12 +57,11 @@ class CognitiveDiagnosisDataset(Dataset):
             idx: 样本索引
 
         Returns:
-            (student_id, exercise_id, concept_vector, label) 元组
+            (student_id, exercise_id, label) 元组
         """
         return (
             self.student_ids[idx],
             self.exercise_ids[idx],
-            self.concept_matrix[idx],
             self.labels[idx]
         )
 
@@ -481,29 +445,11 @@ if __name__ == "__main__":
     # 测试数据加载
     print("\n" + "=" * 50)
     print("测试数据加载:")
-    for batch_idx, (stu_ids, exer_ids, concepts, labels) in enumerate(train_loader):
+    for batch_idx, (stu_ids, exer_ids, labels) in enumerate(train_loader):
         print(f"\n批次 {batch_idx + 1}:")
         print(f"学生ID形状: {stu_ids.shape}")
         print(f"习题ID形状: {exer_ids.shape}")
-        print(f"知识点矩阵形状: {concepts.shape}")
         print(f"标签形状: {labels.shape}")
-
-        # 验证Q矩阵和concept矩阵的一致性
-        for i in range(min(3, len(exer_ids))):
-            exer_id = exer_ids[i].item()
-            q_concepts = info['q_matrix'][exer_id].nonzero().squeeze()
-            data_concepts = concepts[i].nonzero().squeeze()
-
-            if q_concepts.dim() == 0:
-                q_concepts = q_concepts.unsqueeze(0)
-            if data_concepts.dim() == 0:
-                data_concepts = data_concepts.unsqueeze(0)
-
-            print(f"\n样本 {i + 1}:")
-            print(f"  习题ID: {exer_id}")
-            print(f"  Q矩阵中的知识点: {q_concepts.tolist()}")
-            print(f"  数据中的知识点: {data_concepts.tolist()}")
-            print(f"  是否一致: {torch.equal(q_concepts.sort()[0], data_concepts.sort()[0])}")
 
         # 只显示第一个批次
         break

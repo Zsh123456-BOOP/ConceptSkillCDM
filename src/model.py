@@ -13,7 +13,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, Optional, Dict, Union
-import math
 
 # ======================================================
 # 1. 图与关系模块
@@ -182,9 +181,6 @@ class ConceptGraphConv(nn.Module):
 class StudentKnowledgeEncoder(nn.Module):
     """学生知识状态编码器。输入 student_ids (B,) 与 relation_matrices (H, C, C)，输出 knowledge_state (B, C, D)。
 
-    新增：学生×概念低秩因子模块
-    - student_factor_rank > 0 且 use_student_factor=True 时启用
-    - 为每个学生和知识点分别学习一个 rank 维因子，按元素乘再投影到 knowledge_dim
     """
 
     def __init__(
@@ -195,8 +191,6 @@ class StudentKnowledgeEncoder(nn.Module):
             num_gnn_layers: int = 2,
             num_relation_heads: int = 4,
             dropout: float = 0.1,
-            student_factor_rank: int = 0,
-            use_student_factor: bool = True,
     ):
         super().__init__()
         self.num_students = num_students
@@ -206,18 +200,6 @@ class StudentKnowledgeEncoder(nn.Module):
         # ===== 基础学生/概念嵌入 =====
         self.student_emb = nn.Embedding(num_students, knowledge_dim)
         self.concept_emb = nn.Embedding(num_concepts, knowledge_dim)
-
-        # ===== 学生×概念低秩因子（可选） =====
-        self.student_factor_rank = int(student_factor_rank)
-        self.use_student_factor = bool(use_student_factor and self.student_factor_rank > 0)
-
-        if self.use_student_factor:
-            # 学生因子 & 概念因子：维度为 r
-            self.student_factor_emb = nn.Embedding(num_students, self.student_factor_rank)
-            self.concept_factor_emb = nn.Embedding(num_concepts, self.student_factor_rank)
-            # 将 r 维因子投影到 knowledge_dim
-            self.factor_proj = nn.Linear(self.student_factor_rank, knowledge_dim)
-            self.factor_dropout = nn.Dropout(dropout)
 
         # ===== GNN 层：在学生×概念初始状态上做图传播 =====
         self.gnn_layers = nn.ModuleList([
@@ -242,13 +224,6 @@ class StudentKnowledgeEncoder(nn.Module):
         nn.init.xavier_normal_(self.student_emb.weight)
         nn.init.xavier_normal_(self.concept_emb.weight)
 
-        if self.use_student_factor:
-            nn.init.xavier_normal_(self.student_factor_emb.weight)
-            nn.init.xavier_normal_(self.concept_factor_emb.weight)
-            nn.init.xavier_normal_(self.factor_proj.weight)
-            if self.factor_proj.bias is not None:
-                nn.init.zeros_(self.factor_proj.bias)
-
     def forward(
             self,
             student_ids: torch.Tensor,
@@ -268,27 +243,6 @@ class StudentKnowledgeEncoder(nn.Module):
 
         # ===== 学生×概念 初始知识状态 =====
         h = student_vec_expanded + concept_vec  # (B, C, D)
-
-        # ===== 低秩因子残差（如果启用）=====
-        if self.use_student_factor:
-            # 学生因子: (B, r)
-            stu_f = self.student_factor_emb(student_ids)  # (B, r)
-            # 概念因子: (C, r)
-            cpt_f = self.concept_factor_emb.weight       # (C, r)
-
-            # 对齐维度
-            stu_f_exp = stu_f.unsqueeze(1).expand(-1, self.num_concepts, -1)    # (B, C, r)
-            cpt_f_exp = cpt_f.unsqueeze(0).expand(batch_size, -1, -1)          # (B, C, r)
-
-            # 按元素乘，得到 (B, C, r) 的交互表示
-            factor_raw = stu_f_exp * cpt_f_exp
-            factor_raw = self.factor_dropout(factor_raw)
-
-            # 投影到 knowledge_dim
-            h_factor = self.factor_proj(factor_raw)  # (B, C, D)
-
-            # 残差加到基础表示上
-            h = h + h_factor
 
         # ===== 通过 GNN 层传播 =====
         for gnn, norm in zip(self.gnn_layers, self.layer_norms):
@@ -327,7 +281,7 @@ class TestTakingSkillEncoder(nn.Module):
 
 
 class ExerciseDifficultyEncoder(nn.Module):
-    """习题难度/区分度编码，通过概念图传播。输入 exercise_ids (B,) 与 relation_matrices (H, C, C)，输出 exercise_emb (B, E)、difficulty (B, C)、discrimination (B, C)。"""
+    """习题难度/区分度编码（纯 embedding 形式）。输入 exercise_ids (B,)，输出 exercise_emb (B, E)、difficulty (B, C)、discrimination (B, C)。"""
 
     def __init__(
             self,
@@ -335,18 +289,11 @@ class ExerciseDifficultyEncoder(nn.Module):
             num_concepts: int,
             q_matrix: torch.Tensor,
             exercise_dim: int = 64,
-            knowledge_dim: int = 32,
-            num_heads: int = 4,
-            num_gnn_layers: int = 2,
-            dropout: float = 0.1,
-            use_graph: bool = True,
     ):
         super().__init__()
         self.num_exercises = num_exercises
         self.num_concepts = num_concepts
         self.exercise_dim = exercise_dim
-        self.knowledge_dim = knowledge_dim
-        self.use_graph = use_graph
 
         # 注册Q矩阵（不参与训练）
         self.register_buffer('q_matrix', q_matrix)
@@ -357,12 +304,6 @@ class ExerciseDifficultyEncoder(nn.Module):
         # 难度和区分度的可学习嵌入
         self.difficulty = nn.Embedding(num_exercises, num_concepts)
         self.discrimination = nn.Embedding(num_exercises, num_concepts)
-
-        # 使用图卷积传播难度和区分度
-        self.gnn_layers = nn.ModuleList([
-            ConceptGraphConv(knowledge_dim, knowledge_dim, num_heads=num_heads, dropout=dropout)
-            for _ in range(num_gnn_layers)
-        ])
 
         self._initialize_weights()
 
@@ -376,7 +317,7 @@ class ExerciseDifficultyEncoder(nn.Module):
         # 区分度初始化
         nn.init.ones_(self.discrimination.weight)
 
-    def forward(self, exercise_ids: torch.Tensor, relation_matrices: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, exercise_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """输出 exercise_emb (B, E)、difficulty (B, C)、discrimination (B, C)。"""
         # 获取习题的原始嵌入
         exercise_emb = self.exercise_emb(exercise_ids)
@@ -384,26 +325,6 @@ class ExerciseDifficultyEncoder(nn.Module):
         # 获取习题的难度和区分度
         difficulty = self.difficulty(exercise_ids)  # (batch_size, num_concepts)
         discrimination = torch.sigmoid(self.discrimination(exercise_ids))  # (batch_size, num_concepts)
-
-        if self.use_graph:
-            # 转换为适合图卷积的形状
-            difficulty_g = difficulty.unsqueeze(-1).expand(-1, -1, self.knowledge_dim)  # (B, C, D)
-            discrimination_g = discrimination.unsqueeze(-1).expand(-1, -1, self.knowledge_dim)  # (B, C, D)
-
-            h_difficulty = difficulty_g
-            h_discrimination = discrimination_g
-
-            for gnn in self.gnn_layers:
-                h_difficulty = gnn(h_difficulty, relation_matrices)
-                h_discrimination = gnn(h_discrimination, relation_matrices)
-
-            # 平均池化回到 (batch_size, num_concepts)
-            difficulty = h_difficulty.mean(dim=-1)
-            discrimination = h_discrimination.mean(dim=-1)
-        else:
-            # 消融：跳过图传播，仅使用习题-概念的可学习标量
-            difficulty = difficulty
-            discrimination = discrimination
 
         return exercise_emb, difficulty, discrimination
 
@@ -645,10 +566,6 @@ class CognitiveDiagnosisModel(nn.Module):
             proto_lambda: float = 0.5,
             use_soft_prototype: bool = True,
             use_skill_encoder: bool = True,
-            use_exercise_graph: bool = True,
-            # ====== 学生侧低秩因子 ======
-            student_factor_rank: int = 0,
-            use_student_factor: bool = True,
             # ====== 个性化关系图（G-PDS hook） ======
             use_personal_graph: bool = False,
             personal_rank: int = 4,
@@ -664,13 +581,10 @@ class CognitiveDiagnosisModel(nn.Module):
 
         self.knowledge_dim = knowledge_dim
         self.use_skill_encoder = bool(use_skill_encoder)
-        self.use_exercise_graph = bool(use_exercise_graph)
         self.use_personal_graph = bool(use_personal_graph)
         self.personal_rank = int(personal_rank)
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
-        self.use_student_factor = bool(use_student_factor and student_factor_rank > 0)
-        self.student_factor_rank = int(student_factor_rank)
 
         # ===== 概念关系学习 =====
         self.relation_learning = MultiHeadRelationLearning(
@@ -688,8 +602,6 @@ class CognitiveDiagnosisModel(nn.Module):
             num_gnn_layers=num_gnn_layers,
             num_relation_heads=num_relation_heads,
             dropout=dropout,
-            student_factor_rank=self.student_factor_rank,
-            use_student_factor=self.use_student_factor,
         )
 
 
@@ -705,11 +617,6 @@ class CognitiveDiagnosisModel(nn.Module):
             num_concepts=num_concepts,
             q_matrix=q_matrix,
             exercise_dim=exercise_dim,
-            knowledge_dim=knowledge_dim,
-            num_heads=num_relation_heads,
-            num_gnn_layers=num_gnn_layers,
-            dropout=dropout,
-            use_graph=self.use_exercise_graph
         )
 
         # ===== 诊断预测头 =====
@@ -752,14 +659,12 @@ class CognitiveDiagnosisModel(nn.Module):
             self,
             student_ids: torch.Tensor,
             exercise_ids: torch.Tensor,
-            concept_vector: torch.Tensor = None,
             return_details: bool = False
     ) -> Union[torch.Tensor, Tuple]:
         """
         前向计算作答概率。
         - student_ids: (B,) 学生索引
         - exercise_ids: (B,) 习题索引
-        - concept_vector: 为兼容保留（当前版本直接使用结构性 Q，不再融合）
         - return_details: 若为 True，返回中间张量诊断信息
         返回：pred_prob (B,)；如 return_details=True，同时返回 details 字典，包含关系矩阵、知识状态、技巧向量、习题难度/区分度、融合概念向量与原型分配等。
 
@@ -768,10 +673,10 @@ class CognitiveDiagnosisModel(nn.Module):
         2) 学生知识编码 (GNN) 得到 knowledge_state；
         3) soft prototype（如启用）对 knowledge_state 做残差校正；
         4) 学生技巧与习题难度/区分度编码；
-        5) 直接使用 Q 矩阵；通过预测头计算 IRT 风格概率（concept_vector 仅保留接口兼容，当前不参与融合）。
+        5) 直接使用 Q 矩阵；通过预测头计算 IRT 风格概率。
         """
         # 1. 学习概念关系图
-        relation_matrices, concept_emb = self.relation_learning()
+        relation_matrices, _ = self.relation_learning()
 
         # 2. 编码学生知识状态（通过GNN传播）
         knowledge_state = self.knowledge_encoder(student_ids, relation_matrices)
@@ -804,9 +709,9 @@ class CognitiveDiagnosisModel(nn.Module):
             skill_vector = torch.zeros_like(self.skill_encoder(student_ids))
 
         # 4. 编码习题特征
-        exercise_emb, difficulty, discrimination = self.exercise_encoder(exercise_ids, relation_matrices)
+        exercise_emb, difficulty, discrimination = self.exercise_encoder(exercise_ids)
 
-        # 5. 获取Q矩阵向量（当前版本直接使用结构性 Q，不再融合 concept_vector）
+        # 5. 获取Q矩阵向量（当前版本直接使用结构性 Q）
         q_vector = self.q_matrix[exercise_ids]  # (batch_size, num_concepts)
         effective_concept = q_vector
 

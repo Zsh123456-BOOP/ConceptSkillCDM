@@ -23,14 +23,14 @@ import time
 # ===== 根据你贴出来的 CSV 行手工整理的“最佳配置” =====
 # 列名：
 # timestamp, dataset, model_variant, ablation_flags, seed, test_auc, test_acc,
-# test_rmse, best_val_auc, model_epoch, ablate_exercise_graph, ablate_skill_encoder,
+# test_rmse, best_val_auc, model_epoch, ablate_skill_encoder,
 # ablate_soft_prototype, batch_size, dataset_name, disable_soft_prototype,
 # dropout, early_stop_patience, epochs, exercise_dim, knowledge_dim,
 # lambda_alpha, lambda_proto_div, lambda_proto_usage, lambda_sparse,
 # lambda_sparse_personal, learning_rate, min_exer_interactions, min_poison_count,
 # min_stu_interactions, no_cuda, num_gnn_layers, num_prototypes,
 # num_relation_heads, num_workers, patience, proto_lambda, proto_tau,
-# save_interval, skill_dim, use_exercise_graph, use_personal_graph,
+# save_interval, skill_dim, use_personal_graph,
 # use_skill_encoder, use_soft_prototype, weight_decay
 
 BEST_CFG = {
@@ -65,7 +65,6 @@ BEST_CFG = {
         "skill_dim": 2,
         "weight_decay": 1e-5,
         # 消融/模块开关相关
-        "ablate_exercise_graph": False,
         "ablate_skill_encoder": False,
         "ablate_soft_prototype": False,
         "use_personal_graph": False,  # CSV 里是 0
@@ -101,7 +100,6 @@ BEST_CFG = {
         "save_interval": 10,
         "skill_dim": 2,
         "weight_decay": 1e-5,
-        "ablate_exercise_graph": False,
         "ablate_skill_encoder": False,
         "ablate_soft_prototype": False,
         "use_personal_graph": False,  # CSV 里是 0

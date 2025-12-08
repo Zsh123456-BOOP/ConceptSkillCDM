@@ -6,7 +6,6 @@ run_ablation.py
 在「已找到较优超参」的前提下，对各模块做结构消融：
 - soft prototype
 - skill encoder
-- exercise graph
 
 一次命令同时跑 assist_09 和 junyi，
 同一数据集的所有 ablation 先跑完，再进入下一个数据集。
@@ -67,12 +66,6 @@ ABLATIONS: List[Dict] = [
         "name": "no_skill",
         "flags": {
             "ablate_skill_encoder": True,
-        },
-    },
-    {
-        "name": "no_exgraph",
-        "flags": {
-            "ablate_exercise_graph": True,
         },
     },
 ]

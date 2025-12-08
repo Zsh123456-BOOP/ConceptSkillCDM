@@ -160,7 +160,6 @@ def append_summary_csv(
     for flag in [
         "ablate_soft_prototype",
         "ablate_skill_encoder",
-        "ablate_exercise_graph",
     ]:
         if hasattr(args, flag):
             ablation_flags.append(f"{flag}={getattr(args, flag)}")

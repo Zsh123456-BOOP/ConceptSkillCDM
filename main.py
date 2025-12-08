@@ -31,19 +31,6 @@ def parse_args():
     parser.add_argument("--num_gnn_layers", type=int, default=2)
     parser.add_argument("--dropout", type=float, default=0.1)
 
-    # 学生侧低秩因子
-    parser.add_argument(
-        "--student_factor_rank",
-        type=int,
-        default=0,
-        help="Rank of student-concept low-rank factorization (0 = disable).",
-    )
-    parser.add_argument(
-        "--disable_student_factor",
-        action="store_true",
-        help="Disable student-factor module.",
-    )
-
     # soft prototype 相关参数
     parser.add_argument("--num_prototypes", type=int, default=3, help="Number of soft prototypes for students")
     parser.add_argument("--proto_tau", type=float, default=1.0, help="Temperature for soft prototype assignment")
@@ -133,7 +120,6 @@ def parse_args():
     # 消融开关（默认 False，不做消融）
     parser.add_argument("--ablate_soft_prototype", action="store_true", help="关闭 soft prototype 模块")
     parser.add_argument("--ablate_skill_encoder", action="store_true", help="关闭应试技巧编码器")
-    parser.add_argument("--ablate_exercise_graph", action="store_true", help="关闭习题侧图传播")
 
     return parser
 
@@ -149,9 +135,7 @@ def main():
         and not getattr(args, "ablate_soft_prototype", False)
     )
     args.use_skill_encoder = not getattr(args, "ablate_skill_encoder", False)
-    args.use_exercise_graph = not getattr(args, "ablate_exercise_graph", False)
     args.use_personal_graph = getattr(args, "use_personal_graph", False)
-    args.use_student_factor = not getattr(args, "disable_student_factor", False)
 
     # 设置随机种子
     torch.manual_seed(args.seed)

@@ -22,8 +22,6 @@ DATASET_DEFAULTS = {
         "num_prototypes": 3,
         "proto_tau": 1.0,
         "proto_lambda": 0.5,
-        # 学生侧低秩因子默认开一个小 rank
-        "student_factor_rank": 4,
     },
     "assist_17": {
         "data_dir": "./data/assist_17",
@@ -47,8 +45,6 @@ DATASET_DEFAULTS = {
         "lambda_sparse_personal": 0.0,
         "lambda_alpha": 0.0,
         "use_personal_graph": 0,
-        # 学生侧低秩因子默认开一个小 rank
-        "student_factor_rank": 4,
     },
 }
 
@@ -60,10 +56,8 @@ GRID_SEARCH_SPACE = {
             "learning_rate": [1e-4, 3e-4],
             "lambda_sparse": [0.05, 0.1],
             "dropout": [0.1, 0.2],
-            # 消融参数预留（当前单一取值）
             "ablate_soft_prototype": [False],
             "ablate_skill_encoder": [False],
-            "ablate_exercise_graph": [False],
         },
     },
     "assist_17": {
@@ -81,10 +75,8 @@ GRID_SEARCH_SPACE = {
             "learning_rate": [3e-4, 1e-3],
             "lambda_sparse": [0.05, 0.1],
             "dropout": [0.1, 0.2],
-            # 消融参数预留（当前单一取值，保证组合数还是 16）
             "ablate_soft_prototype": [False],
             "ablate_skill_encoder": [False],
-            "ablate_exercise_graph": [False],
         },
     },
 }

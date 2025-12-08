@@ -4,7 +4,7 @@
 """
 全模块消融脚本：
 - 以当前 BEST_CFG 为基线
-- 对 soft prototype / skill encoder / exercise graph / student-factor 做系统消融
+- 对 soft prototype / skill encoder 做系统消融
 - 便于判断哪些模块可以从模型中删掉
 
 用法示例：
@@ -50,15 +50,11 @@ BEST_CFG = {
         "skill_dim": 2,
         "weight_decay": 1e-5,
         # 消融/模块开关相关（基线全开）
-        "ablate_exercise_graph": False,
         "ablate_skill_encoder": False,
         "ablate_soft_prototype": False,
         "use_personal_graph": False,  # CSV 里是 0
         # 其他
         "model_variant": "gpd_base",
-        # 学生侧低秩因子（如果在 main/config 里用到）
-        "student_factor_rank": 4,
-        "disable_student_factor": False,
     },
     "assist_09": {
         "seed": 42,
@@ -89,13 +85,10 @@ BEST_CFG = {
         "save_interval": 10,
         "skill_dim": 2,
         "weight_decay": 1e-5,
-        "ablate_exercise_graph": False,
         "ablate_skill_encoder": False,
         "ablate_soft_prototype": False,
         "use_personal_graph": False,  # CSV 里是 0
         "model_variant": "gpd_base",
-        "student_factor_rank": 4,
-        "disable_student_factor": False,
     },
 }
 
@@ -118,25 +111,10 @@ ABLATIONS = {
         "ablate_skill_encoder": True,
     },
 
-    # 只关 exercise graph（题目侧 GNN 是否有贡献）
-    "no_exgraph": {
-        "ablate_exercise_graph": True,
-    },
-
-    # 只关学生侧低秩因子（student-factor）
-    "no_stufactor": {
-        "disable_student_factor": True,
-        # student_factor_rank 可以保留原值，但为了明确，也可以显式置 0
-        "student_factor_rank": 0,
-    },
-
     # 极简模型：把上面几个全部关掉，只保留“全局概念图 + 学生知识状态 + IRT 头”
     "minimal": {
         "ablate_soft_prototype": True,
         "ablate_skill_encoder": True,
-        "ablate_exercise_graph": True,
-        "disable_student_factor": True,
-        "student_factor_rank": 0,
         "use_personal_graph": False,  # 保险起见，强制关掉个性化图
     },
 }

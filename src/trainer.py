@@ -41,16 +41,14 @@ def train_epoch(
     all_probs = []
 
     for batch_idx, batch in enumerate(train_loader):
-        student_ids, exercise_ids, concept_vector, labels = batch
+        student_ids, exercise_ids, labels = batch
         student_ids = student_ids.to(device)
         exercise_ids = exercise_ids.to(device)
-        concept_vector = concept_vector.to(device)
         labels = labels.to(device).float()
 
         pred_probs, details = model(
             student_ids,
             exercise_ids,
-            concept_vector=concept_vector,
             return_details=True,
         )
 
@@ -126,16 +124,14 @@ def validate(
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(val_loader):
-            student_ids, exercise_ids, concept_vector, labels = batch
+            student_ids, exercise_ids, labels = batch
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)
-            concept_vector = concept_vector.to(device)
             labels = labels.to(device).float()
 
             pred_probs, details = model(
                 student_ids,
                 exercise_ids,
-                concept_vector=concept_vector,
                 return_details=True,
             )
 
@@ -195,12 +191,11 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
 
     logger.info("%s Loading datasets...", run_tag)
     logger.info(
-        "%s [Ablation] model_variant=%s | soft_proto=%s, skill=%s, exercise_graph=%s",
+        "%s [Ablation] model_variant=%s | soft_proto=%s, skill=%s",
         run_tag,
         getattr(args, "model_variant", "full"),
         str(getattr(args, "use_soft_prototype", True)),
         str(getattr(args, "use_skill_encoder", True)),
-        str(getattr(args, "use_exercise_graph", True)),
     )
     logger.info(
         "%s Regularization: sparse=%.4f, proto_div=%.4f, proto_usage=%.4f, "
@@ -266,10 +261,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         proto_lambda=args.proto_lambda,
         use_soft_prototype=getattr(args, "use_soft_prototype", True),
         use_skill_encoder=getattr(args, "use_skill_encoder", True),
-        use_exercise_graph=getattr(args, "use_exercise_graph", True),
-        # 学生侧低秩因子
-        student_factor_rank=getattr(args, "student_factor_rank", 0),
-        use_student_factor=getattr(args, "use_student_factor", True),
         # 个性化关系图
         use_personal_graph=getattr(args, "use_personal_graph", False),
         lambda_sparse_personal=args.lambda_sparse_personal,
@@ -503,37 +494,17 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         not loaded_args.get("disable_soft_prototype", False),
     )
     loaded_use_skill = loaded_args.get("use_skill_encoder", True)
-    loaded_use_ex_graph = loaded_args.get("use_exercise_graph", True)
     use_soft_prototype = loaded_use_soft and getattr(args, "use_soft_prototype", True)
     use_skill_encoder = loaded_use_skill and getattr(args, "use_skill_encoder", True)
-    use_exercise_graph = loaded_use_ex_graph and getattr(args, "use_exercise_graph", True)
     use_personal_graph = loaded_args.get("use_personal_graph", getattr(args, "use_personal_graph", False))
 
     lambda_sparse_personal = loaded_args.get("lambda_sparse_personal", args.lambda_sparse_personal)
     lambda_alpha = loaded_args.get("lambda_alpha", args.lambda_alpha)
 
-    # ===== 学生侧低秩因子：兼容旧 checkpoint =====
-    if "student_factor_rank" in loaded_args:
-        student_factor_rank = loaded_args.get("student_factor_rank", getattr(args, "student_factor_rank", 0))
-        loaded_use_student_factor = loaded_args.get(
-            "use_student_factor",
-            not loaded_args.get("disable_student_factor", False),
-        )
-    else:
-        # 旧模型没有这个模块，推理时强制关闭，保证参数形状匹配
-        student_factor_rank = 0
-        loaded_use_student_factor = False
-
-    use_student_factor = loaded_use_student_factor and getattr(
-        args, "use_student_factor",
-        not getattr(args, "disable_student_factor", False),
-    )
-
 
 
     args.use_soft_prototype = use_soft_prototype
     args.use_skill_encoder = use_skill_encoder
-    args.use_exercise_graph = use_exercise_graph
     args.use_personal_graph = use_personal_graph
 
     model = CognitiveDiagnosisModel(
@@ -552,10 +523,6 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         proto_lambda=proto_lambda,
         use_soft_prototype=use_soft_prototype,
         use_skill_encoder=use_skill_encoder,
-        use_exercise_graph=use_exercise_graph,
-        # 学生侧低秩因子
-        student_factor_rank=student_factor_rank,
-        use_student_factor=use_student_factor,
         # 个性化关系图
         use_personal_graph=use_personal_graph,
         lambda_sparse_personal=lambda_sparse_personal,
@@ -575,16 +542,14 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(test_loader):
-            student_ids, exercise_ids, concept_vector, labels = batch
+            student_ids, exercise_ids, labels = batch
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)
-            concept_vector = concept_vector.to(device)
             labels = labels.to(device).float()
 
             pred_probs = model(
                 student_ids,
                 exercise_ids,
-                concept_vector=concept_vector,
                 return_details=False,
             )
 
