@@ -37,7 +37,7 @@ BEST_CFG = {
     "junyi": {
         # 来自 CSV
         "seed": 42,
-        "batch_size": 512,
+        "batch_size": 1024,
         "disable_soft_prototype": False,
         "dropout": 0.1,
         "early_stop_patience": 5,
@@ -76,7 +76,7 @@ BEST_CFG = {
         "seed": 42,
         "batch_size": 128,
         "disable_soft_prototype": False,
-        "dropout": 0.1,
+        "dropout": 0.2,
         "early_stop_patience": 5,
         "epochs": 100,
         "exercise_dim": 128,
@@ -84,7 +84,7 @@ BEST_CFG = {
         "lambda_alpha": 0.0,
         "lambda_proto_div": 0.0,
         "lambda_proto_usage": 0.0,
-        "lambda_sparse": 0.1,
+        "lambda_sparse": 0.05,
         "lambda_sparse_personal": 0.0,
         "learning_rate": 3e-4,  # assist_09 的最佳行是 0.0003
         "min_exer_interactions": 0,
@@ -96,7 +96,7 @@ BEST_CFG = {
         "num_relation_heads": 4,
         "num_workers": 4,
         "patience": 5,
-        "proto_lambda": 0.5,
+        "proto_lambda": 0.3,
         "proto_tau": 1.0,
         "save_interval": 10,
         "skill_dim": 2,

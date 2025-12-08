@@ -22,6 +22,8 @@ DATASET_DEFAULTS = {
         "num_prototypes": 3,
         "proto_tau": 1.0,
         "proto_lambda": 0.5,
+        # 学生侧低秩因子默认开一个小 rank
+        "student_factor_rank": 4,
     },
     "assist_17": {
         "data_dir": "./data/assist_17",
@@ -45,6 +47,8 @@ DATASET_DEFAULTS = {
         "lambda_sparse_personal": 0.0,
         "lambda_alpha": 0.0,
         "use_personal_graph": 0,
+        # 学生侧低秩因子默认开一个小 rank
+        "student_factor_rank": 4,
     },
 }
 

@@ -236,6 +236,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         min_exer_interactions=args.min_exer_interactions,
         min_poison_count=args.min_poison_count,
         logger=logger,
+        dataset_name=args.dataset_name if hasattr(args, "dataset_name") else args.dataset,
     )
 
     logger.info(
@@ -266,10 +267,15 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         use_soft_prototype=getattr(args, "use_soft_prototype", True),
         use_skill_encoder=getattr(args, "use_skill_encoder", True),
         use_exercise_graph=getattr(args, "use_exercise_graph", True),
+        # 学生侧低秩因子
+        student_factor_rank=getattr(args, "student_factor_rank", 0),
+        use_student_factor=getattr(args, "use_student_factor", True),
+        # 个性化关系图
         use_personal_graph=getattr(args, "use_personal_graph", False),
         lambda_sparse_personal=args.lambda_sparse_personal,
         lambda_alpha=args.lambda_alpha,
     ).to(device)
+
 
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -506,6 +512,25 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     lambda_sparse_personal = loaded_args.get("lambda_sparse_personal", args.lambda_sparse_personal)
     lambda_alpha = loaded_args.get("lambda_alpha", args.lambda_alpha)
 
+    # ===== 学生侧低秩因子：兼容旧 checkpoint =====
+    if "student_factor_rank" in loaded_args:
+        student_factor_rank = loaded_args.get("student_factor_rank", getattr(args, "student_factor_rank", 0))
+        loaded_use_student_factor = loaded_args.get(
+            "use_student_factor",
+            not loaded_args.get("disable_student_factor", False),
+        )
+    else:
+        # 旧模型没有这个模块，推理时强制关闭，保证参数形状匹配
+        student_factor_rank = 0
+        loaded_use_student_factor = False
+
+    use_student_factor = loaded_use_student_factor and getattr(
+        args, "use_student_factor",
+        not getattr(args, "disable_student_factor", False),
+    )
+
+
+
     args.use_soft_prototype = use_soft_prototype
     args.use_skill_encoder = use_skill_encoder
     args.use_exercise_graph = use_exercise_graph
@@ -528,10 +553,15 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         use_soft_prototype=use_soft_prototype,
         use_skill_encoder=use_skill_encoder,
         use_exercise_graph=use_exercise_graph,
+        # 学生侧低秩因子
+        student_factor_rank=student_factor_rank,
+        use_student_factor=use_student_factor,
+        # 个性化关系图
         use_personal_graph=use_personal_graph,
         lambda_sparse_personal=lambda_sparse_personal,
         lambda_alpha=lambda_alpha,
     ).to(device)
+
 
     model.load_state_dict(checkpoint["model_state_dict"])
     logger.info(f'Model loaded from epoch {checkpoint["epoch"]}')

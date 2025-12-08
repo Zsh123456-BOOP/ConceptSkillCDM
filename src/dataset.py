@@ -208,6 +208,7 @@ def build_q_matrix(
 
     return q_matrix
 
+
 def create_dataloaders(
         train_file: str,
         val_file: str,
@@ -218,7 +219,8 @@ def create_dataloaders(
         min_stu_interactions: int = 0,
         min_exer_interactions: int = 0,
         min_poison_count: int = 0,
-        logger=None
+        logger=None,
+        dataset_name: str = None,   # ★ 新增：数据集名字（assist_09 / junyi / assist_17）
 ) -> Tuple[DataLoader, DataLoader, DataLoader, dict]:
     """
     创建训练、验证和测试的数据加载器，并执行统一的数据清洗
@@ -239,11 +241,15 @@ def create_dataloaders(
         (train_loader, val_loader, test_loader, info_dict) 元组
         info_dict包含数据集的统计信息和映射字典
     """
+    dataset_prefix = f"[{dataset_name}]" if dataset_name else ""
+
     def log(msg: str):
+        full_msg = f"{dataset_prefix} {msg}" if dataset_prefix else msg
         if logger is not None:
-            logger.info(msg)
+            logger.info(full_msg)
         else:
-            print(msg)
+            print(full_msg)
+
 
     # 1. 读取原始 CSV
     train_df = pd.read_csv(train_file)
@@ -278,7 +284,6 @@ def create_dataloaders(
     else:
         log("[数据清洗] 跳过学生冷启动过滤（min_stu_interactions <= 0）。")
 
-
     # --- 题目冷门过滤 ---
     if min_exer_interactions > 0:
         combined = pd.concat([train_df, val_df, test_df], ignore_index=True)
@@ -304,7 +309,6 @@ def create_dataloaders(
         log(f"[数据清洗] 题目冷门过滤：在 train/valid/test 中共删除 {dropped_total} 条记录。")
     else:
         log("[数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。")
-
 
     # --- 毒题清洗（Acc=0 或 1 且作答数 >= min_poison_count） ---
     if min_poison_count > 0:
@@ -346,18 +350,72 @@ def create_dataloaders(
     else:
         log("[数据清洗] 跳过毒题清洗（min_poison_count <= 0）。")
 
-
     # 2. 构建ID映射 & Q矩阵（基于清洗后的 DataFrame）
     csv_sources = [train_df, val_df, test_df]
 
-    print("正在构建ID映射...")
+    log("正在构建ID映射...")
     stu_id_map, exer_id_map, cpt_id_map = build_id_mappings(csv_sources)
 
-    print("正在构建Q矩阵...")
+    log("正在构建Q矩阵...")
     q_matrix = build_q_matrix(csv_sources, exer_id_map, cpt_id_map)
 
+    # ========= 统计每题的概念数量（全局 + 各数据集） =========
+    # 每道题对应的概念数：按 Q 矩阵行求和
+    concepts_per_exercise = q_matrix.sum(dim=1)  # (num_exercises,)
+
+    def _log_concept_stats(split_name: str, df: pd.DataFrame):
+        """对某个 split 统计：每道题关联的概念数量分布"""
+        if df is None or len(df) == 0:
+            log(f"[{split_name}] 数据集为空，跳过概念数统计。")
+            return
+
+        # 把该 split 中出现的题目映射到内部ID
+        raw_exer_ids = df["exer_id"].unique().tolist()
+        mapped_ids = []
+        for eid in raw_exer_ids:
+            if eid in exer_id_map:
+                mapped_ids.append(exer_id_map[eid])
+
+        if len(mapped_ids) == 0:
+            log(f"[{split_name}] 无有效题目ID，跳过概念数统计。")
+            return
+
+        mapped_ids = np.array(mapped_ids, dtype=int)
+
+        # 取出这些题目的概念数
+        counts = concepts_per_exercise[mapped_ids].cpu().numpy()
+        n_items = len(counts)
+
+        mean_c = float(counts.mean())
+        min_c = int(counts.min())
+        max_c = int(counts.max())
+
+        # 1 概念、多概念 题目比例
+        num_1 = int((counts == 1).sum())
+        num_ge2 = int((counts >= 2).sum())
+        p1 = num_1 / n_items
+        p_ge2 = num_ge2 / n_items
+
+        log(
+            f"[{split_name}] 概念数统计：题目数={n_items}, "
+            f"平均概念数={mean_c:.4f}, min={min_c}, max={max_c}, "
+            f"1概念={num_1} ({p1:.2%}), ≥2概念={num_ge2} ({p_ge2:.2%})"
+        )
+
+        # 如需更细的直方图分布，也可以顺手打一行
+        hist = {}
+        for k in range(min_c, max_c + 1):
+            hist[k] = int((counts == k).sum())
+        log(f"[{split_name}] 概念数直方图（概念数: 题目数量）: {hist}")
+
+    log("[统计] 开始统计清洗后每道题的概念数量分布...")
+    _log_concept_stats("Train", train_df)
+    _log_concept_stats("Valid", val_df)
+    _log_concept_stats("Test", test_df)
+    log("[统计] 概念数量统计完成。")
+
     # 3. 创建数据集（直接传 DataFrame，避免重复读盘）
-    print("正在加载数据集...")
+    log("正在加载数据集...")
     train_dataset = CognitiveDiagnosisDataset(train_df, stu_id_map, exer_id_map, cpt_id_map)
     val_dataset = CognitiveDiagnosisDataset(val_df, stu_id_map, exer_id_map, cpt_id_map)
     test_dataset = CognitiveDiagnosisDataset(test_df, stu_id_map, exer_id_map, cpt_id_map)
@@ -401,11 +459,12 @@ def create_dataloaders(
         'stu_id_reverse_map': {v: k for k, v in stu_id_map.items()},
         'exer_id_reverse_map': {v: k for k, v in exer_id_map.items()},
         'cpt_id_reverse_map': {v: k for k, v in cpt_id_map.items()},
-        'q_matrix': q_matrix
+        'q_matrix': q_matrix,
+        # 新增：每道题的“概念数量”，与 exer_id 内部索引对齐
+        'concepts_per_exercise': concepts_per_exercise,
     }
 
     return train_loader, val_loader, test_loader, info_dict
-
 
 
 # 使用示例

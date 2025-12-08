@@ -179,9 +179,13 @@ class ConceptGraphConv(nn.Module):
 #    - ExerciseDifficultyEncoder
 # ======================================================
 
-
 class StudentKnowledgeEncoder(nn.Module):
-    """学生知识状态编码器。输入 student_ids (B,) 与 relation_matrices (H, C, C)，输出 knowledge_state (B, C, D)。"""
+    """学生知识状态编码器。输入 student_ids (B,) 与 relation_matrices (H, C, C)，输出 knowledge_state (B, C, D)。
+
+    新增：学生×概念低秩因子模块
+    - student_factor_rank > 0 且 use_student_factor=True 时启用
+    - 为每个学生和知识点分别学习一个 rank 维因子，按元素乘再投影到 knowledge_dim
+    """
 
     def __init__(
             self,
@@ -190,20 +194,32 @@ class StudentKnowledgeEncoder(nn.Module):
             knowledge_dim: int,
             num_gnn_layers: int = 2,
             num_relation_heads: int = 4,
-            dropout: float = 0.1
+            dropout: float = 0.1,
+            student_factor_rank: int = 0,
+            use_student_factor: bool = True,
     ):
         super().__init__()
         self.num_students = num_students
         self.num_concepts = num_concepts
         self.knowledge_dim = knowledge_dim
 
-        # 学生级别的知识向量
+        # ===== 基础学生/概念嵌入 =====
         self.student_emb = nn.Embedding(num_students, knowledge_dim)
-
-        # 概念级别的知识偏置向量（所有学生共享的概念特征）
         self.concept_emb = nn.Embedding(num_concepts, knowledge_dim)
 
-        # GNN层：在学生 × 概念的初始状态上做图传播
+        # ===== 学生×概念低秩因子（可选） =====
+        self.student_factor_rank = int(student_factor_rank)
+        self.use_student_factor = bool(use_student_factor and self.student_factor_rank > 0)
+
+        if self.use_student_factor:
+            # 学生因子 & 概念因子：维度为 r
+            self.student_factor_emb = nn.Embedding(num_students, self.student_factor_rank)
+            self.concept_factor_emb = nn.Embedding(num_concepts, self.student_factor_rank)
+            # 将 r 维因子投影到 knowledge_dim
+            self.factor_proj = nn.Linear(self.student_factor_rank, knowledge_dim)
+            self.factor_dropout = nn.Dropout(dropout)
+
+        # ===== GNN 层：在学生×概念初始状态上做图传播 =====
         self.gnn_layers = nn.ModuleList([
             ConceptGraphConv(
                 knowledge_dim,
@@ -226,6 +242,13 @@ class StudentKnowledgeEncoder(nn.Module):
         nn.init.xavier_normal_(self.student_emb.weight)
         nn.init.xavier_normal_(self.concept_emb.weight)
 
+        if self.use_student_factor:
+            nn.init.xavier_normal_(self.student_factor_emb.weight)
+            nn.init.xavier_normal_(self.concept_factor_emb.weight)
+            nn.init.xavier_normal_(self.factor_proj.weight)
+            if self.factor_proj.bias is not None:
+                nn.init.zeros_(self.factor_proj.bias)
+
     def forward(
             self,
             student_ids: torch.Tensor,
@@ -234,19 +257,40 @@ class StudentKnowledgeEncoder(nn.Module):
         """生成知识状态张量 (B, C, D)。"""
         batch_size = student_ids.size(0)
 
-        # 学生向量: (batch_size, knowledge_dim)
-        student_vec = self.student_emb(student_ids)  # 每个学生一个向量
+        # 学生向量: (B, D)
+        student_vec = self.student_emb(student_ids)
 
-        # 概念向量: (1, num_concepts, knowledge_dim) -> (batch_size, num_concepts, knowledge_dim)
+        # 概念向量: (1, C, D) -> (B, C, D)
         concept_vec = self.concept_emb.weight.unsqueeze(0).expand(batch_size, -1, -1)
 
-        # 扩展学生向量到每个概念: (batch_size, 1, knowledge_dim) -> (batch_size, num_concepts, knowledge_dim)
+        # 扩展学生向量到每个概念: (B, 1, D) -> (B, C, D)
         student_vec_expanded = student_vec.unsqueeze(1).expand(-1, self.num_concepts, -1)
 
-        # 学生 × 概念 的初始知识状态
-        h = student_vec_expanded + concept_vec  # (batch_size, num_concepts, knowledge_dim)
+        # ===== 学生×概念 初始知识状态 =====
+        h = student_vec_expanded + concept_vec  # (B, C, D)
 
-        # 通过GNN层传播
+        # ===== 低秩因子残差（如果启用）=====
+        if self.use_student_factor:
+            # 学生因子: (B, r)
+            stu_f = self.student_factor_emb(student_ids)  # (B, r)
+            # 概念因子: (C, r)
+            cpt_f = self.concept_factor_emb.weight       # (C, r)
+
+            # 对齐维度
+            stu_f_exp = stu_f.unsqueeze(1).expand(-1, self.num_concepts, -1)    # (B, C, r)
+            cpt_f_exp = cpt_f.unsqueeze(0).expand(batch_size, -1, -1)          # (B, C, r)
+
+            # 按元素乘，得到 (B, C, r) 的交互表示
+            factor_raw = stu_f_exp * cpt_f_exp
+            factor_raw = self.factor_dropout(factor_raw)
+
+            # 投影到 knowledge_dim
+            h_factor = self.factor_proj(factor_raw)  # (B, C, D)
+
+            # 残差加到基础表示上
+            h = h + h_factor
+
+        # ===== 通过 GNN 层传播 =====
         for gnn, norm in zip(self.gnn_layers, self.layer_norms):
             h_new = gnn(h, relation_matrices)
             h = norm(h + h_new)
@@ -602,6 +646,9 @@ class CognitiveDiagnosisModel(nn.Module):
             use_soft_prototype: bool = True,
             use_skill_encoder: bool = True,
             use_exercise_graph: bool = True,
+            # ====== 学生侧低秩因子 ======
+            student_factor_rank: int = 0,
+            use_student_factor: bool = True,
             # ====== 个性化关系图（G-PDS hook） ======
             use_personal_graph: bool = False,
             personal_rank: int = 4,
@@ -610,9 +657,11 @@ class CognitiveDiagnosisModel(nn.Module):
     ):
         super().__init__()
 
+        # ===== 这里三行一定要有 =====
         self.num_students = num_students
         self.num_exercises = num_exercises
         self.num_concepts = num_concepts
+
         self.knowledge_dim = knowledge_dim
         self.use_skill_encoder = bool(use_skill_encoder)
         self.use_exercise_graph = bool(use_exercise_graph)
@@ -620,6 +669,8 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_rank = int(personal_rank)
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
+        self.use_student_factor = bool(use_student_factor and student_factor_rank > 0)
+        self.student_factor_rank = int(student_factor_rank)
 
         # ===== 概念关系学习 =====
         self.relation_learning = MultiHeadRelationLearning(
@@ -636,8 +687,11 @@ class CognitiveDiagnosisModel(nn.Module):
             knowledge_dim=knowledge_dim,
             num_gnn_layers=num_gnn_layers,
             num_relation_heads=num_relation_heads,
-            dropout=dropout
+            dropout=dropout,
+            student_factor_rank=self.student_factor_rank,
+            use_student_factor=self.use_student_factor,
         )
+
 
         # ===== 学生应试技巧编码器 =====
         self.skill_encoder = TestTakingSkillEncoder(
