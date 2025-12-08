@@ -55,12 +55,6 @@ def parse_args():
         default=0.0,
         help="Weight for prototype usage balance regularization",
     )
-    parser.add_argument(
-        "--lambda_proto_usage",
-        type=float,
-        default=0.0,
-        help="Weight for prototype usage balance regularization",
-    )
 
     # 早停和调度器参数
     parser.add_argument("--patience", type=int, default=5)
