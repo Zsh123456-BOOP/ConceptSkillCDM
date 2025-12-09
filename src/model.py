@@ -361,6 +361,9 @@ class ExerciseDifficultyEncoder(nn.Module):
             difficulty = difficulty
             discrimination = discrimination
 
+        # 在最终用于 IRT 之前，对难度做 tanh 限幅，避免极端值
+        difficulty = torch.tanh(difficulty)
+
         return exercise_emb, difficulty, discrimination
 
 
@@ -391,7 +394,7 @@ class ResponsePredictionHead(nn.Module):
         self.knowledge_bias = nn.Parameter(torch.zeros(1))
 
         # -------【保留】技巧部分先不动-------
-        self.skill_net = nn.Sequential(
+        self.residual_net  = nn.Sequential(
             nn.Linear(skill_dim + exercise_dim, hidden_dim // 2),
             nn.ReLU(),
             nn.Dropout(0.1),
@@ -406,7 +409,7 @@ class ResponsePredictionHead(nn.Module):
         nn.init.zeros_(self.knowledge_bias)
 
         # 技巧网络初始化
-        for layer in self.skill_net:
+        for layer in self.residual_net:
             if isinstance(layer, nn.Linear):
                 nn.init.xavier_normal_(layer.weight)
                 if layer.bias is not None:
@@ -444,21 +447,20 @@ class ResponsePredictionHead(nn.Module):
         mask_sum = concept_mask.sum(dim=1, keepdim=True) + 1e-12
         concept_norm = concept_mask / mask_sum  # (B, C)
 
-        # 聚合到题目层
-        knowledge_prob = torch.sigmoid((irt_logits * concept_norm).sum(dim=1))  # (B,)
+        # 聚合到题目层：这是基础 logit（还没过 sigmoid）
+        base_logit = (irt_logits * concept_norm).sum(dim=1)  # (B,)
 
-        # ------- 技巧影响 -------
-        skill_input = torch.cat([skill_vector, exercise_emb], dim=1)  # (B, S+E)
-        skill_adjustment = self.skill_net(skill_input).squeeze(-1)    # (B,)
-        skill_adjustment = torch.tanh(skill_adjustment) * 0.2         # 控制影响幅度
+        # ------- 残差 logit：skill + exercise -------
+        res_input = torch.cat([skill_vector, exercise_emb], dim=1)  # (B, S+E)
+        delta_logit = self.residual_net(res_input).squeeze(-1)      # (B,)
 
-        final_prob = torch.clamp(
-            knowledge_prob + skill_adjustment,
-            min=1e-6,
-            max=1 - 1e-6
-        )
+        # 最终 logit + 概率
+        final_logit = base_logit + delta_logit
+        final_prob = torch.sigmoid(final_logit).clamp(min=1e-6, max=1 - 1e-6)
 
         return final_prob
+
+
 
 class SoftPrototypeModule(nn.Module):
     """软原型模块：维护 K 个原型，对学生表示做 soft assignment 并生成混合原型。"""
@@ -560,7 +562,7 @@ class CognitiveDiagnosisModel(nn.Module):
             num_relation_heads: int = 4,
             num_gnn_layers: int = 2,
             dropout: float = 0.1,
-            # ====== soft prototype 相关参数（新增） ======
+            # ====== soft prototype 相关参数 ======
             num_prototypes: int = 3,
             proto_tau: float = 1.0,
             proto_lambda: float = 0.5,
@@ -572,6 +574,8 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_rank: int = 4,
             lambda_sparse_personal: float = 0.0,
             lambda_alpha: float = 0.0,
+            # ====== 新增：习题参数的 L2 系数 ======
+            exercise_l2_lambda: float = 5e-5,
     ):
         super().__init__()
 
@@ -579,19 +583,21 @@ class CognitiveDiagnosisModel(nn.Module):
         self.num_exercises = num_exercises
         self.num_concepts = num_concepts
         self.knowledge_dim = knowledge_dim
+
         self.use_skill_encoder = bool(use_skill_encoder)
         self.use_exercise_graph = bool(use_exercise_graph)
         self.use_personal_graph = bool(use_personal_graph)
         self.personal_rank = int(personal_rank)
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
+        self.exercise_l2_lambda = float(exercise_l2_lambda)
 
         # ===== 概念关系学习 =====
         self.relation_learning = MultiHeadRelationLearning(
             num_concepts=num_concepts,
             concept_dim=knowledge_dim,
             num_heads=num_relation_heads,
-            dropout=dropout
+            dropout=dropout,
         )
 
         # ===== 学生知识状态编码器 =====
@@ -601,13 +607,13 @@ class CognitiveDiagnosisModel(nn.Module):
             knowledge_dim=knowledge_dim,
             num_gnn_layers=num_gnn_layers,
             num_relation_heads=num_relation_heads,
-            dropout=dropout
+            dropout=dropout,
         )
 
         # ===== 学生应试技巧编码器 =====
         self.skill_encoder = TestTakingSkillEncoder(
             num_students=num_students,
-            skill_dim=skill_dim
+            skill_dim=skill_dim,
         )
 
         # ===== 习题编码器 =====
@@ -620,20 +626,20 @@ class CognitiveDiagnosisModel(nn.Module):
             num_heads=num_relation_heads,
             num_gnn_layers=num_gnn_layers,
             dropout=dropout,
-            use_graph=self.use_exercise_graph
+            use_graph=self.use_exercise_graph,
         )
 
         # ===== 诊断预测头 =====
         self.prediction_head = ResponsePredictionHead(
             knowledge_dim=knowledge_dim,
             skill_dim=skill_dim,
-            exercise_dim=exercise_dim
+            exercise_dim=exercise_dim,
         )
 
-        # 注册Q矩阵
-        self.register_buffer('q_matrix', q_matrix)
+        # 注册 Q 矩阵（供 forward 直接索引）
+        self.register_buffer("q_matrix", q_matrix)
 
-        # ===== soft prototype 层（新增） =====
+        # ===== soft prototype 层 =====
         self.use_soft_prototype = bool(use_soft_prototype and num_prototypes > 0)
         self.proto_lambda = float(proto_lambda)
 
@@ -641,7 +647,7 @@ class CognitiveDiagnosisModel(nn.Module):
             self.prototype_module = SoftPrototypeModule(
                 num_prototypes=num_prototypes,
                 dim=knowledge_dim,
-                tau=proto_tau
+                tau=proto_tau,
             )
         else:
             self.prototype_module = None
@@ -671,19 +677,12 @@ class CognitiveDiagnosisModel(nn.Module):
         - exercise_ids: (B,) 习题索引
         - concept_vector: 为兼容保留（当前版本直接使用结构性 Q，不再融合）
         - return_details: 若为 True，返回中间张量诊断信息
-        返回：pred_prob (B,)；如 return_details=True，同时返回 details 字典，包含关系矩阵、知识状态、技巧向量、习题难度/区分度、融合概念向量与原型分配等。
-
-        流程：
-        1) 关系学习得到 relation_matrices；
-        2) 学生知识编码 (GNN) 得到 knowledge_state；
-        3) soft prototype（如启用）对 knowledge_state 做残差校正；
-        4) 学生技巧与习题难度/区分度编码；
-        5) 直接使用 Q 矩阵；通过预测头计算 IRT 风格概率（concept_vector 仅保留接口兼容，当前不参与融合）。
         """
+
         # 1. 学习概念关系图
         relation_matrices, concept_emb = self.relation_learning()
 
-        # 2. 编码学生知识状态（通过GNN传播）
+        # 2. 编码学生知识状态（通过 GNN 传播）
         knowledge_state = self.knowledge_encoder(student_ids, relation_matrices)
         # knowledge_state: (B, num_concepts, knowledge_dim)
 
@@ -699,54 +698,55 @@ class CognitiveDiagnosisModel(nn.Module):
             proto_broadcast = proto_mix.unsqueeze(1).expand(-1, self.num_concepts, -1)
             knowledge_state = (1.0 - self.proto_lambda) * knowledge_state + self.proto_lambda * proto_broadcast
 
-        # === G-PDS hook：个性化关系图（暂不替换主路径，仅返回诊断信息） ===
+        # === G-PDS hook：个性化关系图（目前只返回诊断用，不参与主路径） ===
         gate_alpha = None
         personal_matrices = None
         if self.use_personal_graph:
-            gate_alpha = self.adaptive_gate(student_repr)  # (B,1,1)
+            gate_alpha = self.adaptive_gate(student_repr)          # (B,1,1)
             personal_matrices = self.personal_generator(student_repr)  # (B, C, C)
 
         # 3. 编码学生应试技巧
         if self.use_skill_encoder:
-            skill_vector = self.skill_encoder(student_ids)  # (batch_size, skill_dim)
+            skill_vector = self.skill_encoder(student_ids)  # (B, skill_dim)
         else:
-            # 消融：技巧向量置零
             skill_vector = torch.zeros_like(self.skill_encoder(student_ids))
 
-        # 4. 编码习题特征
-        exercise_emb, difficulty, discrimination = self.exercise_encoder(exercise_ids, relation_matrices)
+        # 4. 编码习题特征（内部已经对 difficulty 做过 tanh 限幅）
+        exercise_emb, difficulty, discrimination = self.exercise_encoder(
+            exercise_ids, relation_matrices
+        )
 
-        # 5. 获取Q矩阵向量（当前版本直接使用结构性 Q，不再融合 concept_vector）
-        q_vector = self.q_matrix[exercise_ids]  # (batch_size, num_concepts)
+        # 5. 获取结构性 Q 向量
+        q_vector = self.q_matrix[exercise_ids]  # (B, num_concepts)
         effective_concept = q_vector
 
-        # 7. 预测
+        # 6. 预测
         pred_prob = self.prediction_head(
             knowledge_state,
             skill_vector,
             exercise_emb,
             difficulty,
             discrimination,
-            effective_concept
+            effective_concept,
         )
 
         if return_details:
             details = {
-                'relation_matrices': relation_matrices,
-                'knowledge_state': knowledge_state,
-                'skill_vector': skill_vector,
-                'difficulty': difficulty,
-                'discrimination': discrimination,
-                'q_vector': q_vector,
-                'effective_concept': effective_concept,
-                'student_repr': student_repr,
+                "relation_matrices": relation_matrices,
+                "knowledge_state": knowledge_state,
+                "skill_vector": skill_vector,
+                "difficulty": difficulty,
+                "discrimination": discrimination,
+                "q_vector": q_vector,
+                "effective_concept": effective_concept,
+                "student_repr": student_repr,
             }
             if self.use_soft_prototype:
-                details['prototype_assign'] = proto_assign  # (B, K)
-                details['prototype_mix'] = proto_mix        # (B, D)
+                details["prototype_assign"] = proto_assign  # (B, K)
+                details["prototype_mix"] = proto_mix        # (B, D)
             if self.use_personal_graph:
-                details['alpha'] = gate_alpha
-                details['personal_matrices'] = personal_matrices
+                details["alpha"] = gate_alpha
+                details["personal_matrices"] = personal_matrices
             return pred_prob, details
         else:
             return pred_prob
@@ -772,21 +772,35 @@ class CognitiveDiagnosisModel(nn.Module):
         - 原型使用均衡 (lambda_proto_usage)：平均分配接近均匀
         - 个性化稀疏 (lambda_sparse_personal)：个性化图的稀疏惩罚
         - 门控约束 (lambda_alpha)：鼓励 α 更小偏向全局图
-        输入形状：relation_matrices (H, C, C)、skill_vector (B, S)、knowledge_state (B, C, D)、prototype_assign (B, K, 可选)。
+        - 习题参数 L2：exercise_emb / difficulty / discrimination 的 L2
         """
         if lambda_sparse_personal is None:
             lambda_sparse_personal = self.lambda_sparse_personal
         if lambda_alpha is None:
             lambda_alpha = self.lambda_alpha
 
-        # 1) 稀疏性：关系矩阵 L1 约束
-        sparse_loss = self.relation_learning.get_sparsity_loss(relation_matrices)
+        device = knowledge_state.device
 
+        # 1) 概念关系矩阵的稀疏 L1
+        sparse_loss = self.relation_learning.get_sparsity_loss(relation_matrices)
         reg_loss = lambda_sparse * sparse_loss
 
+        # 2) 习题相关参数的 L2 正则（embedding / difficulty / discrimination）
+        if hasattr(self, "exercise_encoder") and self.exercise_l2_lambda > 0:
+            ex_emb = self.exercise_encoder.exercise_emb.weight        # (num_exercises, E)
+            diff_w = self.exercise_encoder.difficulty.weight          # (num_exercises, C)
+            disc_w = self.exercise_encoder.discrimination.weight      # (num_exercises, C)
+
+            exercise_l2 = (
+                ex_emb.pow(2).mean()
+                + diff_w.pow(2).mean()
+                + disc_w.pow(2).mean()
+            )
+            reg_loss = reg_loss + self.exercise_l2_lambda * exercise_l2
+
         # 3) 原型相关正则（可选）
-        proto_div_loss = torch.tensor(0.0, device=knowledge_state.device)
-        proto_usage_loss = torch.tensor(0.0, device=knowledge_state.device)
+        proto_div_loss = torch.tensor(0.0, device=device)
+        proto_usage_loss = torch.tensor(0.0, device=device)
 
         if self.use_soft_prototype and prototype_assign is not None:
             K = prototype_assign.size(1)
@@ -797,11 +811,10 @@ class CognitiveDiagnosisModel(nn.Module):
                 sim = torch.matmul(P_norm, P_norm.t())  # (K, K)
 
                 eye = torch.eye(K, device=sim.device, dtype=sim.dtype)
-                off_diag = (sim - eye)
-                proto_div_loss = (off_diag ** 2).sum() / (K * (K - 1) + 1e-12)  # 原型多样性
+                off_diag = sim - eye
+                proto_div_loss = (off_diag ** 2).sum() / (K * (K - 1) + 1e-12)
 
             if lambda_proto_usage > 0.0:
-                # 平衡使用：平均分配接近均匀，避免坍缩到单个原型
                 q_mean = prototype_assign.mean(dim=0)  # (K,)
                 uniform = torch.full_like(q_mean, 1.0 / K)
                 proto_usage_loss = F.mse_loss(q_mean, uniform)
@@ -813,7 +826,7 @@ class CognitiveDiagnosisModel(nn.Module):
             sparse_personal = personal_matrices.abs().mean()
             reg_loss = reg_loss + lambda_sparse_personal * sparse_personal
 
-        # 5) 门控 α 惩罚，鼓励更多依赖全局图
+        # 5) 门控 α 惩罚，鼓励更多依赖全局图（α 越小越好）
         if alpha is not None and lambda_alpha > 0:
             alpha_mean = alpha.mean()
             reg_loss = reg_loss + lambda_alpha * alpha_mean
@@ -838,6 +851,7 @@ class CognitiveDiagnosisModel(nn.Module):
 
             # 获取知识状态
             knowledge_state = self.knowledge_encoder(student_ids, relation_matrices)
+
             # soft prototype 校正（与 forward 保持一致）
             if self.use_soft_prototype:
                 student_repr = knowledge_state.mean(dim=1)  # (1, D)
@@ -853,9 +867,7 @@ class CognitiveDiagnosisModel(nn.Module):
             else:
                 skill_vector = torch.zeros_like(self.skill_encoder(student_ids).squeeze(0))
 
-            # 计算每个知识点的掌握程度
-            # 计算每个知识点的掌握程度（与预测头保持一致的线性单调打分）
-            # knowledge_state: (num_concepts, D)
+            # 与预测头一致的单调线性打分，得到知识掌握度
             w_pos = F.softplus(self.prediction_head.knowledge_weight_raw)  # (D,)
             scores = torch.matmul(
                 knowledge_state,                  # (C, D)
@@ -865,9 +877,9 @@ class CognitiveDiagnosisModel(nn.Module):
             knowledge_mastery = torch.sigmoid(scores)  # (C,)
 
             diagnosis = {
-                'knowledge_mastery': knowledge_mastery,  # (num_concepts,)
-                'skill_level': skill_vector,             # (skill_dim,)
-                'relation_matrices': relation_matrices   # (num_heads, num_concepts, num_concepts)
+                "knowledge_mastery": knowledge_mastery,   # (num_concepts,)
+                "skill_level": skill_vector,              # (skill_dim,)
+                "relation_matrices": relation_matrices,   # (num_heads, C, C)
             }
 
         return diagnosis

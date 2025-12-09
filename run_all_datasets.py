@@ -39,7 +39,7 @@ BEST_CFG = {
         "seed": 42,
         "batch_size": 512,
         "disable_soft_prototype": False,
-        "dropout": 0.1,
+        "dropout": 0.2,  # NEW: dropout 从 0.1 提到 0.2
         "early_stop_patience": 5,
         "epochs": 100,
         "exercise_dim": 128,
@@ -59,7 +59,7 @@ BEST_CFG = {
         "num_relation_heads": 4,
         "num_workers": 4,
         "patience": 5,
-        "proto_lambda": 0.5,
+        "proto_lambda": 0.2,  # NEW: 原型残差权重从 0.5 降到 0.2
         "proto_tau": 1.0,
         "save_interval": 10,
         "skill_dim": 2,
@@ -76,11 +76,12 @@ BEST_CFG = {
         "seed": 42,
         "batch_size": 128,
         "disable_soft_prototype": False,
-        "dropout": 0.1,
+        "dropout": 0.2,  # NEW: dropout 从 0.1 提到 0.2
         "early_stop_patience": 5,
         "epochs": 100,
-        "exercise_dim": 128,
-        "knowledge_dim": 128,
+        # NEW: assist_09 容量降一档
+        "exercise_dim": 64,   # 128 -> 64
+        "knowledge_dim": 64,  # 128 -> 64
         "lambda_alpha": 0.0,
         "lambda_proto_div": 0.0,
         "lambda_proto_usage": 0.0,
@@ -91,12 +92,12 @@ BEST_CFG = {
         "min_poison_count": 0,
         "min_stu_interactions": 15,
         "no_cuda": False,
-        "num_gnn_layers": 2,
+        "num_gnn_layers": 1,       # NEW: 2 -> 1
         "num_prototypes": 3,
-        "num_relation_heads": 4,
+        "num_relation_heads": 2,   # NEW: 4 -> 2
         "num_workers": 4,
         "patience": 5,
-        "proto_lambda": 0.5,
+        "proto_lambda": 0.2,  # NEW: 0.5 -> 0.2
         "proto_tau": 1.0,
         "save_interval": 10,
         "skill_dim": 2,
