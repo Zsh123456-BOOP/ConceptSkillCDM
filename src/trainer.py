@@ -269,6 +269,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         use_personal_graph=getattr(args, "use_personal_graph", False),
         lambda_sparse_personal=args.lambda_sparse_personal,
         lambda_alpha=args.lambda_alpha,
+        # ✅ 新增：从 args 传入，而不是 model 里写死
+        exercise_l2_lambda=getattr(args, "exercise_l2_lambda", 5e-5),
     ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())

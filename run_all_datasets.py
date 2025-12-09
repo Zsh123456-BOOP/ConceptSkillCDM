@@ -19,6 +19,7 @@ import argparse
 import os
 import subprocess
 import time
+from src.config import BEST_PRESETS
 
 # ===== 根据你贴出来的 CSV 行手工整理的“最佳配置” =====
 # 列名：
@@ -71,6 +72,7 @@ BEST_CFG = {
         "use_personal_graph": False,  # CSV 里是 0
         # 其他
         "model_variant": "gpd_base",
+        "exercise_l2_lambda": 5e-5,
     },
     "assist_09": {
         "seed": 42,
@@ -107,6 +109,7 @@ BEST_CFG = {
         "ablate_soft_prototype": False,
         "use_personal_graph": False,  # CSV 里是 0
         "model_variant": "gpd_base",
+        "exercise_l2_lambda": 5e-5,
     },
 }
 

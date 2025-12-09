@@ -22,6 +22,7 @@ DATASET_DEFAULTS = {
         "num_prototypes": 3,
         "proto_tau": 1.0,
         "proto_lambda": 0.5,
+        "exercise_l2_lambda": 5e-5,
     },
     "assist_17": {
         "data_dir": "./data/assist_17",
@@ -34,6 +35,7 @@ DATASET_DEFAULTS = {
         "lambda_alpha": 0.0,
         "use_personal_graph": 0,
         # 其他如果不写就用 argparse 默认
+        "exercise_l2_lambda": 5e-5,
     },
     "junyi": {
         "data_dir": "./data/junyi",
@@ -45,6 +47,7 @@ DATASET_DEFAULTS = {
         "lambda_sparse_personal": 0.0,
         "lambda_alpha": 0.0,
         "use_personal_graph": 0,
+        "exercise_l2_lambda": 5e-5,
     },
 }
 

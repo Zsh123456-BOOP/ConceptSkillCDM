@@ -92,6 +92,13 @@ def parse_args():
         help='Comma-separated GPU ids to consider, e.g. "0,2". If None, use all GPUs.',
     )
 
+    parser.add_argument(
+        "--exercise_l2_lambda",
+        type=float,
+        default=5e-5,   # 保持你现在 model 里的默认值一致
+        help="L2 regularization weight for exercise parameters (embedding/difficulty/discrimination).",
+    )
+
     # 保存参数
     parser.add_argument("--save_dir", type=str, default="./checkpoints")
     parser.add_argument("--log_dir", type=str, default="./logs")
