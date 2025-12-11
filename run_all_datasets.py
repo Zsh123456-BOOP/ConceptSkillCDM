@@ -102,7 +102,7 @@ BEST_CFG = {
         "proto_lambda": 0.1,      # ★ CSV: 0.1（原来你脚本里是 0.2）
         "proto_tau": 1.0,
         "save_interval": 10,
-        "skill_dim": 2,
+        "skill_dim": 64,
         "weight_decay": 1e-5,
         "ablate_exercise_graph": False,
         "ablate_skill_encoder": False,
