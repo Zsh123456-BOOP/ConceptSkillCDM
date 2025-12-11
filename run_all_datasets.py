@@ -40,7 +40,7 @@ BEST_CFG = {
         "batch_size": 512,
         "disable_soft_prototype": False,
         "dropout": 0.15,          # ★ CSV: 0.15
-        "early_stop_patience": 5,
+        "early_stop_patience": 3,
         "epochs": 100,
         "exercise_dim": 128,
         "knowledge_dim": 128,
@@ -80,7 +80,7 @@ BEST_CFG = {
         "batch_size": 128,
         "disable_soft_prototype": False,
         "dropout": 0.20,          # CSV: 0.20
-        "early_stop_patience": 5,
+        "early_stop_patience": 3,
         "epochs": 100,
         "exercise_dim": 64,       # CSV: 64
         "knowledge_dim": 64,      # CSV: 64

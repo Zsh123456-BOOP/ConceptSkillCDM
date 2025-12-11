@@ -1,12 +1,14 @@
 """
-认知诊断模型（单文件实现）：
-- 多头概念关系学习（生成概念图）
-- 学生知识状态编码（GNN 传播）
-- 学生应试技巧编码（猜测/失误）
-- 习题难度/区分度编码
-- IRT 风格作答预测头
-- 可选 soft prototype 对学生表示做残差校正
-主类：CognitiveDiagnosisModel，整合上述组件完成训练与推理。
+认知诊断模型（单文件实现 - 神经/认知双路融合版）：
+- [架构升级] Dual-Branch Fusion:
+    1. Cognitive Branch (IRT): 使用 Masked Mean 聚合（取其稳定性）。
+    2. Neural Branch (MF): 使用 Student Latent * Exercise Latent（取其高拟合上限）。
+- [简化] 移除 Exercise GNN：减少参数量，防止在习题侧过拟合。
+- [增强] Skill Encoder 升级：维度提升至 64，作为 Neural Branch 的学生输入。
+- [正则] Dropout 提升至 0.3，加强泛化。
+
+适用数据集：Assist09, Junyi
+目标：利用 Neural Branch 捕捉 IRT 无法解释的残差，冲击 0.7790+。
 """
 
 import torch
@@ -17,13 +19,11 @@ import math
 
 # ======================================================
 # 1. 图与关系模块
-#    - MultiHeadRelationLearning
-#    - ConceptGraphConv
 # ======================================================
 
 
 class MultiHeadRelationLearning(nn.Module):
-    """多头概念关系学习，输出稀疏邻接矩阵。输入：无显式输入；输出：relation_matrices (H, C, C)、concept_embeddings (C, D)。"""
+    """多头概念关系学习，输出稀疏邻接矩阵。"""
 
     def __init__(
             self,
@@ -37,12 +37,10 @@ class MultiHeadRelationLearning(nn.Module):
         self.concept_dim = concept_dim
         self.num_heads = num_heads
 
-        # 知识点的可学习嵌入
         self.concept_embeddings = nn.Parameter(
             torch.randn(num_concepts, concept_dim)
         )
 
-        # 多头注意力
         self.attention_heads = nn.ModuleList([
             nn.MultiheadAttention(
                 embed_dim=concept_dim,
@@ -52,54 +50,37 @@ class MultiHeadRelationLearning(nn.Module):
             ) for _ in range(num_heads)
         ])
 
-        # 用于生成稀疏邻接矩阵的可学习温度参数
-        self.temperature = nn.Parameter(torch.ones(num_heads))
-
-        # Dropout
+        # 固定缩放
+        self.scale = 1.0 / math.sqrt(concept_dim)
         self.dropout = nn.Dropout(dropout)
-
         self._initialize_weights()
 
     def _initialize_weights(self):
-        """初始化权重"""
         nn.init.xavier_normal_(self.concept_embeddings)
 
     def forward(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        """前向计算多头注意力，得到关系矩阵 (H, C, C) 与概念嵌入 (C, D)。"""
-        # 扩展维度用于批处理
-        concepts = self.concept_embeddings.unsqueeze(0)  # (1, num_concepts, concept_dim)
-
+        concepts = self.concept_embeddings.unsqueeze(0)
         relation_matrices = []
 
         for i, attn_head in enumerate(self.attention_heads):
-            # 自注意力计算
             _, attn_weights = attn_head(
                 concepts, concepts, concepts,
                 need_weights=True,
                 average_attn_weights=True
             )
-            # attn_weights: (1, num_concepts, num_concepts)
-
-            attn_weights = attn_weights.squeeze(0)  # (num_concepts, num_concepts)
-
-            # 温度缩放（简化版稀疏化，可配合 L1）
-            attn_weights = attn_weights / self.temperature[i]
-
+            attn_weights = attn_weights.squeeze(0)
             relation_matrices.append(attn_weights)
 
-        # 堆叠所有头的关系矩阵
         relation_matrices = torch.stack(relation_matrices, dim=0)
-        # (num_heads, num_concepts, num_concepts)
-
         return relation_matrices, self.concept_embeddings
 
     def get_sparsity_loss(self, relation_matrices: torch.Tensor) -> torch.Tensor:
-        """对关系矩阵做 L1 稀疏正则，relation_matrices 形状 (H, C, C)。"""
-        return torch.mean(torch.abs(relation_matrices))
+        # L2 Loss 稳定性更好
+        return torch.mean(relation_matrices ** 2)
 
 
 class ConceptGraphConv(nn.Module):
-    """基于学习到的关系矩阵的图卷积。输入：x (B, C, Din)，relation_matrices (H, C, C)；输出：节点特征 (B, C, Dout)。"""
+    """图卷积层"""
 
     def __init__(
             self,
@@ -109,79 +90,46 @@ class ConceptGraphConv(nn.Module):
             dropout: float = 0.1
     ):
         super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
         self.num_heads = num_heads
-
-        # 每个关系头的变换矩阵
         self.head_transforms = nn.ModuleList([
             nn.Linear(in_features, out_features, bias=False)
             for _ in range(num_heads)
         ])
-
-        # 聚合多头信息的注意力权重
         self.head_attention = nn.Parameter(torch.ones(num_heads) / num_heads)
-
         self.bias = nn.Parameter(torch.zeros(out_features))
         self.dropout = nn.Dropout(dropout)
-
         self._initialize_weights()
 
     def _initialize_weights(self):
-        """初始化权重"""
         for transform in self.head_transforms:
             nn.init.xavier_normal_(transform.weight)
 
-    def forward(
-            self,
-            x: torch.Tensor,
-            relation_matrices: torch.Tensor
-    ) -> torch.Tensor:
-        """执行图卷积，输出形状 (B, C, Dout)。"""
+    def forward(self, x: torch.Tensor, relation_matrices: torch.Tensor) -> torch.Tensor:
         outputs = []
-
         for i in range(self.num_heads):
-            # 获取该头的关系矩阵
-            adj = relation_matrices[i]  # (num_concepts, num_concepts)
-
-            # 简化版行归一化
-            degree = adj.sum(dim=1, keepdim=True).clamp(min=1e-12)
-            adj_norm = adj / degree  # (num_concepts, num_concepts)
-
-            # 特征变换
-            h = self.head_transforms[i](x)  # (batch_size, num_concepts, out_features)
-
-            # 图传播
-            h = torch.matmul(adj_norm, h)  # (batch_size, num_concepts, out_features)
-
+            adj = relation_matrices[i]
+            # 归一化
+            adj = adj / (adj.sum(dim=-1, keepdim=True) + 1e-6)
+            
+            h = self.head_transforms[i](x)
+            h = torch.matmul(adj, h)
             outputs.append(h)
 
-        # 加权聚合多头输出
-        output = torch.stack(outputs, dim=0)  # (num_heads, batch_size, num_concepts, out_features)
-
-        # 使用softmax归一化的注意力权重
+        output = torch.stack(outputs, dim=0)
         attn_weights = F.softmax(self.head_attention, dim=0).view(-1, 1, 1, 1)
-        output = (output * attn_weights).sum(dim=0)  # (batch_size, num_concepts, out_features)
-
-        # 添加偏置
+        output = (output * attn_weights).sum(dim=0)
         output = output + self.bias
-
-        # Dropout
         output = self.dropout(output)
-
         return output
 
 
 # ======================================================
 # 2. 编码器
-#    - StudentKnowledgeEncoder
-#    - TestTakingSkillEncoder
-#    - ExerciseDifficultyEncoder
 # ======================================================
 
 
 class StudentKnowledgeEncoder(nn.Module):
-    """学生知识状态编码器。输入 student_ids (B,) 与 relation_matrices (H, C, C)，输出 knowledge_state (B, C, D)。"""
+    """学生知识状态编码器 (Cognitive Branch)"""
 
     def __init__(
             self,
@@ -190,20 +138,18 @@ class StudentKnowledgeEncoder(nn.Module):
             knowledge_dim: int,
             num_gnn_layers: int = 2,
             num_relation_heads: int = 4,
-            dropout: float = 0.1
+            dropout: float = 0.1,
+            gnn_residual_weight: float = 0.5 
     ):
         super().__init__()
         self.num_students = num_students
         self.num_concepts = num_concepts
         self.knowledge_dim = knowledge_dim
+        self.gnn_residual_weight = gnn_residual_weight
 
-        # 学生级别的知识向量
         self.student_emb = nn.Embedding(num_students, knowledge_dim)
-
-        # 概念级别的知识偏置向量（所有学生共享的概念特征）
         self.concept_emb = nn.Embedding(num_concepts, knowledge_dim)
 
-        # GNN层：在学生 × 概念的初始状态上做图传播
         self.gnn_layers = nn.ModuleList([
             ConceptGraphConv(
                 knowledge_dim,
@@ -213,7 +159,6 @@ class StudentKnowledgeEncoder(nn.Module):
             ) for _ in range(num_gnn_layers)
         ])
 
-        # 层归一化
         self.layer_norms = nn.ModuleList([
             nn.LayerNorm(knowledge_dim)
             for _ in range(num_gnn_layers)
@@ -222,287 +167,190 @@ class StudentKnowledgeEncoder(nn.Module):
         self._initialize_weights()
 
     def _initialize_weights(self):
-        """初始化权重"""
         nn.init.xavier_normal_(self.student_emb.weight)
         nn.init.xavier_normal_(self.concept_emb.weight)
 
-    def forward(
-            self,
-            student_ids: torch.Tensor,
-            relation_matrices: torch.Tensor
-    ) -> torch.Tensor:
-        """生成知识状态张量 (B, C, D)。"""
+    def forward(self, student_ids: torch.Tensor, relation_matrices: torch.Tensor) -> torch.Tensor:
         batch_size = student_ids.size(0)
-
-        # 学生向量: (batch_size, knowledge_dim)
-        student_vec = self.student_emb(student_ids)  # 每个学生一个向量
-
-        # 概念向量: (1, num_concepts, knowledge_dim) -> (batch_size, num_concepts, knowledge_dim)
+        student_vec = self.student_emb(student_ids)
         concept_vec = self.concept_emb.weight.unsqueeze(0).expand(batch_size, -1, -1)
-
-        # 扩展学生向量到每个概念: (batch_size, 1, knowledge_dim) -> (batch_size, num_concepts, knowledge_dim)
         student_vec_expanded = student_vec.unsqueeze(1).expand(-1, self.num_concepts, -1)
+        
+        h = student_vec_expanded + concept_vec
 
-        # 学生 × 概念 的初始知识状态
-        h = student_vec_expanded + concept_vec  # (batch_size, num_concepts, knowledge_dim)
-
-        # 通过GNN层传播
         for gnn, norm in zip(self.gnn_layers, self.layer_norms):
-            h_new = gnn(h, relation_matrices)
-            h = norm(h + h_new)
+            h_in = h
+            h_out = gnn(h, relation_matrices)
+            h = norm(h_in + self.gnn_residual_weight * h_out)
             h = F.relu(h)
 
         return h
 
 
-class TestTakingSkillEncoder(nn.Module):
-    """学生应试技巧编码，输入 student_ids (B,)，输出 skill_vector (B, skill_dim)。"""
-
-    def __init__(
-            self,
-            num_students: int,
-            skill_dim: int = 2
-    ):
+class StudentLatentEncoder(nn.Module):
+    """
+    [升级] 学生隐向量编码器 (Neural Branch)
+    替代之前的 TestTakingSkillEncoder，维度提升，用于捕捉 IRT 无法解释的潜在特征。
+    """
+    def __init__(self, num_students: int, latent_dim: int = 64):
         super().__init__()
-        self.num_students = num_students
-        self.skill_dim = skill_dim
-
-        # 学生的应试技巧嵌入（猜测能力、失误倾向等）
-        self.skill_emb = nn.Embedding(num_students, skill_dim)
-
+        self.latent_emb = nn.Embedding(num_students, latent_dim)
         self._initialize_weights()
 
     def _initialize_weights(self):
-        """初始化权重"""
-        # 初始化为接近0
-        nn.init.normal_(self.skill_emb.weight, mean=0, std=0.01)
+        nn.init.xavier_normal_(self.latent_emb.weight)
 
     def forward(self, student_ids: torch.Tensor) -> torch.Tensor:
-        """返回技巧向量 (B, skill_dim)。"""
-        return self.skill_emb(student_ids)
+        return self.latent_emb(student_ids)
 
 
 class ExerciseDifficultyEncoder(nn.Module):
-    """习题难度/区分度编码，通过概念图传播。输入 exercise_ids (B,) 与 relation_matrices (H, C, C)，输出 exercise_emb (B, E)、difficulty (B, C)、discrimination (B, C)。"""
-
+    """
+    [简化] 习题编码器
+    移除 GNN，直接学习 Embedding，减少噪声和过拟合。
+    """
     def __init__(
             self,
             num_exercises: int,
             num_concepts: int,
             q_matrix: torch.Tensor,
             exercise_dim: int = 64,
-            knowledge_dim: int = 32,
-            num_heads: int = 4,
-            num_gnn_layers: int = 2,
-            dropout: float = 0.1,
-            use_graph: bool = True,
+            knowledge_dim: int = 32, # 仅占位，保持接口兼容
+            num_heads: int = 4,      # 仅占位
+            num_gnn_layers: int = 2, # 仅占位
+            dropout: float = 0.1,    # 仅占位
+            use_graph: bool = False, # 强制 False
     ):
         super().__init__()
-        self.num_exercises = num_exercises
-        self.num_concepts = num_concepts
         self.exercise_dim = exercise_dim
-        self.knowledge_dim = knowledge_dim
-        self.use_graph = use_graph
-
-        # 注册Q矩阵（不参与训练）
         self.register_buffer('q_matrix', q_matrix)
 
-        # 习题的可学习嵌入
+        # 习题隐向量 (用于 Neural Branch)
         self.exercise_emb = nn.Embedding(num_exercises, exercise_dim)
-
-        # 难度和区分度的可学习嵌入
+        
+        # 习题 IRT 参数 (用于 Cognitive Branch)
         self.difficulty = nn.Embedding(num_exercises, num_concepts)
         self.discrimination = nn.Embedding(num_exercises, num_concepts)
-
-        # 使用图卷积传播难度和区分度
-        self.gnn_layers = nn.ModuleList([
-            ConceptGraphConv(knowledge_dim, knowledge_dim, num_heads=num_heads, dropout=dropout)
-            for _ in range(num_gnn_layers)
-        ])
 
         self._initialize_weights()
 
     def _initialize_weights(self):
-        """初始化权重"""
         nn.init.xavier_normal_(self.exercise_emb.weight)
-
-        # 难度初始化
         nn.init.zeros_(self.difficulty.weight)
-
-        # 区分度初始化
         nn.init.ones_(self.discrimination.weight)
 
-    def forward(self, exercise_ids: torch.Tensor, relation_matrices: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """输出 exercise_emb (B, E)、difficulty (B, C)、discrimination (B, C)。"""
-        # 获取习题的原始嵌入
+    def forward(self, exercise_ids: torch.Tensor, relation_matrices: torch.Tensor = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # 直接查表，不进行 GNN 传播，减少过拟合风险
         exercise_emb = self.exercise_emb(exercise_ids)
+        difficulty = self.difficulty(exercise_ids)
+        discrimination = self.discrimination(exercise_ids)
 
-        # 获取习题的难度和区分度
-        difficulty = self.difficulty(exercise_ids)  # (batch_size, num_concepts)
-        discrimination = torch.sigmoid(self.discrimination(exercise_ids))  # (batch_size, num_concepts)
-
-        if self.use_graph:
-            # 转换为适合图卷积的形状
-            difficulty_g = difficulty.unsqueeze(-1).expand(-1, -1, self.knowledge_dim)  # (B, C, D)
-            discrimination_g = discrimination.unsqueeze(-1).expand(-1, -1, self.knowledge_dim)  # (B, C, D)
-
-            h_difficulty = difficulty_g
-            h_discrimination = discrimination_g
-
-            for gnn in self.gnn_layers:
-                h_difficulty = gnn(h_difficulty, relation_matrices)
-                h_discrimination = gnn(h_discrimination, relation_matrices)
-
-            # 平均池化回到 (batch_size, num_concepts)
-            difficulty = h_difficulty.mean(dim=-1)
-            discrimination = h_discrimination.mean(dim=-1)
-        else:
-            # 消融：跳过图传播，仅使用习题-概念的可学习标量
-            difficulty = difficulty
-            discrimination = discrimination
-
-        # 在最终用于 IRT 之前，对难度做 tanh 限幅，避免极端值
-        difficulty = torch.tanh(difficulty)
-
+        # 区分度保证非负
+        discrimination = F.softplus(discrimination)
+        
         return exercise_emb, difficulty, discrimination
 
 
 # ======================================================
 # 3. 预测与原型模块
-#    - ResponsePredictionHead
-#    - SoftPrototypeModule
-#    - （后续 hook）个性化关系图相关模块
 # ======================================================
 
 
 class ResponsePredictionHead(nn.Module):
-    """IRT 风格预测头：融合知识状态 (B, C, D)、技巧向量 (B, S) 与习题嵌入 (B, E) 计算作答概率。"""
+    """
+    [重构] 双路预测头 (Dual-Branch Prediction Head)
+    Branch 1: IRT (Mean Aggregation) -> 负责显性知识推理 (稳定)
+    Branch 2: Neural (Dot Product) -> 负责隐性特征拟合 (高上限)
+    """
 
     def __init__(
             self,
             knowledge_dim: int,
-            skill_dim: int,
+            skill_dim: int,   # 现在这是 latent_dim
             exercise_dim: int,
             hidden_dim: int = 128
     ):
         super().__init__()
-
-        # -------【改动 1】知识部分：改为单调线性打分-------
-        # 原来是一个 MLP，现在改成一个向量 w ∈ R^D + 一个偏置 b
-        # 在 forward 里通过 softplus(w_raw) 保证权重 ≥ 0，满足单调性
+        # IRT 参数
         self.knowledge_weight_raw = nn.Parameter(torch.randn(knowledge_dim))
         self.knowledge_bias = nn.Parameter(torch.zeros(1))
+        
+        # Neural 参数 (简单的 MLP 用于融合或调整)
+        # 这里我们使用直接的点积作为 Neural Branch 的核心，再加一个 Bias
+        self.neural_bias = nn.Parameter(torch.zeros(1))
 
-        # -------【保留】技巧部分先不动-------
-        self.residual_net  = nn.Sequential(
-            nn.Linear(skill_dim + exercise_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(hidden_dim // 2, 1)
-        )
+        # 融合层：学习两路的权重
+        self.fusion_gate = nn.Linear(2, 1)
 
         self._initialize_weights()
 
     def _initialize_weights(self):
-        # 知识权重初始化
         nn.init.normal_(self.knowledge_weight_raw, mean=0.0, std=0.1)
         nn.init.zeros_(self.knowledge_bias)
-
-        # 技巧网络初始化
-        for layer in self.residual_net:
-            if isinstance(layer, nn.Linear):
-                nn.init.xavier_normal_(layer.weight)
-                if layer.bias is not None:
-                    nn.init.zeros_(layer.bias)
+        nn.init.zeros_(self.neural_bias)
+        # 初始化 fusion gate，使其均衡
+        nn.init.constant_(self.fusion_gate.weight, 0.5)
+        nn.init.zeros_(self.fusion_gate.bias)
 
     def forward(
             self,
             knowledge_state: torch.Tensor,   # (B, C, D)
-            skill_vector: torch.Tensor,      # (B, S)
-            exercise_emb: torch.Tensor,      # (B, E)
+            student_latent: torch.Tensor,    # (B, Latent) - 原 skill_vector
+            exercise_emb: torch.Tensor,      # (B, Latent)
             difficulty: torch.Tensor,        # (B, C)
             discrimination: torch.Tensor,    # (B, C)
             concept_mask: torch.Tensor,      # (B, C)
     ) -> torch.Tensor:
-        """返回作答概率 (B,)。concept_mask 为 Q 行或样本级概念掩码或两者融合。"""
-        batch_size, num_concepts, knowledge_dim = knowledge_state.size()
+        
+        # === Branch 1: Cognitive IRT (Masked Mean) ===
+        # 这一路保证模型的可解释性和基本稳定性 (0.775 的基础)
+        w_pos = F.softplus(self.knowledge_weight_raw)
+        knowledge_scores = torch.matmul(knowledge_state, w_pos.view(-1, 1)).squeeze(-1) + self.knowledge_bias
+        
+        irt_logits = discrimination * (knowledge_scores - difficulty)
+        masked_irt = irt_logits * concept_mask
+        num_concepts = concept_mask.sum(dim=1) + 1e-9
+        # 使用 Mean 聚合，因为它已被验证最稳定
+        irt_score = masked_irt.sum(dim=1) / num_concepts # (B,)
 
-        # -------【改动 2】知识打分：单调线性-------
-        # 先把知识维度权重限制为非负，保证「知识越高，得分不降」
-        w_pos = F.softplus(self.knowledge_weight_raw)  # (D,)
+        # === Branch 2: Neural Matrix Factorization ===
+        # 这一路负责拟合残差，提升上限
+        # Dot Product Interaction
+        neural_score = (student_latent * exercise_emb).sum(dim=-1) + self.neural_bias # (B,)
 
-        # (B, C, D) · (D,) -> (B, C)
-        knowledge_scores = torch.matmul(
-            knowledge_state,              # (B, C, D)
-            w_pos.view(-1, 1)            # (D, 1)
-        ).squeeze(-1)                    # (B, C)
+        # === Fusion ===
+        # 简单的加和通常最有效，或者加权和
+        # total_logit = irt_score + neural_score
+        
+        # 尝试加权融合
+        # stack: (B, 2)
+        scores_stack = torch.stack([irt_score, neural_score], dim=1)
+        total_logit = scores_stack.sum(dim=1) # 直接相加，让梯度自由流动
 
-        # 加上一个全局偏置（不影响单调性）
-        knowledge_scores = knowledge_scores + self.knowledge_bias  # (B, C)
-
-        # ------- IRT logits -------
-        irt_logits = discrimination * (knowledge_scores - difficulty)  # (B, C)
-
-        # 归一化 concept_mask，防止全 0
-        mask_sum = concept_mask.sum(dim=1, keepdim=True) + 1e-12
-        concept_norm = concept_mask / mask_sum  # (B, C)
-
-        # 聚合到题目层：这是基础 logit（还没过 sigmoid）
-        base_logit = (irt_logits * concept_norm).sum(dim=1)  # (B,)
-
-        # ------- 残差 logit：skill + exercise -------
-        res_input = torch.cat([skill_vector, exercise_emb], dim=1)  # (B, S+E)
-        delta_logit = self.residual_net(res_input).squeeze(-1)      # (B,)
-
-        # 最终 logit + 概率
-        final_logit = base_logit + delta_logit
-        final_prob = torch.sigmoid(final_logit).clamp(min=1e-6, max=1 - 1e-6)
-
+        final_prob = torch.sigmoid(total_logit).clamp(min=1e-6, max=1 - 1e-6)
         return final_prob
 
 
-
 class SoftPrototypeModule(nn.Module):
-    """软原型模块：维护 K 个原型，对学生表示做 soft assignment 并生成混合原型。"""
-
-    def __init__(
-            self,
-            num_prototypes: int,
-            dim: int,
-            tau: float = 1.0
-    ):
+    """软原型模块"""
+    def __init__(self, num_prototypes: int, dim: int, tau: float = 1.0):
         super().__init__()
         self.num_prototypes = num_prototypes
-        self.dim = dim
         self.tau = tau
-
         self.prototypes = nn.Parameter(torch.randn(num_prototypes, dim) * 0.1)
         nn.init.xavier_normal_(self.prototypes)
 
     def forward(self, student_repr: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """输入 student_repr (B, D)，输出 proto_mix (B, D) 与 assign_q (B, K)。"""
-        # 归一化后做相似度更稳定
-        s = F.normalize(student_repr, dim=-1)  # (B, D)
-        p = F.normalize(self.prototypes, dim=-1)  # (K, D)
-
-        logits = torch.matmul(s, p.t()) / self.tau  # (B, K)
-        assign_q = F.softmax(logits, dim=-1)  # (B, K)
-
-        proto_mix = torch.matmul(assign_q, self.prototypes)  # (B, D)
-
+        s = F.normalize(student_repr, dim=-1)
+        p = F.normalize(self.prototypes, dim=-1)
+        logits = torch.matmul(s, p.t()) / self.tau
+        assign_q = F.softmax(logits, dim=-1)
+        proto_mix = torch.matmul(assign_q, self.prototypes)
         return proto_mix, assign_q
 
 
-# ======================================================
-# 3.5 个性化关系图模块（G-PDS hook）
-#    - AdaptiveGate：自适应门控，控制全局图与个性化图的权重
-#    - PersonalRelationGenerator：LoRA 风格生成个性化关系矩阵
-# ======================================================
-
-
 class AdaptiveGate(nn.Module):
-    """根据学生表征输出门控系数 α（0-1），偏向全局或个性化图。"""
-
+    """自适应门控"""
     def __init__(self, student_dim: int):
         super().__init__()
         self.gate = nn.Sequential(
@@ -511,45 +359,34 @@ class AdaptiveGate(nn.Module):
             nn.Linear(student_dim // 2, 1),
             nn.Sigmoid()
         )
-
     def forward(self, student_repr: torch.Tensor) -> torch.Tensor:
-        alpha = self.gate(student_repr).view(-1, 1, 1)  # (B,1,1)
-        return alpha
+        return self.gate(student_repr).view(-1, 1, 1)
 
 
 class PersonalRelationGenerator(nn.Module):
-    """LoRA 风格生成个性化关系矩阵，低秩近似学生特定的概念关联。"""
-
+    """个性化关系生成"""
     def __init__(self, student_dim: int, num_concepts: int, rank: int = 4):
         super().__init__()
         self.num_concepts = num_concepts
         self.rank = rank
         self.to_u = nn.Linear(student_dim, num_concepts * rank, bias=False)
         self.to_v = nn.Linear(student_dim, num_concepts * rank, bias=False)
-
         nn.init.xavier_normal_(self.to_u.weight)
         nn.init.xavier_normal_(self.to_v.weight)
 
     def forward(self, student_repr: torch.Tensor) -> torch.Tensor:
-        """
-        输入: student_repr (B, D)
-        输出: personal_matrices (B, C, C)，通过 U V^T 构造的低秩个性化关系
-        """
         batch_size = student_repr.size(0)
         u = self.to_u(student_repr).view(batch_size, self.num_concepts, self.rank)
         v = self.to_v(student_repr).view(batch_size, self.num_concepts, self.rank)
-        personal = torch.matmul(u, v.transpose(-1, -2))  # (B, C, C)
-        return personal
+        return torch.matmul(u, v.transpose(-1, -2))
 
 
 # ======================================================
-# 4. CognitiveDiagnosisModel (主组装)
+# 4. 主模型
 # ======================================================
 
 
 class CognitiveDiagnosisModel(nn.Module):
-    """主模型：组装关系学习、各类编码器、预测头与可选软原型。"""
-
     def __init__(
             self,
             num_students: int,
@@ -562,28 +399,30 @@ class CognitiveDiagnosisModel(nn.Module):
             num_relation_heads: int = 4,
             num_gnn_layers: int = 2,
             dropout: float = 0.1,
-            # ====== soft prototype 相关参数 ======
             num_prototypes: int = 3,
             proto_tau: float = 1.0,
             proto_lambda: float = 0.5,
             use_soft_prototype: bool = True,
             use_skill_encoder: bool = True,
             use_exercise_graph: bool = True,
-            # ====== 个性化关系图（G-PDS hook） ======
             use_personal_graph: bool = False,
             personal_rank: int = 4,
             lambda_sparse_personal: float = 0.0,
             lambda_alpha: float = 0.0,
-            # ====== 新增：习题参数的 L2 系数 ======
             exercise_l2_lambda: float = 5e-5,
+            gnn_residual_weight: float = 0.5,
     ):
         super().__init__()
-
         self.num_students = num_students
         self.num_exercises = num_exercises
         self.num_concepts = num_concepts
         self.knowledge_dim = knowledge_dim
-
+        
+        # [调整] skill_dim 现在代表 neural branch 的 latent dim，强制与 exercise_dim 一致
+        # 如果传入的 skill_dim 很小(如2)，这里强制覆盖为 exercise_dim 以保证 Neural Branch 能力
+        self.skill_dim = exercise_dim 
+        self.exercise_dim = exercise_dim
+        
         self.use_skill_encoder = bool(use_skill_encoder)
         self.use_exercise_graph = bool(use_exercise_graph)
         self.use_personal_graph = bool(use_personal_graph)
@@ -591,8 +430,10 @@ class CognitiveDiagnosisModel(nn.Module):
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
         self.exercise_l2_lambda = float(exercise_l2_lambda)
+        
+        self.use_soft_prototype = bool(use_soft_prototype and num_prototypes > 0)
+        self.proto_lambda = float(proto_lambda)
 
-        # ===== 概念关系学习 =====
         self.relation_learning = MultiHeadRelationLearning(
             num_concepts=num_concepts,
             concept_dim=knowledge_dim,
@@ -600,7 +441,6 @@ class CognitiveDiagnosisModel(nn.Module):
             dropout=dropout,
         )
 
-        # ===== 学生知识状态编码器 =====
         self.knowledge_encoder = StudentKnowledgeEncoder(
             num_students=num_students,
             num_concepts=num_concepts,
@@ -608,15 +448,12 @@ class CognitiveDiagnosisModel(nn.Module):
             num_gnn_layers=num_gnn_layers,
             num_relation_heads=num_relation_heads,
             dropout=dropout,
+            gnn_residual_weight=gnn_residual_weight 
         )
 
-        # ===== 学生应试技巧编码器 =====
-        self.skill_encoder = TestTakingSkillEncoder(
-            num_students=num_students,
-            skill_dim=skill_dim,
-        )
+        # [升级] 使用 StudentLatentEncoder 替代原 Skill Encoder
+        self.skill_encoder = StudentLatentEncoder(num_students, self.skill_dim)
 
-        # ===== 习题编码器 =====
         self.exercise_encoder = ExerciseDifficultyEncoder(
             num_exercises=num_exercises,
             num_concepts=num_concepts,
@@ -626,40 +463,25 @@ class CognitiveDiagnosisModel(nn.Module):
             num_heads=num_relation_heads,
             num_gnn_layers=num_gnn_layers,
             dropout=dropout,
-            use_graph=self.use_exercise_graph,
+            use_graph=False, # 强制关闭习题图，简化模型
         )
 
-        # ===== 诊断预测头 =====
         self.prediction_head = ResponsePredictionHead(
             knowledge_dim=knowledge_dim,
-            skill_dim=skill_dim,
+            skill_dim=self.skill_dim,
             exercise_dim=exercise_dim,
         )
 
-        # 注册 Q 矩阵（供 forward 直接索引）
         self.register_buffer("q_matrix", q_matrix)
 
-        # ===== soft prototype 层 =====
-        self.use_soft_prototype = bool(use_soft_prototype and num_prototypes > 0)
-        self.proto_lambda = float(proto_lambda)
-
         if self.use_soft_prototype:
-            self.prototype_module = SoftPrototypeModule(
-                num_prototypes=num_prototypes,
-                dim=knowledge_dim,
-                tau=proto_tau,
-            )
+            self.prototype_module = SoftPrototypeModule(num_prototypes, knowledge_dim, proto_tau)
         else:
             self.prototype_module = None
 
-        # ===== 个性化关系图模块（默认关闭） =====
         if self.use_personal_graph:
-            self.adaptive_gate = AdaptiveGate(student_dim=knowledge_dim)
-            self.personal_generator = PersonalRelationGenerator(
-                student_dim=knowledge_dim,
-                num_concepts=num_concepts,
-                rank=self.personal_rank,
-            )
+            self.adaptive_gate = AdaptiveGate(knowledge_dim)
+            self.personal_generator = PersonalRelationGenerator(knowledge_dim, num_concepts, self.personal_rank)
         else:
             self.adaptive_gate = None
             self.personal_generator = None
@@ -671,63 +493,42 @@ class CognitiveDiagnosisModel(nn.Module):
             concept_vector: torch.Tensor = None,
             return_details: bool = False
     ) -> Union[torch.Tensor, Tuple]:
-        """
-        前向计算作答概率。
-        - student_ids: (B,) 学生索引
-        - exercise_ids: (B,) 习题索引
-        - concept_vector: 为兼容保留（当前版本直接使用结构性 Q，不再融合）
-        - return_details: 若为 True，返回中间张量诊断信息
-        """
-
-        # 1. 学习概念关系图
+        
         relation_matrices, concept_emb = self.relation_learning()
-
-        # 2. 编码学生知识状态（通过 GNN 传播）
         knowledge_state = self.knowledge_encoder(student_ids, relation_matrices)
-        # knowledge_state: (B, num_concepts, knowledge_dim)
 
-        # === soft prototype 混合：基于学生级表示进行原型校正 ===
         proto_mix = None
         proto_assign = None
-        student_repr = knowledge_state.mean(dim=1)  # (B, D)，作为学生级表示
+        student_repr = knowledge_state.mean(dim=1)
 
         if self.use_soft_prototype:
-            proto_mix, proto_assign = self.prototype_module(student_repr)  # (B, D), (B, K)
-
-            # 将混合原型广播到所有概念上，做残差矫正
+            proto_mix, proto_assign = self.prototype_module(student_repr)
             proto_broadcast = proto_mix.unsqueeze(1).expand(-1, self.num_concepts, -1)
             knowledge_state = (1.0 - self.proto_lambda) * knowledge_state + self.proto_lambda * proto_broadcast
 
-        # === G-PDS hook：个性化关系图（目前只返回诊断用，不参与主路径） ===
         gate_alpha = None
         personal_matrices = None
         if self.use_personal_graph:
-            gate_alpha = self.adaptive_gate(student_repr)          # (B,1,1)
-            personal_matrices = self.personal_generator(student_repr)  # (B, C, C)
+            gate_alpha = self.adaptive_gate(student_repr)
+            personal_matrices = self.personal_generator(student_repr)
 
-        # 3. 编码学生应试技巧
-        if self.use_skill_encoder:
-            skill_vector = self.skill_encoder(student_ids)  # (B, skill_dim)
-        else:
-            skill_vector = torch.zeros_like(self.skill_encoder(student_ids))
+        # 获取 Student Latent Vector
+        skill_vector = self.skill_encoder(student_ids)
 
-        # 4. 编码习题特征（内部已经对 difficulty 做过 tanh 限幅）
+        # 获取 Exercise Embeddings
         exercise_emb, difficulty, discrimination = self.exercise_encoder(
             exercise_ids, relation_matrices
         )
 
-        # 5. 获取结构性 Q 向量
-        q_vector = self.q_matrix[exercise_ids]  # (B, num_concepts)
-        effective_concept = q_vector
-
-        # 6. 预测
+        q_vector = self.q_matrix[exercise_ids]
+        
         pred_prob = self.prediction_head(
-            knowledge_state,
-            skill_vector,
-            exercise_emb,
-            difficulty,
-            discrimination,
-            effective_concept,
+            knowledge_state=knowledge_state,
+            student_latent=skill_vector, # 传入 Neural Branch
+            exercise_emb=exercise_emb,   # 传入 Neural Branch
+            difficulty=difficulty,
+            discrimination=discrimination,
+            concept_mask=q_vector, 
         )
 
         if return_details:
@@ -738,12 +539,11 @@ class CognitiveDiagnosisModel(nn.Module):
                 "difficulty": difficulty,
                 "discrimination": discrimination,
                 "q_vector": q_vector,
-                "effective_concept": effective_concept,
                 "student_repr": student_repr,
             }
             if self.use_soft_prototype:
-                details["prototype_assign"] = proto_assign  # (B, K)
-                details["prototype_mix"] = proto_mix        # (B, D)
+                details["prototype_assign"] = proto_assign
+                details["prototype_mix"] = proto_mix
             if self.use_personal_graph:
                 details["alpha"] = gate_alpha
                 details["personal_matrices"] = personal_matrices
@@ -765,121 +565,82 @@ class CognitiveDiagnosisModel(nn.Module):
             lambda_sparse_personal: Optional[float] = None,
             lambda_alpha: Optional[float] = None,
     ) -> torch.Tensor:
-        """
-        计算正则项：
-        - 稀疏 (lambda_sparse)：关系矩阵 L1
-        - 原型多样性 (lambda_proto_div)：原型间相似度去相关
-        - 原型使用均衡 (lambda_proto_usage)：平均分配接近均匀
-        - 个性化稀疏 (lambda_sparse_personal)：个性化图的稀疏惩罚
-        - 门控约束 (lambda_alpha)：鼓励 α 更小偏向全局图
-        - 习题参数 L2：exercise_emb / difficulty / discrimination 的 L2
-        """
-        if lambda_sparse_personal is None:
-            lambda_sparse_personal = self.lambda_sparse_personal
-        if lambda_alpha is None:
-            lambda_alpha = self.lambda_alpha
-
+        if lambda_sparse_personal is None: lambda_sparse_personal = self.lambda_sparse_personal
+        if lambda_alpha is None: lambda_alpha = self.lambda_alpha
         device = knowledge_state.device
 
-        # 1) 概念关系矩阵的稀疏 L1
+        # L2 Sparse Loss
         sparse_loss = self.relation_learning.get_sparsity_loss(relation_matrices)
         reg_loss = lambda_sparse * sparse_loss
 
-        # 2) 习题相关参数的 L2 正则（embedding / difficulty / discrimination）
+        # Exercise L2
         if hasattr(self, "exercise_encoder") and self.exercise_l2_lambda > 0:
-            ex_emb = self.exercise_encoder.exercise_emb.weight        # (num_exercises, E)
-            diff_w = self.exercise_encoder.difficulty.weight          # (num_exercises, C)
-            disc_w = self.exercise_encoder.discrimination.weight      # (num_exercises, C)
-
-            exercise_l2 = (
-                ex_emb.pow(2).mean()
-                + diff_w.pow(2).mean()
-                + disc_w.pow(2).mean()
-            )
+            ex_emb = self.exercise_encoder.exercise_emb.weight
+            diff_w = self.exercise_encoder.difficulty.weight
+            disc_w = self.exercise_encoder.discrimination.weight
+            # 增加对 skill (student latent) 的正则化，防止 Neural Branch 过拟合
+            skill_emb = self.skill_encoder.latent_emb.weight
+            
+            exercise_l2 = (ex_emb.pow(2).mean() + diff_w.pow(2).mean() + 
+                           disc_w.pow(2).mean() + skill_emb.pow(2).mean())
             reg_loss = reg_loss + self.exercise_l2_lambda * exercise_l2
 
-        # 3) 原型相关正则（可选）
+        # Proto Reg
         proto_div_loss = torch.tensor(0.0, device=device)
         proto_usage_loss = torch.tensor(0.0, device=device)
 
         if self.use_soft_prototype and prototype_assign is not None:
             K = prototype_assign.size(1)
-
-            if lambda_proto_div > 0.0 and hasattr(self, "prototype_module") and self.prototype_module is not None:
-                P = self.prototype_module.prototypes  # (K, D)
+            if lambda_proto_div > 0.0 and self.prototype_module is not None:
+                P = self.prototype_module.prototypes
                 P_norm = F.normalize(P, dim=-1)
-                sim = torch.matmul(P_norm, P_norm.t())  # (K, K)
-
+                sim = torch.matmul(P_norm, P_norm.t())
                 eye = torch.eye(K, device=sim.device, dtype=sim.dtype)
                 off_diag = sim - eye
                 proto_div_loss = (off_diag ** 2).sum() / (K * (K - 1) + 1e-12)
-
             if lambda_proto_usage > 0.0:
-                q_mean = prototype_assign.mean(dim=0)  # (K,)
+                q_mean = prototype_assign.mean(dim=0)
                 uniform = torch.full_like(q_mean, 1.0 / K)
                 proto_usage_loss = F.mse_loss(q_mean, uniform)
-
             reg_loss = reg_loss + lambda_proto_div * proto_div_loss + lambda_proto_usage * proto_usage_loss
 
-        # 4) 个性化关系图稀疏正则（仅当提供 personal_matrices 且权重大于 0 时生效）
+        # Personal Graph Reg
         if personal_matrices is not None and lambda_sparse_personal > 0:
             sparse_personal = personal_matrices.abs().mean()
             reg_loss = reg_loss + lambda_sparse_personal * sparse_personal
 
-        # 5) 门控 α 惩罚，鼓励更多依赖全局图（α 越小越好）
         if alpha is not None and lambda_alpha > 0:
-            alpha_mean = alpha.mean()
-            reg_loss = reg_loss + lambda_alpha * alpha_mean
+            reg_loss = reg_loss + lambda_alpha * alpha.mean()
 
         return reg_loss
 
-    def get_student_diagnosis(
-            self,
-            student_id: int
-    ) -> Dict[str, torch.Tensor]:
-        """
-        生成单个学生的诊断结果（内部索引）。
-        返回包含知识掌握度 (C,)、技巧向量 (S,) 以及关系矩阵的字典。
-        """
+    def get_student_diagnosis(self, student_id: int) -> Dict[str, torch.Tensor]:
         self.eval()
         with torch.no_grad():
             device = next(self.parameters()).device
             student_ids = torch.tensor([student_id], device=device)
-
-            # 学习关系图
             relation_matrices, _ = self.relation_learning()
-
-            # 获取知识状态
             knowledge_state = self.knowledge_encoder(student_ids, relation_matrices)
 
-            # soft prototype 校正（与 forward 保持一致）
             if self.use_soft_prototype:
-                student_repr = knowledge_state.mean(dim=1)  # (1, D)
+                student_repr = knowledge_state.mean(dim=1)
                 proto_mix, _ = self.prototype_module(student_repr)
                 proto_broadcast = proto_mix.unsqueeze(1).expand(-1, self.num_concepts, -1)
                 knowledge_state = (1.0 - self.proto_lambda) * knowledge_state + self.proto_lambda * proto_broadcast
 
-            knowledge_state = knowledge_state.squeeze(0)  # (num_concepts, knowledge_dim)
+            knowledge_state = knowledge_state.squeeze(0)
+            
+            # Neural Branch 的 Latent Vector
+            skill_vector = self.skill_encoder(student_ids).squeeze(0)
 
-            # 获取技巧向量
-            if self.use_skill_encoder:
-                skill_vector = self.skill_encoder(student_ids).squeeze(0)  # (skill_dim,)
-            else:
-                skill_vector = torch.zeros_like(self.skill_encoder(student_ids).squeeze(0))
-
-            # 与预测头一致的单调线性打分，得到知识掌握度
-            w_pos = F.softplus(self.prediction_head.knowledge_weight_raw)  # (D,)
-            scores = torch.matmul(
-                knowledge_state,                  # (C, D)
-                w_pos.view(-1, 1)                 # (D, 1)
-            ).squeeze(-1) + self.prediction_head.knowledge_bias  # (C,)
-
-            knowledge_mastery = torch.sigmoid(scores)  # (C,)
+            # 诊断主要看 Cognitive Branch
+            w_pos = F.softplus(self.prediction_head.knowledge_weight_raw)
+            scores = torch.matmul(knowledge_state, w_pos.view(-1, 1)).squeeze(-1) + self.prediction_head.knowledge_bias
+            knowledge_mastery = torch.sigmoid(scores)
 
             diagnosis = {
-                "knowledge_mastery": knowledge_mastery,   # (num_concepts,)
-                "skill_level": skill_vector,              # (skill_dim,)
-                "relation_matrices": relation_matrices,   # (num_heads, C, C)
+                "knowledge_mastery": knowledge_mastery,
+                "skill_level": skill_vector, # 现在这是 latent vector
+                "relation_matrices": relation_matrices,
             }
-
         return diagnosis
