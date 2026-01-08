@@ -10,6 +10,16 @@ from src.experiment_utils import setup_logging
 from src.trainer import train_one_experiment, run_inference
 
 
+def _normalize_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "t"}
+    return bool(value)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Cognitive Diagnosis Model Training and Testing")
 
@@ -95,6 +105,7 @@ def parse_args():
     parser.add_argument("--ablate_soft_prototype", action="store_true")
     parser.add_argument("--ablate_skill_encoder", action="store_true")
     parser.add_argument("--ablate_exercise_graph", action="store_true")
+    parser.add_argument("--ablate_concept_graph", action="store_true")
 
     # ======================
     # New optional knobs (do NOT affect run_all_datasets unless used)
@@ -119,13 +130,18 @@ def main():
     args = apply_dataset_defaults(args, parser)
 
     # unified switches (backward compatible)
+    args.generate_diagnosis = _normalize_bool(args.generate_diagnosis, default=True)
     args.use_soft_prototype = (
         not getattr(args, "disable_soft_prototype", False)
         and not getattr(args, "ablate_soft_prototype", False)
     )
     # NOTE: new model always has MF student latent; ablate_skill_encoder kept for compatibility
-    args.use_skill_encoder = not getattr(args, "ablate_skill_encoder", False)
-    args.use_exercise_graph = not getattr(args, "ablate_exercise_graph", False)
+    args.use_mf_branch = not getattr(args, "ablate_skill_encoder", False)
+    args.use_skill_encoder = args.use_mf_branch
+    args.use_concept_graph = not (
+        getattr(args, "ablate_concept_graph", False) or getattr(args, "ablate_exercise_graph", False)
+    )
+    args.use_exercise_graph = args.use_concept_graph
     args.use_personal_graph = getattr(args, "use_personal_graph", False)
 
     # seeds

@@ -271,23 +271,31 @@ class ExerciseDifficultyEncoder(nn.Module):
         q_matrix: torch.Tensor,
         exercise_dim: int = 64,
         dropout: float = 0.1,
+        use_mf_branch: bool = True,
         use_q_conditioning: bool = True,
     ):
         super().__init__()
         self.num_exercises = int(num_exercises)
         self.num_concepts = int(num_concepts)
         self.exercise_dim = int(exercise_dim)
-        self.use_q_conditioning = bool(use_q_conditioning)
+        self.use_mf_branch = bool(use_mf_branch)
+        self.use_q_conditioning = bool(use_q_conditioning and use_mf_branch)
 
         self.register_buffer("q_matrix", q_matrix)
 
-        # Neural branch
-        self.exercise_latent = nn.Embedding(num_exercises, exercise_dim)
-        self.exercise_bias = nn.Embedding(num_exercises, 1)
+        # Neural branch (optional)
+        if self.use_mf_branch:
+            self.exercise_latent = nn.Embedding(num_exercises, exercise_dim)
+            self.exercise_bias = nn.Embedding(num_exercises, 1)
 
-        # Concept latent for Q-conditioning
-        self.concept_latent = nn.Embedding(num_concepts, exercise_dim)
-        self.q_gate_raw = nn.Parameter(torch.zeros(1))  # sigmoid -> [0,1]
+            # Concept latent for Q-conditioning
+            self.concept_latent = nn.Embedding(num_concepts, exercise_dim)
+            self.q_gate_raw = nn.Parameter(torch.zeros(1))  # sigmoid -> [0,1]
+        else:
+            self.exercise_latent = None
+            self.exercise_bias = None
+            self.concept_latent = None
+            self.q_gate_raw = None
 
         # IRT 2PL item scalars
         self.b = nn.Embedding(num_exercises, 1)
@@ -297,10 +305,10 @@ class ExerciseDifficultyEncoder(nn.Module):
         self._initialize_weights()
 
     def _initialize_weights(self):
-        nn.init.xavier_normal_(self.exercise_latent.weight)
-        nn.init.zeros_(self.exercise_bias.weight)
-
-        nn.init.xavier_normal_(self.concept_latent.weight)
+        if self.use_mf_branch:
+            nn.init.xavier_normal_(self.exercise_latent.weight)
+            nn.init.zeros_(self.exercise_bias.weight)
+            nn.init.xavier_normal_(self.concept_latent.weight)
 
         nn.init.zeros_(self.b.weight)
         nn.init.normal_(self.a_raw.weight, mean=0.0, std=0.02)
@@ -309,28 +317,32 @@ class ExerciseDifficultyEncoder(nn.Module):
         self,
         exercise_ids: torch.Tensor,
         concept_mask: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], torch.Tensor, torch.Tensor]:
         """
         Returns:
-            exercise_latent: (B, De)
-            exercise_bias:   (B,)
+            exercise_latent: (B, De) or None
+            exercise_bias:   (B,) or None
             b:               (B,) difficulty
             a:               (B,) discrimination > 0
         """
-        base = self.exercise_latent(exercise_ids)          # (B, De)
-        e_bias = self.exercise_bias(exercise_ids).squeeze(-1)  # (B,)
+        if self.use_mf_branch:
+            base = self.exercise_latent(exercise_ids)          # (B, De)
+            e_bias = self.exercise_bias(exercise_ids).squeeze(-1)  # (B,)
 
-        if self.use_q_conditioning:
-            if concept_mask is None:
-                concept_mask = self.q_matrix[exercise_ids]  # (B, C)
-            q = concept_mask.float()
-            q_norm = q / (q.sum(dim=1, keepdim=True) + 1e-12)  # (B, C)
-            c_lat = self.concept_latent.weight                 # (C, De)
-            q_lat = torch.matmul(q_norm, c_lat)                # (B, De)
-            gate = torch.sigmoid(self.q_gate_raw)              # scalar in [0,1]
-            base = base + gate * q_lat
+            if self.use_q_conditioning:
+                if concept_mask is None:
+                    concept_mask = self.q_matrix[exercise_ids]  # (B, C)
+                q = concept_mask.float()
+                q_norm = q / (q.sum(dim=1, keepdim=True) + 1e-12)  # (B, C)
+                c_lat = self.concept_latent.weight                 # (C, De)
+                q_lat = torch.matmul(q_norm, c_lat)                # (B, De)
+                gate = torch.sigmoid(self.q_gate_raw)              # scalar in [0,1]
+                base = base + gate * q_lat
 
-        base = self.dropout(base)
+            base = self.dropout(base)
+        else:
+            base = None
+            e_bias = None
 
         b = self.b(exercise_ids).squeeze(-1)  # (B,)
         a = F.softplus(self.a_raw(exercise_ids).squeeze(-1)) + 1e-6  # (B,)
@@ -359,25 +371,34 @@ class ResponsePredictionHead(nn.Module):
         exercise_dim: int,
         mf_dim: int = 64,
         dropout: float = 0.1,
+        use_mf_branch: bool = True,
     ):
         super().__init__()
+        self.use_mf_branch = bool(use_mf_branch)
 
         # ✅ Use new parametrizations.weight_norm (no FutureWarning)
         self.theta_proj = parametrizations.weight_norm(nn.Linear(knowledge_dim, 1, bias=True))
 
-        # MF projections
-        self.u_proj = nn.Linear(student_latent_dim, mf_dim, bias=False)
-        self.v_proj = nn.Linear(exercise_dim, mf_dim, bias=False)
-        nn.init.xavier_normal_(self.u_proj.weight)
-        nn.init.xavier_normal_(self.v_proj.weight)
+        if self.use_mf_branch:
+            # MF projections
+            self.u_proj = nn.Linear(student_latent_dim, mf_dim, bias=False)
+            self.v_proj = nn.Linear(exercise_dim, mf_dim, bias=False)
+            nn.init.xavier_normal_(self.u_proj.weight)
+            nn.init.xavier_normal_(self.v_proj.weight)
 
-        self.mf_scale_raw = nn.Parameter(torch.tensor(1.0))
-        self.mf_bias = nn.Parameter(torch.zeros(1))
+            self.mf_scale_raw = nn.Parameter(torch.tensor(1.0))
+            self.mf_bias = nn.Parameter(torch.zeros(1))
 
-        # Gate: use [irt_logit, mf_logit] -> sigmoid
-        self.fusion_gate = nn.Linear(2, 1)
-        nn.init.zeros_(self.fusion_gate.bias)
-        nn.init.constant_(self.fusion_gate.weight, 0.0)  # start at gate ~ 0.5
+            # Gate: use [irt_logit, mf_logit] -> sigmoid
+            self.fusion_gate = nn.Linear(2, 1)
+            nn.init.zeros_(self.fusion_gate.bias)
+            nn.init.constant_(self.fusion_gate.weight, 0.0)  # start at gate ~ 0.5
+        else:
+            self.u_proj = None
+            self.v_proj = None
+            self.mf_scale_raw = None
+            self.mf_bias = None
+            self.fusion_gate = None
 
         self.dropout = nn.Dropout(dropout)
 
@@ -387,10 +408,10 @@ class ResponsePredictionHead(nn.Module):
         concept_mask: torch.Tensor,         # (B, C)
         b: torch.Tensor,                    # (B,)
         a: torch.Tensor,                    # (B,)
-        student_latent: torch.Tensor,       # (B, Ds)
-        student_bias: torch.Tensor,         # (B,)
-        exercise_latent: torch.Tensor,      # (B, De)
-        exercise_bias: torch.Tensor,        # (B,)
+        student_latent: Optional[torch.Tensor],       # (B, Ds) or None
+        student_bias: Optional[torch.Tensor],         # (B,) or None
+        exercise_latent: Optional[torch.Tensor],      # (B, De) or None
+        exercise_bias: Optional[torch.Tensor],        # (B,) or None
         return_logits: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]]:
 
@@ -402,6 +423,22 @@ class ResponsePredictionHead(nn.Module):
         theta_e = (theta_c * mask).sum(dim=1) / denom  # (B,)
 
         irt_logit = a * (theta_e - b)  # (B,)
+
+        if not self.use_mf_branch:
+            total_logit = irt_logit
+            if return_logits:
+                return total_logit
+
+            prob = torch.sigmoid(total_logit)
+            zeros = torch.zeros_like(irt_logit)
+            details = {
+                "theta_c": theta_c.detach(),
+                "theta_e": theta_e.detach(),
+                "irt_logit": irt_logit.detach(),
+                "mf_logit": zeros,
+                "gate": zeros,
+            }
+            return prob, total_logit, details
 
         # --- Neural / MF residual (cosine + scale) ---
         u = self.u_proj(student_latent)
@@ -515,6 +552,8 @@ class CognitiveDiagnosisModel(nn.Module):
         num_relation_heads: int = 4,
         num_gnn_layers: int = 2,
         dropout: float = 0.3,
+        use_mf_branch: bool = True,
+        use_concept_graph: bool = True,
         # graph
         graph_topk: Optional[int] = None,
         allow_self_loop: bool = True,
@@ -539,6 +578,11 @@ class CognitiveDiagnosisModel(nn.Module):
         self.num_exercises = int(num_exercises)
         self.num_concepts = int(num_concepts)
         self.knowledge_dim = int(knowledge_dim)
+        self.skill_dim = int(skill_dim)
+        self.num_relation_heads = int(num_relation_heads)
+
+        self.use_mf_branch = bool(use_mf_branch)
+        self.use_concept_graph = bool(use_concept_graph)
 
         self.use_soft_prototype = bool(use_soft_prototype and num_prototypes > 0)
         self.proto_lambda = float(proto_lambda)
@@ -551,14 +595,17 @@ class CognitiveDiagnosisModel(nn.Module):
         self.lambda_graph_entropy = float(lambda_graph_entropy)
         self.mf_l2_lambda = float(mf_l2_lambda)
 
-        self.relation_learning = MultiHeadRelationLearning(
-            num_concepts=num_concepts,
-            concept_dim=knowledge_dim,
-            num_heads=num_relation_heads,
-            dropout=dropout,
-            topk=graph_topk,
-            allow_self_loop=allow_self_loop,
-        )
+        if self.use_concept_graph:
+            self.relation_learning = MultiHeadRelationLearning(
+                num_concepts=num_concepts,
+                concept_dim=knowledge_dim,
+                num_heads=num_relation_heads,
+                dropout=dropout,
+                topk=graph_topk,
+                allow_self_loop=allow_self_loop,
+            )
+        else:
+            self.relation_learning = None
 
         self.knowledge_encoder = StudentKnowledgeEncoder(
             num_students=num_students,
@@ -570,7 +617,10 @@ class CognitiveDiagnosisModel(nn.Module):
             gnn_residual_weight=gnn_residual_weight,
         )
 
-        self.skill_encoder = StudentLatentEncoder(num_students, latent_dim=skill_dim)
+        if self.use_mf_branch:
+            self.skill_encoder = StudentLatentEncoder(num_students, latent_dim=skill_dim)
+        else:
+            self.skill_encoder = None
 
         self.exercise_encoder = ExerciseDifficultyEncoder(
             num_exercises=num_exercises,
@@ -578,6 +628,7 @@ class CognitiveDiagnosisModel(nn.Module):
             q_matrix=q_matrix,
             exercise_dim=exercise_dim,
             dropout=dropout,
+            use_mf_branch=self.use_mf_branch,
             use_q_conditioning=use_q_conditioning,
         )
 
@@ -587,9 +638,13 @@ class CognitiveDiagnosisModel(nn.Module):
             exercise_dim=exercise_dim,
             mf_dim=min(64, skill_dim, exercise_dim),
             dropout=dropout,
+            use_mf_branch=self.use_mf_branch,
         )
 
         self.register_buffer("q_matrix", q_matrix)
+        identity = torch.eye(num_concepts, dtype=torch.float32)
+        identity = identity.unsqueeze(0).repeat(self.num_relation_heads, 1, 1)
+        self.register_buffer("identity_relations", identity)
 
         if self.use_soft_prototype:
             self.prototype_module = SoftPrototypeModule(num_prototypes, knowledge_dim, proto_tau)
@@ -621,7 +676,10 @@ class CognitiveDiagnosisModel(nn.Module):
         """
 
         # 1) global graph
-        relation_matrices, _ = self.relation_learning()  # (H,C,C)
+        if self.use_concept_graph and self.relation_learning is not None:
+            relation_matrices, _ = self.relation_learning()  # (H,C,C)
+        else:
+            relation_matrices = self.identity_relations  # (H,C,C)
 
         # 2) concept mask (Q)
         q_vector = concept_vector if concept_vector is not None else self.q_matrix[exercise_ids]  # (B,C)
@@ -658,7 +716,10 @@ class CognitiveDiagnosisModel(nn.Module):
             knowledge_state = (1.0 - self.proto_lambda) * knowledge_state + self.proto_lambda * proto_broadcast
 
         # 6) MF vectors + IRT params
-        student_latent, student_bias = self.skill_encoder(student_ids)
+        if self.use_mf_branch and self.skill_encoder is not None:
+            student_latent, student_bias = self.skill_encoder(student_ids)
+        else:
+            student_latent, student_bias = None, None
         exercise_latent, exercise_bias, b, a = self.exercise_encoder(exercise_ids, concept_mask=q_vector)
 
         # 7) prediction
@@ -684,14 +745,15 @@ class CognitiveDiagnosisModel(nn.Module):
             "relation_used": relation_used,          # (H,C,C) or (B,H,C,C)
             "knowledge_state": knowledge_state,
             "student_repr": student_repr,
-            "student_latent": student_latent,
-            "exercise_latent": exercise_latent,
             "q_vector": q_vector,
             "irt_b": b,
             "irt_a": a,
             "logits": logits,
             **head_details,
         }
+        if self.use_mf_branch:
+            details["student_latent"] = student_latent
+            details["exercise_latent"] = exercise_latent
         if self.use_soft_prototype:
             details["prototype_mix"] = proto_mix
             details["prototype_assign"] = proto_assign
@@ -721,19 +783,22 @@ class CognitiveDiagnosisModel(nn.Module):
         reg = torch.tensor(0.0, device=device)
 
         # (1) graph entropy sparsity
-        if self.lambda_graph_entropy > 0:
+        if self.use_concept_graph and self.relation_learning is not None and self.lambda_graph_entropy > 0:
             entropy = self.relation_learning.get_entropy_sparsity(relation_matrices)
             reg = reg + self.lambda_graph_entropy * entropy
 
         # (2) MF/IRT L2
         if self.mf_l2_lambda > 0:
             reg_terms = [
-                self.skill_encoder.latent_emb.weight.pow(2).mean(),
-                self.exercise_encoder.exercise_latent.weight.pow(2).mean(),
-                self.exercise_encoder.concept_latent.weight.pow(2).mean(),
                 self.exercise_encoder.b.weight.pow(2).mean(),
                 self.exercise_encoder.a_raw.weight.pow(2).mean(),
             ]
+            if self.use_mf_branch and self.skill_encoder is not None and self.exercise_encoder.use_mf_branch:
+                reg_terms.extend([
+                    self.skill_encoder.latent_emb.weight.pow(2).mean(),
+                    self.exercise_encoder.exercise_latent.weight.pow(2).mean(),
+                    self.exercise_encoder.concept_latent.weight.pow(2).mean(),
+                ])
             reg = reg + self.mf_l2_lambda * sum(reg_terms)
 
         # (3) prototype regularizers
@@ -774,12 +839,18 @@ class CognitiveDiagnosisModel(nn.Module):
             device = next(self.parameters()).device
             sid = torch.tensor([student_id], device=device, dtype=torch.long)
 
-            rel, _ = self.relation_learning()
+            if self.use_concept_graph and self.relation_learning is not None:
+                rel, _ = self.relation_learning()
+            else:
+                rel = self.identity_relations
             ks = self.knowledge_encoder(sid, rel).squeeze(0)  # (C,D)
             mastery = torch.sigmoid(self.prediction_head.theta_proj(ks).squeeze(-1))  # (C,)
 
-            latent, _ = self.skill_encoder(sid)
-            latent = latent.squeeze(0)
+            if self.skill_encoder is not None:
+                latent, _ = self.skill_encoder(sid)
+                latent = latent.squeeze(0)
+            else:
+                latent = torch.zeros(self.skill_dim, device=device)
 
             return {
                 "knowledge_mastery": mastery,

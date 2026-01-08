@@ -264,6 +264,17 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
 
     logger.info("%s Creating model...", run_tag)
 
+    use_soft_prototype = getattr(args, "use_soft_prototype", True)
+    use_mf_branch = getattr(args, "use_mf_branch", getattr(args, "use_skill_encoder", True))
+    use_concept_graph = getattr(args, "use_concept_graph", getattr(args, "use_exercise_graph", True))
+    logger.info(
+        "%s Ablation switches: use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s",
+        run_tag,
+        use_soft_prototype,
+        use_mf_branch,
+        use_concept_graph,
+    )
+
     # ✅ Mapping old args semantics to new model:
     # - args.lambda_sparse -> model.lambda_graph_entropy
     # - args.exercise_l2_lambda -> model.mf_l2_lambda
@@ -278,12 +289,14 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         num_relation_heads=args.num_relation_heads,
         num_gnn_layers=args.num_gnn_layers,
         dropout=args.dropout,
+        use_mf_branch=use_mf_branch,
+        use_concept_graph=use_concept_graph,
         graph_topk=getattr(args, "graph_topk", None),
         allow_self_loop=not getattr(args, "disable_self_loop", False),
         num_prototypes=args.num_prototypes,
         proto_tau=args.proto_tau,
         proto_lambda=args.proto_lambda,
-        use_soft_prototype=getattr(args, "use_soft_prototype", True),
+        use_soft_prototype=use_soft_prototype,
         use_personal_graph=getattr(args, "use_personal_graph", False),
         personal_rank=getattr(args, "personal_rank", 4),
         lambda_sparse_personal=args.lambda_sparse_personal,
@@ -472,6 +485,25 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     )
 
     # Build model from loaded args (fallback to current args)
+    use_soft_prototype = loaded_args.get("use_soft_prototype", getattr(args, "use_soft_prototype", True))
+    use_mf_branch = loaded_args.get(
+        "use_mf_branch",
+        loaded_args.get("use_skill_encoder", getattr(args, "use_mf_branch", getattr(args, "use_skill_encoder", True))),
+    )
+    use_concept_graph = loaded_args.get(
+        "use_concept_graph",
+        loaded_args.get(
+            "use_exercise_graph",
+            getattr(args, "use_concept_graph", getattr(args, "use_exercise_graph", True)),
+        ),
+    )
+    logger.info(
+        "Inference switches: use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s",
+        use_soft_prototype,
+        use_mf_branch,
+        use_concept_graph,
+    )
+
     model = CognitiveDiagnosisModel(
         num_students=info_dict["num_students"],
         num_exercises=info_dict["num_exercises"],
@@ -483,12 +515,14 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         num_relation_heads=loaded_args.get("num_relation_heads", args.num_relation_heads),
         num_gnn_layers=loaded_args.get("num_gnn_layers", args.num_gnn_layers),
         dropout=loaded_args.get("dropout", args.dropout),
+        use_mf_branch=use_mf_branch,
+        use_concept_graph=use_concept_graph,
         graph_topk=loaded_args.get("graph_topk", getattr(args, "graph_topk", None)),
         allow_self_loop=not loaded_args.get("disable_self_loop", getattr(args, "disable_self_loop", False)),
         num_prototypes=loaded_args.get("num_prototypes", args.num_prototypes),
         proto_tau=loaded_args.get("proto_tau", args.proto_tau),
         proto_lambda=loaded_args.get("proto_lambda", args.proto_lambda),
-        use_soft_prototype=loaded_args.get("use_soft_prototype", getattr(args, "use_soft_prototype", True)),
+        use_soft_prototype=use_soft_prototype,
         use_personal_graph=loaded_args.get("use_personal_graph", getattr(args, "use_personal_graph", False)),
         personal_rank=loaded_args.get("personal_rank", getattr(args, "personal_rank", 4)),
         lambda_sparse_personal=loaded_args.get("lambda_sparse_personal", args.lambda_sparse_personal),

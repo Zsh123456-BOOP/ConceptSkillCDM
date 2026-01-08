@@ -4,13 +4,13 @@
 """
 批量跑 CognitiveDiagnosisModel 的消融实验。
 
-- 固定随机种子 seed=42
+- 默认随机种子 seeds=42,2024,888（可通过 CLI 覆盖）
 - 基于当前 experiment_results.csv 中的最优配置作为 base config
 - 单因素消融：
     1) full               : 全部模块开启
     2) no_soft_proto      : 关闭 soft prototype 模块
     3) no_skill           : 关闭应试技巧编码器
-    4) no_exercise_graph  : 关闭习题侧图传播
+    4) no_concept_graph   : 关闭概念图传播（--ablate_concept_graph / alias --ablate_exercise_graph）
 
 使用示例：
     # 默认：两个数据集 + 两张 GPU (0,1)，最多并行 2 个实验
@@ -119,16 +119,16 @@ ABLATIONS = [
         "flags": {"ablate_skill_encoder": True},
     },
     {
-        "name": "no_exercise_graph",
-        "flags": {"ablate_exercise_graph": True},
+        "name": "no_concept_graph",
+        "flags": {"ablate_concept_graph": True},
     },
 ]
 
-# 固定种子：只看结构影响
-SEEDS = [42]
+# 默认种子：只看结构影响
+DEFAULT_SEEDS = [42, 2024, 888]
 
 
-def launch_experiment(dataset_name, base_cfg, ablation, seed, gpu_id):
+def launch_experiment(dataset_name, base_cfg, ablation, seed, gpu_id, generate_diagnosis):
     """
     按照 BEST_CFG + 消融组合构造 main.py 命令并启动子进程。
     """
@@ -156,6 +156,8 @@ def launch_experiment(dataset_name, base_cfg, ablation, seed, gpu_id):
         log_dir,
         "--seed",
         str(seed),
+        "--generate_diagnosis",
+        "True" if generate_diagnosis else "False",
     ]
 
     # 1) 先把 base 配置转成命令行
@@ -205,14 +207,27 @@ def main():
         default=4,
         help="最多并行的实验数（不超过 GPU 数更稳）",
     )
+    parser.add_argument(
+        "--seeds",
+        type=str,
+        default=",".join(str(s) for s in DEFAULT_SEEDS),
+        help="逗号分隔的随机种子列表，例如 '42,2024,888'",
+    )
+    parser.add_argument(
+        "--generate_diagnosis",
+        action="store_true",
+        help="显式开启诊断生成（默认关闭以加速批量实验）",
+    )
     args = parser.parse_args()
 
     datasets = [d.strip() for d in args.datasets.split(",") if d.strip()]
     gpus = [int(x) for x in args.gpus.split(",") if x.strip()]
     max_concurrent = max(1, args.max_concurrent)
+    seeds = [int(x) for x in args.seeds.split(",") if x.strip()]
 
     print(f"Datasets: {datasets}")
     print(f"GPUs: {gpus}, max_concurrent={max_concurrent}")
+    print(f"Seeds: {seeds}")
 
     # 构建任务队列：dataset × ablation × seed
     jobs = []
@@ -220,7 +235,7 @@ def main():
         if dataset not in BEST_CFG:
             raise ValueError(f"Dataset '{dataset}' not in BEST_CFG.")
         for ablation in ABLATIONS:
-            for seed in SEEDS:
+            for seed in seeds:
                 jobs.append((dataset, ablation, seed))
 
     print(f"Total experiments: {len(jobs)}")
@@ -249,7 +264,7 @@ def main():
             gpu_rr += 1
 
             desc = f"{dataset}|{ablation['name']}|seed{seed}"
-            proc = launch_experiment(dataset, base_cfg, ablation, seed, gpu_id)
+            proc = launch_experiment(dataset, base_cfg, ablation, seed, gpu_id, args.generate_diagnosis)
             running.append((proc, gpu_id, desc))
             job_idx += 1
 
