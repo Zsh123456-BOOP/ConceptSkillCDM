@@ -78,7 +78,7 @@ A_used = (1 - alpha_s) * A_global + alpha_s * A_personal
   - Disable MF residual branch entirely
   - Remove mf_bias / student_bias / exercise_bias contributions
   - Final logit = a_e * (theta_e - b_e)
-- ablate_concept_graph (alias --ablate_exercise_graph):
+- ablate_concept_graph:
   - Replace learned concept adjacency with identity rows (self-loop only)
   - Keep GNN layers but remove cross-concept message passing
 

@@ -10,7 +10,7 @@
     1) full               : 全部模块开启
     2) no_soft_proto      : 关闭 soft prototype 模块
     3) no_skill           : 关闭应试技巧编码器
-    4) no_concept_graph   : 关闭概念图传播（--ablate_concept_graph / alias --ablate_exercise_graph）
+    4) no_concept_graph   : 关闭概念图传播（--ablate_concept_graph）
 
 使用示例：
     # 默认：两个数据集 + 两张 GPU (0,1)，最多并行 2 个实验
@@ -57,7 +57,6 @@ BEST_CFG = {
         "save_interval": 10,
         "skill_dim": 2,
         "weight_decay": 1e-5,
-        "ablate_exercise_graph": False,
         "ablate_skill_encoder": False,
         "ablate_soft_prototype": False,
         "use_personal_graph": False,  # CSV: 0
@@ -95,7 +94,6 @@ BEST_CFG = {
         "save_interval": 10,
         "skill_dim": 2,
         "weight_decay": 1e-5,
-        "ablate_exercise_graph": False,
         "ablate_skill_encoder": False,
         "ablate_soft_prototype": False,
         "use_personal_graph": False,  # CSV: 0

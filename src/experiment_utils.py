@@ -160,7 +160,6 @@ def append_summary_csv(
     for flag in [
         "ablate_soft_prototype",
         "ablate_skill_encoder",
-        "ablate_exercise_graph",
         "ablate_concept_graph",
     ]:
         if hasattr(args, flag):
@@ -217,6 +216,15 @@ def append_summary_csv(
             df = pd.DataFrame([row])
     else:
         df = pd.DataFrame([row])
+
+    if "ablate_exercise_graph" in df.columns:
+        if "ablate_concept_graph" not in df.columns:
+            df["ablate_concept_graph"] = df["ablate_exercise_graph"]
+        df = df.drop(columns=["ablate_exercise_graph"])
+    if "ablation_flags" in df.columns:
+        df["ablation_flags"] = df["ablation_flags"].astype(str).str.replace(
+            "ablate_exercise_graph=", "ablate_concept_graph=", regex=False
+        )
 
     # === 5. 调整列顺序：指标和关键信息放前面 ===
     front_cols = [

@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import sys
 
 import numpy as np
 import torch
@@ -104,7 +105,6 @@ def parse_args():
     # ablations (kept for compatibility; new model may ignore some)
     parser.add_argument("--ablate_soft_prototype", action="store_true")
     parser.add_argument("--ablate_skill_encoder", action="store_true")
-    parser.add_argument("--ablate_exercise_graph", action="store_true")
     parser.add_argument("--ablate_concept_graph", action="store_true")
 
     # ======================
@@ -126,6 +126,8 @@ def parse_args():
 
 def main():
     parser = parse_args()
+    if any(arg.startswith("--ablate_exercise_graph") for arg in sys.argv):
+        raise SystemExit("error: --ablate_exercise_graph is removed. Use --ablate_concept_graph instead.")
     args = parser.parse_args()
     args = apply_dataset_defaults(args, parser)
 
@@ -138,9 +140,7 @@ def main():
     # NOTE: new model always has MF student latent; ablate_skill_encoder kept for compatibility
     args.use_mf_branch = not getattr(args, "ablate_skill_encoder", False)
     args.use_skill_encoder = args.use_mf_branch
-    args.use_concept_graph = not (
-        getattr(args, "ablate_concept_graph", False) or getattr(args, "ablate_exercise_graph", False)
-    )
+    args.use_concept_graph = not getattr(args, "ablate_concept_graph", False)
     args.use_exercise_graph = args.use_concept_graph
     args.use_personal_graph = getattr(args, "use_personal_graph", False)
 

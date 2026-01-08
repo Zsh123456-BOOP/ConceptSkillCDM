@@ -72,7 +72,7 @@ GRID_SEARCH_SPACE = {
             "dropout": [0.1, 0.2],
             "ablate_soft_prototype": [False],
             "ablate_skill_encoder": [False],
-            "ablate_exercise_graph": [False],
+            "ablate_concept_graph": [False],
         },
     },
     "assist_17": {
@@ -91,7 +91,7 @@ GRID_SEARCH_SPACE = {
             "dropout": [0.1, 0.2],
             "ablate_soft_prototype": [False],
             "ablate_skill_encoder": [False],
-            "ablate_exercise_graph": [False],
+            "ablate_concept_graph": [False],
         },
     },
 }

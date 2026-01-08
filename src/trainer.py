@@ -266,7 +266,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
 
     use_soft_prototype = getattr(args, "use_soft_prototype", True)
     use_mf_branch = getattr(args, "use_mf_branch", getattr(args, "use_skill_encoder", True))
-    use_concept_graph = getattr(args, "use_concept_graph", getattr(args, "use_exercise_graph", True))
+    use_concept_graph = getattr(args, "use_concept_graph", True)
     logger.info(
         "%s Ablation switches: use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s",
         run_tag,
@@ -490,13 +490,7 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         "use_mf_branch",
         loaded_args.get("use_skill_encoder", getattr(args, "use_mf_branch", getattr(args, "use_skill_encoder", True))),
     )
-    use_concept_graph = loaded_args.get(
-        "use_concept_graph",
-        loaded_args.get(
-            "use_exercise_graph",
-            getattr(args, "use_concept_graph", getattr(args, "use_exercise_graph", True)),
-        ),
-    )
+    use_concept_graph = loaded_args.get("use_concept_graph", getattr(args, "use_concept_graph", True))
     logger.info(
         "Inference switches: use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s",
         use_soft_prototype,
