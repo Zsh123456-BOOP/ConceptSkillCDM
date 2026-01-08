@@ -1,7 +1,7 @@
 # src/trainer.py
 import json
 import os
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Optional, Union, List
 
 import pandas as pd
 import torch
@@ -18,31 +18,34 @@ from src.experiment_utils import (
     append_summary_csv,
 )
 
+# =========================
+# Global toggles
+# =========================
+# If True: fail fast when checkpoint/model keys mismatch (recommended for ablations)
+STRICT_CHECKPOINT_LOADING = True
+
 # ======================================================
 # Helpers
 # ======================================================
 
-def _sigmoid_np(x: torch.Tensor) -> torch.Tensor:
+def _sigmoid_torch(x: torch.Tensor) -> torch.Tensor:
     """Numerically stable sigmoid for metrics; keep in torch for speed."""
     return torch.sigmoid(x)
 
 
 def _ensure_1d(t: torch.Tensor) -> torch.Tensor:
-    """Ensure tensor shape (B,) for logits/labels."""
-    return t.view(-1)
+    """Ensure tensor shape (B,) for logits/labels. Use reshape to handle non-contiguous tensors."""
+    return t.reshape(-1)
 
 
 def _convert_legacy_weight_norm_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     """
     Compatibility helper:
-    If you ever loaded checkpoints created with deprecated torch.nn.utils.weight_norm,
-    keys are like:
+    Old torch.nn.utils.weight_norm produced:
       ...theta_proj.weight_g, ...theta_proj.weight_v
-    New parametrizations.weight_norm uses:
+    New torch.nn.utils.parametrizations.weight_norm produces:
       ...theta_proj.parametrizations.weight.original0 (g)
       ...theta_proj.parametrizations.weight.original1 (v)
-
-    This converter allows strict loading for old checkpoints.
     """
     has_legacy = any(k.endswith("weight_g") or k.endswith("weight_v") for k in state_dict.keys())
     if not has_legacy:
@@ -60,6 +63,29 @@ def _convert_legacy_weight_norm_keys(state_dict: Dict[str, torch.Tensor]) -> Dic
             new_k = base + "parametrizations.weight.original1"
             new_sd[new_k] = new_sd.pop(k)
     return new_sd
+
+
+def _hard_ablation_effective_hparams(
+    *,
+    use_soft_prototype: bool,
+    use_concept_graph: bool,
+    num_gnn_layers: int,
+    num_prototypes: int,
+) -> Tuple[int, int]:
+    """
+    Hard-ablation safety:
+      - If concept graph is disabled, force num_gnn_layers=0 to prevent "I-graph GNN" leakage.
+      - If soft prototype is disabled, force num_prototypes=0 to prevent prototype params from existing.
+    """
+    eff_gnn = int(num_gnn_layers)
+    if not use_concept_graph:
+        eff_gnn = 0
+
+    eff_proto = int(num_prototypes)
+    if not use_soft_prototype:
+        eff_proto = 0
+
+    return eff_gnn, eff_proto
 
 
 # ======================================================
@@ -81,9 +107,9 @@ def train_epoch(
     total_bce = 0.0
     total_reg = 0.0
 
-    all_labels = []
-    all_preds = []
-    all_probs = []
+    all_labels: List[float] = []
+    all_preds: List[float] = []
+    all_probs: List[float] = []
 
     bce_fn = nn.BCEWithLogitsLoss()
 
@@ -92,10 +118,9 @@ def train_epoch(
         student_ids = student_ids.to(device)
         exercise_ids = exercise_ids.to(device)
         concept_vector = concept_vector.to(device)
-        labels = labels.to(device).float()
-        labels = _ensure_1d(labels)
+        labels = _ensure_1d(labels.to(device).float())
 
-        # ✅ get logits + details (for regularizers)
+        # get logits + details (for regularizers)
         logits, details = model(
             student_ids,
             exercise_ids,
@@ -106,17 +131,15 @@ def train_epoch(
         logits = _ensure_1d(logits)
 
         bce_loss = bce_fn(logits, labels)
-
         reg_loss = model.get_regularization_loss(
             relation_matrices=details["relation_matrices"],
             details=details,
             lambda_proto_div=lambda_proto_div,
             lambda_proto_usage=lambda_proto_usage,
         )
-
         loss = bce_loss + reg_loss
 
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
         optimizer.step()
@@ -126,12 +149,12 @@ def train_epoch(
         total_reg += float(reg_loss.item())
 
         with torch.no_grad():
-            probs = _sigmoid_np(logits)
+            probs = _sigmoid_torch(logits)
             preds = (probs > 0.5).float()
 
-        all_labels.extend(labels.detach().cpu().numpy())
-        all_preds.extend(preds.detach().cpu().numpy())
-        all_probs.extend(probs.detach().cpu().numpy())
+        all_labels.extend(labels.detach().cpu().numpy().tolist())
+        all_preds.extend(preds.detach().cpu().numpy().tolist())
+        all_probs.extend(probs.detach().cpu().numpy().tolist())
 
     avg_loss = total_loss / max(1, len(train_loader))
     avg_bce = total_bce / max(1, len(train_loader))
@@ -155,9 +178,9 @@ def validate(
     total_bce = 0.0
     total_reg = 0.0
 
-    all_labels = []
-    all_preds = []
-    all_probs = []
+    all_labels: List[float] = []
+    all_preds: List[float] = []
+    all_probs: List[float] = []
 
     bce_fn = nn.BCEWithLogitsLoss()
 
@@ -167,8 +190,7 @@ def validate(
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)
             concept_vector = concept_vector.to(device)
-            labels = labels.to(device).float()
-            labels = _ensure_1d(labels)
+            labels = _ensure_1d(labels.to(device).float())
 
             logits, details = model(
                 student_ids,
@@ -192,12 +214,12 @@ def validate(
             total_bce += float(bce_loss.item())
             total_reg += float(reg_loss.item())
 
-            probs = _sigmoid_np(logits)
+            probs = _sigmoid_torch(logits)
             preds = (probs > 0.5).float()
 
-            all_labels.extend(labels.cpu().numpy())
-            all_preds.extend(preds.cpu().numpy())
-            all_probs.extend(probs.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy().tolist())
+            all_preds.extend(preds.cpu().numpy().tolist())
+            all_probs.extend(probs.cpu().numpy().tolist())
 
     avg_loss = total_loss / max(1, len(val_loader))
     avg_bce = total_bce / max(1, len(val_loader))
@@ -264,20 +286,30 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
 
     logger.info("%s Creating model...", run_tag)
 
+    # switches from main.py (already normalized there)
     use_soft_prototype = getattr(args, "use_soft_prototype", True)
     use_mf_branch = getattr(args, "use_mf_branch", getattr(args, "use_skill_encoder", True))
     use_concept_graph = getattr(args, "use_concept_graph", True)
+
+    # hard-ablation safety (prevents "half-ablation")
+    eff_gnn_layers, eff_num_prototypes = _hard_ablation_effective_hparams(
+        use_soft_prototype=use_soft_prototype,
+        use_concept_graph=use_concept_graph,
+        num_gnn_layers=getattr(args, "num_gnn_layers", 0),
+        num_prototypes=getattr(args, "num_prototypes", 0),
+    )
+
     logger.info(
-        "%s Ablation switches: use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s",
+        "%s Ablation switches: use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s "
+        "(effective num_gnn_layers=%d, num_prototypes=%d)",
         run_tag,
         use_soft_prototype,
         use_mf_branch,
         use_concept_graph,
+        eff_gnn_layers,
+        eff_num_prototypes,
     )
 
-    # ✅ Mapping old args semantics to new model:
-    # - args.lambda_sparse -> model.lambda_graph_entropy
-    # - args.exercise_l2_lambda -> model.mf_l2_lambda
     model = CognitiveDiagnosisModel(
         num_students=info_dict["num_students"],
         num_exercises=info_dict["num_exercises"],
@@ -287,13 +319,13 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         skill_dim=args.skill_dim,
         exercise_dim=args.exercise_dim,
         num_relation_heads=args.num_relation_heads,
-        num_gnn_layers=args.num_gnn_layers,
+        num_gnn_layers=eff_gnn_layers,
         dropout=args.dropout,
         use_mf_branch=use_mf_branch,
         use_concept_graph=use_concept_graph,
         graph_topk=getattr(args, "graph_topk", None),
         allow_self_loop=not getattr(args, "disable_self_loop", False),
-        num_prototypes=args.num_prototypes,
+        num_prototypes=eff_num_prototypes,
         proto_tau=args.proto_tau,
         proto_lambda=args.proto_lambda,
         use_soft_prototype=use_soft_prototype,
@@ -371,7 +403,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         history["val"].append(val_metrics)
 
         if val_metrics["auc"] > best_val_auc:
-            best_val_auc = val_metrics["auc"]
+            best_val_auc = float(val_metrics["auc"])
             best_epoch = epoch
             patience_counter = 0
 
@@ -391,12 +423,16 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             logger.info("%s -> New best AUC=%.4f at epoch %d", run_tag, best_val_auc, epoch)
         else:
             patience_counter += 1
-            logger.info("%s -> No improvement %d epoch(s) (best AUC=%.4f @ %d)",
-                        run_tag, patience_counter, best_val_auc, best_epoch)
+            logger.info(
+                "%s -> No improvement %d epoch(s) (best AUC=%.4f @ %d)",
+                run_tag, patience_counter, best_val_auc, best_epoch
+            )
 
         if patience_counter >= args.early_stop_patience:
-            logger.info("%s Early stopping at epoch %d (best AUC=%.4f @ %d)",
-                        run_tag, epoch, best_val_auc, best_epoch)
+            logger.info(
+                "%s Early stopping at epoch %d (best AUC=%.4f @ %d)",
+                run_tag, epoch, best_val_auc, best_epoch
+            )
             break
 
         if epoch % args.save_interval == 0:
@@ -440,7 +476,7 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         return {}, {}
 
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-    loaded_args = checkpoint.get("args", {})
+    loaded_args: Dict[str, Any] = checkpoint.get("args", {})
     info_dict = checkpoint.get("info_dict", None)
 
     if info_dict is None:
@@ -476,12 +512,13 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         cpt_id_map=cpt_id_map,
     )
 
+    pin_memory = bool(getattr(device, "type", "cpu") == "cuda")
     test_loader = DataLoader(
         test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=pin_memory,
     )
 
     # Build model from loaded args (fallback to current args)
@@ -491,11 +528,23 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         loaded_args.get("use_skill_encoder", getattr(args, "use_mf_branch", getattr(args, "use_skill_encoder", True))),
     )
     use_concept_graph = loaded_args.get("use_concept_graph", getattr(args, "use_concept_graph", True))
+
+    # hard-ablation safety at inference too
+    eff_gnn_layers, eff_num_prototypes = _hard_ablation_effective_hparams(
+        use_soft_prototype=use_soft_prototype,
+        use_concept_graph=use_concept_graph,
+        num_gnn_layers=int(loaded_args.get("num_gnn_layers", getattr(args, "num_gnn_layers", 0))),
+        num_prototypes=int(loaded_args.get("num_prototypes", getattr(args, "num_prototypes", 0))),
+    )
+
     logger.info(
-        "Inference switches: use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s",
+        "Inference switches: use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s "
+        "(effective num_gnn_layers=%d, num_prototypes=%d)",
         use_soft_prototype,
         use_mf_branch,
         use_concept_graph,
+        eff_gnn_layers,
+        eff_num_prototypes,
     )
 
     model = CognitiveDiagnosisModel(
@@ -507,13 +556,13 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         skill_dim=loaded_args.get("skill_dim", args.skill_dim),
         exercise_dim=loaded_args.get("exercise_dim", args.exercise_dim),
         num_relation_heads=loaded_args.get("num_relation_heads", args.num_relation_heads),
-        num_gnn_layers=loaded_args.get("num_gnn_layers", args.num_gnn_layers),
+        num_gnn_layers=eff_gnn_layers,
         dropout=loaded_args.get("dropout", args.dropout),
         use_mf_branch=use_mf_branch,
         use_concept_graph=use_concept_graph,
         graph_topk=loaded_args.get("graph_topk", getattr(args, "graph_topk", None)),
         allow_self_loop=not loaded_args.get("disable_self_loop", getattr(args, "disable_self_loop", False)),
-        num_prototypes=loaded_args.get("num_prototypes", args.num_prototypes),
+        num_prototypes=eff_num_prototypes,
         proto_tau=loaded_args.get("proto_tau", args.proto_tau),
         proto_lambda=loaded_args.get("proto_lambda", args.proto_lambda),
         use_soft_prototype=use_soft_prototype,
@@ -527,15 +576,30 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         use_q_conditioning=not loaded_args.get("disable_q_conditioning", getattr(args, "disable_q_conditioning", False)),
     ).to(device)
 
-    # ✅ compatibility for legacy weight_norm checkpoints
+    # compatibility for legacy weight_norm checkpoints
     state_dict = checkpoint["model_state_dict"]
     state_dict = _convert_legacy_weight_norm_keys(state_dict)
-    model.load_state_dict(state_dict, strict=False)
+
+    incompatible = model.load_state_dict(state_dict, strict=False)
+    missing_keys = list(getattr(incompatible, "missing_keys", []))
+    unexpected_keys = list(getattr(incompatible, "unexpected_keys", []))
+
+    if missing_keys or unexpected_keys:
+        logger.warning("State dict mismatch detected.")
+        logger.warning("  Missing keys (%d): %s", len(missing_keys), missing_keys[:50])
+        logger.warning("  Unexpected keys (%d): %s", len(unexpected_keys), unexpected_keys[:50])
+
+        if STRICT_CHECKPOINT_LOADING:
+            raise RuntimeError(
+                f"Checkpoint/model architecture mismatch. missing={len(missing_keys)}, unexpected={len(unexpected_keys)}"
+            )
 
     logger.info(f"Model loaded from epoch {checkpoint['epoch']}. Start testing...")
 
     model.eval()
-    all_labels, all_preds, all_probs = [], [], []
+    all_labels: List[float] = []
+    all_preds: List[float] = []
+    all_probs: List[float] = []
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(test_loader):
@@ -543,8 +607,7 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)
             concept_vector = concept_vector.to(device)
-            labels = labels.to(device).float()
-            labels = _ensure_1d(labels)
+            labels = _ensure_1d(labels.to(device).float())
 
             logits = model(
                 student_ids,
@@ -554,12 +617,12 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
                 return_logits=True,
             )
             logits = _ensure_1d(logits)
-            probs = _sigmoid_np(logits)
+            probs = _sigmoid_torch(logits)
             preds = (probs > 0.5).float()
 
-            all_labels.extend(labels.cpu().numpy())
-            all_preds.extend(preds.cpu().numpy())
-            all_probs.extend(probs.cpu().numpy())
+            all_labels.extend(labels.detach().cpu().numpy().tolist())
+            all_preds.extend(preds.detach().cpu().numpy().tolist())
+            all_probs.extend(probs.detach().cpu().numpy().tolist())
 
             if (batch_idx + 1) % 200 == 0:
                 logger.info(f"[Test] {batch_idx + 1}/{len(test_loader)} batches done, samples={len(all_labels)}")

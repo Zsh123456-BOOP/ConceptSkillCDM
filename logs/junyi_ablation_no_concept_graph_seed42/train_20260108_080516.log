@@ -1,0 +1,118 @@
+2026-01-08 08:05:16,502 - INFO - Arguments:
+2026-01-08 08:05:16,502 - INFO -   ablate_concept_graph: True
+2026-01-08 08:05:16,502 - INFO -   ablate_skill_encoder: False
+2026-01-08 08:05:16,502 - INFO -   ablate_soft_prototype: False
+2026-01-08 08:05:16,502 - INFO -   batch_size: 512
+2026-01-08 08:05:16,502 - INFO -   data_dir: ./data/junyi
+2026-01-08 08:05:16,502 - INFO -   dataset_name: junyi
+2026-01-08 08:05:16,502 - INFO -   disable_q_conditioning: False
+2026-01-08 08:05:16,502 - INFO -   disable_self_loop: False
+2026-01-08 08:05:16,502 - INFO -   disable_soft_prototype: False
+2026-01-08 08:05:16,502 - INFO -   dropout: 0.4
+2026-01-08 08:05:16,502 - INFO -   early_stop_patience: 3
+2026-01-08 08:05:16,502 - INFO -   epochs: 100
+2026-01-08 08:05:16,502 - INFO -   exercise_dim: 128
+2026-01-08 08:05:16,502 - INFO -   exercise_l2_lambda: 5e-05
+2026-01-08 08:05:16,502 - INFO -   generate_diagnosis: False
+2026-01-08 08:05:16,502 - INFO -   gnn_residual_weight: 0.5
+2026-01-08 08:05:16,503 - INFO -   gpu_candidates: None
+2026-01-08 08:05:16,503 - INFO -   graph_topk: None
+2026-01-08 08:05:16,503 - INFO -   knowledge_dim: 128
+2026-01-08 08:05:16,503 - INFO -   lambda_alpha: 0.0
+2026-01-08 08:05:16,503 - INFO -   lambda_proto_div: 0.0
+2026-01-08 08:05:16,503 - INFO -   lambda_proto_usage: 0.0
+2026-01-08 08:05:16,503 - INFO -   lambda_sparse: 0.05
+2026-01-08 08:05:16,503 - INFO -   lambda_sparse_personal: 0.0
+2026-01-08 08:05:16,503 - INFO -   learning_rate: 0.003
+2026-01-08 08:05:16,503 - INFO -   log_dir: logs/junyi_ablation_no_concept_graph_seed42
+2026-01-08 08:05:16,503 - INFO -   min_exer_interactions: 0
+2026-01-08 08:05:16,503 - INFO -   min_poison_count: 0
+2026-01-08 08:05:16,503 - INFO -   min_stu_interactions: 15
+2026-01-08 08:05:16,503 - INFO -   model_variant: gpd_base_no_concept_graph
+2026-01-08 08:05:16,503 - INFO -   no_cuda: False
+2026-01-08 08:05:16,503 - INFO -   num_gnn_layers: 0
+2026-01-08 08:05:16,503 - INFO -   num_prototypes: 3
+2026-01-08 08:05:16,503 - INFO -   num_relation_heads: 4
+2026-01-08 08:05:16,503 - INFO -   num_workers: 4
+2026-01-08 08:05:16,503 - INFO -   patience: 1
+2026-01-08 08:05:16,503 - INFO -   personal_rank: 4
+2026-01-08 08:05:16,503 - INFO -   proto_lambda: 0.5
+2026-01-08 08:05:16,503 - INFO -   proto_tau: 1.0
+2026-01-08 08:05:16,503 - INFO -   save_dir: checkpoints/junyi_ablation_no_concept_graph_seed42
+2026-01-08 08:05:16,503 - INFO -   save_interval: 10
+2026-01-08 08:05:16,503 - INFO -   seed: 42
+2026-01-08 08:05:16,503 - INFO -   skill_dim: 2
+2026-01-08 08:05:16,503 - INFO -   use_concept_graph: False
+2026-01-08 08:05:16,504 - INFO -   use_exercise_graph: False
+2026-01-08 08:05:16,504 - INFO -   use_mf_branch: True
+2026-01-08 08:05:16,504 - INFO -   use_personal_graph: 0
+2026-01-08 08:05:16,504 - INFO -   use_skill_encoder: True
+2026-01-08 08:05:16,504 - INFO -   use_soft_prototype: True
+2026-01-08 08:05:16,504 - INFO -   weight_decay: 0.001
+2026-01-08 08:05:16,625 - INFO - Using device: cuda:0 (physical gpu 3)
+2026-01-08 08:05:16,626 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Loading datasets...
+2026-01-08 08:05:16,626 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Regularization: graph_entropy(lambda_sparse)=0.050000, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000000, alpha_penalty=0.000000, mf_l2(exercise_l2_lambda)=0.000050
+2026-01-08 08:05:16,805 - INFO - [数据清洗] 学生交互次数 < 15 次的学生：共移除 0 个学生（仅统计用户数）
+2026-01-08 08:05:16,831 - INFO - [数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 0 条记录。
+2026-01-08 08:05:16,832 - INFO - [数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。
+2026-01-08 08:05:16,832 - INFO - [数据清洗] 跳过毒题清洗（min_poison_count <= 0）。
+2026-01-08 08:05:36,124 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Train samples: 262473, Val samples: 24299
+2026-01-08 08:05:36,125 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Number of students: 10000
+2026-01-08 08:05:36,125 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Number of exercises: 706
+2026-01-08 08:05:36,125 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Number of concepts: 706
+2026-01-08 08:05:36,125 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Creating model...
+2026-01-08 08:05:36,126 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Ablation switches: use_soft_prototype=True, use_mf_branch=True, use_concept_graph=False (effective num_gnn_layers=0, num_prototypes=3)
+2026-01-08 08:05:36,406 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Total parameters: 1,584,002
+2026-01-08 08:05:36,406 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Trainable parameters: 1,584,002
+2026-01-08 08:05:38,255 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Starting training...
+2026-01-08 08:05:47,934 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [001/100] | Train: Loss=0.6213, BCE=0.6213, Reg=0.0000, AUC=0.6384, ACC=0.6457, RMSE=0.4653 | Val: Loss=0.5496, BCE=0.5496, Reg=0.0000, AUC=0.7700, ACC=0.7082, RMSE=0.4313
+2026-01-08 08:05:48,252 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> New best AUC=0.7700 at epoch 1
+2026-01-08 08:05:57,158 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [002/100] | Train: Loss=0.5434, BCE=0.5434, Reg=0.0000, AUC=0.7792, ACC=0.7128, RMSE=0.4282 | Val: Loss=0.5255, BCE=0.5255, Reg=0.0000, AUC=0.7894, ACC=0.7426, RMSE=0.4192
+2026-01-08 08:05:57,566 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> New best AUC=0.7894 at epoch 2
+2026-01-08 08:06:06,271 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [003/100] | Train: Loss=0.5262, BCE=0.5262, Reg=0.0000, AUC=0.7929, ACC=0.7376, RMSE=0.4196 | Val: Loss=0.5165, BCE=0.5165, Reg=0.0000, AUC=0.7941, ACC=0.7479, RMSE=0.4150
+2026-01-08 08:06:06,603 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> New best AUC=0.7941 at epoch 3
+2026-01-08 08:06:15,637 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [004/100] | Train: Loss=0.5172, BCE=0.5172, Reg=0.0000, AUC=0.8000, ACC=0.7457, RMSE=0.4151 | Val: Loss=0.5118, BCE=0.5118, Reg=0.0000, AUC=0.7996, ACC=0.7566, RMSE=0.4121
+2026-01-08 08:06:15,977 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> New best AUC=0.7996 at epoch 4
+2026-01-08 08:06:24,232 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [005/100] | Train: Loss=0.5124, BCE=0.5124, Reg=0.0000, AUC=0.8036, ACC=0.7498, RMSE=0.4127 | Val: Loss=0.5054, BCE=0.5054, Reg=0.0000, AUC=0.8036, ACC=0.7597, RMSE=0.4090
+2026-01-08 08:06:24,561 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> New best AUC=0.8036 at epoch 5
+2026-01-08 08:06:33,117 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [006/100] | Train: Loss=0.5096, BCE=0.5096, Reg=0.0000, AUC=0.8056, ACC=0.7515, RMSE=0.4112 | Val: Loss=0.5049, BCE=0.5049, Reg=0.0000, AUC=0.8023, ACC=0.7576, RMSE=0.4091
+2026-01-08 08:06:33,118 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.8036 @ 5)
+2026-01-08 08:06:41,662 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [007/100] | Train: Loss=0.5076, BCE=0.5076, Reg=0.0000, AUC=0.8072, ACC=0.7540, RMSE=0.4102 | Val: Loss=0.5057, BCE=0.5057, Reg=0.0000, AUC=0.8032, ACC=0.7617, RMSE=0.4092
+2026-01-08 08:06:41,662 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> No improvement 2 epoch(s) (best AUC=0.8036 @ 5)
+2026-01-08 08:06:50,357 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [008/100] | Train: Loss=0.5069, BCE=0.5069, Reg=0.0000, AUC=0.8075, ACC=0.7542, RMSE=0.4099 | Val: Loss=0.5020, BCE=0.5020, Reg=0.0000, AUC=0.8053, ACC=0.7608, RMSE=0.4075
+2026-01-08 08:06:50,721 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> New best AUC=0.8053 at epoch 8
+2026-01-08 08:07:00,398 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [009/100] | Train: Loss=0.5055, BCE=0.5055, Reg=0.0000, AUC=0.8085, ACC=0.7551, RMSE=0.4093 | Val: Loss=0.5019, BCE=0.5019, Reg=0.0000, AUC=0.8058, ACC=0.7610, RMSE=0.4075
+2026-01-08 08:07:00,730 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> New best AUC=0.8058 at epoch 9
+2026-01-08 08:07:09,722 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [010/100] | Train: Loss=0.5054, BCE=0.5054, Reg=0.0000, AUC=0.8087, ACC=0.7553, RMSE=0.4091 | Val: Loss=0.5021, BCE=0.5021, Reg=0.0000, AUC=0.8061, ACC=0.7623, RMSE=0.4074
+2026-01-08 08:07:10,065 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> New best AUC=0.8061 at epoch 10
+2026-01-08 08:07:10,129 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Checkpoint saved: checkpoints/junyi_ablation_no_concept_graph_seed42/checkpoint_epoch_10.pth
+2026-01-08 08:07:19,212 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [011/100] | Train: Loss=0.5054, BCE=0.5054, Reg=0.0000, AUC=0.8084, ACC=0.7547, RMSE=0.4092 | Val: Loss=0.5009, BCE=0.5009, Reg=0.0000, AUC=0.8055, ACC=0.7611, RMSE=0.4072
+2026-01-08 08:07:19,213 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.8061 @ 10)
+2026-01-08 08:07:28,751 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [012/100] | Train: Loss=0.5046, BCE=0.5046, Reg=0.0000, AUC=0.8088, ACC=0.7550, RMSE=0.4088 | Val: Loss=0.5014, BCE=0.5014, Reg=0.0000, AUC=0.8053, ACC=0.7617, RMSE=0.4072
+2026-01-08 08:07:28,752 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> No improvement 2 epoch(s) (best AUC=0.8061 @ 10)
+2026-01-08 08:07:38,204 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [013/100] | Train: Loss=0.5041, BCE=0.5041, Reg=0.0000, AUC=0.8088, ACC=0.7542, RMSE=0.4087 | Val: Loss=0.4978, BCE=0.4978, Reg=0.0000, AUC=0.8083, ACC=0.7618, RMSE=0.4056
+2026-01-08 08:07:38,548 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> New best AUC=0.8083 at epoch 13
+2026-01-08 08:07:48,135 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [014/100] | Train: Loss=0.5043, BCE=0.5043, Reg=0.0000, AUC=0.8087, ACC=0.7543, RMSE=0.4087 | Val: Loss=0.4997, BCE=0.4997, Reg=0.0000, AUC=0.8052, ACC=0.7612, RMSE=0.4064
+2026-01-08 08:07:48,136 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.8083 @ 13)
+2026-01-08 08:07:57,731 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [015/100] | Train: Loss=0.5042, BCE=0.5042, Reg=0.0000, AUC=0.8090, ACC=0.7540, RMSE=0.4086 | Val: Loss=0.4975, BCE=0.4975, Reg=0.0000, AUC=0.8075, ACC=0.7637, RMSE=0.4052
+2026-01-08 08:07:57,732 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> No improvement 2 epoch(s) (best AUC=0.8083 @ 13)
+2026-01-08 08:08:07,487 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Epoch [016/100] | Train: Loss=0.5044, BCE=0.5044, Reg=0.0000, AUC=0.8089, ACC=0.7544, RMSE=0.4087 | Val: Loss=0.4988, BCE=0.4988, Reg=0.0000, AUC=0.8067, ACC=0.7633, RMSE=0.4060
+2026-01-08 08:08:07,488 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] -> No improvement 3 epoch(s) (best AUC=0.8083 @ 13)
+2026-01-08 08:08:07,488 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Early stopping at epoch 16 (best AUC=0.8083 @ 13)
+2026-01-08 08:08:07,497 - INFO - Epoch-wise metrics saved to checkpoints/junyi_ablation_no_concept_graph_seed42/metrics_history.csv
+2026-01-08 08:08:07,498 - INFO - [junyi|gpd_base_no_concept_graph|lr=0.003|drop=0.40] Training completed! Best Val AUC=0.8083 @ epoch 13
+2026-01-08 08:08:07,715 - INFO - Using device: cuda:0 (physical gpu 3)
+2026-01-08 08:08:07,716 - INFO - Loading model from checkpoints/junyi_ablation_no_concept_graph_seed42/best_model.pth...
+2026-01-08 08:08:08,602 - INFO - Inference switches: use_soft_prototype=True, use_mf_branch=True, use_concept_graph=False (effective num_gnn_layers=0, num_prototypes=3)
+2026-01-08 08:08:08,714 - INFO - Model loaded from epoch 13. Start testing...
+2026-01-08 08:08:09,904 - INFO - 
+==================================================
+2026-01-08 08:08:09,904 - INFO - Test Results:
+2026-01-08 08:08:09,905 - INFO - AUC: 0.8135
+2026-01-08 08:08:09,905 - INFO - ACC: 0.7544
+2026-01-08 08:08:09,905 - INFO - RMSE: 0.4102
+2026-01-08 08:08:09,905 - INFO - ==================================================
+2026-01-08 08:08:09,926 - INFO - Summary appended to /home/zsh/ConceptSkillCDM/results/experiment_results.csv
+2026-01-08 08:08:09,964 - INFO - Run completed.
+2026-01-08 08:08:09,964 - INFO - Best validation AUC: 0.8083 at epoch 13
+2026-01-08 08:08:09,964 - INFO - Test metrics - AUC: 0.8135, ACC: 0.7544, RMSE: 0.4102

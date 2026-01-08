@@ -2,14 +2,13 @@
 """
 Cognitive Diagnosis Model - Reviewer-friendly Dual-Branch Version
 
-Design goals (harder to criticize):
-1) Cognitive Branch: standard 2PL IRT at item-level (a_e, b_e),
-   student ability computed from concept-level theta and Q-masked mean.
-2) Neural Branch: Q-conditioned MF residual (student latent × (item base + q-projected concept latent)).
-3) Fusion: gated residual (logit = irt_logit + gate * mf_logit), gate is actually used.
-4) Graph: learned concept adjacency with entropy sparsity;
-   optional personalized adjacency is truly used (second-pass re-encoding).
-5) Training stability: expose logits for BCEWithLogitsLoss (recommended).
+Fixes included (as requested):
+1) Personal graph sparsity regularizer: replaced ineffective abs(mean) with row-entropy (meaningful under row-stochastic).
+2) return_logits semantics: now respected end-to-end (model.forward no longer hard-codes return_logits=False in head).
+3) NaN guard for degenerate concept size (C==1) when self-loop is disabled: safe fallback.
+4) AMP / mixed-precision stability: adjacency is cast to Wh.dtype before matmul in ConceptGraphConv.
+5) Optional weight sharing: concept embeddings used for relation learning and knowledge encoding are tied when concept graph is enabled
+   (removes the “two unrelated concept embedding spaces” ambiguity).
 """
 
 import math
@@ -18,7 +17,7 @@ from typing import Tuple, Optional, Dict, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils import parametrizations  # ✅ new API (no deprecation warning)
+from torch.nn.utils import parametrizations  # new API (no deprecation warning)
 
 
 # ======================================================
@@ -51,6 +50,7 @@ class MultiHeadRelationLearning(nn.Module):
         self.topk = topk
         self.allow_self_loop = bool(allow_self_loop)
 
+        # Will be optionally tied to knowledge_encoder.concept_emb.weight in the main model
         self.concept_embeddings = nn.Parameter(torch.randn(num_concepts, concept_dim) * 0.02)
 
         self.Wq = nn.ModuleList([nn.Linear(concept_dim, concept_dim, bias=False) for _ in range(num_heads)])
@@ -62,16 +62,14 @@ class MultiHeadRelationLearning(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self._initialize_weights()
 
-    def _initialize_weights(self):
+    def _initialize_weights(self) -> None:
         nn.init.xavier_normal_(self.concept_embeddings)
         for m in list(self.Wq) + list(self.Wk):
             nn.init.xavier_normal_(m.weight)
 
     @staticmethod
     def _apply_topk(scores: torch.Tensor, k: int) -> torch.Tensor:
-        """
-        Hard keep top-k per row. Use -inf for masked entries so softmax yields exact 0.
-        """
+        """Hard keep top-k per row. Use -inf for masked entries so softmax yields exact 0."""
         vals, idx = torch.topk(scores, k=k, dim=-1)
         masked = torch.full_like(scores, float("-inf"))
         masked.scatter_(dim=-1, index=idx, src=vals)
@@ -85,6 +83,13 @@ class MultiHeadRelationLearning(nn.Module):
         """
         C, D = self.num_concepts, self.concept_dim
         x = self.concept_embeddings  # (C, D)
+
+        # ---- Degenerate guard: C==1 ----
+        # If C==1 and self-loop is disabled, masking would create all -inf => softmax NaN.
+        # Safe fallback: always return identity adjacency for C==1.
+        if C == 1:
+            A = torch.ones((self.num_heads, 1, 1), device=x.device, dtype=x.dtype)
+            return A, x
 
         tau = F.softplus(self.tau_raw) + 1e-6  # (H,)
         rels = []
@@ -102,9 +107,23 @@ class MultiHeadRelationLearning(nn.Module):
             if self.topk is not None and 0 < self.topk < C:
                 scores = self._apply_topk(scores, self.topk)
 
-            A = F.softmax(scores, dim=-1)      # row-stochastic
-            A = self.dropout(A)               # drop edges
-            A = A / (A.sum(dim=-1, keepdim=True) + 1e-12)  # re-normalize
+            A = F.softmax(scores, dim=-1)  # row-stochastic
+
+            # Edge dropout can, in rare cases, zero-out an entire row; guard it.
+            A = self.dropout(A)
+            row_sum = A.sum(dim=-1, keepdim=True)
+
+            if self.allow_self_loop:
+                # For any zero-sum row, restore a self-loop so normalization is safe & meaningful.
+                zero_rows = (row_sum.squeeze(-1) < 1e-12)  # (C,)
+                if zero_rows.any():
+                    A = A.clone()
+                    idx = torch.nonzero(zero_rows, as_tuple=False).squeeze(-1)
+                    A[idx, :] = 0.0
+                    A[idx, idx] = 1.0
+                    row_sum = A.sum(dim=-1, keepdim=True)
+
+            A = A / (row_sum + 1e-12)  # re-normalize
 
             rels.append(A)
 
@@ -114,8 +133,7 @@ class MultiHeadRelationLearning(nn.Module):
     def get_entropy_sparsity(self, relation_matrices: torch.Tensor) -> torch.Tensor:
         """
         Row entropy sparsity:
-        - Under row-stochastic constraint, L1/L2 is less meaningful.
-        - Entropy encourages peaky distributions => practical sparsity.
+        Minimizing entropy encourages peaky distributions => practical sparsity under row-stochastic constraint.
         """
         A = relation_matrices.clamp(min=1e-12)
         entropy = -(A * A.log()).sum(dim=-1).mean()
@@ -140,7 +158,7 @@ class ConceptGraphConv(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self._initialize_weights()
 
-    def _initialize_weights(self):
+    def _initialize_weights(self) -> None:
         for t in self.head_transforms:
             nn.init.xavier_normal_(t.weight)
 
@@ -158,13 +176,18 @@ class ConceptGraphConv(nn.Module):
             Wh = self.head_transforms[h](x)  # (B, C, Dout)
 
             if relation_matrices.dim() == 3:
+                # (H,C,C) -> use h-th adjacency
                 A = relation_matrices[h]  # (C, C)
+                # AMP safety: cast A to Wh dtype
+                A = A.to(dtype=Wh.dtype)
                 A = A / (A.sum(dim=-1, keepdim=True) + 1e-12)
-                out = torch.matmul(A, Wh)  # broadcast matmul -> (B, C, Dout)
+                out = torch.matmul(A, Wh)  # (C,C) @ (B,C,D) -> (B,C,D)
             else:
+                # (B,H,C,C) -> use per-batch adjacency
                 A = relation_matrices[:, h, :, :]  # (B, C, C)
+                A = A.to(dtype=Wh.dtype)
                 A = A / (A.sum(dim=-1, keepdim=True) + 1e-12)
-                out = torch.bmm(A, Wh)  # (B, C, Dout)
+                out = torch.bmm(A, Wh)  # (B,C,C) @ (B,C,D) -> (B,C,D)
 
             outputs.append(out)
 
@@ -217,7 +240,7 @@ class StudentKnowledgeEncoder(nn.Module):
 
         self._initialize_weights()
 
-    def _initialize_weights(self):
+    def _initialize_weights(self) -> None:
         nn.init.xavier_normal_(self.student_global.weight)
         nn.init.xavier_normal_(self.concept_emb.weight)
 
@@ -246,7 +269,7 @@ class StudentLatentEncoder(nn.Module):
         self.bias = nn.Embedding(num_students, 1)
         self._initialize_weights()
 
-    def _initialize_weights(self):
+    def _initialize_weights(self) -> None:
         nn.init.xavier_normal_(self.latent_emb.weight)
         nn.init.zeros_(self.bias.weight)
 
@@ -258,10 +281,10 @@ class StudentLatentEncoder(nn.Module):
 
 class ExerciseDifficultyEncoder(nn.Module):
     """
-    Item parameterization (reviewer-friendly):
+    Item parameterization:
     - IRT: item scalars b_e (difficulty) and a_e (discrimination>0)  [2PL]
     - Neural: item latent = base_item_latent + q_gate * (Q-normalized concept latent mix)
-      This makes MF branch Q-conditioned (harder to accuse pure ID memorization).
+      This makes MF branch Q-conditioned.
     """
 
     def __init__(
@@ -304,7 +327,7 @@ class ExerciseDifficultyEncoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self._initialize_weights()
 
-    def _initialize_weights(self):
+    def _initialize_weights(self) -> None:
         if self.use_mf_branch:
             nn.init.xavier_normal_(self.exercise_latent.weight)
             nn.init.zeros_(self.exercise_bias.weight)
@@ -326,7 +349,7 @@ class ExerciseDifficultyEncoder(nn.Module):
             a:               (B,) discrimination > 0
         """
         if self.use_mf_branch:
-            base = self.exercise_latent(exercise_ids)          # (B, De)
+            base = self.exercise_latent(exercise_ids)              # (B, De)
             e_bias = self.exercise_bias(exercise_ids).squeeze(-1)  # (B,)
 
             if self.use_q_conditioning:
@@ -376,11 +399,9 @@ class ResponsePredictionHead(nn.Module):
         super().__init__()
         self.use_mf_branch = bool(use_mf_branch)
 
-        # ✅ Use new parametrizations.weight_norm (no FutureWarning)
         self.theta_proj = parametrizations.weight_norm(nn.Linear(knowledge_dim, 1, bias=True))
 
         if self.use_mf_branch:
-            # MF projections
             self.u_proj = nn.Linear(student_latent_dim, mf_dim, bias=False)
             self.v_proj = nn.Linear(exercise_dim, mf_dim, bias=False)
             nn.init.xavier_normal_(self.u_proj.weight)
@@ -389,10 +410,9 @@ class ResponsePredictionHead(nn.Module):
             self.mf_scale_raw = nn.Parameter(torch.tensor(1.0))
             self.mf_bias = nn.Parameter(torch.zeros(1))
 
-            # Gate: use [irt_logit, mf_logit] -> sigmoid
             self.fusion_gate = nn.Linear(2, 1)
             nn.init.zeros_(self.fusion_gate.bias)
-            nn.init.constant_(self.fusion_gate.weight, 0.0)  # start at gate ~ 0.5
+            nn.init.constant_(self.fusion_gate.weight, 0.0)
         else:
             self.u_proj = None
             self.v_proj = None
@@ -441,6 +461,10 @@ class ResponsePredictionHead(nn.Module):
             return prob, total_logit, details
 
         # --- Neural / MF residual (cosine + scale) ---
+        # (These should not be None if use_mf_branch=True; keep explicit for safety)
+        if student_latent is None or exercise_latent is None or student_bias is None or exercise_bias is None:
+            raise RuntimeError("MF branch is enabled but MF inputs are None. Check ablation wiring.")
+
         u = self.u_proj(student_latent)
         v = self.v_proj(exercise_latent)
         u = F.normalize(u, dim=-1)
@@ -522,7 +546,7 @@ class PersonalRelationGenerator(nn.Module):
         u = self.to_u(student_repr).view(B, self.num_concepts, self.rank)
         v = self.to_v(student_repr).view(B, self.num_concepts, self.rank)
         scores = torch.bmm(u, v.transpose(1, 2))  # (B,C,C)
-        A = F.softmax(scores, dim=-1)            # row-stochastic
+        A = F.softmax(scores, dim=-1)             # row-stochastic
         return A
 
 
@@ -617,6 +641,12 @@ class CognitiveDiagnosisModel(nn.Module):
             gnn_residual_weight=gnn_residual_weight,
         )
 
+        # ---- Optional weight tying: make graph concept embeddings == encoder concept embeddings ----
+        # This resolves the “two separate concept embedding spaces” ambiguity.
+        if self.use_concept_graph and self.relation_learning is not None:
+            if self.knowledge_encoder.concept_emb.weight.shape == self.relation_learning.concept_embeddings.shape:
+                self.knowledge_encoder.concept_emb.weight = self.relation_learning.concept_embeddings
+
         if self.use_mf_branch:
             self.skill_encoder = StudentLatentEncoder(num_students, latent_dim=skill_dim)
         else:
@@ -642,6 +672,7 @@ class CognitiveDiagnosisModel(nn.Module):
         )
 
         self.register_buffer("q_matrix", q_matrix)
+
         identity = torch.eye(num_concepts, dtype=torch.float32)
         identity = identity.unsqueeze(0).repeat(self.num_relation_heads, 1, 1)
         self.register_buffer("identity_relations", identity)
@@ -657,6 +688,12 @@ class CognitiveDiagnosisModel(nn.Module):
         else:
             self.adaptive_gate = None
             self.personal_generator = None
+
+    @staticmethod
+    def _row_entropy(A: torch.Tensor) -> torch.Tensor:
+        """Row entropy for row-stochastic matrices. Lower entropy => peakier => sparser in practice."""
+        A = A.clamp(min=1e-12)
+        return -(A * A.log()).sum(dim=-1).mean()
 
     def forward(
         self,
@@ -688,7 +725,7 @@ class CognitiveDiagnosisModel(nn.Module):
         knowledge_state = self.knowledge_encoder(student_ids, relation_matrices)  # (B,C,D)
         student_repr = knowledge_state.mean(dim=1)  # (B,D)
 
-        # 4) optional personal graph (ACTUALLY USED): generate, mix, re-encode
+        # 4) optional personal graph (used): generate, mix, re-encode
         gate_alpha = None
         personal_matrices = None
         relation_used = relation_matrices
@@ -707,7 +744,7 @@ class CognitiveDiagnosisModel(nn.Module):
             knowledge_state = self.knowledge_encoder(student_ids, relation_used)
             student_repr = knowledge_state.mean(dim=1)
 
-        # 5) optional prototype correction (ACTUALLY USED)
+        # 5) optional prototype correction (used)
         proto_mix = None
         proto_assign = None
         if self.use_soft_prototype and self.prototype_module is not None:
@@ -720,19 +757,34 @@ class CognitiveDiagnosisModel(nn.Module):
             student_latent, student_bias = self.skill_encoder(student_ids)
         else:
             student_latent, student_bias = None, None
+
         exercise_latent, exercise_bias, b, a = self.exercise_encoder(exercise_ids, concept_mask=q_vector)
 
-        # 7) prediction
-        prob, logits, head_details = self.prediction_head(
-            knowledge_state=knowledge_state,
-            concept_mask=q_vector,
-            b=b, a=a,
-            student_latent=student_latent,
-            student_bias=student_bias,
-            exercise_latent=exercise_latent,
-            exercise_bias=exercise_bias,
-            return_logits=False,
-        )
+        # 7) prediction (FIX: respect return_logits)
+        if return_details:
+            prob, logits, head_details = self.prediction_head(
+                knowledge_state=knowledge_state,
+                concept_mask=q_vector,
+                b=b, a=a,
+                student_latent=student_latent,
+                student_bias=student_bias,
+                exercise_latent=exercise_latent,
+                exercise_bias=exercise_bias,
+                return_logits=False,
+            )
+        else:
+            logits = self.prediction_head(
+                knowledge_state=knowledge_state,
+                concept_mask=q_vector,
+                b=b, a=a,
+                student_latent=student_latent,
+                student_bias=student_bias,
+                exercise_latent=exercise_latent,
+                exercise_bias=exercise_bias,
+                return_logits=True,
+            )
+            prob = torch.sigmoid(logits)
+            head_details = None
 
         # return formatting
         if not return_details and not return_logits:
@@ -749,8 +801,10 @@ class CognitiveDiagnosisModel(nn.Module):
             "irt_b": b,
             "irt_a": a,
             "logits": logits,
-            **head_details,
         }
+        if head_details is not None:
+            details.update(head_details)
+
         if self.use_mf_branch:
             details["student_latent"] = student_latent
             details["exercise_latent"] = exercise_latent
@@ -778,11 +832,13 @@ class CognitiveDiagnosisModel(nn.Module):
         (2) L2 on MF/IRT embeddings (weight = self.mf_l2_lambda)
         (3) Prototype diversity/usage (optional)
         (4) Personal graph sparsity + alpha penalty (optional)
+
+        FIX: personal graph sparsity now uses row-entropy (meaningful under row-stochastic constraint).
         """
         device = relation_matrices.device
         reg = torch.tensor(0.0, device=device)
 
-        # (1) graph entropy sparsity
+        # (1) global graph entropy sparsity
         if self.use_concept_graph and self.relation_learning is not None and self.lambda_graph_entropy > 0:
             entropy = self.relation_learning.get_entropy_sparsity(relation_matrices)
             reg = reg + self.lambda_graph_entropy * entropy
@@ -822,7 +878,8 @@ class CognitiveDiagnosisModel(nn.Module):
         # (4) personal graph regularizers
         if self.use_personal_graph and details is not None:
             if "personal_matrices" in details and self.lambda_sparse_personal > 0:
-                reg = reg + self.lambda_sparse_personal * details["personal_matrices"].abs().mean()
+                # FIX: entropy sparsity is meaningful for row-stochastic personal adjacency
+                reg = reg + self.lambda_sparse_personal * self._row_entropy(details["personal_matrices"])
             if "alpha" in details and self.lambda_alpha > 0:
                 reg = reg + self.lambda_alpha * details["alpha"].mean()
 
@@ -843,6 +900,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 rel, _ = self.relation_learning()
             else:
                 rel = self.identity_relations
+
             ks = self.knowledge_encoder(sid, rel).squeeze(0)  # (C,D)
             mastery = torch.sigmoid(self.prediction_head.theta_proj(ks).squeeze(-1))  # (C,)
 
