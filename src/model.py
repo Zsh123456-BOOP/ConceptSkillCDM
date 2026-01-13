@@ -200,14 +200,29 @@ class ConceptGraphConv(nn.Module):
         for h in range(self.num_heads):
             Wh = self.head_transforms[h](x)  # (B, C, Dout)
 
-            if relation_matrices.dim() == 3:
+            if isinstance(relation_matrices, dict):
+                # 优化路径：个性化图混合，逐 head 计算避免 4D 张量
+                global_A = relation_matrices["global_matrices"][h]  # (C, C)
+                personal_A = relation_matrices["personal_matrices"]  # (B, C, C)
+                gate = relation_matrices["gate_alpha"].view(-1, 1, 1)  # (B, 1, 1)
+                
+                global_A = global_A.to(dtype=Wh.dtype)
+                personal_A = personal_A.to(dtype=Wh.dtype)
+                
+                # 混合：A = (1-gate)*global + gate*personal，逐样本计算
+                global_A_expanded = global_A.unsqueeze(0)  # (1, C, C)
+                A = (1.0 - gate) * global_A_expanded + gate * personal_A  # (B, C, C)
+                A = A / (A.sum(dim=-1, keepdim=True) + 1e-12)
+                out = torch.bmm(A, Wh)  # (B,C,C) @ (B,C,D) -> (B,C,D)
+                
+            elif relation_matrices.dim() == 3:
                 # 全局邻接
                 A = relation_matrices[h]  # (C, C)
                 A = A.to(dtype=Wh.dtype)  # Fix #4
                 A = A / (A.sum(dim=-1, keepdim=True) + 1e-12)
                 out = torch.matmul(A, Wh)  # (C,C) @ (B,C,D) -> (B,C,D)
             else:
-                # 个性化邻接
+                # 4D 个性化邻接（兼容旧代码）
                 A = relation_matrices[:, h, :, :]  # (B, C, C)
                 A = A.to(dtype=Wh.dtype)  # Fix #4
                 A = A / (A.sum(dim=-1, keepdim=True) + 1e-12)
@@ -752,6 +767,7 @@ class ConceptStructureModeling(nn.Module):
         student_repr = knowledge_state.mean(dim=1)                                # (B,D)
 
         # 3) 个性化图（E，可选）：生成并混合，再编码第二遍
+        #    优化：避免创建 (B,H,C,C) 4D 张量，改用逐 head 计算
         gate_alpha = None
         personal_matrices = None
         relation_used = relation_matrices
@@ -760,17 +776,21 @@ class ConceptStructureModeling(nn.Module):
             gate_alpha = self.adaptive_gate(student_repr)              # (B,1,1,1)
             personal_matrices = self.personal_generator(student_repr)  # (B,C,C)
 
-            H = relation_matrices.size(0)
-            base = relation_matrices.unsqueeze(0).expand(B, -1, -1, -1)      # (B,H,C,C)
-            pers = personal_matrices.unsqueeze(1).expand(-1, H, -1, -1)      # (B,H,C,C)
-            relation_used = (1.0 - gate_alpha) * base + gate_alpha * pers    # (B,H,C,C)
+            # 优化：不展开为 (B,H,C,C)，而是保存 gate_alpha 和 personal_matrices
+            # 让 GNN 层在需要时逐 head 混合，减少显存占用
+            # relation_used 改为字典传递必要信息
+            relation_used = {
+                "global_matrices": relation_matrices,        # (H,C,C)
+                "personal_matrices": personal_matrices,      # (B,C,C)
+                "gate_alpha": gate_alpha.squeeze(-1).squeeze(-1).squeeze(-1),  # (B,)
+            }
 
             knowledge_state = self.knowledge_encoder(student_ids, relation_used)
             student_repr = knowledge_state.mean(dim=1)
 
         return {
             "relation_matrices": relation_matrices,
-            "relation_used": relation_used,
+            "relation_used": relation_used if isinstance(relation_used, torch.Tensor) else relation_matrices,
             "knowledge_state": knowledge_state,
             "student_repr": student_repr,
             "alpha": gate_alpha,
@@ -1219,10 +1239,13 @@ class CognitiveDiagnosisModel(nn.Module):
                 reg = reg + lambda_proto_usage * proto_usage
 
         # (4) 个性化图正则（仅 personal graph 存在时）
+        #     优化：检查 personal_matrices 是否为 None，避免空值错误
         if self.enable_module1 and self.use_personal_graph and details is not None:
-            if "personal_matrices" in details and self.lambda_sparse_personal > 0:
-                reg = reg + self.lambda_sparse_personal * self._row_entropy(details["personal_matrices"])
-            if "alpha" in details and self.lambda_alpha > 0:
+            if "personal_matrices" in details and details["personal_matrices"] is not None and self.lambda_sparse_personal > 0:
+                # 正则项不需要完整梯度图，使用更小的张量计算
+                pm = details["personal_matrices"]
+                reg = reg + self.lambda_sparse_personal * self._row_entropy(pm)
+            if "alpha" in details and details["alpha"] is not None and self.lambda_alpha > 0:
                 reg = reg + self.lambda_alpha * details["alpha"].mean()
 
         return reg

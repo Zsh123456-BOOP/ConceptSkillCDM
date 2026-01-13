@@ -3,10 +3,12 @@ import json
 import os
 from typing import Tuple, Dict, Any, Optional, Union, List
 
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from src.dataset import CognitiveDiagnosisDataset, create_dataloaders
@@ -678,3 +680,101 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         logger.info(f"Student diagnosis reports saved to {diagnosis_path}")
 
     return metrics, results
+
+
+def save_component_analysis_data(
+    model: CognitiveDiagnosisModel,
+    train_loader: DataLoader,
+    device: torch.device,
+    save_dir: str,
+    logger,
+    num_samples: int = 100,
+) -> Dict[str, Any]:
+    """
+    保存组件可视化分析所需的数据：
+    1. Prototype 向量和相似度矩阵
+    2. 全局概念图 relation_matrices
+    3. Gate Alpha 分布（个性化图混合系数）
+    4. 个性化图采样
+    """
+    model.eval()
+    analysis_data = {}
+    
+    os.makedirs(save_dir, exist_ok=True)
+    
+    with torch.no_grad():
+        # ========== 1) Prototype 分析 ==========
+        if model.prototype_module is not None:
+            proto_vectors = model.prototype_module.prototypes.detach().cpu().numpy()
+            analysis_data["prototype_vectors"] = proto_vectors
+            
+            # 计算原型间相似度
+            P = F.normalize(model.prototype_module.prototypes, dim=-1, eps=1e-12)
+            proto_similarity = (P @ P.t()).detach().cpu().numpy()
+            analysis_data["prototype_similarity"] = proto_similarity
+            
+            # 收集原型分配分布
+            proto_assigns = []
+            sample_count = 0
+            for batch in train_loader:
+                if sample_count >= num_samples:
+                    break
+                student_ids, exercise_ids, concept_vector, _ = batch
+                student_ids = student_ids.to(device)
+                
+                # 获取学生表示
+                s_out = model.structure_module(student_ids, identity_relations=model.identity_relations)
+                student_repr = s_out["student_repr"]
+                
+                _, assign = model.prototype_module(student_repr)
+                proto_assigns.append(assign.detach().cpu().numpy())
+                sample_count += len(student_ids)
+            
+            if proto_assigns:
+                analysis_data["prototype_assign"] = np.concatenate(proto_assigns, axis=0)[:num_samples]
+            
+            logger.info(f"[Component Analysis] Prototype: {proto_vectors.shape}, similarity: {proto_similarity.shape}")
+        
+        # ========== 2) 全局概念图分析 ==========
+        if model.structure_module.relation_learning is not None:
+            relation_matrices, _ = model.structure_module.relation_learning()
+            analysis_data["global_relation_matrices"] = relation_matrices.detach().cpu().numpy()
+            logger.info(f"[Component Analysis] Global graph: {relation_matrices.shape}")
+        
+        # ========== 3) 个性化图分析 ==========
+        if model.use_personal_graph and model.structure_module.personal_generator is not None:
+            gate_alphas = []
+            personal_graphs = []
+            sample_count = 0
+            
+            for batch in train_loader:
+                if sample_count >= num_samples:
+                    break
+                student_ids, _, _, _ = batch
+                student_ids = student_ids.to(device)
+                
+                s_out = model.structure_module(student_ids, identity_relations=model.identity_relations)
+                
+                if s_out["alpha"] is not None:
+                    gate_alphas.append(s_out["alpha"].squeeze().detach().cpu().numpy())
+                if s_out["personal_matrices"] is not None:
+                    personal_graphs.append(s_out["personal_matrices"].detach().cpu().numpy())
+                
+                sample_count += len(student_ids)
+            
+            if gate_alphas:
+                analysis_data["gate_alpha"] = np.concatenate([g.flatten() for g in gate_alphas])[:num_samples]
+                logger.info(f"[Component Analysis] Gate alpha samples: {len(analysis_data['gate_alpha'])}")
+            
+            if personal_graphs:
+                # 只保存少量个性化图样本（节省空间）
+                personal_arr = np.concatenate(personal_graphs, axis=0)[:min(10, num_samples)]
+                analysis_data["personal_matrices_samples"] = personal_arr
+                logger.info(f"[Component Analysis] Personal graph samples: {personal_arr.shape}")
+    
+    # ========== 保存数据 ==========
+    analysis_path = os.path.join(save_dir, "component_analysis_data.npz")
+    np.savez_compressed(analysis_path, **analysis_data)
+    logger.info(f"[Component Analysis] Data saved to {analysis_path}")
+    
+    return analysis_data

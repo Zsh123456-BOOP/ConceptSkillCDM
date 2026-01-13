@@ -34,7 +34,7 @@ from typing import Dict, Any, List, Tuple, Optional
 BEST_CFG: Dict[str, Dict[str, Any]] = {
     "junyi": {
         "seed": 42,
-        "batch_size": 512,
+        "batch_size": 256,
         "disable_soft_prototype": False,
         "dropout": 0.4,
         "early_stop_patience": 3,
@@ -44,7 +44,7 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "lambda_alpha": 0.0,
         "lambda_proto_div": 0.0,
         "lambda_proto_usage": 0.0,
-        "lambda_sparse": 1,
+        "lambda_sparse": 2,
         "lambda_sparse_personal": 0.0,
         "learning_rate": 0.003,
         "min_exer_interactions": 0,
@@ -80,7 +80,7 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "lambda_alpha": 0.0,
         "lambda_proto_div": 0.0,
         "lambda_proto_usage": 0.0,
-        "lambda_sparse": 1,
+        "lambda_sparse": 2,
         "lambda_sparse_personal": 0.0,
         "learning_rate": 3e-4,
         "min_exer_interactions": 0,
@@ -115,7 +115,6 @@ MODEL_ABLATIONS: List[Dict[str, Any]] = [
     {"name": "no_module1", "flags": {"ablate_module1": True}, "overrides": {}},
     # {"name": "no_module2", "flags": {"ablate_module2": True}, "overrides": {}},
     {"name": "no_module3", "flags": {"ablate_module3": True}, "overrides": {}},
-    {"name": "no_module1_and_module3", "flags": {"ablate_module1": True, "ablate_module3": True}, "overrides": {}},
 ]
 
 # 这些是你说的 “A~E 子模块消融（旧开关）”，默认不跑

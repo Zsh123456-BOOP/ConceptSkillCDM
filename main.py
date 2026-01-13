@@ -9,7 +9,7 @@ import torch
 
 from src.config import apply_dataset_defaults
 from src.experiment_utils import setup_logging
-from src.trainer import train_one_experiment, run_inference
+from src.trainer import train_one_experiment, run_inference, save_component_analysis_data
 
 
 def _normalize_bool(value, default=False):
@@ -291,6 +291,92 @@ def main():
     logger.info(
         f"Test metrics - AUC: {metrics['auc']:.4f}, ACC: {metrics['acc']:.4f}, RMSE: {metrics['rmse']:.4f}"
     )
+    
+    # =========================================================
+    # 7) 保存组件分析数据（用于可视化验证）
+    # =========================================================
+    if getattr(args, "generate_diagnosis", True):
+        try:
+            # 需要重新加载模型和数据加载器
+            from torch.utils.data import DataLoader
+            from src.dataset import create_dataloaders
+            
+            device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
+            
+            # 加载最佳模型
+            model_path = os.path.join(args.save_dir, "best_model.pth")
+            checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+            info_dict = checkpoint["info_dict"]
+            
+            # 重建模型
+            from src.model import CognitiveDiagnosisModel
+            model = CognitiveDiagnosisModel(
+                num_students=info_dict["num_students"],
+                num_exercises=info_dict["num_exercises"],
+                num_concepts=info_dict["num_concepts"],
+                q_matrix=info_dict["q_matrix"],
+                knowledge_dim=args.knowledge_dim,
+                skill_dim=args.skill_dim,
+                exercise_dim=args.exercise_dim,
+                num_relation_heads=args.num_relation_heads,
+                num_gnn_layers=args.num_gnn_layers if args.use_concept_graph else 0,
+                dropout=args.dropout,
+                use_mf_branch=args.use_mf_branch,
+                use_concept_graph=args.use_concept_graph,
+                num_prototypes=args.num_prototypes if args.use_soft_prototype else 0,
+                proto_tau=args.proto_tau,
+                proto_lambda=args.proto_lambda,
+                use_soft_prototype=args.use_soft_prototype,
+                use_personal_graph=args.use_personal_graph,
+                personal_rank=getattr(args, "personal_rank", 4),
+            ).to(device)
+            model.load_state_dict(checkpoint["model_state_dict"])
+            
+            # 创建数据加载器
+            train_file = os.path.join(args.data_dir, "train.csv")
+            val_file = os.path.join(args.data_dir, "valid.csv")
+            test_file = os.path.join(args.data_dir, "test.csv")
+            train_loader, _, _, _ = create_dataloaders(
+                train_file=train_file,
+                val_file=val_file,
+                test_file=test_file,
+                batch_size=args.batch_size,
+                num_workers=args.num_workers,
+                shuffle_train=False,
+                min_stu_interactions=args.min_stu_interactions,
+                min_exer_interactions=args.min_exer_interactions,
+                min_poison_count=args.min_poison_count,
+                logger=logger,
+            )
+            
+            # 保存组件分析数据
+            analysis_data = save_component_analysis_data(
+                model=model,
+                train_loader=train_loader,
+                device=device,
+                save_dir=args.save_dir,
+                logger=logger,
+                num_samples=200,
+            )
+            
+            # 自动生成可视化图表
+            try:
+                from plot_component_analysis import (
+                    plot_prototype_analysis,
+                    plot_global_graph,
+                    plot_personal_graph_analysis,
+                )
+                
+                logger.info("Generating component analysis visualizations...")
+                plot_prototype_analysis(analysis_data, args.save_dir)
+                plot_global_graph(analysis_data, args.save_dir)
+                plot_personal_graph_analysis(analysis_data, args.save_dir)
+                logger.info(f"Visualizations saved to {args.save_dir}")
+            except Exception as plot_err:
+                logger.warning(f"Failed to generate visualizations: {plot_err}")
+                
+        except Exception as e:
+            logger.warning(f"Failed to save component analysis data: {e}")
 
 
 if __name__ == "__main__":
