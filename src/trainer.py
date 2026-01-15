@@ -1,6 +1,7 @@
 # src/trainer.py
 import json
 import os
+import warnings
 from typing import Tuple, Dict, Any, Optional, Union, List
 
 import numpy as np
@@ -11,6 +12,9 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
+# 过滤 DataParallel 的 gather 标量警告（这是正常行为，不影响结果）
+warnings.filterwarnings("ignore", message="Was asked to gather along dimension 0")
+
 from src.dataset import CognitiveDiagnosisDataset, create_dataloaders
 from src.model import CognitiveDiagnosisModel
 from src.experiment_utils import (
@@ -18,6 +22,11 @@ from src.experiment_utils import (
     select_device,
     save_epoch_history_csv,
     append_summary_csv,
+)
+from src.module_activity import (
+    compute_module_activity,
+    format_activity_brief,
+    format_activity_report,
 )
 
 # =========================
@@ -38,6 +47,13 @@ def _sigmoid_torch(x: torch.Tensor) -> torch.Tensor:
 def _ensure_1d(t: torch.Tensor) -> torch.Tensor:
     """Ensure tensor shape (B,) for logits/labels. Use reshape to handle non-contiguous tensors."""
     return t.reshape(-1)
+
+
+def _get_base_model(model: nn.Module) -> CognitiveDiagnosisModel:
+    """获取基础模型（处理 DataParallel 包装）"""
+    if isinstance(model, nn.DataParallel):
+        return model.module
+    return model
 
 
 def _convert_legacy_weight_norm_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -64,6 +80,26 @@ def _convert_legacy_weight_norm_keys(state_dict: Dict[str, torch.Tensor]) -> Dic
             base = k[:-len("weight_v")]
             new_k = base + "parametrizations.weight.original1"
             new_sd[new_k] = new_sd.pop(k)
+    return new_sd
+
+
+def _strip_module_prefix(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """
+    移除 DataParallel 保存的 state_dict 中的 'module.' 前缀。
+    
+    DataParallel 训练时保存的权重格式为 'module.xxx'，
+    但在非 DataParallel 模型中加载时需要移除这个前缀。
+    """
+    has_module_prefix = any(k.startswith("module.") for k in state_dict.keys())
+    if not has_module_prefix:
+        return state_dict
+    
+    new_sd = {}
+    for k, v in state_dict.items():
+        if k.startswith("module."):
+            new_sd[k[7:]] = v  # 移除 "module." 前缀（7个字符）
+        else:
+            new_sd[k] = v
     return new_sd
 
 
@@ -133,7 +169,7 @@ def train_epoch(
         logits = _ensure_1d(logits)
 
         bce_loss = bce_fn(logits, labels)
-        reg_loss = model.get_regularization_loss(
+        reg_loss = _get_base_model(model).get_regularization_loss(
             relation_matrices=details["relation_matrices"],
             details=details,
             lambda_proto_div=lambda_proto_div,
@@ -204,7 +240,7 @@ def validate(
             logits = _ensure_1d(logits)
 
             bce_loss = bce_fn(logits, labels)
-            reg_loss = model.get_regularization_loss(
+            reg_loss = _get_base_model(model).get_regularization_loss(
                 relation_matrices=details["relation_matrices"],
                 details=details,
                 lambda_proto_div=lambda_proto_div,
@@ -341,6 +377,19 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         use_q_conditioning=not getattr(args, "disable_q_conditioning", False),
     ).to(device)
 
+    # 多 GPU 支持（DataParallel）
+    is_multi_gpu = getattr(args, "multi_gpu", False) and torch.cuda.device_count() > 1
+    if is_multi_gpu:
+        gpu_ids_str = getattr(args, "gpu_ids", None)
+        if gpu_ids_str:
+            # 使用指定的 GPU（已通过 CUDA_VISIBLE_DEVICES 映射，这里用相对索引）
+            num_visible = torch.cuda.device_count()
+            device_ids = list(range(num_visible))
+        else:
+            device_ids = None
+        model = torch.nn.DataParallel(model, device_ids=device_ids)
+        logger.info("%s Multi-GPU enabled: using %d GPUs", run_tag, torch.cuda.device_count())
+
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info("%s Total parameters: %s", run_tag, f"{total_params:,}")
@@ -413,7 +462,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             torch.save(
                 {
                     "epoch": epoch,
-                    "model_state_dict": model.state_dict(),
+                    "model_state_dict": _get_base_model(model).state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "val_auc": best_val_auc,
                     "val_metrics": val_metrics,
@@ -442,7 +491,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             torch.save(
                 {
                     "epoch": epoch,
-                    "model_state_dict": model.state_dict(),
+                    "model_state_dict": _get_base_model(model).state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "val_metrics": val_metrics,
                     "train_metrics": train_metrics,
@@ -451,6 +500,14 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 checkpoint_path,
             )
             logger.info("%s Checkpoint saved: %s", run_tag, checkpoint_path)
+
+            # 模块活跃度检测（每 save_interval 输出简报）
+            try:
+                activity = compute_module_activity(model, val_loader, device, num_samples=300)
+                brief = format_activity_brief(activity)
+                logger.info("%s [Module Activity] Epoch %d: %s", run_tag, epoch, brief)
+            except Exception as e:
+                logger.warning("%s [Module Activity] Failed: %s", run_tag, str(e))
 
     history["best_epoch"] = best_epoch
     history["best_val_auc"] = best_val_auc
@@ -461,6 +518,26 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         json.dump(history, f, indent=4)
 
     logger.info("%s Training completed! Best Val AUC=%.4f @ epoch %d", run_tag, best_val_auc, best_epoch)
+
+    # ========== 训练结束：输出完整的模块活跃度报告 ==========
+    try:
+        activity = compute_module_activity(model, val_loader, device, num_samples=500)
+        report = format_activity_report(
+            activity,
+            dataset_name=getattr(args, 'dataset_name', 'unknown'),
+            seed=getattr(args, 'seed', 42),
+            epoch=epoch,
+        )
+        logger.info("\n%s", report)
+
+        # 保存活跃度数据到 JSON
+        activity_path = os.path.join(args.save_dir, "module_activity.json")
+        with open(activity_path, "w") as f:
+            json.dump(activity, f, indent=4)
+        logger.info("%s Module activity saved to %s", run_tag, activity_path)
+    except Exception as e:
+        logger.warning("%s [Module Activity Report] Failed: %s", run_tag, str(e))
+
     return best_val_auc, best_epoch
 
 
@@ -581,6 +658,7 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     # compatibility for legacy weight_norm checkpoints
     state_dict = checkpoint["model_state_dict"]
     state_dict = _convert_legacy_weight_norm_keys(state_dict)
+    state_dict = _strip_module_prefix(state_dict)  # 处理 DataParallel 的 module. 前缀
 
     incompatible = model.load_state_dict(state_dict, strict=False)
     missing_keys = list(getattr(incompatible, "missing_keys", []))

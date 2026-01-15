@@ -69,3 +69,40 @@ def get_best_gpu(candidates=None, memory_threshold=2000):
         # 这里可以选择让外部循环继续等待，或者返回最不忙的那个
     
     return best_gpu
+
+
+def get_best_gpus(n=2, candidates=None, memory_threshold=2000):
+    """
+    从候选列表中选择 N 张显存剩余最多的 GPU
+    :param n: 需要的 GPU 数量
+    :param candidates: 允许使用的 GPU ID 列表
+    :param memory_threshold: 最小需要的显存 (MiB)
+    :return: list of gpu_ids (按显存从大到小排列)
+    """
+    gpu_map = get_gpu_memory_map()
+    
+    if not gpu_map:
+        return [0]
+    
+    target_gpus = candidates if candidates is not None else list(gpu_map.keys())
+    
+    # 按显存从大到小排序
+    sorted_gpus = sorted(
+        [(gpu_id, gpu_map.get(gpu_id, 0)) for gpu_id in target_gpus],
+        key=lambda x: x[1],
+        reverse=True
+    )
+    
+    # 取前 N 个
+    selected = [gpu_id for gpu_id, mem in sorted_gpus[:n] if mem >= memory_threshold]
+    
+    if len(selected) < n:
+        print(f"⚠️ Warning: Only {len(selected)} GPUs meet memory threshold. Requested {n}.")
+        # 如果不够，补充其他 GPU
+        for gpu_id, mem in sorted_gpus:
+            if gpu_id not in selected:
+                selected.append(gpu_id)
+            if len(selected) >= n:
+                break
+    
+    return selected

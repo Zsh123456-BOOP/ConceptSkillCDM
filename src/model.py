@@ -773,8 +773,11 @@ class ConceptStructureModeling(nn.Module):
         relation_used = relation_matrices
 
         if self.use_personal_graph and self.adaptive_gate is not None and self.personal_generator is not None:
-            gate_alpha = self.adaptive_gate(student_repr)              # (B,1,1,1)
-            personal_matrices = self.personal_generator(student_repr)  # (B,C,C)
+            # Fix: 使用学生的 global embedding 作为个性化图生成的输入
+            # 这样每个学生有独特的表示，而不是经过概念平均后几乎相同的 student_repr
+            student_global_repr = self.knowledge_encoder.student_global(student_ids)  # (B,D)
+            gate_alpha = self.adaptive_gate(student_global_repr)              # (B,1,1,1)
+            personal_matrices = self.personal_generator(student_global_repr)  # (B,C,C)
 
             # 优化：不展开为 (B,H,C,C)，而是保存 gate_alpha 和 personal_matrices
             # 让 GNN 层在需要时逐 head 混合，减少显存占用
@@ -1246,7 +1249,11 @@ class CognitiveDiagnosisModel(nn.Module):
                 pm = details["personal_matrices"]
                 reg = reg + self.lambda_sparse_personal * self._row_entropy(pm)
             if "alpha" in details and details["alpha"] is not None and self.lambda_alpha > 0:
-                reg = reg + self.lambda_alpha * details["alpha"].mean()
+                # 最大化 alpha 方差：让不同学生有不同的 alpha 值
+                # 使用负项来鼓励方差增大（方差越大，损失越低）
+                alpha_flat = details["alpha"].view(-1)
+                alpha_var = alpha_flat.var() + 1e-6
+                reg = reg - self.lambda_alpha * alpha_var  # 负号使优化器最大化方差
 
         return reg
 

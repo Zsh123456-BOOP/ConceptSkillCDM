@@ -150,6 +150,12 @@ def parse_args():
     parser.add_argument("--gnn_residual_weight", type=float, default=0.5,
                         help="Residual weight in GNN update.")
 
+    # 多 GPU 训练
+    parser.add_argument("--multi_gpu", action="store_true",
+                        help="Enable multi-GPU training with DataParallel.")
+    parser.add_argument("--gpu_ids", type=str, default=None,
+                        help="Comma-separated GPU IDs for multi-GPU training (e.g., '0,1').")
+
     return parser
 
 

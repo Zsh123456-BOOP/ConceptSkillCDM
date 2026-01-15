@@ -6,12 +6,12 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import torch
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error
 from gpu_utils import get_best_gpu
 
 
-def setup_logging(log_dir: str, name: str | None = None) -> logging.Logger:
+def setup_logging(log_dir: str, name: Optional[str] = None) -> logging.Logger:
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, f'{name or "train"}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
 

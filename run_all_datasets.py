@@ -13,15 +13,23 @@ import subprocess
 import time
 
 from best_configs import BEST_CFG
+from gpu_utils import get_best_gpus
 
 
-
-def launch_experiment(dataset_name, cfg, gpu_id):
+def launch_experiment(dataset_name, cfg, gpu_candidates):
+    """启动单个实验，支持多 GPU"""
     tag = f"{dataset_name}_best_gpd_base"
     save_dir = os.path.join("checkpoints", tag)
     log_dir = os.path.join("logs", tag)
     os.makedirs(save_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
+
+    # 获取需要的 GPU 数量
+    num_gpus = cfg.get("num_gpus", 1)
+    
+    # 选择最空闲的 N 张 GPU
+    selected_gpus = get_best_gpus(n=num_gpus, candidates=gpu_candidates)
+    gpu_str = ",".join(str(g) for g in selected_gpus)
 
     cmd = [
         "python",
@@ -38,7 +46,7 @@ def launch_experiment(dataset_name, cfg, gpu_id):
 
     # Convert cfg to CLI args
     for k, v in cfg.items():
-        if k == "model_variant":
+        if k in ("model_variant", "num_gpus"):  # 跳过这些参数
             continue
         if isinstance(v, bool):
             if v:
@@ -47,18 +55,24 @@ def launch_experiment(dataset_name, cfg, gpu_id):
             cmd.append(f"--{k}")
             cmd.append(str(v))
 
-    env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    # 多 GPU 时添加参数
+    if num_gpus > 1:
+        cmd.append("--multi_gpu")
+        cmd.append("--gpu_ids")
+        cmd.append(gpu_str)
 
-    print(f"[LAUNCH] dataset={dataset_name}, gpu={gpu_id}")
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = gpu_str
+
+    print(f"[LAUNCH] dataset={dataset_name}, gpus={gpu_str} (n={num_gpus})")
     print("         CMD:", " ".join(cmd))
-    return subprocess.Popen(cmd, env=env)
+    return subprocess.Popen(cmd, env=env), selected_gpus
 
 
 def main():
     parser = argparse.ArgumentParser(description="Run best configs for assist_09 & junyi.")
     parser.add_argument("--datasets", type=str, default="assist_09,junyi")
-    parser.add_argument("--gpus", type=str, default="0,1")
+    parser.add_argument("--gpus", type=str, default="1,2,3")
     parser.add_argument("--max_concurrent", type=int, default=2)
     args = parser.parse_args()
 
@@ -95,12 +109,10 @@ def main():
             dataset = jobs[job_idx]
             cfg = BEST_CFG[dataset]
 
-            gpu_id = gpus[gpu_rr % len(gpus)]
-            gpu_rr += 1
-
             desc = f"{dataset}|best_gpd_base"
-            proc = launch_experiment(dataset, cfg, gpu_id)
-            running.append((proc, gpu_id, desc))
+            proc, selected_gpus = launch_experiment(dataset, cfg, gpus)
+            gpu_desc = ",".join(str(g) for g in selected_gpus)
+            running.append((proc, gpu_desc, desc))
             job_idx += 1
 
         if running:
