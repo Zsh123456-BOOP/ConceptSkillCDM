@@ -51,6 +51,9 @@ SUBMODULE_ABLATIONS: List[Dict[str, Any]] = [
     {"name": "no_concept_graph",
      "flags": {"ablate_concept_graph": True},
      "overrides": {"num_gnn_layers": 0}},
+    {"name": "no_personal_graph",
+     "flags": {"use_personal_graph": False},  # 注意：这里不是 ablate_*, 而是直接控制 toggle
+     "overrides": {}},
 ]
 
 
@@ -116,22 +119,41 @@ def launch_experiment(
         "--generate_diagnosis", "True" if generate_diagnosis else "False",
     ]
 
-    # base cfg -> CLI args（避免把 seed/model_variant/ablate_* 透传进去）
-    for k, v in base_cfg.items():
+    # 合并 config：base + overrides + flags
+    final_cfg = base_cfg.copy()
+    
+    # 0. 如果 flag 在 flags 列表里，说明要由 flags 控制（如 use_personal_graph=False），
+    #    则先从 config 里删掉它，避免被 _append_arg 当作普通参数加进去了。
+    for k in ablation.get("flags", {}).keys():
+        if k in final_cfg:
+            del final_cfg[k]
+
+    # 1. 应用 overrides (参数值覆盖)
+    if "overrides" in ablation:
+        for k, v in ablation["overrides"].items():
+            final_cfg[k] = v
+            
+    # 2. 生成此合并后 config 的参数
+    for k, v in final_cfg.items():
         if k in ["model_variant", "seed"]:
             continue
+        # 跳过消融相关的控制参数（这些不由 config 字典控制，而是由 flags 控制）
         if k.startswith("ablate_") or k.startswith("disable_") or k.startswith("enable_"):
             continue
+            
         _append_arg(cmd, k, v)
 
-    # overrides
-    for k, v in ablation.get("overrides", {}).items():
-        _append_arg(cmd, k, v)
-
-    # flags (store_true)
+    # 3. 应用 flags (单纯的 toggle，如 --ablate_module3, --use_personal_graph)
     for k, v in ablation.get("flags", {}).items():
-        if v:
+        # 对于 ablate_*, 只有 True 才添加；
+        # 对于普通 boolean 参数 (如 use_personal_graph)，True -> --use_personal_graph, False -> 不添加
+        if v is True:
             cmd.append(f"--{k}")
+        elif isinstance(v, bool) and v is False:
+             pass # False flag 不添加
+        else:
+             # 非 bool 类型的 flag? 本应该去 overrides，以防万一
+             _append_arg(cmd, k, v)
 
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)

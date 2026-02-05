@@ -88,7 +88,7 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "num_relation_heads": 4,         # Module 1 多头关系数
 
         # === Module 1: 概念图正则 ===
-        "lambda_sparse": 2,              # 全局概念图稀疏正则（降低以避免过度稀疏）
+        "lambda_sparse": 0,                 # 全局概念图稀疏正则（设为0避免identity collapse）
         "lambda_sparse_personal": 0.5, # 个性化图稀疏正则（需 use_personal_graph=True）
         "lambda_alpha": 0.3,            # 个性化混合系数惩罚（需 use_personal_graph=True）
         "use_personal_graph": True,      # 是否启用个性化图
@@ -122,8 +122,8 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "seed": 42,
         "batch_size": 256,
         "epochs": 100,
-        "learning_rate": 0.003,
-        "weight_decay": 0.001,
+        "learning_rate": 0.001,
+        "weight_decay": 1e-5,
         "dropout": 0.4,
         "early_stop_patience": 3,
         "patience": 5,
@@ -139,7 +139,7 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "num_relation_heads": 4,         # Module 1 多头关系数
 
         # === Module 1: 概念图正则 ===
-        "lambda_sparse": 1,              # 全局概念图稀疏正则
+        "lambda_sparse": 0,                 # 全局概念图稀疏正则（设为0避免identity collapse）
         "lambda_sparse_personal": 0.5, # 个性化图稀疏正则（需 use_personal_graph=True）
         "lambda_alpha": 0.3,            # 个性化混合系数惩罚（需 use_personal_graph=True）
         "use_personal_graph": True,      # 是否启用个性化图

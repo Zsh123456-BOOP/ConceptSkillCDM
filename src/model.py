@@ -78,7 +78,7 @@ class MultiHeadRelationLearning(nn.Module):
         self.allow_self_loop = bool(allow_self_loop)
 
         # 注意：concept_embeddings 会在主模型里“可选绑定”到 knowledge_encoder.concept_emb.weight
-        self.concept_embeddings = nn.Parameter(torch.randn(num_concepts, concept_dim) * 0.02)
+        self.concept_embeddings = nn.Parameter(torch.randn(num_concepts, concept_dim))  # Fix: 移除 0.02
 
         self.Wq = nn.ModuleList([nn.Linear(concept_dim, concept_dim, bias=False) for _ in range(num_heads)])
         self.Wk = nn.ModuleList([nn.Linear(concept_dim, concept_dim, bias=False) for _ in range(num_heads)])
@@ -90,7 +90,7 @@ class MultiHeadRelationLearning(nn.Module):
         self._initialize_weights()
 
     def _initialize_weights(self) -> None:
-        nn.init.xavier_normal_(self.concept_embeddings)
+        nn.init.xavier_normal_(self.concept_embeddings, gain=1.0)  # Fix: gain=1.0 prevents softmax saturation
         for m in list(self.Wq) + list(self.Wk):
             nn.init.xavier_normal_(m.weight)
 
@@ -597,10 +597,14 @@ class SoftPrototypeModule(nn.Module):
 # ======================================================
 
 class AdaptiveGate(nn.Module):
-    """个性化图混合系数 alpha（B,1,1,1）。"""
+    """个性化图混合系数 alpha（B,1,1,1）。
+    
+    Fix: 添加 LayerNorm 标准化输入，解决 student embedding variance 过低的问题。
+    """
 
     def __init__(self, student_dim: int):
         super().__init__()
+        self.input_norm = nn.LayerNorm(student_dim)  # Fix: 标准化输入
         hid = max(1, student_dim // 2)
         self.gate = nn.Sequential(
             nn.Linear(student_dim, hid),
@@ -610,14 +614,19 @@ class AdaptiveGate(nn.Module):
         )
 
     def forward(self, student_repr: torch.Tensor) -> torch.Tensor:
+        student_repr = self.input_norm(student_repr)  # Fix: 标准化输入
         return self.gate(student_repr).view(-1, 1, 1, 1)
 
 
 class PersonalRelationGenerator(nn.Module):
-    """低秩分解生成个性化邻接（B,C,C），softmax 保证 row-stochastic。"""
+    """低秩分解生成个性化邻接（B,C,C），softmax 保证 row-stochastic。
+    
+    Fix: 添加 LayerNorm 标准化输入，解决 student embedding variance 过低的问题。
+    """
 
     def __init__(self, student_dim: int, num_concepts: int, rank: int = 4):
         super().__init__()
+        self.input_norm = nn.LayerNorm(student_dim)  # Fix: 标准化输入
         self.num_concepts = int(num_concepts)
         self.rank = int(rank)
         self.to_u = nn.Linear(student_dim, num_concepts * rank, bias=False)
@@ -626,6 +635,7 @@ class PersonalRelationGenerator(nn.Module):
         nn.init.xavier_normal_(self.to_v.weight)
 
     def forward(self, student_repr: torch.Tensor) -> torch.Tensor:
+        student_repr = self.input_norm(student_repr)  # Fix: 标准化输入
         B = student_repr.size(0)
         u = self.to_u(student_repr).view(B, self.num_concepts, self.rank)
         v = self.to_v(student_repr).view(B, self.num_concepts, self.rank)
