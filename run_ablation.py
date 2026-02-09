@@ -30,6 +30,12 @@ import sys
 from typing import Dict, Any, List, Tuple, Optional
 
 from best_configs import BEST_CFG, DEFAULT_SEEDS
+from gpu_utils import (
+    calc_effective_max_concurrent,
+    parse_int_csv,
+    parse_gpu_ids,
+    pick_gpu_with_slot_round_robin,
+)
 
 
 # ========== 3) 消融集合：分成 model-level 与 submodule-level ==========
@@ -70,16 +76,6 @@ def _parse_csv_list(x: str) -> List[str]:
     return [t.strip() for t in x.split(",") if t.strip()]
 
 
-def _parse_int_list(x: str) -> List[int]:
-    out = []
-    for t in x.split(","):
-        t = t.strip()
-        if not t:
-            continue
-        out.append(int(t))
-    return out
-
-
 def _get_ablation_pool(ablation_set: str) -> List[Dict[str, Any]]:
     if ablation_set == "model":
         return list(MODEL_ABLATIONS)
@@ -88,26 +84,6 @@ def _get_ablation_pool(ablation_set: str) -> List[Dict[str, Any]]:
     if ablation_set == "all":
         return list(MODEL_ABLATIONS) + list(SUBMODULE_ABLATIONS)
     raise ValueError(f"Unknown ablation_set='{ablation_set}'. Choose from: model, sub, all")
-
-
-def _pick_gpu_with_slot(
-    gpus: List[int],
-    gpu_load: Dict[int, int],
-    max_per_gpu: int,
-    start_idx: int,
-) -> Tuple[Optional[int], int]:
-    """按轮询顺序选择一个还有空槽的 GPU。"""
-    if not gpus:
-        return None, start_idx
-
-    n = len(gpus)
-    for offset in range(n):
-        idx = (start_idx + offset) % n
-        gid = gpus[idx]
-        if gpu_load.get(gid, 0) < max_per_gpu:
-            return gid, (idx + 1) % n
-
-    return None, start_idx
 
 
 def launch_experiment(
@@ -214,14 +190,14 @@ def main():
     args = parser.parse_args()
 
     datasets = _parse_csv_list(args.datasets)
-    gpus = _parse_int_list(args.gpus)
+    gpus = parse_gpu_ids(args.gpus)
     max_concurrent = max(1, args.max_concurrent)
     max_per_gpu = max(1, args.max_per_gpu)
     if not gpus:
         raise ValueError("No GPUs provided. Use --gpus 0 or set properly.")
-    effective_max_concurrent = min(max_concurrent, len(gpus) * max_per_gpu)
+    effective_max_concurrent = calc_effective_max_concurrent(max_concurrent, gpus, max_per_gpu)
 
-    seeds = list(DEFAULT_SEEDS) if args.seeds is None else _parse_int_list(args.seeds)
+    seeds = list(DEFAULT_SEEDS) if args.seeds is None else parse_int_csv(args.seeds)
 
     # 先选定 ablation pool（默认 model-only）
     ablation_pool = _get_ablation_pool(args.ablation_set)
@@ -278,7 +254,7 @@ def main():
 
         while job_idx < len(jobs) and len(running) < effective_max_concurrent:
             dataset, base_cfg, ablation, seed = jobs[job_idx]
-            gpu_id, gpu_rr = _pick_gpu_with_slot(gpus, gpu_load, max_per_gpu, gpu_rr)
+            gpu_id, gpu_rr = pick_gpu_with_slot_round_robin(gpus, gpu_load, max_per_gpu, gpu_rr)
             if gpu_id is None:
                 break
 

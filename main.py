@@ -7,6 +7,7 @@ import sys
 import numpy as np
 import torch
 
+from gpu_utils import configure_main_process_gpus, parse_gpu_ids
 from src.config import apply_dataset_defaults
 from src.experiment_utils import setup_logging
 from src.trainer import train_one_experiment, run_inference, save_component_analysis_data
@@ -96,6 +97,24 @@ def parse_args():
 
     # 多 GPU 选择（如果你后续要做自动选卡，可在 trainer/launcher 用）
     parser.add_argument("--gpu_candidates", type=str, default=None)
+    parser.add_argument(
+        "--gpus",
+        type=str,
+        default=None,
+        help="Comma-separated physical GPU ids for auto selection, e.g. '0,1'.",
+    )
+    parser.add_argument(
+        "--num_gpus",
+        type=int,
+        default=1,
+        help="How many GPUs to use when --gpus is provided.",
+    )
+    parser.add_argument(
+        "--gpu_memory_threshold",
+        type=int,
+        default=2000,
+        help="Minimum free memory (MiB) preferred by auto GPU selection.",
+    )
 
     # 旧名字：exercise_l2_lambda -> 新模型 mf_l2_lambda
     parser.add_argument(
@@ -181,6 +200,29 @@ def main():
 
     args = parser.parse_args()
     args = apply_dataset_defaults(args, parser)
+
+    # =========================================================
+    # -1) 可选：main 进程自动选卡（与 launcher 脚本解耦）
+    # =========================================================
+    if getattr(args, "gpus", None):
+        gpu_candidates = parse_gpu_ids(args.gpus)
+        if not gpu_candidates:
+            raise SystemExit("error: --gpus is empty after parsing. Example: --gpus 0,1")
+
+        selected_physical = configure_main_process_gpus(
+            gpus=gpu_candidates,
+            num_gpus=max(1, int(getattr(args, "num_gpus", 1))),
+            memory_threshold=int(getattr(args, "gpu_memory_threshold", 2000)),
+        )
+        args.selected_gpus = ",".join(str(g) for g in selected_physical)
+        args.gpu_candidates = args.selected_gpus
+
+        if len(selected_physical) > 1:
+            args.multi_gpu = True
+            # DataParallel 在 trainer 中使用可见卡的相对索引，这里只保留声明用途。
+            args.gpu_ids = ",".join(str(i) for i in range(len(selected_physical)))
+        else:
+            args.multi_gpu = False
 
     # =========================================================
     # 0) 基础 sanity check：避免无预测路径

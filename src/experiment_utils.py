@@ -8,7 +8,7 @@ import pandas as pd
 import torch
 from typing import Dict, Any, Optional
 from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error
-from gpu_utils import get_best_gpu
+from gpu_utils import get_best_gpu, parse_gpu_ids
 
 
 def setup_logging(log_dir: str, name: Optional[str] = None) -> logging.Logger:
@@ -48,13 +48,18 @@ def select_device(args, logger) -> torch.device:
         logger.info("Using device: cpu")
         return device
 
+    # DataParallel 要求主模型在 device_ids[0]，这里固定多卡主卡为可见卡 0。
+    if getattr(args, "multi_gpu", False) and torch.cuda.device_count() > 1:
+        device = torch.device("cuda:0")
+        torch.cuda.set_device(0)
+        logger.info("Using device: cuda:0 (DataParallel primary device)")
+        return device
+
     candidates = None
     raw_candidates = getattr(args, "gpu_candidates", None)
     if raw_candidates is not None:
         try:
-            candidates = [
-                int(x.strip()) for x in str(raw_candidates).split(",") if x.strip() != ""
-            ]
+            candidates = parse_gpu_ids(str(raw_candidates))
             if not candidates:
                 candidates = None
         except Exception:
@@ -64,9 +69,7 @@ def select_device(args, logger) -> torch.device:
     visible_list = None
     if visible_env:
         try:
-            visible_list = [
-                int(x.strip()) for x in visible_env.split(",") if x.strip() != ""
-            ]
+            visible_list = parse_gpu_ids(visible_env)
             if not visible_list:
                 visible_list = None
         except Exception:

@@ -11,27 +11,14 @@ import argparse
 import os
 import subprocess
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 from best_configs import BEST_CFG
-from gpu_utils import get_best_gpus
-
-
-def _pick_gpus_for_job(
-    required: int,
-    all_gpus: List[int],
-    gpu_load: Dict[int, int],
-    max_per_gpu: int,
-) -> Optional[List[int]]:
-    """为一个任务挑选满足槽位限制的 GPU 列表。"""
-    available = [gid for gid in all_gpus if gpu_load.get(gid, 0) < max_per_gpu]
-    if len(available) < required:
-        return None
-
-    selected = get_best_gpus(n=required, candidates=available)
-    if len(selected) < required:
-        selected = available[:required]
-    return selected
+from gpu_utils import (
+    calc_effective_max_concurrent,
+    parse_gpu_ids,
+    pick_gpus_for_job,
+)
 
 
 def launch_experiment(dataset_name, cfg, selected_gpus):
@@ -100,13 +87,13 @@ def main():
     args = parser.parse_args()
 
     datasets = [d.strip() for d in args.datasets.split(",") if d.strip()]
-    gpus = [int(x) for x in args.gpus.split(",") if x.strip()]
+    gpus = parse_gpu_ids(args.gpus)
     max_concurrent = max(1, args.max_concurrent)
     max_per_gpu = max(1, args.max_per_gpu)
     poll_interval = max(1, args.poll_interval)
     if not gpus:
         raise ValueError("No GPUs provided. Use --gpus 0 or set properly.")
-    effective_max_concurrent = min(max_concurrent, len(gpus) * max_per_gpu)
+    effective_max_concurrent = calc_effective_max_concurrent(max_concurrent, gpus, max_per_gpu)
 
     print(f"Datasets: {datasets}")
     print(
@@ -149,7 +136,7 @@ def main():
             dataset = jobs[job_idx]
             cfg = BEST_CFG[dataset]
             required_gpus = max(1, int(cfg.get("num_gpus", 1)))
-            selected_gpus = _pick_gpus_for_job(required_gpus, gpus, gpu_load, max_per_gpu)
+            selected_gpus = pick_gpus_for_job(required_gpus, gpus, gpu_load, max_per_gpu)
             if selected_gpus is None:
                 break
 
