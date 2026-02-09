@@ -1,0 +1,224 @@
+2026-02-09 14:43:41,913 - INFO - Arguments:
+2026-02-09 14:43:41,913 - INFO -   ablate_concept_graph: False
+2026-02-09 14:43:41,913 - INFO -   ablate_module1: False
+2026-02-09 14:43:41,913 - INFO -   ablate_module2: False
+2026-02-09 14:43:41,913 - INFO -   ablate_module3: False
+2026-02-09 14:43:41,913 - INFO -   ablate_skill_encoder: False
+2026-02-09 14:43:41,913 - INFO -   ablate_soft_prototype: False
+2026-02-09 14:43:41,913 - INFO -   allow_self_loop: True
+2026-02-09 14:43:41,913 - INFO -   batch_size: 256
+2026-02-09 14:43:41,913 - INFO -   data_dir: ./data/junyi
+2026-02-09 14:43:41,913 - INFO -   dataset_name: junyi
+2026-02-09 14:43:41,913 - INFO -   debug_module3_diag: True
+2026-02-09 14:43:41,913 - INFO -   diag_batches: 2
+2026-02-09 14:43:41,914 - INFO -   disable_q_conditioning: False
+2026-02-09 14:43:41,914 - INFO -   disable_self_loop: False
+2026-02-09 14:43:41,914 - INFO -   disable_soft_prototype: False
+2026-02-09 14:43:41,914 - INFO -   dropout: 0.4
+2026-02-09 14:43:41,914 - INFO -   early_stop_patience: 3
+2026-02-09 14:43:41,914 - INFO -   enable_module1: True
+2026-02-09 14:43:41,914 - INFO -   enable_module2: True
+2026-02-09 14:43:41,914 - INFO -   enable_module3: True
+2026-02-09 14:43:41,914 - INFO -   epochs: 100
+2026-02-09 14:43:41,914 - INFO -   exercise_dim: 128
+2026-02-09 14:43:41,914 - INFO -   exercise_l2_lambda: 5e-05
+2026-02-09 14:43:41,914 - INFO -   generate_diagnosis: False
+2026-02-09 14:43:41,914 - INFO -   gnn_residual_weight: 0.5
+2026-02-09 14:43:41,914 - INFO -   gpu_candidates: None
+2026-02-09 14:43:41,914 - INFO -   gpu_ids: None
+2026-02-09 14:43:41,914 - INFO -   graph_topk: None
+2026-02-09 14:43:41,914 - INFO -   knowledge_dim: 128
+2026-02-09 14:43:41,914 - INFO -   lambda_alpha: 0.01
+2026-02-09 14:43:41,914 - INFO -   lambda_proto_div: 0.1
+2026-02-09 14:43:41,914 - INFO -   lambda_proto_usage: 0.1
+2026-02-09 14:43:41,914 - INFO -   lambda_sparse: 1.0
+2026-02-09 14:43:41,914 - INFO -   lambda_sparse_personal: 0.005
+2026-02-09 14:43:41,914 - INFO -   learning_rate: 0.003
+2026-02-09 14:43:41,914 - INFO -   log_dir: logs/junyi_ablation_full_seed42
+2026-02-09 14:43:41,914 - INFO -   min_exer_interactions: 0
+2026-02-09 14:43:41,914 - INFO -   min_poison_count: 0
+2026-02-09 14:43:41,914 - INFO -   min_stu_interactions: 15
+2026-02-09 14:43:41,914 - INFO -   model_variant: gpd_base_full
+2026-02-09 14:43:41,914 - INFO -   multi_gpu: False
+2026-02-09 14:43:41,914 - INFO -   no_cuda: False
+2026-02-09 14:43:41,915 - INFO -   num_gnn_layers: 2
+2026-02-09 14:43:41,915 - INFO -   num_prototypes: 3
+2026-02-09 14:43:41,915 - INFO -   num_relation_heads: 2
+2026-02-09 14:43:41,915 - INFO -   num_workers: 4
+2026-02-09 14:43:41,915 - INFO -   patience: 1
+2026-02-09 14:43:41,915 - INFO -   personal_rank: 4
+2026-02-09 14:43:41,915 - INFO -   proto_lambda: 5.0
+2026-02-09 14:43:41,915 - INFO -   proto_tau: 1.0
+2026-02-09 14:43:41,915 - INFO -   save_dir: checkpoints/junyi_ablation_full_seed42
+2026-02-09 14:43:41,915 - INFO -   save_interval: 10
+2026-02-09 14:43:41,915 - INFO -   seed: 42
+2026-02-09 14:43:41,915 - INFO -   skill_dim: 64
+2026-02-09 14:43:41,915 - INFO -   use_concept_graph: True
+2026-02-09 14:43:41,915 - INFO -   use_exercise_graph: True
+2026-02-09 14:43:41,915 - INFO -   use_mf_branch: True
+2026-02-09 14:43:41,915 - INFO -   use_personal_graph: True
+2026-02-09 14:43:41,915 - INFO -   use_q_conditioning: True
+2026-02-09 14:43:41,915 - INFO -   use_skill_encoder: True
+2026-02-09 14:43:41,915 - INFO -   use_soft_prototype: True
+2026-02-09 14:43:41,915 - INFO -   weight_decay: 0.001
+2026-02-09 14:43:42,000 - INFO - Using device: cuda:0
+2026-02-09 14:43:42,000 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Loading datasets...
+2026-02-09 14:43:42,001 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Regularization: graph_entropy(lambda_sparse)=1.000000, proto_div=0.100000, proto_usage=0.100000, personal_sparse=0.005000, alpha_penalty=0.010000, mf_l2(exercise_l2_lambda)=0.000050
+2026-02-09 14:43:42,114 - INFO - [数据清洗] 学生交互次数 < 15 次的学生：共移除 0 个学生（仅统计用户数）
+2026-02-09 14:43:42,129 - INFO - [数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 0 条记录。
+2026-02-09 14:43:42,129 - INFO - [数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。
+2026-02-09 14:43:42,129 - INFO - [数据清洗] 跳过毒题清洗（min_poison_count <= 0）。
+2026-02-09 14:43:50,532 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Train samples: 262473, Val samples: 24299
+2026-02-09 14:43:50,533 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Number of students: 10000
+2026-02-09 14:43:50,533 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Number of exercises: 706
+2026-02-09 14:43:50,533 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Number of concepts: 706
+2026-02-09 14:43:50,533 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Creating model...
+2026-02-09 14:43:50,533 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Ablation switches: ablate_module1=False, ablate_module2=False, ablate_module3=False | enable_module1=True, enable_module2=True, enable_module3=True | use_soft_prototype=True, use_mf_branch=True, use_concept_graph=True | effective(num_gnn_layers=2, num_prototypes=3)
+2026-02-09 14:43:50,681 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Ablation runtime check: args(ablate_module1=False,ablate_module2=False,ablate_module3=False) | model(enable_module1=True,enable_module2=True,enable_module3=True) | physical(has_knowledge_encoder=True,has_mf_branch=True,has_soft_prototype=True)
+2026-02-09 14:43:50,681 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Debug diagnostics enabled: diag_batches=2
+2026-02-09 14:43:50,681 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Total parameters: 3,079,653
+2026-02-09 14:43:50,681 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Trainable parameters: 3,079,653
+2026-02-09 14:43:51,475 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Starting training...
+2026-02-09 14:46:25,735 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [001/100] | Train: Loss=6.6226, BCE=0.5414, Reg=6.0812, AUC=0.7674, ACC=0.7284, RMSE=0.4264 | Val: Loss=7.1081, BCE=0.5154, Reg=6.5927, AUC=0.7902, ACC=0.7500, RMSE=0.4131
+2026-02-09 14:46:27,861 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [001] | mf_abs_mean=0.1974, mf_std=0.1228, gate_mean=0.2997, gate_std=0.0744, irt_abs_mean=1.4870, irt_std=1.0015, delta_abs_mean=0.0581, delta_std=0.0375, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5001, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 14:46:27,861 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [001] | mf_u_proj=0.024907, mf_v_proj=0.030986, fusion_gate=0.001488, q_gate_raw=0.000009, skill_latent=0.231414
+2026-02-09 14:46:28,028 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> New best AUC=0.7902 at epoch 1
+2026-02-09 14:48:50,479 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [002/100] | Train: Loss=6.5994, BCE=0.5179, Reg=6.0814, AUC=0.7900, ACC=0.7449, RMSE=0.4152 | Val: Loss=7.1052, BCE=0.5122, Reg=6.5930, AUC=0.7975, ACC=0.7569, RMSE=0.4109
+2026-02-09 14:48:52,139 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [002] | mf_abs_mean=0.1647, mf_std=0.1025, gate_mean=0.2874, gate_std=0.0857, irt_abs_mean=1.6508, irt_std=1.0058, delta_abs_mean=0.0476, delta_std=0.0344, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5004, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 14:48:52,139 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [002] | mf_u_proj=0.026247, mf_v_proj=0.021850, fusion_gate=0.003032, q_gate_raw=0.000116, skill_latent=0.322699
+2026-02-09 14:48:52,412 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> New best AUC=0.7975 at epoch 2
+2026-02-09 14:51:14,734 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [003/100] | Train: Loss=6.5928, BCE=0.5112, Reg=6.0816, AUC=0.7964, ACC=0.7507, RMSE=0.4119 | Val: Loss=7.0987, BCE=0.5058, Reg=6.5928, AUC=0.8030, ACC=0.7623, RMSE=0.4070
+2026-02-09 14:51:16,985 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [003] | mf_abs_mean=0.1868, mf_std=0.1107, gate_mean=0.2987, gate_std=0.0632, irt_abs_mean=1.7626, irt_std=1.1338, delta_abs_mean=0.0557, delta_std=0.0352, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.4971, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 14:51:16,985 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [003] | mf_u_proj=0.037534, mf_v_proj=0.026178, fusion_gate=0.003973, q_gate_raw=0.000116, skill_latent=0.258897
+2026-02-09 14:51:17,292 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> New best AUC=0.8030 at epoch 3
+2026-02-09 14:53:39,613 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [004/100] | Train: Loss=6.5885, BCE=0.5070, Reg=6.0815, AUC=0.8005, ACC=0.7532, RMSE=0.4100 | Val: Loss=7.0987, BCE=0.5059, Reg=6.5928, AUC=0.8021, ACC=0.7586, RMSE=0.4076
+2026-02-09 14:53:41,999 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [004] | mf_abs_mean=0.1536, mf_std=0.0980, gate_mean=0.2844, gate_std=0.0841, irt_abs_mean=1.6935, irt_std=1.1157, delta_abs_mean=0.0441, delta_std=0.0334, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.4977, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 14:53:41,999 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [004] | mf_u_proj=0.022953, mf_v_proj=0.025243, fusion_gate=0.001428, q_gate_raw=0.000170, skill_latent=0.348646
+2026-02-09 14:53:42,000 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.8030 @ 3)
+2026-02-09 14:56:04,374 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [005/100] | Train: Loss=6.5865, BCE=0.5045, Reg=6.0820, AUC=0.8030, ACC=0.7541, RMSE=0.4088 | Val: Loss=7.0924, BCE=0.4988, Reg=6.5936, AUC=0.8056, ACC=0.7647, RMSE=0.4046
+2026-02-09 14:56:06,024 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [005] | mf_abs_mean=0.1753, mf_std=0.1028, gate_mean=0.3091, gate_std=0.0526, irt_abs_mean=1.6338, irt_std=1.0641, delta_abs_mean=0.0540, delta_std=0.0332, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.4977, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 14:56:06,024 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [005] | mf_u_proj=0.022753, mf_v_proj=0.024020, fusion_gate=0.001992, q_gate_raw=0.000095, skill_latent=0.341808
+2026-02-09 14:56:06,272 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> New best AUC=0.8056 at epoch 5
+2026-02-09 14:58:28,695 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [006/100] | Train: Loss=6.5846, BCE=0.5020, Reg=6.0827, AUC=0.8056, ACC=0.7562, RMSE=0.4075 | Val: Loss=7.0984, BCE=0.5046, Reg=6.5938, AUC=0.8061, ACC=0.7670, RMSE=0.4058
+2026-02-09 14:58:30,387 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [006] | mf_abs_mean=0.1622, mf_std=0.0963, gate_mean=0.2800, gate_std=0.0778, irt_abs_mean=1.8412, irt_std=1.1541, delta_abs_mean=0.0450, delta_std=0.0296, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5002, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 14:58:30,387 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [006] | mf_u_proj=0.023657, mf_v_proj=0.029467, fusion_gate=0.002273, q_gate_raw=0.000007, skill_latent=0.375712
+2026-02-09 14:58:30,622 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> New best AUC=0.8061 at epoch 6
+2026-02-09 15:00:52,886 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [007/100] | Train: Loss=6.5837, BCE=0.5009, Reg=6.0828, AUC=0.8066, ACC=0.7571, RMSE=0.4069 | Val: Loss=7.0905, BCE=0.4966, Reg=6.5939, AUC=0.8098, ACC=0.7656, RMSE=0.4039
+2026-02-09 15:00:54,559 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [007] | mf_abs_mean=0.1396, mf_std=0.0916, gate_mean=0.2929, gate_std=0.0705, irt_abs_mean=1.6395, irt_std=1.1097, delta_abs_mean=0.0413, delta_std=0.0301, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.4975, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 15:00:54,559 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [007] | mf_u_proj=0.019850, mf_v_proj=0.030335, fusion_gate=0.001827, q_gate_raw=0.000014, skill_latent=0.921349
+2026-02-09 15:00:54,832 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> New best AUC=0.8098 at epoch 7
+2026-02-09 15:03:17,334 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [008/100] | Train: Loss=6.5819, BCE=0.4992, Reg=6.0828, AUC=0.8080, ACC=0.7572, RMSE=0.4062 | Val: Loss=7.0919, BCE=0.4980, Reg=6.5939, AUC=0.8091, ACC=0.7670, RMSE=0.4032
+2026-02-09 15:03:19,683 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [008] | mf_abs_mean=0.1726, mf_std=0.1070, gate_mean=0.2775, gate_std=0.0844, irt_abs_mean=1.7946, irt_std=1.2021, delta_abs_mean=0.0479, delta_std=0.0359, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5018, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 15:03:19,683 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [008] | mf_u_proj=0.018596, mf_v_proj=0.025013, fusion_gate=0.006856, q_gate_raw=0.000165, skill_latent=0.292105
+2026-02-09 15:03:19,684 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.8098 @ 7)
+2026-02-09 15:05:41,859 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [009/100] | Train: Loss=6.5810, BCE=0.4983, Reg=6.0827, AUC=0.8089, ACC=0.7589, RMSE=0.4057 | Val: Loss=7.0873, BCE=0.4935, Reg=6.5938, AUC=0.8101, ACC=0.7674, RMSE=0.4022
+2026-02-09 15:05:43,612 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [009] | mf_abs_mean=0.1747, mf_std=0.1091, gate_mean=0.2792, gate_std=0.0737, irt_abs_mean=1.6954, irt_std=1.1657, delta_abs_mean=0.0497, delta_std=0.0366, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5015, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 15:05:43,612 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [009] | mf_u_proj=0.024650, mf_v_proj=0.023743, fusion_gate=0.001077, q_gate_raw=0.000132, skill_latent=0.171275
+2026-02-09 15:05:43,930 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> New best AUC=0.8101 at epoch 9
+2026-02-09 15:08:06,185 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [010/100] | Train: Loss=6.5796, BCE=0.4969, Reg=6.0827, AUC=0.8102, ACC=0.7591, RMSE=0.4051 | Val: Loss=7.0940, BCE=0.5000, Reg=6.5939, AUC=0.8097, ACC=0.7656, RMSE=0.4033
+2026-02-09 15:08:07,843 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [010] | mf_abs_mean=0.1781, mf_std=0.1095, gate_mean=0.2893, gate_std=0.0700, irt_abs_mean=1.8646, irt_std=1.2716, delta_abs_mean=0.0517, delta_std=0.0360, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.4997, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 15:08:07,843 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [010] | mf_u_proj=0.018744, mf_v_proj=0.013067, fusion_gate=0.001503, q_gate_raw=0.000019, skill_latent=4.978567
+2026-02-09 15:08:07,843 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.8101 @ 9)
+2026-02-09 15:08:07,906 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Checkpoint saved: checkpoints/junyi_ablation_full_seed42/checkpoint_epoch_10.pth
+2026-02-09 15:08:08,201 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Module Activity] Epoch 10: Proto✓ Graph✗ Personal✗ MF✓
+2026-02-09 15:10:30,452 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [011/100] | Train: Loss=6.5803, BCE=0.4975, Reg=6.0827, AUC=0.8094, ACC=0.7592, RMSE=0.4054 | Val: Loss=7.0876, BCE=0.4938, Reg=6.5938, AUC=0.8108, ACC=0.7673, RMSE=0.4022
+2026-02-09 15:10:32,077 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [011] | mf_abs_mean=0.1625, mf_std=0.1080, gate_mean=0.2913, gate_std=0.0810, irt_abs_mean=1.6617, irt_std=1.1446, delta_abs_mean=0.0482, delta_std=0.0363, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5005, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 15:10:32,077 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [011] | mf_u_proj=0.029280, mf_v_proj=0.028922, fusion_gate=0.004536, q_gate_raw=0.000091, skill_latent=0.385037
+2026-02-09 15:10:32,339 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> New best AUC=0.8108 at epoch 11
+2026-02-09 15:12:54,742 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [012/100] | Train: Loss=6.5677, BCE=0.4850, Reg=6.0827, AUC=0.8206, ACC=0.7679, RMSE=0.3992 | Val: Loss=7.0792, BCE=0.4854, Reg=6.5938, AUC=0.8185, ACC=0.7724, RMSE=0.3975
+2026-02-09 15:12:56,474 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [012] | mf_abs_mean=0.1746, mf_std=0.1068, gate_mean=0.2946, gate_std=0.0769, irt_abs_mean=1.7846, irt_std=1.2543, delta_abs_mean=0.0517, delta_std=0.0363, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.4980, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 15:12:56,474 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [012] | mf_u_proj=0.021852, mf_v_proj=0.032308, fusion_gate=0.001333, q_gate_raw=0.000229, skill_latent=0.150724
+2026-02-09 15:12:56,765 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> New best AUC=0.8185 at epoch 12
+2026-02-09 15:15:19,548 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [013/100] | Train: Loss=6.5654, BCE=0.4827, Reg=6.0827, AUC=0.8227, ACC=0.7692, RMSE=0.3981 | Val: Loss=7.0792, BCE=0.4853, Reg=6.5939, AUC=0.8188, ACC=0.7708, RMSE=0.3986
+2026-02-09 15:15:21,551 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [013] | mf_abs_mean=0.1651, mf_std=0.1004, gate_mean=0.3003, gate_std=0.0795, irt_abs_mean=1.7211, irt_std=1.1758, delta_abs_mean=0.0501, delta_std=0.0355, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.4978, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 15:15:21,551 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [013] | mf_u_proj=0.016214, mf_v_proj=0.022872, fusion_gate=0.002115, q_gate_raw=0.000266, skill_latent=0.216284
+2026-02-09 15:15:21,832 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> New best AUC=0.8188 at epoch 13
+2026-02-09 15:17:44,238 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [014/100] | Train: Loss=6.5637, BCE=0.4811, Reg=6.0826, AUC=0.8239, ACC=0.7701, RMSE=0.3974 | Val: Loss=7.0748, BCE=0.4809, Reg=6.5938, AUC=0.8207, ACC=0.7739, RMSE=0.3967
+2026-02-09 15:17:46,196 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [014] | mf_abs_mean=0.1742, mf_std=0.1026, gate_mean=0.2959, gate_std=0.0737, irt_abs_mean=1.6327, irt_std=1.1144, delta_abs_mean=0.0512, delta_std=0.0335, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5001, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 15:17:46,196 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [014] | mf_u_proj=0.020213, mf_v_proj=0.032377, fusion_gate=0.002722, q_gate_raw=0.000265, skill_latent=0.184167
+2026-02-09 15:17:46,497 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> New best AUC=0.8207 at epoch 14
+2026-02-09 15:20:08,986 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [015/100] | Train: Loss=6.5634, BCE=0.4808, Reg=6.0826, AUC=0.8243, ACC=0.7707, RMSE=0.3972 | Val: Loss=7.0758, BCE=0.4819, Reg=6.5938, AUC=0.8203, ACC=0.7728, RMSE=0.3971
+2026-02-09 15:20:10,930 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [015] | mf_abs_mean=0.1487, mf_std=0.0912, gate_mean=0.3046, gate_std=0.0688, irt_abs_mean=1.6642, irt_std=1.1448, delta_abs_mean=0.0456, delta_std=0.0305, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5001, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 15:20:10,931 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [015] | mf_u_proj=0.027149, mf_v_proj=0.037385, fusion_gate=0.001506, q_gate_raw=0.000174, skill_latent=0.289301
+2026-02-09 15:20:10,931 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.8207 @ 14)
+2026-02-09 15:22:33,358 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [016/100] | Train: Loss=6.5629, BCE=0.4803, Reg=6.0826, AUC=0.8246, ACC=0.7703, RMSE=0.3970 | Val: Loss=7.0780, BCE=0.4842, Reg=6.5938, AUC=0.8191, ACC=0.7723, RMSE=0.3978
+2026-02-09 15:22:35,330 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [016] | mf_abs_mean=0.1347, mf_std=0.0897, gate_mean=0.2939, gate_std=0.0839, irt_abs_mean=1.7258, irt_std=1.2052, delta_abs_mean=0.0396, delta_std=0.0302, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5004, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 15:22:35,330 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [016] | mf_u_proj=0.020470, mf_v_proj=0.032124, fusion_gate=0.004329, q_gate_raw=0.000049, skill_latent=0.632118
+2026-02-09 15:22:35,330 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> No improvement 2 epoch(s) (best AUC=0.8207 @ 14)
+2026-02-09 15:24:57,889 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [017/100] | Train: Loss=6.5501, BCE=0.4675, Reg=6.0826, AUC=0.8351, ACC=0.7792, RMSE=0.3907 | Val: Loss=7.0737, BCE=0.4800, Reg=6.5938, AUC=0.8225, ACC=0.7765, RMSE=0.3958
+2026-02-09 15:24:59,851 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [017] | mf_abs_mean=0.1623, mf_std=0.0999, gate_mean=0.3181, gate_std=0.0711, irt_abs_mean=1.7792, irt_std=1.2066, delta_abs_mean=0.0507, delta_std=0.0329, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.4993, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 15:24:59,851 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [017] | mf_u_proj=0.036758, mf_v_proj=0.037717, fusion_gate=0.003360, q_gate_raw=0.000112, skill_latent=0.319510
+2026-02-09 15:25:00,147 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> New best AUC=0.8225 at epoch 17
+2026-02-09 15:27:22,954 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [018/100] | Train: Loss=6.5468, BCE=0.4642, Reg=6.0826, AUC=0.8375, ACC=0.7809, RMSE=0.3891 | Val: Loss=7.0718, BCE=0.4779, Reg=6.5938, AUC=0.8232, ACC=0.7770, RMSE=0.3950
+2026-02-09 15:27:24,817 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [018] | mf_abs_mean=0.1467, mf_std=0.0963, gate_mean=0.3255, gate_std=0.0686, irt_abs_mean=1.7601, irt_std=1.2103, delta_abs_mean=0.0473, delta_std=0.0331, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5018, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 15:27:24,818 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [018] | mf_u_proj=0.020195, mf_v_proj=0.034024, fusion_gate=0.000588, q_gate_raw=0.000076, skill_latent=0.167880
+2026-02-09 15:27:25,086 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> New best AUC=0.8232 at epoch 18
+2026-02-09 15:29:47,850 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [019/100] | Train: Loss=6.5449, BCE=0.4624, Reg=6.0825, AUC=0.8390, ACC=0.7820, RMSE=0.3882 | Val: Loss=7.0778, BCE=0.4840, Reg=6.5938, AUC=0.8223, ACC=0.7780, RMSE=0.3961
+2026-02-09 15:29:49,521 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [019] | mf_abs_mean=0.1534, mf_std=0.0948, gate_mean=0.3203, gate_std=0.0675, irt_abs_mean=1.9995, irt_std=1.3108, delta_abs_mean=0.0500, delta_std=0.0346, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.4994, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 15:29:49,521 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [019] | mf_u_proj=0.025656, mf_v_proj=0.049117, fusion_gate=0.003130, q_gate_raw=0.000015, skill_latent=0.285204
+2026-02-09 15:29:49,521 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.8232 @ 18)
+2026-02-09 15:32:12,192 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [020/100] | Train: Loss=6.5427, BCE=0.4602, Reg=6.0825, AUC=0.8407, ACC=0.7831, RMSE=0.3873 | Val: Loss=7.0728, BCE=0.4791, Reg=6.5937, AUC=0.8218, ACC=0.7753, RMSE=0.3954
+2026-02-09 15:32:14,163 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [020] | mf_abs_mean=0.1209, mf_std=0.0851, gate_mean=0.3363, gate_std=0.0580, irt_abs_mean=1.8095, irt_std=1.2140, delta_abs_mean=0.0407, delta_std=0.0301, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5011, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 15:32:14,163 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [020] | mf_u_proj=0.027573, mf_v_proj=0.043907, fusion_gate=0.000649, q_gate_raw=0.000039, skill_latent=0.196251
+2026-02-09 15:32:14,163 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> No improvement 2 epoch(s) (best AUC=0.8232 @ 18)
+2026-02-09 15:32:14,227 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Checkpoint saved: checkpoints/junyi_ablation_full_seed42/checkpoint_epoch_20.pth
+2026-02-09 15:32:14,562 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Module Activity] Epoch 20: Proto✓ Graph✗ Personal✗ MF✓
+2026-02-09 15:34:37,322 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Epoch [021/100] | Train: Loss=6.5252, BCE=0.4426, Reg=6.0825, AUC=0.8539, ACC=0.7941, RMSE=0.3787 | Val: Loss=7.0758, BCE=0.4820, Reg=6.5937, AUC=0.8219, ACC=0.7728, RMSE=0.3967
+2026-02-09 15:34:39,274 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Diag] Epoch [021] | mf_abs_mean=0.1120, mf_std=0.0768, gate_mean=0.3527, gate_std=0.0543, irt_abs_mean=1.8564, irt_std=1.2126, delta_abs_mean=0.0399, delta_std=0.0291, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5022, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-09 15:34:39,275 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [021] | mf_u_proj=0.039082, mf_v_proj=0.064356, fusion_gate=0.004407, q_gate_raw=0.000082, skill_latent=0.181073
+2026-02-09 15:34:39,275 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] -> No improvement 3 epoch(s) (best AUC=0.8232 @ 18)
+2026-02-09 15:34:39,275 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Early stopping at epoch 21 (best AUC=0.8232 @ 18)
+2026-02-09 15:34:39,280 - INFO - Epoch-wise metrics saved to checkpoints/junyi_ablation_full_seed42/metrics_history.csv
+2026-02-09 15:34:39,281 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Training completed! Best Val AUC=0.8232 @ epoch 18
+2026-02-09 15:34:39,557 - INFO - 
+============================================================
+         MODULE ACTIVITY REPORT
+============================================================
+Dataset: junyi | Seed: 42 | Epoch: 21
+
+1. Soft Prototype Module:
+   - Usage entropy: 1.034 / 1.099
+   - Usage ratio: 94.1%
+   - Prototype distribution: ['0.43', '0.39', '0.17']
+   - Status: ✓ ACTIVE
+
+2. Concept Graph Module:
+   - Mean row entropy: 6.560 / 6.560
+   - Entropy ratio: 100.0%
+   - Status: ✗ TRIVIAL (uniform distribution, not learning)
+   → Consider: increase lambda_sparse or training longer
+
+3. Personal Graph Module:
+   - Gate alpha mean: 0.502
+   - Gate alpha std: 0.000
+   - Status: ⚠ MARGINAL (low alpha values)
+
+4. Skill/MF Module:
+   - MF logit |mean|: 0.1120
+   - MF logit std: 0.1355
+   - Fusion gate mean: 0.353
+   - Status: ✓ ACTIVE (contributing to predictions)
+
+------------------------------------------------------------
+SUMMARY:
+   Active modules: Soft Prototype, Skill/MF
+   ⚠ Inactive modules: Concept Graph, Personal Graph
+============================================================
+2026-02-09 15:34:39,557 - INFO - [junyi|gpd_base_full|lr=0.003|drop=0.40] Module activity saved to checkpoints/junyi_ablation_full_seed42/module_activity.json
+2026-02-09 15:34:39,650 - INFO - Using device: cuda:0
+2026-02-09 15:34:39,650 - INFO - Loading model from checkpoints/junyi_ablation_full_seed42/best_model.pth...
+2026-02-09 15:34:39,995 - INFO - Inference switches: ablate_module1=False, ablate_module2=False, ablate_module3=False | enable_module1=True, enable_module2=True, enable_module3=True | use_soft_prototype=True, use_mf_branch=True, use_concept_graph=True | effective(num_gnn_layers=2, num_prototypes=3)
+2026-02-09 15:34:40,028 - INFO - [Inference] Ablation runtime check: args(ablate_module1=False,ablate_module2=False,ablate_module3=False) | model(enable_module1=True,enable_module2=True,enable_module3=True) | physical(has_knowledge_encoder=True,has_mf_branch=True,has_soft_prototype=True)
+2026-02-09 15:34:40,029 - INFO - Model loaded from epoch 18. Start testing...
+2026-02-09 15:34:48,225 - INFO - [Test] 200/262 batches done, samples=51200
+2026-02-09 15:34:50,810 - INFO - 
+==================================================
+2026-02-09 15:34:50,810 - INFO - Test Results:
+2026-02-09 15:34:50,810 - INFO - AUC: 0.8284
+2026-02-09 15:34:50,810 - INFO - ACC: 0.7687
+2026-02-09 15:34:50,810 - INFO - RMSE: 0.3992
+2026-02-09 15:34:50,810 - INFO - ==================================================
+2026-02-09 15:34:50,814 - INFO - Summary appended to /home/zsh/ConceptSkillCDM/results/experiment_results.csv
+2026-02-09 15:34:50,828 - INFO - Run completed.
+2026-02-09 15:34:50,828 - INFO - Best validation AUC: 0.8232 at epoch 18
+2026-02-09 15:34:50,828 - INFO - Test metrics - AUC: 0.8284, ACC: 0.7687, RMSE: 0.3992
