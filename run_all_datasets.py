@@ -72,7 +72,7 @@ def launch_experiment(dataset_name, cfg, gpu_candidates):
 def main():
     parser = argparse.ArgumentParser(description="Run best configs for assist_09 & junyi.")
     parser.add_argument("--datasets", type=str, default="assist_09,junyi")
-    parser.add_argument("--gpus", type=str, default="1,2,3")
+    parser.add_argument("--gpus", type=str, default="1,2")
     parser.add_argument("--max_concurrent", type=int, default=2)
     args = parser.parse_args()
 

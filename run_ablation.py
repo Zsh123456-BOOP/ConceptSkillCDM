@@ -171,8 +171,8 @@ def main():
     parser = argparse.ArgumentParser(description="Run ablation experiments for CognitiveDiagnosisModel.")
 
     parser.add_argument("--datasets", type=str, default="assist_09,junyi", help="Comma-separated datasets.")
-    parser.add_argument("--gpus", type=str, default="0,1,2,3", help="Comma-separated GPU ids.")
-    parser.add_argument("--max_concurrent", type=int, default=4, help="Max concurrent experiments.")
+    parser.add_argument("--gpus", type=str, default="1,2", help="Comma-separated GPU ids.")
+    parser.add_argument("--max_concurrent", type=int, default=2, help="Max concurrent experiments.")
 
     parser.add_argument("--generate_diagnosis", action="store_true", help="Enable diagnosis generation.")
     parser.add_argument("--seeds", type=str, default=None, help="Comma-separated seeds, e.g., 42,43")

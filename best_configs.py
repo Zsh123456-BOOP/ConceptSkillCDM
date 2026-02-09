@@ -133,7 +133,7 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "knowledge_dim": 128,            # Module 1/2 概念嵌入维度
         "exercise_dim": 128,             # Module 2/3 题目嵌入维度
         "skill_dim": 64,                 # Module 3 学生 MF 潜在维度
-        "num_gnn_layers": 2,             # Module 1 GNN 层数
+        "num_gnn_layers": 1,             # Module 1 GNN 层数
         "num_relation_heads": 2,         # Module 1 多头关系数
 
         # === Module 1: 概念图正则 ===
