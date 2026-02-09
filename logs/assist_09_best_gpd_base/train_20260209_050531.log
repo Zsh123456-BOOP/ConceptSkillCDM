@@ -1,0 +1,77 @@
+2026-02-09 05:05:31,734 - INFO - Arguments:
+2026-02-09 05:05:31,734 - INFO -   ablate_concept_graph: False
+2026-02-09 05:05:31,734 - INFO -   ablate_module1: False
+2026-02-09 05:05:31,734 - INFO -   ablate_module2: False
+2026-02-09 05:05:31,734 - INFO -   ablate_module3: False
+2026-02-09 05:05:31,734 - INFO -   ablate_skill_encoder: False
+2026-02-09 05:05:31,734 - INFO -   ablate_soft_prototype: False
+2026-02-09 05:05:31,734 - INFO -   allow_self_loop: True
+2026-02-09 05:05:31,734 - INFO -   batch_size: 128
+2026-02-09 05:05:31,734 - INFO -   data_dir: ./data/assist_09
+2026-02-09 05:05:31,734 - INFO -   dataset_name: assist_09
+2026-02-09 05:05:31,735 - INFO -   disable_q_conditioning: False
+2026-02-09 05:05:31,735 - INFO -   disable_self_loop: False
+2026-02-09 05:05:31,735 - INFO -   disable_soft_prototype: False
+2026-02-09 05:05:31,735 - INFO -   dropout: 0.2
+2026-02-09 05:05:31,735 - INFO -   early_stop_patience: 3
+2026-02-09 05:05:31,735 - INFO -   enable_module1: True
+2026-02-09 05:05:31,735 - INFO -   enable_module2: True
+2026-02-09 05:05:31,735 - INFO -   enable_module3: True
+2026-02-09 05:05:31,735 - INFO -   epochs: 100
+2026-02-09 05:05:31,735 - INFO -   exercise_dim: 64
+2026-02-09 05:05:31,735 - INFO -   exercise_l2_lambda: 5e-05
+2026-02-09 05:05:31,735 - INFO -   generate_diagnosis: True
+2026-02-09 05:05:31,735 - INFO -   gnn_residual_weight: 0.5
+2026-02-09 05:05:31,735 - INFO -   gpu_candidates: None
+2026-02-09 05:05:31,735 - INFO -   gpu_ids: None
+2026-02-09 05:05:31,735 - INFO -   graph_topk: None
+2026-02-09 05:05:31,735 - INFO -   knowledge_dim: 64
+2026-02-09 05:05:31,735 - INFO -   lambda_alpha: 0.01
+2026-02-09 05:05:31,735 - INFO -   lambda_proto_div: 0.1
+2026-02-09 05:05:31,735 - INFO -   lambda_proto_usage: 0.1
+2026-02-09 05:05:31,735 - INFO -   lambda_sparse: 1.0
+2026-02-09 05:05:31,735 - INFO -   lambda_sparse_personal: 0.005
+2026-02-09 05:05:31,735 - INFO -   learning_rate: 0.0003
+2026-02-09 05:05:31,735 - INFO -   log_dir: logs/assist_09_best_gpd_base
+2026-02-09 05:05:31,735 - INFO -   min_exer_interactions: 0
+2026-02-09 05:05:31,735 - INFO -   min_poison_count: 0
+2026-02-09 05:05:31,735 - INFO -   min_stu_interactions: 15
+2026-02-09 05:05:31,735 - INFO -   model_variant: gpd_base
+2026-02-09 05:05:31,735 - INFO -   multi_gpu: False
+2026-02-09 05:05:31,736 - INFO -   no_cuda: False
+2026-02-09 05:05:31,736 - INFO -   num_gnn_layers: 1
+2026-02-09 05:05:31,736 - INFO -   num_prototypes: 3
+2026-02-09 05:05:31,736 - INFO -   num_relation_heads: 2
+2026-02-09 05:05:31,736 - INFO -   num_workers: 4
+2026-02-09 05:05:31,736 - INFO -   patience: 5
+2026-02-09 05:05:31,736 - INFO -   personal_rank: 4
+2026-02-09 05:05:31,736 - INFO -   proto_lambda: 5.0
+2026-02-09 05:05:31,736 - INFO -   proto_tau: 1.0
+2026-02-09 05:05:31,736 - INFO -   save_dir: checkpoints/assist_09_best_gpd_base
+2026-02-09 05:05:31,736 - INFO -   save_interval: 10
+2026-02-09 05:05:31,736 - INFO -   seed: 42
+2026-02-09 05:05:31,736 - INFO -   skill_dim: 128
+2026-02-09 05:05:31,736 - INFO -   use_concept_graph: True
+2026-02-09 05:05:31,736 - INFO -   use_exercise_graph: True
+2026-02-09 05:05:31,736 - INFO -   use_mf_branch: True
+2026-02-09 05:05:31,736 - INFO -   use_personal_graph: True
+2026-02-09 05:05:31,736 - INFO -   use_q_conditioning: True
+2026-02-09 05:05:31,736 - INFO -   use_skill_encoder: True
+2026-02-09 05:05:31,736 - INFO -   use_soft_prototype: True
+2026-02-09 05:05:31,736 - INFO -   weight_decay: 1e-05
+2026-02-09 05:05:31,823 - INFO - Using device: cuda:0 (physical gpu 1)
+2026-02-09 05:05:31,824 - INFO - [assist_09|gpd_base|lr=0.0003|drop=0.20] Loading datasets...
+2026-02-09 05:05:31,824 - INFO - [assist_09|gpd_base|lr=0.0003|drop=0.20] Regularization: graph_entropy(lambda_sparse)=1.000000, proto_div=0.100000, proto_usage=0.100000, personal_sparse=0.005000, alpha_penalty=0.010000, mf_l2(exercise_l2_lambda)=0.000050
+2026-02-09 05:05:31,932 - INFO - [数据清洗] 学生交互次数 < 15 次的学生：共移除 0 个学生（仅统计用户数）
+2026-02-09 05:05:31,944 - INFO - [数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 0 条记录。
+2026-02-09 05:05:31,945 - INFO - [数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。
+2026-02-09 05:05:31,945 - INFO - [数据清洗] 跳过毒题清洗（min_poison_count <= 0）。
+2026-02-09 05:05:41,567 - INFO - [assist_09|gpd_base|lr=0.0003|drop=0.20] Train samples: 194489, Val samples: 20385
+2026-02-09 05:05:41,567 - INFO - [assist_09|gpd_base|lr=0.0003|drop=0.20] Number of students: 2493
+2026-02-09 05:05:41,567 - INFO - [assist_09|gpd_base|lr=0.0003|drop=0.20] Number of exercises: 17676
+2026-02-09 05:05:41,567 - INFO - [assist_09|gpd_base|lr=0.0003|drop=0.20] Number of concepts: 123
+2026-02-09 05:05:41,567 - INFO - [assist_09|gpd_base|lr=0.0003|drop=0.20] Creating model...
+2026-02-09 05:05:41,567 - INFO - [assist_09|gpd_base|lr=0.0003|drop=0.20] Ablation switches: use_soft_prototype=True, use_mf_branch=True, use_concept_graph=True (effective num_gnn_layers=1, num_prototypes=3)
+2026-02-09 05:05:41,691 - INFO - [assist_09|gpd_base|lr=0.0003|drop=0.20] Total parameters: 1,783,854
+2026-02-09 05:05:41,691 - INFO - [assist_09|gpd_base|lr=0.0003|drop=0.20] Trainable parameters: 1,783,854
+2026-02-09 05:05:42,515 - INFO - [assist_09|gpd_base|lr=0.0003|drop=0.20] Starting training...
