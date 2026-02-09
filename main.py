@@ -156,6 +156,19 @@ def parse_args():
     parser.add_argument("--gpu_ids", type=str, default=None,
                         help="Comma-separated GPU IDs for multi-GPU training (e.g., '0,1').")
 
+    # 诊断日志（不改变训练逻辑）
+    parser.add_argument(
+        "--debug_module3_diag",
+        action="store_true",
+        help="Enable per-epoch module diagnostics for module1/module3 and gradient norms.",
+    )
+    parser.add_argument(
+        "--diag_batches",
+        type=int,
+        default=2,
+        help="Number of validation batches sampled per epoch for debug diagnostics.",
+    )
+
     return parser
 
 

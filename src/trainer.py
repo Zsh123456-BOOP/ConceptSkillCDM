@@ -200,6 +200,193 @@ def _hard_ablation_effective_hparams(
     return eff_gnn, eff_proto
 
 
+def _safe_mean_std(values: List[float]) -> Tuple[float, float]:
+    if not values:
+        return 0.0, 0.0
+    arr = np.asarray(values, dtype=np.float64)
+    return float(arr.mean()), float(arr.std())
+
+
+def _safe_abs_mean_std(values: List[float]) -> Tuple[float, float]:
+    if not values:
+        return 0.0, 0.0
+    arr = np.abs(np.asarray(values, dtype=np.float64))
+    return float(arr.mean()), float(arr.std())
+
+
+def _row_entropy_mean(A: np.ndarray) -> float:
+    eps = 1e-12
+    A = np.clip(A, eps, None)
+    row_entropy = -(A * np.log(A)).sum(axis=-1)
+    return float(row_entropy.mean())
+
+
+def _collect_debug_forward_stats(
+    model: CognitiveDiagnosisModel,
+    data_loader: DataLoader,
+    device: torch.device,
+    max_batches: int = 2,
+) -> Dict[str, float]:
+    """
+    仅用于诊断日志：采样少量 batch 统计 module1/module3 关键信号。
+    不参与训练，也不改变任何训练逻辑。
+    """
+    max_batches = max(1, int(max_batches))
+    was_training = model.training
+    model.eval()
+
+    mf_vals: List[float] = []
+    gate_vals: List[float] = []
+    irt_vals: List[float] = []
+    delta_vals: List[float] = []
+    alpha_vals: List[float] = []
+    personal_entropy_vals: List[float] = []
+
+    graph_row_entropy_mean = 0.0
+    graph_entropy_ratio = 0.0
+    graph_ready = False
+
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(data_loader):
+            if batch_idx >= max_batches:
+                break
+
+            student_ids, exercise_ids, concept_vector, _ = batch
+            student_ids = student_ids.to(device)
+            exercise_ids = exercise_ids.to(device)
+            concept_vector = concept_vector.to(device)
+
+            _, details = model(
+                student_ids,
+                exercise_ids,
+                concept_vector=concept_vector,
+                return_details=True,
+                return_logits=True,
+            )
+
+            mf_logit = details.get("mf_logit")
+            if mf_logit is not None:
+                mf_vals.extend(mf_logit.detach().reshape(-1).cpu().numpy().tolist())
+
+            irt_logit = details.get("irt_logit")
+            if irt_logit is not None:
+                irt_vals.extend(irt_logit.detach().reshape(-1).cpu().numpy().tolist())
+
+            gate = details.get("gate")
+            if gate is not None:
+                gate_vals.extend(gate.detach().reshape(-1).cpu().numpy().tolist())
+
+            if mf_logit is not None and gate is not None:
+                delta = gate.detach().reshape(-1) * mf_logit.detach().reshape(-1)
+                delta_vals.extend(delta.cpu().numpy().tolist())
+
+            alpha = details.get("alpha")
+            if alpha is not None:
+                alpha_vals.extend(alpha.detach().reshape(-1).cpu().numpy().tolist())
+
+            personal_matrices = details.get("personal_matrices")
+            if personal_matrices is not None:
+                pm = personal_matrices.detach().cpu().numpy()
+                personal_entropy_vals.append(_row_entropy_mean(pm))
+
+            if not graph_ready:
+                relation_matrices = details.get("relation_matrices")
+                if relation_matrices is not None:
+                    rm = relation_matrices.detach().cpu().numpy()
+                    graph_row_entropy_mean = _row_entropy_mean(rm)
+                    max_row_entropy = float(np.log(rm.shape[-1])) if rm.shape[-1] > 1 else 0.0
+                    graph_entropy_ratio = (
+                        graph_row_entropy_mean / max_row_entropy if max_row_entropy > 0 else 0.0
+                    )
+                    graph_ready = True
+
+    if was_training:
+        model.train()
+
+    mf_abs_mean, mf_std = _safe_abs_mean_std(mf_vals)
+    gate_mean, gate_std = _safe_mean_std(gate_vals)
+    irt_abs_mean, irt_std = _safe_abs_mean_std(irt_vals)
+    delta_abs_mean, delta_std = _safe_abs_mean_std(delta_vals)
+    alpha_mean, alpha_std = _safe_mean_std(alpha_vals)
+    personal_row_entropy, _ = _safe_mean_std(personal_entropy_vals)
+
+    return {
+        "mf_abs_mean": mf_abs_mean,
+        "mf_std": mf_std,
+        "gate_mean": gate_mean,
+        "gate_std": gate_std,
+        "irt_abs_mean": irt_abs_mean,
+        "irt_std": irt_std,
+        "delta_abs_mean": delta_abs_mean,
+        "delta_std": delta_std,
+        "graph_row_entropy_mean": graph_row_entropy_mean,
+        "graph_entropy_ratio": graph_entropy_ratio,
+        "alpha_mean": alpha_mean,
+        "alpha_std": alpha_std,
+        "personal_row_entropy": personal_row_entropy,
+    }
+
+
+def _grad_norm_or_zero(param: Optional[torch.Tensor]) -> float:
+    if param is None:
+        return 0.0
+    grad = getattr(param, "grad", None)
+    if grad is None:
+        return 0.0
+    return float(grad.detach().norm(p=2).item())
+
+
+def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
+    base_model = _get_base_model(model)
+
+    mf_head = getattr(base_model, "mf_head", None)
+    fusion = getattr(base_model, "fusion", None)
+    exercise_encoder = getattr(base_model, "exercise_encoder", None)
+    skill_encoder = getattr(base_model, "skill_encoder", None)
+
+    mf_u = getattr(getattr(mf_head, "u_proj", None), "weight", None)
+    mf_v = getattr(getattr(mf_head, "v_proj", None), "weight", None)
+    fusion_w = getattr(getattr(fusion, "fusion_gate", None), "weight", None)
+    q_gate = getattr(exercise_encoder, "q_gate_raw", None) if exercise_encoder is not None else None
+    skill_latent = getattr(getattr(skill_encoder, "latent_emb", None), "weight", None)
+
+    return {
+        "mf_u_proj": _grad_norm_or_zero(mf_u),
+        "mf_v_proj": _grad_norm_or_zero(mf_v),
+        "fusion_gate": _grad_norm_or_zero(fusion_w),
+        "q_gate_raw": _grad_norm_or_zero(q_gate),
+        "skill_latent": _grad_norm_or_zero(skill_latent),
+    }
+
+
+def _debug_assert_module3_wiring(model: nn.Module, *, ablate_module3: bool) -> None:
+    """
+    Debug 模式下的 module3 断言：
+    - enable_module3 & use_mf_branch 时，mf_head/skill_encoder/fusion 必须存在
+    - ablate_module3=True 时，module3 组件必须不存在
+    """
+    base_model = _get_base_model(model)
+    enable_module3 = bool(getattr(base_model, "enable_module3", False))
+    use_mf_branch = bool(getattr(base_model, "use_mf_branch", False))
+    mf_head = getattr(base_model, "mf_head", None)
+    skill_encoder = getattr(base_model, "skill_encoder", None)
+    fusion = getattr(base_model, "fusion", None)
+    prototype_module = getattr(base_model, "prototype_module", None)
+
+    if enable_module3 and use_mf_branch:
+        if mf_head is None or skill_encoder is None or fusion is None:
+            raise RuntimeError(
+                "Debug wiring assert failed: enable_module3=True & use_mf_branch=True, "
+                "but mf_head/skill_encoder/fusion is missing."
+            )
+
+    if ablate_module3:
+        if mf_head is not None or skill_encoder is not None or fusion is not None or prototype_module is not None:
+            raise RuntimeError(
+                "Debug wiring assert failed: ablate_module3=True, but module3 components still exist."
+            )
+
+
 # ======================================================
 # Train / Validate (use BCEWithLogitsLoss)
 # ======================================================
@@ -405,6 +592,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     ablate_module1 = bool(getattr(args, "ablate_module1", False))
     ablate_module2 = bool(getattr(args, "ablate_module2", False))
     ablate_module3 = bool(getattr(args, "ablate_module3", False))
+    debug_module3_diag = bool(getattr(args, "debug_module3_diag", False))
+    diag_batches = max(1, int(getattr(args, "diag_batches", 2)))
     expected_enable_module1 = not ablate_module1
     expected_enable_module2 = not ablate_module2
     expected_enable_module3 = not ablate_module3
@@ -490,6 +679,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         ablate_module2=ablate_module2,
         ablate_module3=ablate_module3,
     )
+    if debug_module3_diag:
+        _debug_assert_module3_wiring(model, ablate_module3=ablate_module3)
+        logger.info("%s Debug diagnostics enabled: diag_batches=%d", run_tag, diag_batches)
 
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -527,6 +719,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             args.lambda_proto_usage,
             logger,
         )
+        grad_norms = _collect_debug_grad_norms(model) if debug_module3_diag else None
 
         val_metrics = validate(
             model,
@@ -548,6 +741,47 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             val_metrics["loss"], val_metrics["bce_loss"], val_metrics["reg_loss"],
             val_metrics["auc"], val_metrics["acc"], val_metrics["rmse"],
         )
+
+        if debug_module3_diag:
+            diag = _collect_debug_forward_stats(
+                model=model,
+                data_loader=val_loader,
+                device=device,
+                max_batches=diag_batches,
+            )
+            logger.info(
+                "%s [Diag] Epoch [%03d] | "
+                "mf_abs_mean=%.4f, mf_std=%.4f, gate_mean=%.4f, gate_std=%.4f, "
+                "irt_abs_mean=%.4f, irt_std=%.4f, delta_abs_mean=%.4f, delta_std=%.4f, "
+                "graph_row_entropy=%.4f, graph_entropy_ratio=%.4f, "
+                "alpha_mean=%.4f, alpha_std=%.4f, personal_row_entropy=%.4f",
+                run_tag,
+                epoch,
+                diag["mf_abs_mean"],
+                diag["mf_std"],
+                diag["gate_mean"],
+                diag["gate_std"],
+                diag["irt_abs_mean"],
+                diag["irt_std"],
+                diag["delta_abs_mean"],
+                diag["delta_std"],
+                diag["graph_row_entropy_mean"],
+                diag["graph_entropy_ratio"],
+                diag["alpha_mean"],
+                diag["alpha_std"],
+                diag["personal_row_entropy"],
+            )
+            logger.info(
+                "%s [Grad Norms] Epoch [%03d] | "
+                "mf_u_proj=%.6f, mf_v_proj=%.6f, fusion_gate=%.6f, q_gate_raw=%.6f, skill_latent=%.6f",
+                run_tag,
+                epoch,
+                grad_norms["mf_u_proj"],
+                grad_norms["mf_v_proj"],
+                grad_norms["fusion_gate"],
+                grad_norms["q_gate_raw"],
+                grad_norms["skill_latent"],
+            )
 
         scheduler.step(val_metrics["loss"])
 
