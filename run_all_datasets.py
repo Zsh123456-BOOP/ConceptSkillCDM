@@ -94,7 +94,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run best configs for assist_09 & junyi.")
     parser.add_argument("--datasets", type=str, default="assist_09,junyi")
     parser.add_argument("--gpus", type=str, default="1,2")
-    parser.add_argument("--max_concurrent", type=int, default=1)
+    parser.add_argument("--max_concurrent", type=int, default=2)
     parser.add_argument("--max_per_gpu", type=int, default=1)
     parser.add_argument("--poll_interval", type=int, default=10)
     args = parser.parse_args()

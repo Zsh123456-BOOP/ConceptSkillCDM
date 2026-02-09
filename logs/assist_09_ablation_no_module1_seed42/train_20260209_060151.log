@@ -1,0 +1,155 @@
+2026-02-09 06:01:51,086 - INFO - Arguments:
+2026-02-09 06:01:51,087 - INFO -   ablate_concept_graph: False
+2026-02-09 06:01:51,087 - INFO -   ablate_module1: True
+2026-02-09 06:01:51,087 - INFO -   ablate_module2: False
+2026-02-09 06:01:51,087 - INFO -   ablate_module3: False
+2026-02-09 06:01:51,087 - INFO -   ablate_skill_encoder: False
+2026-02-09 06:01:51,087 - INFO -   ablate_soft_prototype: False
+2026-02-09 06:01:51,087 - INFO -   allow_self_loop: True
+2026-02-09 06:01:51,087 - INFO -   batch_size: 128
+2026-02-09 06:01:51,087 - INFO -   data_dir: ./data/assist_09
+2026-02-09 06:01:51,087 - INFO -   dataset_name: assist_09
+2026-02-09 06:01:51,087 - INFO -   disable_q_conditioning: False
+2026-02-09 06:01:51,087 - INFO -   disable_self_loop: False
+2026-02-09 06:01:51,087 - INFO -   disable_soft_prototype: False
+2026-02-09 06:01:51,087 - INFO -   dropout: 0.2
+2026-02-09 06:01:51,087 - INFO -   early_stop_patience: 3
+2026-02-09 06:01:51,087 - INFO -   enable_module1: False
+2026-02-09 06:01:51,087 - INFO -   enable_module2: True
+2026-02-09 06:01:51,087 - INFO -   enable_module3: True
+2026-02-09 06:01:51,087 - INFO -   epochs: 100
+2026-02-09 06:01:51,087 - INFO -   exercise_dim: 64
+2026-02-09 06:01:51,087 - INFO -   exercise_l2_lambda: 5e-05
+2026-02-09 06:01:51,087 - INFO -   generate_diagnosis: False
+2026-02-09 06:01:51,087 - INFO -   gnn_residual_weight: 0.5
+2026-02-09 06:01:51,087 - INFO -   gpu_candidates: None
+2026-02-09 06:01:51,087 - INFO -   gpu_ids: None
+2026-02-09 06:01:51,087 - INFO -   graph_topk: None
+2026-02-09 06:01:51,087 - INFO -   knowledge_dim: 64
+2026-02-09 06:01:51,087 - INFO -   lambda_alpha: 0.0
+2026-02-09 06:01:51,088 - INFO -   lambda_proto_div: 0.1
+2026-02-09 06:01:51,088 - INFO -   lambda_proto_usage: 0.1
+2026-02-09 06:01:51,088 - INFO -   lambda_sparse: 0.0
+2026-02-09 06:01:51,088 - INFO -   lambda_sparse_personal: 0.0
+2026-02-09 06:01:51,088 - INFO -   learning_rate: 0.0003
+2026-02-09 06:01:51,088 - INFO -   log_dir: logs/assist_09_ablation_no_module1_seed42
+2026-02-09 06:01:51,088 - INFO -   min_exer_interactions: 0
+2026-02-09 06:01:51,088 - INFO -   min_poison_count: 0
+2026-02-09 06:01:51,088 - INFO -   min_stu_interactions: 15
+2026-02-09 06:01:51,088 - INFO -   model_variant: gpd_base_no_module1
+2026-02-09 06:01:51,088 - INFO -   multi_gpu: False
+2026-02-09 06:01:51,088 - INFO -   no_cuda: False
+2026-02-09 06:01:51,088 - INFO -   num_gnn_layers: 0
+2026-02-09 06:01:51,088 - INFO -   num_prototypes: 3
+2026-02-09 06:01:51,088 - INFO -   num_relation_heads: 2
+2026-02-09 06:01:51,088 - INFO -   num_workers: 4
+2026-02-09 06:01:51,088 - INFO -   patience: 5
+2026-02-09 06:01:51,088 - INFO -   personal_rank: 4
+2026-02-09 06:01:51,088 - INFO -   proto_lambda: 5.0
+2026-02-09 06:01:51,088 - INFO -   proto_tau: 1.0
+2026-02-09 06:01:51,088 - INFO -   save_dir: checkpoints/assist_09_ablation_no_module1_seed42
+2026-02-09 06:01:51,088 - INFO -   save_interval: 10
+2026-02-09 06:01:51,088 - INFO -   seed: 42
+2026-02-09 06:01:51,088 - INFO -   skill_dim: 128
+2026-02-09 06:01:51,088 - INFO -   use_concept_graph: False
+2026-02-09 06:01:51,088 - INFO -   use_exercise_graph: False
+2026-02-09 06:01:51,088 - INFO -   use_mf_branch: True
+2026-02-09 06:01:51,088 - INFO -   use_personal_graph: False
+2026-02-09 06:01:51,088 - INFO -   use_q_conditioning: True
+2026-02-09 06:01:51,089 - INFO -   use_skill_encoder: True
+2026-02-09 06:01:51,089 - INFO -   use_soft_prototype: True
+2026-02-09 06:01:51,089 - INFO -   weight_decay: 1e-05
+2026-02-09 06:01:51,173 - INFO - Using device: cuda:0 (physical gpu 2)
+2026-02-09 06:01:51,173 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Loading datasets...
+2026-02-09 06:01:51,174 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Regularization: graph_entropy(lambda_sparse)=0.000000, proto_div=0.100000, proto_usage=0.100000, personal_sparse=0.000000, alpha_penalty=0.000000, mf_l2(exercise_l2_lambda)=0.000050
+2026-02-09 06:01:51,279 - INFO - [数据清洗] 学生交互次数 < 15 次的学生：共移除 0 个学生（仅统计用户数）
+2026-02-09 06:01:51,290 - INFO - [数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 0 条记录。
+2026-02-09 06:01:51,290 - INFO - [数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。
+2026-02-09 06:01:51,290 - INFO - [数据清洗] 跳过毒题清洗（min_poison_count <= 0）。
+2026-02-09 06:02:01,517 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Train samples: 194489, Val samples: 20385
+2026-02-09 06:02:01,517 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Number of students: 2493
+2026-02-09 06:02:01,517 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Number of exercises: 17676
+2026-02-09 06:02:01,517 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Number of concepts: 123
+2026-02-09 06:02:01,517 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Creating model...
+2026-02-09 06:02:01,518 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Ablation switches: use_soft_prototype=True, use_mf_branch=True, use_concept_graph=False (effective num_gnn_layers=0, num_prototypes=3)
+2026-02-09 06:02:01,651 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Total parameters: 1,693,737
+2026-02-09 06:02:01,651 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Trainable parameters: 1,693,737
+2026-02-09 06:02:02,561 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Starting training...
+2026-02-09 06:02:24,426 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Epoch [001/100] | Train: Loss=0.5886, BCE=0.5886, Reg=0.0000, AUC=0.6932, ACC=0.6929, RMSE=0.4486 | Val: Loss=0.5591, BCE=0.5590, Reg=0.0000, AUC=0.7397, ACC=0.7165, RMSE=0.4344
+2026-02-09 06:02:24,690 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] -> New best AUC=0.7397 at epoch 1
+2026-02-09 06:02:45,728 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Epoch [002/100] | Train: Loss=0.5180, BCE=0.5180, Reg=0.0000, AUC=0.7897, ACC=0.7458, RMSE=0.4149 | Val: Loss=0.5386, BCE=0.5386, Reg=0.0000, AUC=0.7644, ACC=0.7331, RMSE=0.4250
+2026-02-09 06:02:46,102 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] -> New best AUC=0.7644 at epoch 2
+2026-02-09 06:03:07,602 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Epoch [003/100] | Train: Loss=0.4464, BCE=0.4464, Reg=0.0000, AUC=0.8625, ACC=0.7979, RMSE=0.3788 | Val: Loss=0.5306, BCE=0.5306, Reg=0.0000, AUC=0.7727, ACC=0.7347, RMSE=0.4214
+2026-02-09 06:03:08,029 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] -> New best AUC=0.7727 at epoch 3
+2026-02-09 06:03:28,625 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Epoch [004/100] | Train: Loss=0.3902, BCE=0.3902, Reg=0.0000, AUC=0.9041, ACC=0.8367, RMSE=0.3486 | Val: Loss=0.5271, BCE=0.5271, Reg=0.0001, AUC=0.7776, ACC=0.7386, RMSE=0.4195
+2026-02-09 06:03:29,057 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] -> New best AUC=0.7776 at epoch 4
+2026-02-09 06:03:50,936 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Epoch [005/100] | Train: Loss=0.3520, BCE=0.3519, Reg=0.0000, AUC=0.9264, ACC=0.8599, RMSE=0.3271 | Val: Loss=0.5251, BCE=0.5250, Reg=0.0001, AUC=0.7822, ACC=0.7407, RMSE=0.4183
+2026-02-09 06:03:51,321 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] -> New best AUC=0.7822 at epoch 5
+2026-02-09 06:04:12,404 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Epoch [006/100] | Train: Loss=0.3213, BCE=0.3213, Reg=0.0000, AUC=0.9422, ACC=0.8775, RMSE=0.3095 | Val: Loss=0.5259, BCE=0.5258, Reg=0.0001, AUC=0.7826, ACC=0.7440, RMSE=0.4182
+2026-02-09 06:04:12,862 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] -> New best AUC=0.7826 at epoch 6
+2026-02-09 06:04:34,539 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Epoch [007/100] | Train: Loss=0.2971, BCE=0.2970, Reg=0.0000, AUC=0.9526, ACC=0.8891, RMSE=0.2955 | Val: Loss=0.5255, BCE=0.5254, Reg=0.0001, AUC=0.7846, ACC=0.7449, RMSE=0.4177
+2026-02-09 06:04:34,918 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] -> New best AUC=0.7846 at epoch 7
+2026-02-09 06:04:56,672 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Epoch [008/100] | Train: Loss=0.2763, BCE=0.2762, Reg=0.0000, AUC=0.9600, ACC=0.8992, RMSE=0.2832 | Val: Loss=0.5302, BCE=0.5301, Reg=0.0001, AUC=0.7839, ACC=0.7425, RMSE=0.4189
+2026-02-09 06:04:56,673 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] -> No improvement 1 epoch(s) (best AUC=0.7846 @ 7)
+2026-02-09 06:05:19,010 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Epoch [009/100] | Train: Loss=0.2579, BCE=0.2579, Reg=0.0000, AUC=0.9659, ACC=0.9066, RMSE=0.2724 | Val: Loss=0.5334, BCE=0.5333, Reg=0.0001, AUC=0.7848, ACC=0.7445, RMSE=0.4194
+2026-02-09 06:05:19,416 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] -> New best AUC=0.7848 at epoch 9
+2026-02-09 06:05:42,566 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Epoch [010/100] | Train: Loss=0.2416, BCE=0.2416, Reg=0.0000, AUC=0.9704, ACC=0.9131, RMSE=0.2627 | Val: Loss=0.5380, BCE=0.5379, Reg=0.0001, AUC=0.7858, ACC=0.7448, RMSE=0.4200
+2026-02-09 06:05:44,318 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] -> New best AUC=0.7858 at epoch 10
+2026-02-09 06:05:44,396 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Checkpoint saved: checkpoints/assist_09_ablation_no_module1_seed42/checkpoint_epoch_10.pth
+2026-02-09 06:05:44,563 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] [Module Activity] Epoch 10: Proto✓ MF✓
+2026-02-09 06:06:05,286 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Epoch [011/100] | Train: Loss=0.2282, BCE=0.2282, Reg=0.0001, AUC=0.9736, ACC=0.9181, RMSE=0.2549 | Val: Loss=0.5452, BCE=0.5451, Reg=0.0001, AUC=0.7844, ACC=0.7424, RMSE=0.4220
+2026-02-09 06:06:05,287 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] -> No improvement 1 epoch(s) (best AUC=0.7858 @ 10)
+2026-02-09 06:06:26,150 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Epoch [012/100] | Train: Loss=0.2069, BCE=0.2068, Reg=0.0001, AUC=0.9788, ACC=0.9269, RMSE=0.2409 | Val: Loss=0.5473, BCE=0.5472, Reg=0.0001, AUC=0.7857, ACC=0.7433, RMSE=0.4221
+2026-02-09 06:06:26,151 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] -> No improvement 2 epoch(s) (best AUC=0.7858 @ 10)
+2026-02-09 06:06:46,600 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Epoch [013/100] | Train: Loss=0.1994, BCE=0.1994, Reg=0.0001, AUC=0.9803, ACC=0.9297, RMSE=0.2362 | Val: Loss=0.5502, BCE=0.5500, Reg=0.0001, AUC=0.7857, ACC=0.7433, RMSE=0.4229
+2026-02-09 06:06:46,600 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] -> No improvement 3 epoch(s) (best AUC=0.7858 @ 10)
+2026-02-09 06:06:46,600 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Early stopping at epoch 13 (best AUC=0.7858 @ 10)
+2026-02-09 06:06:46,605 - INFO - Epoch-wise metrics saved to checkpoints/assist_09_ablation_no_module1_seed42/metrics_history.csv
+2026-02-09 06:06:46,605 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Training completed! Best Val AUC=0.7858 @ epoch 10
+2026-02-09 06:06:46,784 - INFO - 
+============================================================
+         MODULE ACTIVITY REPORT
+============================================================
+Dataset: assist_09 | Seed: 42 | Epoch: 13
+
+1. Soft Prototype Module:
+   - Usage entropy: 1.093 / 1.099
+   - Usage ratio: 99.5%
+   - Prototype distribution: ['0.38', '0.31', '0.31']
+   - Status: ✓ ACTIVE
+
+2. Concept Graph Module:
+   - Status: DISABLED (use_concept_graph=False or ablate_concept_graph=True)
+
+3. Personal Graph Module:
+   - Status: DISABLED (use_personal_graph=False)
+
+4. Skill/MF Module:
+   - MF logit |mean|: 1.1070
+   - MF logit std: 1.3332
+   - Fusion gate mean: 0.996
+   - Status: ✓ ACTIVE (contributing to predictions)
+
+------------------------------------------------------------
+SUMMARY:
+   Active modules: Soft Prototype, Skill/MF
+   All enabled modules are functioning properly!
+============================================================
+2026-02-09 06:06:46,785 - INFO - [assist_09|gpd_base_no_module1|lr=0.0003|drop=0.20] Module activity saved to checkpoints/assist_09_ablation_no_module1_seed42/module_activity.json
+2026-02-09 06:06:46,845 - INFO - Using device: cuda:0 (physical gpu 2)
+2026-02-09 06:06:46,845 - INFO - Loading model from checkpoints/assist_09_ablation_no_module1_seed42/best_model.pth...
+2026-02-09 06:06:47,341 - INFO - Inference switches: use_soft_prototype=True, use_mf_branch=True, use_concept_graph=False (effective num_gnn_layers=0, num_prototypes=3)
+2026-02-09 06:06:47,370 - INFO - Model loaded from epoch 10. Start testing...
+2026-02-09 06:06:48,070 - INFO - [Test] 200/411 batches done, samples=25600
+2026-02-09 06:06:48,609 - INFO - [Test] 400/411 batches done, samples=51200
+2026-02-09 06:06:48,686 - INFO - 
+==================================================
+2026-02-09 06:06:48,686 - INFO - Test Results:
+2026-02-09 06:06:48,686 - INFO - AUC: 0.7889
+2026-02-09 06:06:48,686 - INFO - ACC: 0.7478
+2026-02-09 06:06:48,687 - INFO - RMSE: 0.4175
+2026-02-09 06:06:48,687 - INFO - ==================================================
+2026-02-09 06:06:48,697 - INFO - Summary appended to /home/zsh/ConceptSkillCDM/results/experiment_results.csv
+2026-02-09 06:06:48,701 - INFO - Run completed.
+2026-02-09 06:06:48,701 - INFO - Best validation AUC: 0.7858 at epoch 10
+2026-02-09 06:06:48,701 - INFO - Test metrics - AUC: 0.7889, ACC: 0.7478, RMSE: 0.4175
