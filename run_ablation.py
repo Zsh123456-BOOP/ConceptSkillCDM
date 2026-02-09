@@ -90,6 +90,26 @@ def _get_ablation_pool(ablation_set: str) -> List[Dict[str, Any]]:
     raise ValueError(f"Unknown ablation_set='{ablation_set}'. Choose from: model, sub, all")
 
 
+def _pick_gpu_with_slot(
+    gpus: List[int],
+    gpu_load: Dict[int, int],
+    max_per_gpu: int,
+    start_idx: int,
+) -> Tuple[Optional[int], int]:
+    """按轮询顺序选择一个还有空槽的 GPU。"""
+    if not gpus:
+        return None, start_idx
+
+    n = len(gpus)
+    for offset in range(n):
+        idx = (start_idx + offset) % n
+        gid = gpus[idx]
+        if gpu_load.get(gid, 0) < max_per_gpu:
+            return gid, (idx + 1) % n
+
+    return None, start_idx
+
+
 def launch_experiment(
     dataset_name: str,
     base_cfg: Dict[str, Any],
@@ -173,6 +193,8 @@ def main():
     parser.add_argument("--datasets", type=str, default="assist_09,junyi", help="Comma-separated datasets.")
     parser.add_argument("--gpus", type=str, default="1,2", help="Comma-separated GPU ids.")
     parser.add_argument("--max_concurrent", type=int, default=2, help="Max concurrent experiments.")
+    parser.add_argument("--max_per_gpu", type=int, default=1,
+                        help="Max experiments per GPU at the same time.")
 
     parser.add_argument("--generate_diagnosis", action="store_true", help="Enable diagnosis generation.")
     parser.add_argument("--seeds", type=str, default=None, help="Comma-separated seeds, e.g., 42,43")
@@ -194,8 +216,10 @@ def main():
     datasets = _parse_csv_list(args.datasets)
     gpus = _parse_int_list(args.gpus)
     max_concurrent = max(1, args.max_concurrent)
+    max_per_gpu = max(1, args.max_per_gpu)
     if not gpus:
         raise ValueError("No GPUs provided. Use --gpus 0 or set properly.")
+    effective_max_concurrent = min(max_concurrent, len(gpus) * max_per_gpu)
 
     seeds = list(DEFAULT_SEEDS) if args.seeds is None else _parse_int_list(args.seeds)
 
@@ -216,7 +240,10 @@ def main():
             raise ValueError("No ablations selected after filtering.")
 
     print(f"Datasets: {datasets}")
-    print(f"GPUs: {gpus}, max_concurrent={max_concurrent}")
+    print(
+        f"GPUs: {gpus}, max_concurrent={max_concurrent}, "
+        f"max_per_gpu={max_per_gpu}, effective_max={effective_max_concurrent}"
+    )
     print(f"Seeds: {seeds}")
     print(f"Ablation set: {args.ablation_set}")
     print(f"Ablations: {[a['name'] for a in ablations]}")
@@ -234,6 +261,7 @@ def main():
     print(f"Total experiments: {len(jobs)}")
 
     running: List[Tuple[subprocess.Popen, int, str]] = []
+    gpu_load: Dict[int, int] = {gid: 0 for gid in gpus}
     job_idx = 0
     gpu_rr = 0
 
@@ -245,12 +273,14 @@ def main():
                 still_running.append((proc, gpu, desc))
             else:
                 print(f"[DONE] {desc} exited with code {ret}")
+                gpu_load[gpu] = max(0, gpu_load.get(gpu, 0) - 1)
         running = still_running
 
-        while job_idx < len(jobs) and len(running) < max_concurrent:
+        while job_idx < len(jobs) and len(running) < effective_max_concurrent:
             dataset, base_cfg, ablation, seed = jobs[job_idx]
-            gpu_id = gpus[gpu_rr % len(gpus)]
-            gpu_rr += 1
+            gpu_id, gpu_rr = _pick_gpu_with_slot(gpus, gpu_load, max_per_gpu, gpu_rr)
+            if gpu_id is None:
+                break
 
             desc = f"{dataset}|{ablation['name']}|seed{seed}|gpu{gpu_id}"
 
@@ -266,6 +296,7 @@ def main():
 
             if not args.dry_run and proc is not None:
                 running.append((proc, gpu_id, desc))
+                gpu_load[gpu_id] += 1
 
             job_idx += 1
 
