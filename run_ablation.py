@@ -191,8 +191,8 @@ def main():
     parser = argparse.ArgumentParser(description="Run ablation experiments for CognitiveDiagnosisModel.")
 
     parser.add_argument("--datasets", type=str, default="assist_09,junyi", help="Comma-separated datasets.")
-    parser.add_argument("--gpus", type=str, default="1,2", help="Comma-separated GPU ids.")
-    parser.add_argument("--max_concurrent", type=int, default=2, help="Max concurrent experiments.")
+    parser.add_argument("--gpus", type=str, default="2", help="Comma-separated GPU ids.")
+    parser.add_argument("--max_concurrent", type=int, default=1, help="Max concurrent experiments.")
     parser.add_argument("--max_per_gpu", type=int, default=1,
                         help="Max experiments per GPU at the same time.")
 

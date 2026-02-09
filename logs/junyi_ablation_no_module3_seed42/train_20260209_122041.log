@@ -1,0 +1,164 @@
+2026-02-09 12:20:41,843 - INFO - Arguments:
+2026-02-09 12:20:41,843 - INFO -   ablate_concept_graph: False
+2026-02-09 12:20:41,843 - INFO -   ablate_module1: False
+2026-02-09 12:20:41,843 - INFO -   ablate_module2: False
+2026-02-09 12:20:41,843 - INFO -   ablate_module3: True
+2026-02-09 12:20:41,843 - INFO -   ablate_skill_encoder: False
+2026-02-09 12:20:41,843 - INFO -   ablate_soft_prototype: False
+2026-02-09 12:20:41,843 - INFO -   allow_self_loop: True
+2026-02-09 12:20:41,843 - INFO -   batch_size: 256
+2026-02-09 12:20:41,843 - INFO -   data_dir: ./data/junyi
+2026-02-09 12:20:41,843 - INFO -   dataset_name: junyi
+2026-02-09 12:20:41,843 - INFO -   disable_q_conditioning: False
+2026-02-09 12:20:41,843 - INFO -   disable_self_loop: False
+2026-02-09 12:20:41,843 - INFO -   disable_soft_prototype: False
+2026-02-09 12:20:41,843 - INFO -   dropout: 0.4
+2026-02-09 12:20:41,843 - INFO -   early_stop_patience: 3
+2026-02-09 12:20:41,843 - INFO -   enable_module1: True
+2026-02-09 12:20:41,843 - INFO -   enable_module2: True
+2026-02-09 12:20:41,843 - INFO -   enable_module3: False
+2026-02-09 12:20:41,843 - INFO -   epochs: 100
+2026-02-09 12:20:41,843 - INFO -   exercise_dim: 128
+2026-02-09 12:20:41,844 - INFO -   exercise_l2_lambda: 5e-05
+2026-02-09 12:20:41,844 - INFO -   generate_diagnosis: False
+2026-02-09 12:20:41,844 - INFO -   gnn_residual_weight: 0.5
+2026-02-09 12:20:41,844 - INFO -   gpu_candidates: None
+2026-02-09 12:20:41,844 - INFO -   gpu_ids: None
+2026-02-09 12:20:41,844 - INFO -   graph_topk: None
+2026-02-09 12:20:41,844 - INFO -   knowledge_dim: 128
+2026-02-09 12:20:41,844 - INFO -   lambda_alpha: 0.01
+2026-02-09 12:20:41,844 - INFO -   lambda_proto_div: 0.0
+2026-02-09 12:20:41,844 - INFO -   lambda_proto_usage: 0.0
+2026-02-09 12:20:41,844 - INFO -   lambda_sparse: 1.0
+2026-02-09 12:20:41,844 - INFO -   lambda_sparse_personal: 0.005
+2026-02-09 12:20:41,844 - INFO -   learning_rate: 0.003
+2026-02-09 12:20:41,844 - INFO -   log_dir: logs/junyi_ablation_no_module3_seed42
+2026-02-09 12:20:41,844 - INFO -   min_exer_interactions: 0
+2026-02-09 12:20:41,844 - INFO -   min_poison_count: 0
+2026-02-09 12:20:41,844 - INFO -   min_stu_interactions: 15
+2026-02-09 12:20:41,844 - INFO -   model_variant: gpd_base_no_module3
+2026-02-09 12:20:41,844 - INFO -   multi_gpu: False
+2026-02-09 12:20:41,844 - INFO -   no_cuda: False
+2026-02-09 12:20:41,844 - INFO -   num_gnn_layers: 2
+2026-02-09 12:20:41,844 - INFO -   num_prototypes: 0
+2026-02-09 12:20:41,844 - INFO -   num_relation_heads: 2
+2026-02-09 12:20:41,844 - INFO -   num_workers: 4
+2026-02-09 12:20:41,844 - INFO -   patience: 1
+2026-02-09 12:20:41,844 - INFO -   personal_rank: 4
+2026-02-09 12:20:41,844 - INFO -   proto_lambda: 5.0
+2026-02-09 12:20:41,844 - INFO -   proto_tau: 1.0
+2026-02-09 12:20:41,844 - INFO -   save_dir: checkpoints/junyi_ablation_no_module3_seed42
+2026-02-09 12:20:41,845 - INFO -   save_interval: 10
+2026-02-09 12:20:41,845 - INFO -   seed: 42
+2026-02-09 12:20:41,845 - INFO -   skill_dim: 64
+2026-02-09 12:20:41,845 - INFO -   use_concept_graph: True
+2026-02-09 12:20:41,845 - INFO -   use_exercise_graph: True
+2026-02-09 12:20:41,845 - INFO -   use_mf_branch: False
+2026-02-09 12:20:41,845 - INFO -   use_personal_graph: True
+2026-02-09 12:20:41,845 - INFO -   use_q_conditioning: True
+2026-02-09 12:20:41,845 - INFO -   use_skill_encoder: False
+2026-02-09 12:20:41,845 - INFO -   use_soft_prototype: False
+2026-02-09 12:20:41,845 - INFO -   weight_decay: 0.001
+2026-02-09 12:20:41,938 - INFO - Using device: cuda:0 (physical gpu 2)
+2026-02-09 12:20:41,938 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Loading datasets...
+2026-02-09 12:20:41,939 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Regularization: graph_entropy(lambda_sparse)=1.000000, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.005000, alpha_penalty=0.010000, mf_l2(exercise_l2_lambda)=0.000050
+2026-02-09 12:20:42,051 - INFO - [数据清洗] 学生交互次数 < 15 次的学生：共移除 0 个学生（仅统计用户数）
+2026-02-09 12:20:42,067 - INFO - [数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 0 条记录。
+2026-02-09 12:20:42,067 - INFO - [数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。
+2026-02-09 12:20:42,067 - INFO - [数据清洗] 跳过毒题清洗（min_poison_count <= 0）。
+2026-02-09 12:20:51,651 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Train samples: 262473, Val samples: 24299
+2026-02-09 12:20:51,651 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Number of students: 10000
+2026-02-09 12:20:51,651 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Number of exercises: 706
+2026-02-09 12:20:51,651 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Number of concepts: 706
+2026-02-09 12:20:51,651 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Creating model...
+2026-02-09 12:20:51,651 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Ablation switches: ablate_module1=False, ablate_module2=False, ablate_module3=True | enable_module1=True, enable_module2=True, enable_module3=False | use_soft_prototype=False, use_mf_branch=False, use_concept_graph=True | effective(num_gnn_layers=2, num_prototypes=0)
+2026-02-09 12:20:51,800 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Ablation runtime check: args(ablate_module1=False,ablate_module2=False,ablate_module3=True) | model(enable_module1=True,enable_module2=True,enable_module3=False) | physical(has_knowledge_encoder=True,has_mf_branch=False,has_soft_prototype=False)
+2026-02-09 12:20:51,801 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Total parameters: 2,235,533
+2026-02-09 12:20:51,801 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Trainable parameters: 2,235,533
+2026-02-09 12:20:52,715 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Starting training...
+2026-02-09 12:23:12,234 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [001/100] | Train: Loss=6.6004, BCE=0.5193, Reg=6.0811, AUC=0.7886, ACC=0.7439, RMSE=0.4159 | Val: Loss=7.1042, BCE=0.5118, Reg=6.5924, AUC=0.7951, ACC=0.7574, RMSE=0.4103
+2026-02-09 12:23:12,339 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> New best AUC=0.7951 at epoch 1
+2026-02-09 12:25:31,496 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [002/100] | Train: Loss=6.5925, BCE=0.5114, Reg=6.0811, AUC=0.7965, ACC=0.7509, RMSE=0.4119 | Val: Loss=7.0969, BCE=0.5045, Reg=6.5924, AUC=0.8004, ACC=0.7591, RMSE=0.4077
+2026-02-09 12:25:31,773 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> New best AUC=0.8004 at epoch 2
+2026-02-09 12:27:51,140 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [003/100] | Train: Loss=6.5872, BCE=0.5061, Reg=6.0811, AUC=0.8015, ACC=0.7535, RMSE=0.4095 | Val: Loss=7.0984, BCE=0.5060, Reg=6.5924, AUC=0.8046, ACC=0.7636, RMSE=0.4068
+2026-02-09 12:27:51,386 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> New best AUC=0.8046 at epoch 3
+2026-02-09 12:30:10,605 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [004/100] | Train: Loss=6.5832, BCE=0.5020, Reg=6.0811, AUC=0.8055, ACC=0.7562, RMSE=0.4074 | Val: Loss=7.0911, BCE=0.4986, Reg=6.5924, AUC=0.8090, ACC=0.7675, RMSE=0.4036
+2026-02-09 12:30:10,843 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> New best AUC=0.8090 at epoch 4
+2026-02-09 12:32:30,189 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [005/100] | Train: Loss=6.5809, BCE=0.4999, Reg=6.0811, AUC=0.8077, ACC=0.7588, RMSE=0.4064 | Val: Loss=7.0905, BCE=0.4981, Reg=6.5924, AUC=0.8106, ACC=0.7660, RMSE=0.4037
+2026-02-09 12:32:30,442 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> New best AUC=0.8106 at epoch 5
+2026-02-09 12:34:49,800 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [006/100] | Train: Loss=6.5805, BCE=0.4994, Reg=6.0811, AUC=0.8080, ACC=0.7587, RMSE=0.4062 | Val: Loss=7.0928, BCE=0.5004, Reg=6.5924, AUC=0.8092, ACC=0.7672, RMSE=0.4043
+2026-02-09 12:34:49,801 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.8106 @ 5)
+2026-02-09 12:37:09,097 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [007/100] | Train: Loss=6.5682, BCE=0.4871, Reg=6.0811, AUC=0.8190, ACC=0.7680, RMSE=0.4000 | Val: Loss=7.0796, BCE=0.4872, Reg=6.5924, AUC=0.8177, ACC=0.7727, RMSE=0.3980
+2026-02-09 12:37:09,301 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> New best AUC=0.8177 at epoch 7
+2026-02-09 12:39:28,658 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [008/100] | Train: Loss=6.5658, BCE=0.4846, Reg=6.0811, AUC=0.8211, ACC=0.7699, RMSE=0.3987 | Val: Loss=7.0791, BCE=0.4867, Reg=6.5924, AUC=0.8175, ACC=0.7702, RMSE=0.3989
+2026-02-09 12:39:28,658 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.8177 @ 7)
+2026-02-09 12:41:47,853 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [009/100] | Train: Loss=6.5647, BCE=0.4836, Reg=6.0811, AUC=0.8218, ACC=0.7705, RMSE=0.3982 | Val: Loss=7.0799, BCE=0.4875, Reg=6.5924, AUC=0.8191, ACC=0.7711, RMSE=0.3985
+2026-02-09 12:41:48,563 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> New best AUC=0.8191 at epoch 9
+2026-02-09 12:44:07,852 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [010/100] | Train: Loss=6.5520, BCE=0.4709, Reg=6.0811, AUC=0.8327, ACC=0.7790, RMSE=0.3919 | Val: Loss=7.0751, BCE=0.4827, Reg=6.5924, AUC=0.8227, ACC=0.7739, RMSE=0.3969
+2026-02-09 12:44:08,096 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> New best AUC=0.8227 at epoch 10
+2026-02-09 12:44:08,164 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Checkpoint saved: checkpoints/junyi_ablation_no_module3_seed42/checkpoint_epoch_10.pth
+2026-02-09 12:44:08,506 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] [Module Activity] Epoch 10: Graph✗ Personal✗ MF✗
+2026-02-09 12:46:27,727 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [011/100] | Train: Loss=6.5481, BCE=0.4670, Reg=6.0812, AUC=0.8358, ACC=0.7813, RMSE=0.3900 | Val: Loss=7.0747, BCE=0.4823, Reg=6.5924, AUC=0.8226, ACC=0.7738, RMSE=0.3967
+2026-02-09 12:46:27,727 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.8227 @ 10)
+2026-02-09 12:48:47,116 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [012/100] | Train: Loss=6.5464, BCE=0.4653, Reg=6.0811, AUC=0.8373, ACC=0.7822, RMSE=0.3892 | Val: Loss=7.0734, BCE=0.4809, Reg=6.5924, AUC=0.8227, ACC=0.7732, RMSE=0.3967
+2026-02-09 12:48:47,320 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> New best AUC=0.8227 at epoch 12
+2026-02-09 12:51:06,439 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [013/100] | Train: Loss=6.5446, BCE=0.4635, Reg=6.0811, AUC=0.8388, ACC=0.7831, RMSE=0.3884 | Val: Loss=7.0731, BCE=0.4807, Reg=6.5924, AUC=0.8241, ACC=0.7742, RMSE=0.3960
+2026-02-09 12:51:06,647 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> New best AUC=0.8241 at epoch 13
+2026-02-09 12:53:25,832 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [014/100] | Train: Loss=6.5428, BCE=0.4617, Reg=6.0811, AUC=0.8401, ACC=0.7840, RMSE=0.3875 | Val: Loss=7.0783, BCE=0.4859, Reg=6.5924, AUC=0.8220, ACC=0.7720, RMSE=0.3985
+2026-02-09 12:53:25,832 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.8241 @ 13)
+2026-02-09 12:55:45,118 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [015/100] | Train: Loss=6.5262, BCE=0.4451, Reg=6.0811, AUC=0.8531, ACC=0.7939, RMSE=0.3793 | Val: Loss=7.0828, BCE=0.4904, Reg=6.5924, AUC=0.8213, ACC=0.7714, RMSE=0.3999
+2026-02-09 12:55:45,118 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> No improvement 2 epoch(s) (best AUC=0.8241 @ 13)
+2026-02-09 12:58:04,320 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Epoch [016/100] | Train: Loss=6.5189, BCE=0.4378, Reg=6.0811, AUC=0.8584, ACC=0.7978, RMSE=0.3757 | Val: Loss=7.0798, BCE=0.4874, Reg=6.5924, AUC=0.8208, ACC=0.7734, RMSE=0.3983
+2026-02-09 12:58:04,320 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] -> No improvement 3 epoch(s) (best AUC=0.8241 @ 13)
+2026-02-09 12:58:04,320 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Early stopping at epoch 16 (best AUC=0.8241 @ 13)
+2026-02-09 12:58:04,324 - INFO - Epoch-wise metrics saved to checkpoints/junyi_ablation_no_module3_seed42/metrics_history.csv
+2026-02-09 12:58:04,324 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Training completed! Best Val AUC=0.8241 @ epoch 13
+2026-02-09 12:58:04,686 - INFO - 
+============================================================
+         MODULE ACTIVITY REPORT
+============================================================
+Dataset: junyi | Seed: 42 | Epoch: 16
+
+1. Soft Prototype Module:
+   - Status: DISABLED (num_prototypes=0 or use_soft_prototype=False)
+
+2. Concept Graph Module:
+   - Mean row entropy: 6.560 / 6.560
+   - Entropy ratio: 100.0%
+   - Status: ✗ TRIVIAL (uniform distribution, not learning)
+   → Consider: increase lambda_sparse or training longer
+
+3. Personal Graph Module:
+   - Gate alpha mean: 0.501
+   - Gate alpha std: 0.000
+   - Status: ⚠ MARGINAL (low alpha values)
+
+4. Skill/MF Module:
+   - MF logit |mean|: 0.0000
+   - MF logit std: 0.0000
+   - Fusion gate mean: 0.000
+   - Status: ✗ INACTIVE (near-zero contribution)
+   → Consider: check skill_dim or learning_rate
+
+------------------------------------------------------------
+SUMMARY:
+   ⚠ Inactive modules: Concept Graph, Personal Graph, Skill/MF
+============================================================
+2026-02-09 12:58:04,687 - INFO - [junyi|gpd_base_no_module3|lr=0.003|drop=0.40] Module activity saved to checkpoints/junyi_ablation_no_module3_seed42/module_activity.json
+2026-02-09 12:58:04,804 - INFO - Using device: cuda:0 (physical gpu 2)
+2026-02-09 12:58:04,804 - INFO - Loading model from checkpoints/junyi_ablation_no_module3_seed42/best_model.pth...
+2026-02-09 12:58:05,165 - INFO - Inference switches: ablate_module1=False, ablate_module2=False, ablate_module3=True | enable_module1=True, enable_module2=True, enable_module3=False | use_soft_prototype=False, use_mf_branch=False, use_concept_graph=True | effective(num_gnn_layers=2, num_prototypes=0)
+2026-02-09 12:58:05,191 - INFO - [Inference] Ablation runtime check: args(ablate_module1=False,ablate_module2=False,ablate_module3=True) | model(enable_module1=True,enable_module2=True,enable_module3=False) | physical(has_knowledge_encoder=True,has_mf_branch=False,has_soft_prototype=False)
+2026-02-09 12:58:05,192 - INFO - Model loaded from epoch 13. Start testing...
+2026-02-09 12:58:13,307 - INFO - [Test] 200/262 batches done, samples=51200
+2026-02-09 12:58:15,867 - INFO - 
+==================================================
+2026-02-09 12:58:15,867 - INFO - Test Results:
+2026-02-09 12:58:15,867 - INFO - AUC: 0.8275
+2026-02-09 12:58:15,867 - INFO - ACC: 0.7673
+2026-02-09 12:58:15,867 - INFO - RMSE: 0.4014
+2026-02-09 12:58:15,867 - INFO - ==================================================
+2026-02-09 12:58:15,878 - INFO - Summary appended to /home/zsh/ConceptSkillCDM/results/experiment_results.csv
+2026-02-09 12:58:15,895 - INFO - Run completed.
+2026-02-09 12:58:15,895 - INFO - Best validation AUC: 0.8241 at epoch 13
+2026-02-09 12:58:15,895 - INFO - Test metrics - AUC: 0.8275, ACC: 0.7673, RMSE: 0.4014
