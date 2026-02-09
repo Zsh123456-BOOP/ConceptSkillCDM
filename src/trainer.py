@@ -56,6 +56,80 @@ def _get_base_model(model: nn.Module) -> CognitiveDiagnosisModel:
     return model
 
 
+def _collect_runtime_ablation_facts(model: nn.Module) -> Dict[str, Any]:
+    """收集模型运行时的模块开关与物理存在性，用于防止“假消融”"""
+    base_model = _get_base_model(model)
+    structure_module = getattr(base_model, "structure_module", None)
+
+    has_knowledge_encoder = (
+        structure_module is not None and getattr(structure_module, "knowledge_encoder", None) is not None
+    )
+    has_mf_branch = (
+        getattr(base_model, "skill_encoder", None) is not None
+        and getattr(base_model, "mf_head", None) is not None
+    )
+    has_soft_prototype = getattr(base_model, "prototype_module", None) is not None
+
+    return {
+        "enable_module1": bool(getattr(base_model, "enable_module1", False)),
+        "enable_module2": bool(getattr(base_model, "enable_module2", False)),
+        "enable_module3": bool(getattr(base_model, "enable_module3", False)),
+        "has_knowledge_encoder": bool(has_knowledge_encoder),
+        "has_mf_branch": bool(has_mf_branch),
+        "has_soft_prototype": bool(has_soft_prototype),
+    }
+
+
+def _log_and_assert_ablation_consistency(
+    *,
+    model: nn.Module,
+    logger,
+    context: str,
+    ablate_module1: bool,
+    ablate_module2: bool,
+    ablate_module3: bool,
+) -> Dict[str, Any]:
+    """
+    记录并校验消融一致性：
+    - args.ablate_module* 与 model.enable_module* 必须一致
+    - 关键模块的“物理存在性”必须符合预期
+    """
+    facts = _collect_runtime_ablation_facts(model)
+
+    logger.info(
+        "%s Ablation runtime check: "
+        "args(ablate_module1=%s,ablate_module2=%s,ablate_module3=%s) | "
+        "model(enable_module1=%s,enable_module2=%s,enable_module3=%s) | "
+        "physical(has_knowledge_encoder=%s,has_mf_branch=%s,has_soft_prototype=%s)",
+        context,
+        ablate_module1,
+        ablate_module2,
+        ablate_module3,
+        facts["enable_module1"],
+        facts["enable_module2"],
+        facts["enable_module3"],
+        facts["has_knowledge_encoder"],
+        facts["has_mf_branch"],
+        facts["has_soft_prototype"],
+    )
+
+    if ablate_module1 and facts["enable_module1"]:
+        raise RuntimeError("Ablation mismatch: ablate_module1=True but model.enable_module1=True.")
+    if ablate_module2 and facts["enable_module2"]:
+        raise RuntimeError("Ablation mismatch: ablate_module2=True but model.enable_module2=True.")
+    if ablate_module3 and facts["enable_module3"]:
+        raise RuntimeError("Ablation mismatch: ablate_module3=True but model.enable_module3=True.")
+
+    if ablate_module1 and facts["has_knowledge_encoder"]:
+        raise RuntimeError("Ablation mismatch: ablate_module1=True but knowledge_encoder still exists.")
+    if ablate_module3 and facts["has_mf_branch"]:
+        raise RuntimeError("Ablation mismatch: ablate_module3=True but MF branch modules still exist.")
+    if ablate_module3 and facts["has_soft_prototype"]:
+        raise RuntimeError("Ablation mismatch: ablate_module3=True but prototype_module still exists.")
+
+    return facts
+
+
 def _convert_legacy_weight_norm_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     """
     Compatibility helper:
@@ -328,6 +402,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     use_soft_prototype = getattr(args, "use_soft_prototype", True)
     use_mf_branch = getattr(args, "use_mf_branch", getattr(args, "use_skill_encoder", True))
     use_concept_graph = getattr(args, "use_concept_graph", True)
+    ablate_module1 = bool(getattr(args, "ablate_module1", False))
+    ablate_module2 = bool(getattr(args, "ablate_module2", False))
+    ablate_module3 = bool(getattr(args, "ablate_module3", False))
+    expected_enable_module1 = not ablate_module1
+    expected_enable_module2 = not ablate_module2
+    expected_enable_module3 = not ablate_module3
 
     # hard-ablation safety (prevents "half-ablation")
     eff_gnn_layers, eff_num_prototypes = _hard_ablation_effective_hparams(
@@ -338,9 +418,18 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     )
 
     logger.info(
-        "%s Ablation switches: use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s "
-        "(effective num_gnn_layers=%d, num_prototypes=%d)",
+        "%s Ablation switches: "
+        "ablate_module1=%s, ablate_module2=%s, ablate_module3=%s | "
+        "enable_module1=%s, enable_module2=%s, enable_module3=%s | "
+        "use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s | "
+        "effective(num_gnn_layers=%d, num_prototypes=%d)",
         run_tag,
+        ablate_module1,
+        ablate_module2,
+        ablate_module3,
+        expected_enable_module1,
+        expected_enable_module2,
+        expected_enable_module3,
         use_soft_prototype,
         use_mf_branch,
         use_concept_graph,
@@ -368,6 +457,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         proto_lambda=args.proto_lambda,
         use_soft_prototype=use_soft_prototype,
         use_personal_graph=getattr(args, "use_personal_graph", False),
+        ablate_module1=ablate_module1,
+        ablate_module2=ablate_module2,
+        ablate_module3=ablate_module3,
         personal_rank=getattr(args, "personal_rank", 4),
         lambda_sparse_personal=args.lambda_sparse_personal,
         lambda_alpha=args.lambda_alpha,
@@ -389,6 +481,15 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             device_ids = None
         model = torch.nn.DataParallel(model, device_ids=device_ids)
         logger.info("%s Multi-GPU enabled: using %d GPUs", run_tag, torch.cuda.device_count())
+
+    _log_and_assert_ablation_consistency(
+        model=model,
+        logger=logger,
+        context=run_tag,
+        ablate_module1=ablate_module1,
+        ablate_module2=ablate_module2,
+        ablate_module3=ablate_module3,
+    )
 
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -607,6 +708,12 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         loaded_args.get("use_skill_encoder", getattr(args, "use_mf_branch", getattr(args, "use_skill_encoder", True))),
     )
     use_concept_graph = loaded_args.get("use_concept_graph", getattr(args, "use_concept_graph", True))
+    ablate_module1 = bool(loaded_args.get("ablate_module1", getattr(args, "ablate_module1", False)))
+    ablate_module2 = bool(loaded_args.get("ablate_module2", getattr(args, "ablate_module2", False)))
+    ablate_module3 = bool(loaded_args.get("ablate_module3", getattr(args, "ablate_module3", False)))
+    expected_enable_module1 = not ablate_module1
+    expected_enable_module2 = not ablate_module2
+    expected_enable_module3 = not ablate_module3
 
     # hard-ablation safety at inference too
     eff_gnn_layers, eff_num_prototypes = _hard_ablation_effective_hparams(
@@ -617,8 +724,17 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     )
 
     logger.info(
-        "Inference switches: use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s "
-        "(effective num_gnn_layers=%d, num_prototypes=%d)",
+        "Inference switches: "
+        "ablate_module1=%s, ablate_module2=%s, ablate_module3=%s | "
+        "enable_module1=%s, enable_module2=%s, enable_module3=%s | "
+        "use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s | "
+        "effective(num_gnn_layers=%d, num_prototypes=%d)",
+        ablate_module1,
+        ablate_module2,
+        ablate_module3,
+        expected_enable_module1,
+        expected_enable_module2,
+        expected_enable_module3,
         use_soft_prototype,
         use_mf_branch,
         use_concept_graph,
@@ -646,6 +762,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         proto_lambda=loaded_args.get("proto_lambda", args.proto_lambda),
         use_soft_prototype=use_soft_prototype,
         use_personal_graph=loaded_args.get("use_personal_graph", getattr(args, "use_personal_graph", False)),
+        ablate_module1=ablate_module1,
+        ablate_module2=ablate_module2,
+        ablate_module3=ablate_module3,
         personal_rank=loaded_args.get("personal_rank", getattr(args, "personal_rank", 4)),
         lambda_sparse_personal=loaded_args.get("lambda_sparse_personal", args.lambda_sparse_personal),
         lambda_alpha=loaded_args.get("lambda_alpha", args.lambda_alpha),
@@ -654,6 +773,15 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         gnn_residual_weight=loaded_args.get("gnn_residual_weight", getattr(args, "gnn_residual_weight", 0.5)),
         use_q_conditioning=not loaded_args.get("disable_q_conditioning", getattr(args, "disable_q_conditioning", False)),
     ).to(device)
+
+    runtime_facts = _log_and_assert_ablation_consistency(
+        model=model,
+        logger=logger,
+        context="[Inference]",
+        ablate_module1=ablate_module1,
+        ablate_module2=ablate_module2,
+        ablate_module3=ablate_module3,
+    )
 
     # compatibility for legacy weight_norm checkpoints
     state_dict = checkpoint["model_state_dict"]
@@ -731,6 +859,7 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         metrics=metrics,
         best_val_auc=results["best_val_auc"],
         model_epoch=results["model_epoch"],
+        final_model_facts=runtime_facts,
         logger=logger,
     )
 

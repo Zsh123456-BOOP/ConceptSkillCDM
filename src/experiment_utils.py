@@ -129,6 +129,7 @@ def append_summary_csv(
     best_val_auc: float,
     model_epoch: int,
     logger,
+    final_model_facts: Optional[Dict[str, Any]] = None,
 ):
     """
     将一次实验的结果追加到统一的 summary CSV 中：
@@ -174,6 +175,15 @@ def append_summary_csv(
     row["test_rmse"] = float(metrics["rmse"])
     row["best_val_auc"] = float(best_val_auc)
     row["model_epoch"] = int(model_epoch)
+
+    # 运行时事实：防止“CSV 标记消融，但模型实际未生效”
+    for idx in [1, 2, 3]:
+        key = f"enable_module{idx}"
+        out_key = f"final_enable_module{idx}"
+        if final_model_facts is not None and key in final_model_facts:
+            row[out_key] = bool(final_model_facts[key])
+        elif hasattr(args, key):
+            row[out_key] = bool(getattr(args, key))
 
     # === 3. 把 args 里的超参数摊平成后面的列 ===
     skip_keys = {
@@ -238,6 +248,9 @@ def append_summary_csv(
         "test_rmse",
         "best_val_auc",
         "model_epoch",
+        "final_enable_module1",
+        "final_enable_module2",
+        "final_enable_module3",
     ]
     front_cols = [c for c in front_cols if c in df.columns]
     other_cols = [c for c in df.columns if c not in front_cols]

@@ -334,6 +334,9 @@ def main():
                 proto_lambda=args.proto_lambda,
                 use_soft_prototype=args.use_soft_prototype,
                 use_personal_graph=args.use_personal_graph,
+                ablate_module1=getattr(args, "ablate_module1", False),
+                ablate_module2=getattr(args, "ablate_module2", False),
+                ablate_module3=getattr(args, "ablate_module3", False),
                 personal_rank=getattr(args, "personal_rank", 4),
             ).to(device)
             model.load_state_dict(checkpoint["model_state_dict"])
