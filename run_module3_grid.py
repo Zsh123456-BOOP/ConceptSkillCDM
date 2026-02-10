@@ -79,10 +79,10 @@ def parse_cli() -> argparse.Namespace:
         default=15,
         help="Epochs for quick diagnosis (default=15). If not explicitly provided and BEST_CFG has epochs, BEST_CFG is used.",
     )
-    parser.add_argument("--gpus", type=str, default="0", help="Comma-separated GPU ids.")
-    parser.add_argument("--max_concurrent", type=int, default=1)
+    parser.add_argument("--gpus", type=str, default="0,3", help="Comma-separated GPU ids.")
+    parser.add_argument("--max_concurrent", type=int, default=2)
     parser.add_argument("--max_per_gpu", type=int, default=1)
-    parser.add_argument("--poll_interval", type=int, default=15)
+    parser.add_argument("--poll_interval", type=int, default=25)
     parser.add_argument("--dry_run", action="store_true", help="Print commands only.")
     parser.add_argument("--ablation_set", type=str, default="model", help="Currently only supports model.")
     parser.add_argument(

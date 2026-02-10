@@ -1,0 +1,173 @@
+2026-02-10 04:01:00,441 - INFO - Arguments:
+2026-02-10 04:01:00,441 - INFO -   ablate_concept_graph: False
+2026-02-10 04:01:00,441 - INFO -   ablate_module1: False
+2026-02-10 04:01:00,441 - INFO -   ablate_module2: False
+2026-02-10 04:01:00,441 - INFO -   ablate_module3: False
+2026-02-10 04:01:00,441 - INFO -   ablate_skill_encoder: False
+2026-02-10 04:01:00,441 - INFO -   ablate_soft_prototype: False
+2026-02-10 04:01:00,441 - INFO -   allow_self_loop: True
+2026-02-10 04:01:00,441 - INFO -   batch_size: 256
+2026-02-10 04:01:00,441 - INFO -   data_dir: ./data/junyi
+2026-02-10 04:01:00,441 - INFO -   dataset_name: junyi
+2026-02-10 04:01:00,441 - INFO -   debug_module3_diag: True
+2026-02-10 04:01:00,441 - INFO -   diag_batches: 2
+2026-02-10 04:01:00,441 - INFO -   disable_q_conditioning: False
+2026-02-10 04:01:00,441 - INFO -   disable_self_loop: False
+2026-02-10 04:01:00,441 - INFO -   disable_soft_prototype: False
+2026-02-10 04:01:00,441 - INFO -   dropout: 0.4
+2026-02-10 04:01:00,441 - INFO -   early_stop_patience: 3
+2026-02-10 04:01:00,442 - INFO -   enable_module1: True
+2026-02-10 04:01:00,442 - INFO -   enable_module2: True
+2026-02-10 04:01:00,442 - INFO -   enable_module3: True
+2026-02-10 04:01:00,442 - INFO -   epochs: 100
+2026-02-10 04:01:00,442 - INFO -   exercise_dim: 128
+2026-02-10 04:01:00,442 - INFO -   exercise_l2_lambda: 5e-05
+2026-02-10 04:01:00,442 - INFO -   generate_diagnosis: False
+2026-02-10 04:01:00,442 - INFO -   gnn_residual_weight: 0.5
+2026-02-10 04:01:00,442 - INFO -   gpu_candidates: None
+2026-02-10 04:01:00,442 - INFO -   gpu_ids: None
+2026-02-10 04:01:00,442 - INFO -   gpu_memory_threshold: 2000
+2026-02-10 04:01:00,442 - INFO -   gpus: None
+2026-02-10 04:01:00,442 - INFO -   graph_topk: None
+2026-02-10 04:01:00,442 - INFO -   knowledge_dim: 128
+2026-02-10 04:01:00,442 - INFO -   lambda_alpha: 0.01
+2026-02-10 04:01:00,442 - INFO -   lambda_proto_div: 0.01
+2026-02-10 04:01:00,442 - INFO -   lambda_proto_usage: 0.01
+2026-02-10 04:01:00,442 - INFO -   lambda_sparse: 1.0
+2026-02-10 04:01:00,442 - INFO -   lambda_sparse_personal: 0.005
+2026-02-10 04:01:00,442 - INFO -   learning_rate: 0.003
+2026-02-10 04:01:00,442 - INFO -   log_dir: logs/junyi_m3grid/seed42/proto_relax_full
+2026-02-10 04:01:00,442 - INFO -   min_exer_interactions: 0
+2026-02-10 04:01:00,442 - INFO -   min_poison_count: 0
+2026-02-10 04:01:00,442 - INFO -   min_stu_interactions: 15
+2026-02-10 04:01:00,442 - INFO -   model_variant: junyi_m3grid_proto_relax_full
+2026-02-10 04:01:00,442 - INFO -   multi_gpu: False
+2026-02-10 04:01:00,442 - INFO -   no_cuda: False
+2026-02-10 04:01:00,442 - INFO -   num_gnn_layers: 2
+2026-02-10 04:01:00,442 - INFO -   num_gpus: 1
+2026-02-10 04:01:00,442 - INFO -   num_prototypes: 3
+2026-02-10 04:01:00,442 - INFO -   num_relation_heads: 2
+2026-02-10 04:01:00,443 - INFO -   num_workers: 4
+2026-02-10 04:01:00,443 - INFO -   patience: 1
+2026-02-10 04:01:00,443 - INFO -   personal_rank: 4
+2026-02-10 04:01:00,443 - INFO -   proto_lambda: 1.0
+2026-02-10 04:01:00,443 - INFO -   proto_tau: 1.0
+2026-02-10 04:01:00,443 - INFO -   save_dir: checkpoints/junyi_m3grid/seed42/proto_relax_full
+2026-02-10 04:01:00,443 - INFO -   save_interval: 10
+2026-02-10 04:01:00,443 - INFO -   seed: 42
+2026-02-10 04:01:00,443 - INFO -   skill_dim: 64
+2026-02-10 04:01:00,443 - INFO -   use_concept_graph: True
+2026-02-10 04:01:00,443 - INFO -   use_exercise_graph: True
+2026-02-10 04:01:00,443 - INFO -   use_mf_branch: True
+2026-02-10 04:01:00,443 - INFO -   use_personal_graph: True
+2026-02-10 04:01:00,443 - INFO -   use_q_conditioning: True
+2026-02-10 04:01:00,443 - INFO -   use_skill_encoder: True
+2026-02-10 04:01:00,443 - INFO -   use_soft_prototype: True
+2026-02-10 04:01:00,443 - INFO -   weight_decay: 0.001
+2026-02-10 04:01:00,533 - INFO - Using device: cuda:0 (physical gpu 3)
+2026-02-10 04:01:00,533 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Loading datasets...
+2026-02-10 04:01:00,533 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Regularization: graph_entropy(lambda_sparse)=1.000000, proto_div=0.010000, proto_usage=0.010000, personal_sparse=0.005000, alpha_penalty=0.010000, mf_l2(exercise_l2_lambda)=0.000050
+2026-02-10 04:01:00,650 - INFO - [数据清洗] 学生交互次数 < 15 次的学生：共移除 0 个学生（仅统计用户数）
+2026-02-10 04:01:00,664 - INFO - [数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 0 条记录。
+2026-02-10 04:01:00,665 - INFO - [数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。
+2026-02-10 04:01:00,665 - INFO - [数据清洗] 跳过毒题清洗（min_poison_count <= 0）。
+2026-02-10 04:01:09,850 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Train samples: 262473, Val samples: 24299
+2026-02-10 04:01:09,850 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Number of students: 10000
+2026-02-10 04:01:09,850 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Number of exercises: 706
+2026-02-10 04:01:09,850 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Number of concepts: 706
+2026-02-10 04:01:09,850 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Creating model...
+2026-02-10 04:01:09,850 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Ablation switches: ablate_module1=False, ablate_module2=False, ablate_module3=False | enable_module1=True, enable_module2=True, enable_module3=True | use_soft_prototype=True, use_mf_branch=True, use_concept_graph=True | effective(num_gnn_layers=2, num_prototypes=3)
+2026-02-10 04:01:10,008 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Ablation runtime check: args(ablate_module1=False,ablate_module2=False,ablate_module3=False) | model(enable_module1=True,enable_module2=True,enable_module3=True) | physical(has_knowledge_encoder=True,has_mf_branch=True,has_soft_prototype=True)
+2026-02-10 04:01:10,008 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Debug diagnostics enabled: diag_batches=2
+2026-02-10 04:01:10,008 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Total parameters: 3,079,653
+2026-02-10 04:01:10,008 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Trainable parameters: 3,079,653
+2026-02-10 04:01:10,872 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Starting training...
+2026-02-10 04:03:41,839 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Epoch [001/100] | Train: Loss=6.6871, BCE=0.6055, Reg=6.0816, AUC=0.6806, ACC=0.6627, RMSE=0.4576 | Val: Loss=7.1403, BCE=0.5477, Reg=6.5926, AUC=0.7766, ACC=0.7136, RMSE=0.4297
+2026-02-10 04:03:41,839 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Reg Terms] Epoch [001] | Train: graph_entropy=6.048314, mf_l2=0.000001, proto_div=0.000273, proto_usage=0.000213, personal_sparse=0.032798, alpha_var=-0.000000, reg_bce_ratio=10.0440 | Val: graph_entropy=6.559615, mf_l2=0.000002, proto_div=0.000206, proto_usage=0.000015, personal_sparse=0.032798, alpha_var=-0.000000, reg_bce_ratio=12.0380
+2026-02-10 04:03:43,936 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Diag] Epoch [001] | mf_abs_mean=0.2265, mf_std=0.1610, gate_mean=0.8306, gate_std=0.0421, irt_abs_mean=0.7474, irt_std=0.5163, delta_abs_mean=0.1882, delta_std=0.1339, delta_over_irt=0.2518, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5000, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-10 04:03:43,937 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [001] | mf_u_proj=0.052013, mf_v_proj=0.058620, fusion_gate=0.002086, q_gate_raw=0.000067, skill_latent=0.360087
+2026-02-10 04:03:44,088 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] -> New best AUC=0.7766 at epoch 1
+2026-02-10 04:06:14,697 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Epoch [002/100] | Train: Loss=6.6284, BCE=0.5470, Reg=6.0814, AUC=0.7754, ACC=0.7036, RMSE=0.4302 | Val: Loss=7.1276, BCE=0.5348, Reg=6.5928, AUC=0.7888, ACC=0.7355, RMSE=0.4234
+2026-02-10 04:06:14,697 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Reg Terms] Epoch [002] | Train: graph_entropy=6.048319, mf_l2=0.000002, proto_div=0.000172, proto_usage=0.000115, personal_sparse=0.032798, alpha_var=-0.000000, reg_bce_ratio=11.1185 | Val: graph_entropy=6.559615, mf_l2=0.000002, proto_div=0.000240, proto_usage=0.000112, personal_sparse=0.032798, alpha_var=-0.000000, reg_bce_ratio=12.3268
+2026-02-10 04:06:16,776 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Diag] Epoch [002] | mf_abs_mean=0.2190, mf_std=0.1752, gate_mean=0.8715, gate_std=0.0276, irt_abs_mean=0.8699, irt_std=0.6347, delta_abs_mean=0.1912, delta_std=0.1530, delta_over_irt=0.2199, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5000, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-10 04:06:16,776 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [002] | mf_u_proj=0.029898, mf_v_proj=0.035433, fusion_gate=0.002617, q_gate_raw=0.000073, skill_latent=0.175527
+2026-02-10 04:06:17,092 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] -> New best AUC=0.7888 at epoch 2
+2026-02-10 04:08:47,770 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Epoch [003/100] | Train: Loss=6.6223, BCE=0.5408, Reg=6.0816, AUC=0.7806, ACC=0.7121, RMSE=0.4271 | Val: Loss=7.1253, BCE=0.5325, Reg=6.5928, AUC=0.7945, ACC=0.7123, RMSE=0.4237
+2026-02-10 04:08:47,771 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Reg Terms] Epoch [003] | Train: graph_entropy=6.048342, mf_l2=0.000002, proto_div=0.000276, proto_usage=0.000145, personal_sparse=0.032798, alpha_var=-0.000000, reg_bce_ratio=11.2462 | Val: graph_entropy=6.559615, mf_l2=0.000003, proto_div=0.000162, proto_usage=0.000181, personal_sparse=0.032798, alpha_var=-0.000000, reg_bce_ratio=12.3804
+2026-02-10 04:08:49,798 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Diag] Epoch [003] | mf_abs_mean=0.2165, mf_std=0.1654, gate_mean=0.8815, gate_std=0.0282, irt_abs_mean=1.0878, irt_std=0.7205, delta_abs_mean=0.1914, delta_std=0.1464, delta_over_irt=0.1760, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5000, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-10 04:08:49,799 - WARNING - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Diag Warning] alpha_std has been near zero for 3 epoch(s) (alpha_std=0.000000, personal_row_entropy=6.5596). This indicates personal-graph mixing may be collapsed/trivial.
+2026-02-10 04:08:49,799 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [003] | mf_u_proj=0.030628, mf_v_proj=0.035766, fusion_gate=0.001216, q_gate_raw=0.000204, skill_latent=0.230410
+2026-02-10 04:08:50,086 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] -> New best AUC=0.7945 at epoch 3
+2026-02-10 04:11:20,603 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Epoch [004/100] | Train: Loss=6.6196, BCE=0.5380, Reg=6.0816, AUC=0.7832, ACC=0.7148, RMSE=0.4259 | Val: Loss=7.1230, BCE=0.5303, Reg=6.5928, AUC=0.7916, ACC=0.7355, RMSE=0.4215
+2026-02-10 04:11:20,603 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Reg Terms] Epoch [004] | Train: graph_entropy=6.048291, mf_l2=0.000002, proto_div=0.000328, proto_usage=0.000164, personal_sparse=0.032798, alpha_var=-0.000000, reg_bce_ratio=11.3032 | Val: graph_entropy=6.559615, mf_l2=0.000002, proto_div=0.000199, proto_usage=0.000145, personal_sparse=0.032798, alpha_var=-0.000000, reg_bce_ratio=12.4324
+2026-02-10 04:11:22,329 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Diag] Epoch [004] | mf_abs_mean=0.2157, mf_std=0.1648, gate_mean=0.8777, gate_std=0.0286, irt_abs_mean=0.9674, irt_std=0.7070, delta_abs_mean=0.1895, delta_std=0.1451, delta_over_irt=0.1959, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5000, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-10 04:11:22,329 - WARNING - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Diag Warning] alpha_std has been near zero for 4 epoch(s) (alpha_std=0.000000, personal_row_entropy=6.5596). This indicates personal-graph mixing may be collapsed/trivial.
+2026-02-10 04:11:22,330 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [004] | mf_u_proj=0.022627, mf_v_proj=0.029326, fusion_gate=0.001650, q_gate_raw=0.000012, skill_latent=0.401679
+2026-02-10 04:11:22,330 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.7945 @ 3)
+2026-02-10 04:13:52,981 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Epoch [005/100] | Train: Loss=6.6186, BCE=0.5369, Reg=6.0816, AUC=0.7838, ACC=0.7177, RMSE=0.4254 | Val: Loss=7.1233, BCE=0.5304, Reg=6.5929, AUC=0.7925, ACC=0.7482, RMSE=0.4209
+2026-02-10 04:13:52,981 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Reg Terms] Epoch [005] | Train: graph_entropy=6.048281, mf_l2=0.000003, proto_div=0.000349, proto_usage=0.000175, personal_sparse=0.032798, alpha_var=-0.000000, reg_bce_ratio=11.3263 | Val: graph_entropy=6.559615, mf_l2=0.000003, proto_div=0.000303, proto_usage=0.000185, personal_sparse=0.032798, alpha_var=-0.000000, reg_bce_ratio=12.4290
+2026-02-10 04:13:55,032 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Diag] Epoch [005] | mf_abs_mean=0.2093, mf_std=0.1619, gate_mean=0.8665, gate_std=0.0333, irt_abs_mean=0.8524, irt_std=0.7045, delta_abs_mean=0.1816, delta_std=0.1403, delta_over_irt=0.2131, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.5000, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-10 04:13:55,032 - WARNING - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Diag Warning] alpha_std has been near zero for 5 epoch(s) (alpha_std=0.000000, personal_row_entropy=6.5596). This indicates personal-graph mixing may be collapsed/trivial.
+2026-02-10 04:13:55,032 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [005] | mf_u_proj=0.021165, mf_v_proj=0.032452, fusion_gate=0.002013, q_gate_raw=0.000109, skill_latent=0.630704
+2026-02-10 04:13:55,032 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] -> No improvement 2 epoch(s) (best AUC=0.7945 @ 3)
+2026-02-10 04:16:25,612 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Epoch [006/100] | Train: Loss=6.6170, BCE=0.5354, Reg=6.0817, AUC=0.7856, ACC=0.7197, RMSE=0.4245 | Val: Loss=7.1219, BCE=0.5291, Reg=6.5929, AUC=0.7917, ACC=0.7292, RMSE=0.4216
+2026-02-10 04:16:25,612 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Reg Terms] Epoch [006] | Train: graph_entropy=6.048323, mf_l2=0.000002, proto_div=0.000353, proto_usage=0.000178, personal_sparse=0.032798, alpha_var=-0.000000, reg_bce_ratio=11.3595 | Val: graph_entropy=6.559615, mf_l2=0.000003, proto_div=0.000248, proto_usage=0.000189, personal_sparse=0.032798, alpha_var=-0.000000, reg_bce_ratio=12.4609
+2026-02-10 04:16:27,352 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Diag] Epoch [006] | mf_abs_mean=0.2156, mf_std=0.1592, gate_mean=0.8796, gate_std=0.0309, irt_abs_mean=1.1047, irt_std=0.7736, delta_abs_mean=0.1901, delta_std=0.1404, delta_over_irt=0.1721, graph_row_entropy=6.5596, graph_entropy_ratio=1.0000, alpha_mean=0.4999, alpha_std=0.0000, personal_row_entropy=6.5596
+2026-02-10 04:16:27,352 - WARNING - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Diag Warning] alpha_std has been near zero for 6 epoch(s) (alpha_std=0.000000, personal_row_entropy=6.5596). This indicates personal-graph mixing may be collapsed/trivial.
+2026-02-10 04:16:27,352 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] [Grad Norms] Epoch [006] | mf_u_proj=0.026036, mf_v_proj=0.033656, fusion_gate=0.000675, q_gate_raw=0.000062, skill_latent=0.142394
+2026-02-10 04:16:27,352 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] -> No improvement 3 epoch(s) (best AUC=0.7945 @ 3)
+2026-02-10 04:16:27,352 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Early stopping at epoch 6 (best AUC=0.7945 @ 3)
+2026-02-10 04:16:27,356 - INFO - Epoch-wise metrics saved to checkpoints/junyi_m3grid/seed42/proto_relax_full/metrics_history.csv
+2026-02-10 04:16:27,356 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Training completed! Best Val AUC=0.7945 @ epoch 3
+2026-02-10 04:16:27,678 - INFO - 
+============================================================
+         MODULE ACTIVITY REPORT
+============================================================
+Dataset: junyi | Seed: 42 | Epoch: 6
+
+1. Soft Prototype Module:
+   - Usage entropy: 1.000 / 1.099
+   - Usage ratio: 91.0%
+   - Prototype distribution: ['0.41', '0.14', '0.45']
+   - Status: ✓ ACTIVE
+
+2. Concept Graph Module:
+   - Mean row entropy: 6.560 / 6.560
+   - Entropy ratio: 100.0%
+   - Status: ✗ TRIVIAL (uniform distribution, not learning)
+   → Consider: increase lambda_sparse or training longer
+
+3. Personal Graph Module:
+   - Gate alpha mean: 0.500
+   - Gate alpha std: 0.000
+   - Status: ⚠ MARGINAL (low alpha values)
+
+4. Skill/MF Module:
+   - MF logit |mean|: 0.2156
+   - MF logit std: 0.2638
+   - Fusion gate mean: 0.880
+   - Status: ✓ ACTIVE (contributing to predictions)
+
+------------------------------------------------------------
+SUMMARY:
+   Active modules: Soft Prototype, Skill/MF
+   ⚠ Inactive modules: Concept Graph, Personal Graph
+============================================================
+2026-02-10 04:16:27,679 - INFO - [junyi|junyi_m3grid_proto_relax_full|lr=0.003|drop=0.40] Module activity saved to checkpoints/junyi_m3grid/seed42/proto_relax_full/module_activity.json
+2026-02-10 04:16:27,801 - INFO - Using device: cuda:0 (physical gpu 3)
+2026-02-10 04:16:27,801 - INFO - Loading model from checkpoints/junyi_m3grid/seed42/proto_relax_full/best_model.pth...
+2026-02-10 04:16:28,325 - INFO - Inference switches: ablate_module1=False, ablate_module2=False, ablate_module3=False | enable_module1=True, enable_module2=True, enable_module3=True | use_soft_prototype=True, use_mf_branch=True, use_concept_graph=True | effective(num_gnn_layers=2, num_prototypes=3)
+2026-02-10 04:16:28,380 - INFO - [Inference] Ablation runtime check: args(ablate_module1=False,ablate_module2=False,ablate_module3=False) | model(enable_module1=True,enable_module2=True,enable_module3=True) | physical(has_knowledge_encoder=True,has_mf_branch=True,has_soft_prototype=True)
+2026-02-10 04:16:28,382 - INFO - Model loaded from epoch 3. Start testing...
+2026-02-10 04:16:36,640 - INFO - [Test] 200/262 batches done, samples=51200
+2026-02-10 04:16:39,215 - INFO - 
+==================================================
+2026-02-10 04:16:39,215 - INFO - Test Results:
+2026-02-10 04:16:39,215 - INFO - AUC: 0.7993
+2026-02-10 04:16:39,215 - INFO - ACC: 0.6896
+2026-02-10 04:16:39,215 - INFO - RMSE: 0.4321
+2026-02-10 04:16:39,215 - INFO - ==================================================
+2026-02-10 04:16:39,224 - INFO - Summary appended to /home/zsh/ConceptSkillCDM/results/experiment_results.csv
+2026-02-10 04:16:39,238 - INFO - Run completed.
+2026-02-10 04:16:39,238 - INFO - Best validation AUC: 0.7945 at epoch 3
+2026-02-10 04:16:39,238 - INFO - Test metrics - AUC: 0.7993, ACC: 0.6896, RMSE: 0.4321
