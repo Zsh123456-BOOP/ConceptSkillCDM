@@ -1181,11 +1181,114 @@ class CognitiveDiagnosisModel(nn.Module):
 
         if self.use_personal_graph:
             if gate_alpha is not None:
-                details["alpha"] = gate_alpha.detach()
+                # Keep gradient path for personal regularizers in training.
+                details["alpha"] = gate_alpha
+                details["alpha_detached"] = gate_alpha.detach()
             if personal_matrices is not None:
-                details["personal_matrices"] = personal_matrices.detach()
+                # Keep gradient path for personal regularizers in training.
+                details["personal_matrices"] = personal_matrices
+                details["personal_matrices_detached"] = personal_matrices.detach()
 
         return out_main, details
+
+    def get_regularization_components(
+        self,
+        relation_matrices: torch.Tensor,
+        details: Optional[Dict[str, torch.Tensor]] = None,
+        lambda_proto_div: float = 0.0,
+        lambda_proto_usage: float = 0.0,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Return decomposed regularization terms.
+        This does not change optimization objective; it is used for logging/diagnostics.
+        """
+        device = relation_matrices.device
+        terms: Dict[str, torch.Tensor] = {
+            "graph_entropy": torch.tensor(0.0, device=device),
+            "mf_l2": torch.tensor(0.0, device=device),
+            "proto_div": torch.tensor(0.0, device=device),
+            "proto_usage": torch.tensor(0.0, device=device),
+            "personal_sparse": torch.tensor(0.0, device=device),
+            "alpha_var": torch.tensor(0.0, device=device),  # signed term (negative when maximizing variance)
+        }
+
+        # (1) Global graph entropy
+        if self.enable_module1 and self.use_concept_graph and self.lambda_graph_entropy > 0:
+            if self.structure_module.relation_learning is not None:
+                entropy = self.structure_module.relation_learning.get_entropy_sparsity(relation_matrices)
+                terms["graph_entropy"] = self.lambda_graph_entropy * entropy
+
+        # (2) MF/IRT L2
+        if self.mf_l2_lambda > 0:
+            reg_terms = []
+
+            if (
+                self.enable_module2
+                and self.exercise_encoder.use_irt
+                and self.exercise_encoder.b is not None
+                and self.exercise_encoder.a_raw is not None
+            ):
+                reg_terms.extend(
+                    [
+                        self.exercise_encoder.b.weight.pow(2).mean(),
+                        self.exercise_encoder.a_raw.weight.pow(2).mean(),
+                    ]
+                )
+
+            if self.enable_module3 and self.use_mf_branch:
+                if self.skill_encoder is not None:
+                    reg_terms.append(self.skill_encoder.latent_emb.weight.pow(2).mean())
+                if self.exercise_encoder.use_mf_branch and self.exercise_encoder.exercise_latent is not None:
+                    reg_terms.append(self.exercise_encoder.exercise_latent.weight.pow(2).mean())
+                if self.exercise_encoder.use_mf_branch and self.exercise_encoder.concept_latent is not None:
+                    reg_terms.append(self.exercise_encoder.concept_latent.weight.pow(2).mean())
+
+            if len(reg_terms) > 0:
+                terms["mf_l2"] = self.mf_l2_lambda * sum(reg_terms)
+
+        # (3) Prototype regularizers
+        if self.prototype_module is not None and details is not None and "prototype_assign" in details:
+            assign = details["prototype_assign"]  # (B,K)
+            K = assign.size(1)
+
+            if lambda_proto_div > 0.0:
+                P = F.normalize(self.prototype_module.prototypes, dim=-1, eps=1e-12)  # (K,D)
+                sim = P @ P.t()
+                off = sim - torch.eye(K, device=device, dtype=sim.dtype)
+                proto_div = (off.pow(2).sum() / (K * (K - 1) + 1e-12))
+                terms["proto_div"] = lambda_proto_div * proto_div
+
+            if lambda_proto_usage > 0.0:
+                q_mean = assign.mean(dim=0)
+                uniform = torch.full_like(q_mean, 1.0 / K)
+                proto_usage = F.mse_loss(q_mean, uniform)
+                terms["proto_usage"] = lambda_proto_usage * proto_usage
+
+        # (4) Personal graph regularizers
+        if self.enable_module1 and self.use_personal_graph and details is not None:
+            if (
+                "personal_matrices" in details
+                and details["personal_matrices"] is not None
+                and self.lambda_sparse_personal > 0
+            ):
+                pm = details["personal_matrices"]
+                terms["personal_sparse"] = self.lambda_sparse_personal * self._row_entropy(pm)
+
+            if "alpha" in details and details["alpha"] is not None and self.lambda_alpha > 0:
+                alpha_flat = details["alpha"].view(-1)
+                alpha_var = alpha_flat.var() + 1e-6
+                terms["alpha_var"] = -self.lambda_alpha * alpha_var
+
+        total = (
+            terms["graph_entropy"]
+            + terms["mf_l2"]
+            + terms["proto_div"]
+            + terms["proto_usage"]
+            + terms["personal_sparse"]
+            + terms["alpha_var"]
+        )
+        terms["total"] = total
+        return terms
 
     def get_regularization_loss(
         self,
@@ -1201,71 +1304,13 @@ class CognitiveDiagnosisModel(nn.Module):
         (3) Prototype 正则（div / usage）—— 仅 prototype 存在时计入
         (4) 个性化图稀疏 + alpha 惩罚 —— 仅 personal graph 存在时计入
         """
-        device = relation_matrices.device
-        reg = torch.tensor(0.0, device=device)
-
-        # (1) 全局概念图行熵稀疏：必须 module1 启用 + use_concept_graph=True + relation_learning 存在
-        if self.enable_module1 and self.use_concept_graph and self.lambda_graph_entropy > 0:
-            if self.structure_module.relation_learning is not None:
-                entropy = self.structure_module.relation_learning.get_entropy_sparsity(relation_matrices)
-                reg = reg + self.lambda_graph_entropy * entropy
-
-        # (2) L2：严格按模块启用计入，避免“模块关了但参数还被正则项训练”
-        if self.mf_l2_lambda > 0:
-            reg_terms = []
-
-            # IRT 参数（仅 module2 启用且参数存在）
-            if self.enable_module2 and self.exercise_encoder.use_irt and self.exercise_encoder.b is not None and self.exercise_encoder.a_raw is not None:
-                reg_terms.extend([
-                    self.exercise_encoder.b.weight.pow(2).mean(),
-                    self.exercise_encoder.a_raw.weight.pow(2).mean(),
-                ])
-
-            # MF 参数（仅 module3 启用且 MF 启用且参数存在）
-            if self.enable_module3 and self.use_mf_branch:
-                if self.skill_encoder is not None:
-                    reg_terms.append(self.skill_encoder.latent_emb.weight.pow(2).mean())
-                if self.exercise_encoder.use_mf_branch and self.exercise_encoder.exercise_latent is not None:
-                    reg_terms.append(self.exercise_encoder.exercise_latent.weight.pow(2).mean())
-                if self.exercise_encoder.use_mf_branch and self.exercise_encoder.concept_latent is not None:
-                    reg_terms.append(self.exercise_encoder.concept_latent.weight.pow(2).mean())
-
-            if len(reg_terms) > 0:
-                reg = reg + self.mf_l2_lambda * sum(reg_terms)
-
-        # (3) Prototype 正则（仅 prototype 存在时）
-        if self.prototype_module is not None and details is not None and "prototype_assign" in details:
-            assign = details["prototype_assign"]  # (B,K)
-            K = assign.size(1)
-
-            if lambda_proto_div > 0.0:
-                P = F.normalize(self.prototype_module.prototypes, dim=-1, eps=1e-12)  # (K,D)
-                sim = P @ P.t()
-                off = sim - torch.eye(K, device=device, dtype=sim.dtype)
-                proto_div = (off.pow(2).sum() / (K * (K - 1) + 1e-12))
-                reg = reg + lambda_proto_div * proto_div
-
-            if lambda_proto_usage > 0.0:
-                q_mean = assign.mean(dim=0)
-                uniform = torch.full_like(q_mean, 1.0 / K)
-                proto_usage = F.mse_loss(q_mean, uniform)
-                reg = reg + lambda_proto_usage * proto_usage
-
-        # (4) 个性化图正则（仅 personal graph 存在时）
-        #     优化：检查 personal_matrices 是否为 None，避免空值错误
-        if self.enable_module1 and self.use_personal_graph and details is not None:
-            if "personal_matrices" in details and details["personal_matrices"] is not None and self.lambda_sparse_personal > 0:
-                # 正则项不需要完整梯度图，使用更小的张量计算
-                pm = details["personal_matrices"]
-                reg = reg + self.lambda_sparse_personal * self._row_entropy(pm)
-            if "alpha" in details and details["alpha"] is not None and self.lambda_alpha > 0:
-                # 最大化 alpha 方差：让不同学生有不同的 alpha 值
-                # 使用负项来鼓励方差增大（方差越大，损失越低）
-                alpha_flat = details["alpha"].view(-1)
-                alpha_var = alpha_flat.var() + 1e-6
-                reg = reg - self.lambda_alpha * alpha_var  # 负号使优化器最大化方差
-
-        return reg
+        terms = self.get_regularization_components(
+            relation_matrices=relation_matrices,
+            details=details,
+            lambda_proto_div=lambda_proto_div,
+            lambda_proto_usage=lambda_proto_usage,
+        )
+        return terms["total"]
 
     def get_student_diagnosis(self, student_id: int) -> Dict[str, torch.Tensor]:
         """

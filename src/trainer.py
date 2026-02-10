@@ -221,6 +221,16 @@ def _row_entropy_mean(A: np.ndarray) -> float:
     return float(row_entropy.mean())
 
 
+_REG_COMPONENT_KEYS: Tuple[str, ...] = (
+    "graph_entropy",
+    "mf_l2",
+    "proto_div",
+    "proto_usage",
+    "personal_sparse",
+    "alpha_var",
+)
+
+
 def _collect_debug_forward_stats(
     model: CognitiveDiagnosisModel,
     data_loader: DataLoader,
@@ -405,6 +415,7 @@ def train_epoch(
     total_loss = 0.0
     total_bce = 0.0
     total_reg = 0.0
+    reg_component_sums: Dict[str, float] = {k: 0.0 for k in _REG_COMPONENT_KEYS}
 
     all_labels: List[float] = []
     all_preds: List[float] = []
@@ -430,12 +441,13 @@ def train_epoch(
         logits = _ensure_1d(logits)
 
         bce_loss = bce_fn(logits, labels)
-        reg_loss = _get_base_model(model).get_regularization_loss(
+        reg_terms = _get_base_model(model).get_regularization_components(
             relation_matrices=details["relation_matrices"],
             details=details,
             lambda_proto_div=lambda_proto_div,
             lambda_proto_usage=lambda_proto_usage,
         )
+        reg_loss = reg_terms["total"]
         loss = bce_loss + reg_loss
 
         optimizer.zero_grad(set_to_none=True)
@@ -446,6 +458,8 @@ def train_epoch(
         total_loss += float(loss.item())
         total_bce += float(bce_loss.item())
         total_reg += float(reg_loss.item())
+        for key in _REG_COMPONENT_KEYS:
+            reg_component_sums[key] += float(reg_terms[key].item())
 
         with torch.no_grad():
             probs = _sigmoid_torch(logits)
@@ -458,9 +472,21 @@ def train_epoch(
     avg_loss = total_loss / max(1, len(train_loader))
     avg_bce = total_bce / max(1, len(train_loader))
     avg_reg = total_reg / max(1, len(train_loader))
+    avg_reg_components = {
+        f"reg_{key}": reg_component_sums[key] / max(1, len(train_loader))
+        for key in _REG_COMPONENT_KEYS
+    }
+    reg_bce_ratio = avg_reg / (abs(avg_bce) + 1e-12)
     metrics = compute_metrics(all_labels, all_preds, all_probs)
 
-    return {"loss": avg_loss, "bce_loss": avg_bce, "reg_loss": avg_reg, **metrics}
+    return {
+        "loss": avg_loss,
+        "bce_loss": avg_bce,
+        "reg_loss": avg_reg,
+        "reg_bce_ratio": reg_bce_ratio,
+        **avg_reg_components,
+        **metrics,
+    }
 
 
 def validate(
@@ -476,6 +502,7 @@ def validate(
     total_loss = 0.0
     total_bce = 0.0
     total_reg = 0.0
+    reg_component_sums: Dict[str, float] = {k: 0.0 for k in _REG_COMPONENT_KEYS}
 
     all_labels: List[float] = []
     all_preds: List[float] = []
@@ -501,17 +528,20 @@ def validate(
             logits = _ensure_1d(logits)
 
             bce_loss = bce_fn(logits, labels)
-            reg_loss = _get_base_model(model).get_regularization_loss(
+            reg_terms = _get_base_model(model).get_regularization_components(
                 relation_matrices=details["relation_matrices"],
                 details=details,
                 lambda_proto_div=lambda_proto_div,
                 lambda_proto_usage=lambda_proto_usage,
             )
+            reg_loss = reg_terms["total"]
             loss = bce_loss + reg_loss
 
             total_loss += float(loss.item())
             total_bce += float(bce_loss.item())
             total_reg += float(reg_loss.item())
+            for key in _REG_COMPONENT_KEYS:
+                reg_component_sums[key] += float(reg_terms[key].item())
 
             probs = _sigmoid_torch(logits)
             preds = (probs > 0.5).float()
@@ -523,9 +553,21 @@ def validate(
     avg_loss = total_loss / max(1, len(val_loader))
     avg_bce = total_bce / max(1, len(val_loader))
     avg_reg = total_reg / max(1, len(val_loader))
+    avg_reg_components = {
+        f"reg_{key}": reg_component_sums[key] / max(1, len(val_loader))
+        for key in _REG_COMPONENT_KEYS
+    }
+    reg_bce_ratio = avg_reg / (abs(avg_bce) + 1e-12)
     metrics = compute_metrics(all_labels, all_preds, all_probs)
 
-    return {"loss": avg_loss, "bce_loss": avg_bce, "reg_loss": avg_reg, **metrics}
+    return {
+        "loss": avg_loss,
+        "bce_loss": avg_bce,
+        "reg_loss": avg_reg,
+        "reg_bce_ratio": reg_bce_ratio,
+        **avg_reg_components,
+        **metrics,
+    }
 
 
 # ======================================================
@@ -706,6 +748,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     patience_counter = 0
 
     history: Dict[str, Any] = {"train": [], "val": [], "best_epoch": 0, "best_val_auc": 0.0}
+    alpha_zero_streak = 0
 
     logger.info("%s Starting training...", run_tag)
 
@@ -741,6 +784,27 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             val_metrics["loss"], val_metrics["bce_loss"], val_metrics["reg_loss"],
             val_metrics["auc"], val_metrics["acc"], val_metrics["rmse"],
         )
+        logger.info(
+            "%s [Reg Terms] Epoch [%03d] | "
+            "Train: graph_entropy=%.6f, mf_l2=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_var=%.6f, reg_bce_ratio=%.4f | "
+            "Val: graph_entropy=%.6f, mf_l2=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_var=%.6f, reg_bce_ratio=%.4f",
+            run_tag,
+            epoch,
+            train_metrics.get("reg_graph_entropy", 0.0),
+            train_metrics.get("reg_mf_l2", 0.0),
+            train_metrics.get("reg_proto_div", 0.0),
+            train_metrics.get("reg_proto_usage", 0.0),
+            train_metrics.get("reg_personal_sparse", 0.0),
+            train_metrics.get("reg_alpha_var", 0.0),
+            train_metrics.get("reg_bce_ratio", 0.0),
+            val_metrics.get("reg_graph_entropy", 0.0),
+            val_metrics.get("reg_mf_l2", 0.0),
+            val_metrics.get("reg_proto_div", 0.0),
+            val_metrics.get("reg_proto_usage", 0.0),
+            val_metrics.get("reg_personal_sparse", 0.0),
+            val_metrics.get("reg_alpha_var", 0.0),
+            val_metrics.get("reg_bce_ratio", 0.0),
+        )
 
         if debug_module3_diag:
             diag = _collect_debug_forward_stats(
@@ -749,10 +813,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 device=device,
                 max_batches=diag_batches,
             )
+            delta_over_irt = diag["delta_abs_mean"] / (diag["irt_abs_mean"] + 1e-12)
             logger.info(
                 "%s [Diag] Epoch [%03d] | "
                 "mf_abs_mean=%.4f, mf_std=%.4f, gate_mean=%.4f, gate_std=%.4f, "
                 "irt_abs_mean=%.4f, irt_std=%.4f, delta_abs_mean=%.4f, delta_std=%.4f, "
+                "delta_over_irt=%.4f, "
                 "graph_row_entropy=%.4f, graph_entropy_ratio=%.4f, "
                 "alpha_mean=%.4f, alpha_std=%.4f, personal_row_entropy=%.4f",
                 run_tag,
@@ -765,12 +831,28 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["irt_std"],
                 diag["delta_abs_mean"],
                 diag["delta_std"],
+                delta_over_irt,
                 diag["graph_row_entropy_mean"],
                 diag["graph_entropy_ratio"],
                 diag["alpha_mean"],
                 diag["alpha_std"],
                 diag["personal_row_entropy"],
             )
+            if getattr(_get_base_model(model), "use_personal_graph", False):
+                if diag["alpha_std"] < 1e-6:
+                    alpha_zero_streak += 1
+                else:
+                    alpha_zero_streak = 0
+                if alpha_zero_streak >= 3:
+                    logger.warning(
+                        "%s [Diag Warning] alpha_std has been near zero for %d epoch(s) "
+                        "(alpha_std=%.6f, personal_row_entropy=%.4f). "
+                        "This indicates personal-graph mixing may be collapsed/trivial.",
+                        run_tag,
+                        alpha_zero_streak,
+                        diag["alpha_std"],
+                        diag["personal_row_entropy"],
+                    )
             logger.info(
                 "%s [Grad Norms] Epoch [%03d] | "
                 "mf_u_proj=%.6f, mf_v_proj=%.6f, fusion_gate=%.6f, q_gate_raw=%.6f, skill_latent=%.6f",
