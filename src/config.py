@@ -1,11 +1,10 @@
 # src/config.py
 """
-Dataset defaults + small grid space.
+Dataset defaults and optional grid-search space.
 
-Important:
-- We keep the meaning of `lambda_sparse` at CLI level:
-  it is still the "graph sparsity regularization weight".
-- In the new model, it is mapped to `lambda_graph_entropy`.
+Notes:
+- `lambda_sparse` is still interpreted as graph sparsity regularization weight at CLI level.
+- In model code it is mapped to `lambda_graph_entropy`.
 """
 
 DATASET_DEFAULTS = {
@@ -14,23 +13,28 @@ DATASET_DEFAULTS = {
         "batch_size": 512,
         "knowledge_dim": 128,
         "exercise_dim": 128,
-        "skill_dim": 64,  # new model prefers MF latent >= 64 (but run_all_datasets overrides anyway)
+        "skill_dim": 64,
         "num_relation_heads": 4,
         "num_gnn_layers": 2,
         "dropout": 0.1,
         "learning_rate": 1e-4,
         "weight_decay": 1e-5,
-        "lambda_sparse": 0.01,          # graph entropy weight
+        "lambda_sparse": 0.01,
         "lambda_proto_div": 0.0,
         "lambda_proto_usage": 0.0,
         "lambda_sparse_personal": 0.0,
         "lambda_alpha": 0.0,
         "use_personal_graph": 0,
-        "num_prototypes": 3,
+        "num_prototypes": 0,
         "proto_tau": 1.0,
-        "proto_lambda": 0.5,
-        "exercise_l2_lambda": 5e-5,     # mapped to mf_l2_lambda
-        # optional new knobs (do not affect old runs if not used)
+        "proto_lambda": 0.0,
+        "enable_soft_prototype": False,
+        "use_soft_prototype_main_path": False,
+        "exercise_l2_lambda": 5e-5,
+        "fusion_gate_max": 0.4,
+        "fusion_gate_bias_init": -2.5,
+        "residual_clip_t": 2.0,
+        "disable_q_aligned_residual": False,
         "graph_topk": None,
         "disable_q_conditioning": False,
         "disable_self_loop": False,
@@ -47,7 +51,16 @@ DATASET_DEFAULTS = {
         "lambda_sparse_personal": 0.0,
         "lambda_alpha": 0.0,
         "use_personal_graph": 0,
+        "num_prototypes": 0,
+        "proto_tau": 1.0,
+        "proto_lambda": 0.0,
+        "enable_soft_prototype": False,
+        "use_soft_prototype_main_path": False,
         "exercise_l2_lambda": 5e-5,
+        "fusion_gate_max": 0.4,
+        "fusion_gate_bias_init": -2.5,
+        "residual_clip_t": 2.0,
+        "disable_q_aligned_residual": False,
     },
     "junyi": {
         "data_dir": "./data/junyi",
@@ -59,7 +72,16 @@ DATASET_DEFAULTS = {
         "lambda_sparse_personal": 0.0,
         "lambda_alpha": 0.0,
         "use_personal_graph": 0,
+        "num_prototypes": 0,
+        "proto_tau": 1.0,
+        "proto_lambda": 0.0,
+        "enable_soft_prototype": False,
+        "use_soft_prototype_main_path": False,
         "exercise_l2_lambda": 5e-5,
+        "fusion_gate_max": 0.4,
+        "fusion_gate_bias_init": -2.5,
+        "residual_clip_t": 2.0,
+        "disable_q_aligned_residual": False,
     },
 }
 
@@ -119,3 +141,5 @@ def apply_dataset_defaults(args, parser=None):
             if not hasattr(args, key) or getattr(args, key) is None:
                 setattr(args, key, value)
     return args
+
+

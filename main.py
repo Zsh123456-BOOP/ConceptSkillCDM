@@ -15,9 +15,9 @@ from src.trainer import train_one_experiment, run_inference, save_component_anal
 
 def _normalize_bool(value, default=False):
     """
-    兼容旧的 --generate_diagnosis 传参方式：
-    - 可能是 True/False
-    - 可能是 "True"/"False"/"1"/"0"/"yes"/"no"
+     --generate_diagnosis 
+    -  True/False
+    -  "True"/"False"/"1"/"0"/"yes"/"no"
     """
     if isinstance(value, bool):
         return value
@@ -44,7 +44,7 @@ def parse_args():
     parser.add_argument("--data_dir", type=str, default=None)
 
     # ======================
-    # Model (保留旧参数名，兼容历史脚本/日志)
+    # Model (/)
     # ======================
     parser.add_argument("--knowledge_dim", type=int, default=128)
     parser.add_argument("--skill_dim", type=int, default=64)
@@ -53,10 +53,15 @@ def parse_args():
     parser.add_argument("--num_gnn_layers", type=int, default=2)
     parser.add_argument("--dropout", type=float, default=0.1)
 
-    # ---- prototype（可消融）----
+    # ---- prototype----
     parser.add_argument("--num_prototypes", type=int, default=3)
     parser.add_argument("--proto_tau", type=float, default=1.0)
     parser.add_argument("--proto_lambda", type=float, default=0.5)
+    parser.add_argument(
+        "--enable_soft_prototype",
+        action="store_true",
+        help="Enable Soft Prototype module (default is OFF to avoid negative transfer on junyi).",
+    )
     parser.add_argument("--disable_soft_prototype", action="store_true")
 
     # ======================
@@ -67,7 +72,7 @@ def parse_args():
     parser.add_argument("--learning_rate", type=float, default=0.0001)
     parser.add_argument("--weight_decay", type=float, default=1e-5)
 
-    # ---- Regularization（保留旧名字）----
+    # ---- Regularization----
     parser.add_argument(
         "--lambda_sparse",
         type=float,
@@ -88,14 +93,14 @@ def parse_args():
     parser.add_argument("--no_cuda", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
 
-    # 注意：这是“兼容旧行为”的 bool（不是标准 action=store_true）
+    #  bool action=store_true
     parser.add_argument("--generate_diagnosis", default=True)
 
-    # personal graph（可消融/可扩展）
+    # personal graph/
     parser.add_argument("--use_personal_graph", action="store_true")
     parser.add_argument("--model_variant", type=str, default="full")
 
-    # 多 GPU 选择（如果你后续要做自动选卡，可在 trainer/launcher 用）
+    #  GPU  trainer/launcher 
     parser.add_argument("--gpu_candidates", type=str, default=None)
     parser.add_argument(
         "--gpus",
@@ -116,7 +121,7 @@ def parse_args():
         help="Minimum free memory (MiB) preferred by auto GPU selection.",
     )
 
-    # 旧名字：exercise_l2_lambda -> 新模型 mf_l2_lambda
+    # exercise_l2_lambda ->  mf_l2_lambda
     parser.add_argument(
         "--exercise_l2_lambda",
         type=float,
@@ -135,14 +140,14 @@ def parse_args():
     parser.add_argument("--min_poison_count", type=int, default=0)
 
     # ======================
-    # Ablations（旧开关：子模块级；用于历史对齐）
+    # Ablations
     # ======================
     parser.add_argument("--ablate_soft_prototype", action="store_true")
-    parser.add_argument("--ablate_skill_encoder", action="store_true")   # 关闭 MF 分支
-    parser.add_argument("--ablate_concept_graph", action="store_true")   # 关闭 concept graph
+    parser.add_argument("--ablate_skill_encoder", action="store_true")   #  MF 
+    parser.add_argument("--ablate_concept_graph", action="store_true")   #  concept graph
 
     # ======================
-    # Ablations（新开关：模块级“完全消融”）
+    # Ablations
     # ======================
     parser.add_argument("--ablate_module1", action="store_true",
                         help="Fully disable Module 1 (Concept Structure Modeling: A+E+knowledge_encoder).")
@@ -152,7 +157,7 @@ def parse_args():
                         help="Fully disable Module 3 (Neural residual + prototype: B+C).")
 
     # ======================
-    # New optional knobs（不影响旧脚本，除非显式传参）
+    # New optional knobs
     # ======================
     parser.add_argument("--graph_topk", type=int, default=None,
                         help="Hard top-k neighbors per concept row (None=disable).")
@@ -169,13 +174,25 @@ def parse_args():
     parser.add_argument("--gnn_residual_weight", type=float, default=0.5,
                         help="Residual weight in GNN update.")
 
-    # 多 GPU 训练
+    # Module3 conservative fusion / residual knobs
+    parser.add_argument("--fusion_gate_max", type=float, default=0.4,
+                        help="Maximum residual gate amplitude in conservative fusion.")
+    parser.add_argument("--fusion_gate_bias_init", type=float, default=-2.5,
+                        help="Initial bias for conservative fusion gate (negative => small initial gate).")
+    parser.add_argument("--residual_clip_t", type=float, default=2.0,
+                        help="T for residual clipping: residual = T * tanh(residual / T).")
+    parser.add_argument("--disable_q_aligned_residual", action="store_true",
+                        help="Compatibility flag; q-aligned residual is enabled by default.")
+    parser.add_argument("--use_soft_prototype_main_path", action="store_true",
+                        help="If set, prototype mix is injected into knowledge_state. Default off.")
+
+    #  GPU 
     parser.add_argument("--multi_gpu", action="store_true",
                         help="Enable multi-GPU training with DataParallel.")
     parser.add_argument("--gpu_ids", type=str, default=None,
                         help="Comma-separated GPU IDs for multi-GPU training (e.g., '0,1').")
 
-    # 诊断日志（不改变训练逻辑）
+    # 
     parser.add_argument(
         "--debug_module3_diag",
         action="store_true",
@@ -194,7 +211,7 @@ def parse_args():
 def main():
     parser = parse_args()
 
-    # 兼容：老参数如果有人还在用，直接报错提示
+    # 
     if any(arg.startswith("--ablate_exercise_graph") for arg in sys.argv):
         raise SystemExit("error: --ablate_exercise_graph is removed. Use --ablate_concept_graph instead.")
 
@@ -202,7 +219,7 @@ def main():
     args = apply_dataset_defaults(args, parser)
 
     # =========================================================
-    # -1) 可选：main 进程自动选卡（与 launcher 脚本解耦）
+    # -1) main  launcher 
     # =========================================================
     if getattr(args, "gpus", None):
         gpu_candidates = parse_gpu_ids(args.gpus)
@@ -219,65 +236,67 @@ def main():
 
         if len(selected_physical) > 1:
             args.multi_gpu = True
-            # DataParallel 在 trainer 中使用可见卡的相对索引，这里只保留声明用途。
+            # DataParallel  trainer 
             args.gpu_ids = ",".join(str(i) for i in range(len(selected_physical)))
         else:
             args.multi_gpu = False
 
     # =========================================================
-    # 0) 基础 sanity check：避免无预测路径
+    # 0)  sanity check
     # =========================================================
     if getattr(args, "ablate_module2", False) and getattr(args, "ablate_module3", False):
         raise SystemExit("error: invalid ablation: both --ablate_module2 and --ablate_module3 are set (no prediction path).")
 
-    # 兼容旧 bool 传法
+    #  bool 
     args.generate_diagnosis = _normalize_bool(args.generate_diagnosis, default=True)
 
     # =========================================================
-    # 1) 模块级完全消融：先定 enable/disable，再派生子开关
+    # 1)  enable/disable
     # =========================================================
     args.enable_module1 = not bool(getattr(args, "ablate_module1", False))
     args.enable_module2 = not bool(getattr(args, "ablate_module2", False))
     args.enable_module3 = not bool(getattr(args, "ablate_module3", False))
 
-    # module2 完全消融时，diagnosis 没意义：强制关掉（避免误用）
+    # module2 diagnosis 
     if not args.enable_module2:
         args.generate_diagnosis = False
 
     # =========================================================
-    # 2) 子模块开关：将旧 ablate_* 映射到 use_*
-    #    并受“模块级消融”强制覆盖，保证彻底
+    # 2)  ablate_*  use_*
+    #    
     # =========================================================
 
-    # (A) Prototype：disable_soft_prototype 或 ablate_soft_prototype 会关闭
+    # (A) Prototype --enable_soft_prototype 
     use_soft_proto = (
+        bool(getattr(args, "enable_soft_prototype", False))
+        and
         (not getattr(args, "disable_soft_prototype", False))
         and (not getattr(args, "ablate_soft_prototype", False))
         and (getattr(args, "num_prototypes", 0) > 0)
     )
 
-    # (B) MF 分支：ablate_skill_encoder == 关闭 MF（no_skill）
+    # (B) MF ablate_skill_encoder ==  MFno_skill
     use_mf_branch = not getattr(args, "ablate_skill_encoder", False)
 
-    # (C) 概念图：ablate_concept_graph == 关闭 concept graph（no_concept_graph）
+    # (C) ablate_concept_graph ==  concept graphno_concept_graph
     use_concept_graph = not getattr(args, "ablate_concept_graph", False)
 
-    # (D) personal graph：显式开关
+    # (D) personal graph
     use_personal_graph = bool(getattr(args, "use_personal_graph", False))
 
-    # ---------- 模块级强制覆盖（保证“完全消融不残留”） ----------
+    # ----------  ----------
     if not args.enable_module1:
-        # 模块1全关：结构模块彻底禁用（A/E/knowledge_encoder 都不应参与）
+        # 1A/E/knowledge_encoder 
         use_concept_graph = False
         use_personal_graph = False
-        # 这些参数即使留着也不生效，但为了日志清晰与避免 trainer 侧额外正则逻辑，统一归零
+        #  trainer 
         args.num_gnn_layers = 0
         args.lambda_sparse = 0.0
         args.lambda_sparse_personal = 0.0
         args.lambda_alpha = 0.0
 
     if not args.enable_module3:
-        # 模块3全关：MF/Proto 全关
+        # 3MF/Proto 
         use_mf_branch = False
         use_soft_proto = False
         args.num_prototypes = 0
@@ -285,7 +304,7 @@ def main():
         args.lambda_proto_usage = 0.0
 
     if not args.enable_module2:
-        # 模块2全关：Prototype 在结构上无贡献且可能形成“伪路径”，强制关
+        # 2Prototype 
         use_soft_proto = False
         args.num_prototypes = 0
         args.lambda_proto_div = 0.0
@@ -295,22 +314,26 @@ def main():
     args.use_mf_branch = bool(use_mf_branch)
     args.use_concept_graph = bool(use_concept_graph)
     args.use_personal_graph = bool(use_personal_graph)
+    args.use_q_aligned_residual = not bool(getattr(args, "disable_q_aligned_residual", False))
+    args.use_soft_prototype_main_path = bool(
+        getattr(args, "use_soft_prototype_main_path", False) and args.use_soft_prototype
+    )
 
-    # 兼容历史字段（trainer/日志若仍使用旧名字）
+    # trainer/
     args.use_skill_encoder = args.use_mf_branch
     args.use_exercise_graph = args.use_concept_graph
 
     # =========================================================
-    # 3) 新增派生字段：避免 trainer/model 之间参数名不一致
+    # 3)  trainer/model 
     # =========================================================
-    # disable_self_loop -> allow_self_loop（模型里用 allow_self_loop）
+    # disable_self_loop -> allow_self_loop allow_self_loop
     args.allow_self_loop = not getattr(args, "disable_self_loop", False)
 
-    # disable_q_conditioning -> use_q_conditioning（模型里用 use_q_conditioning）
+    # disable_q_conditioning -> use_q_conditioning use_q_conditioning
     args.use_q_conditioning = not getattr(args, "disable_q_conditioning", False)
 
     # =========================================================
-    # 4) 随机种子（保证可复现）
+    # 4) 
     # =========================================================
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -321,14 +344,14 @@ def main():
         torch.backends.cudnn.benchmark = False
 
     # =========================================================
-    # 5) 目录与日志
+    # 5) 
     # =========================================================
     os.makedirs(args.save_dir, exist_ok=True)
     os.makedirs(args.log_dir, exist_ok=True)
 
     logger = setup_logging(args.log_dir)
 
-    # 保存最终 args（非常关键：消融实验一定要落盘）
+    #  args
     args_file = os.path.join(args.save_dir, "args.json")
     with open(args_file, "w", encoding="utf-8") as f:
         json.dump(vars(args), f, indent=4, ensure_ascii=False)
@@ -338,7 +361,7 @@ def main():
         logger.info(f"  {arg}: {value}")
 
     # =========================================================
-    # 6) 训练 + 推理
+    # 6)  + 
     # =========================================================
     best_val_auc, best_epoch = train_one_experiment(args, logger)
     metrics, _ = run_inference(args, logger)
@@ -354,22 +377,22 @@ def main():
     )
     
     # =========================================================
-    # 7) 保存组件分析数据（用于可视化验证）
+    # 7) 
     # =========================================================
     if getattr(args, "generate_diagnosis", True):
         try:
-            # 需要重新加载模型和数据加载器
+            # 
             from torch.utils.data import DataLoader
             from src.dataset import create_dataloaders
             
             device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
             
-            # 加载最佳模型
+            # 
             model_path = os.path.join(args.save_dir, "best_model.pth")
             checkpoint = torch.load(model_path, map_location=device, weights_only=False)
             info_dict = checkpoint["info_dict"]
             
-            # 重建模型
+            # 
             from src.model import CognitiveDiagnosisModel
             model = CognitiveDiagnosisModel(
                 num_students=info_dict["num_students"],
@@ -388,15 +411,20 @@ def main():
                 proto_tau=args.proto_tau,
                 proto_lambda=args.proto_lambda,
                 use_soft_prototype=args.use_soft_prototype,
+                use_soft_prototype_main_path=args.use_soft_prototype_main_path,
                 use_personal_graph=args.use_personal_graph,
                 ablate_module1=getattr(args, "ablate_module1", False),
                 ablate_module2=getattr(args, "ablate_module2", False),
                 ablate_module3=getattr(args, "ablate_module3", False),
+                use_q_aligned_residual=getattr(args, "use_q_aligned_residual", True),
+                fusion_gate_max=getattr(args, "fusion_gate_max", 0.4),
+                fusion_gate_bias_init=getattr(args, "fusion_gate_bias_init", -2.5),
+                residual_clip_t=getattr(args, "residual_clip_t", 2.0),
                 personal_rank=getattr(args, "personal_rank", 4),
             ).to(device)
             model.load_state_dict(checkpoint["model_state_dict"])
             
-            # 创建数据加载器
+            # 
             train_file = os.path.join(args.data_dir, "train.csv")
             val_file = os.path.join(args.data_dir, "valid.csv")
             test_file = os.path.join(args.data_dir, "test.csv")
@@ -413,7 +441,7 @@ def main():
                 logger=logger,
             )
             
-            # 保存组件分析数据
+            # 
             analysis_data = save_component_analysis_data(
                 model=model,
                 train_loader=train_loader,
@@ -423,7 +451,7 @@ def main():
                 num_samples=200,
             )
             
-            # 自动生成可视化图表
+            # 
             try:
                 from plot_component_analysis import (
                     plot_prototype_analysis,
@@ -445,3 +473,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

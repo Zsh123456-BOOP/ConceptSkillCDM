@@ -246,6 +246,7 @@ def _collect_debug_forward_stats(
     model.eval()
 
     mf_vals: List[float] = []
+    residual_vals: List[float] = []
     gate_vals: List[float] = []
     irt_vals: List[float] = []
     delta_vals: List[float] = []
@@ -277,6 +278,10 @@ def _collect_debug_forward_stats(
             mf_logit = details.get("mf_logit")
             if mf_logit is not None:
                 mf_vals.extend(mf_logit.detach().reshape(-1).cpu().numpy().tolist())
+
+            residual_logit = details.get("residual_logit", mf_logit)
+            if residual_logit is not None:
+                residual_vals.extend(residual_logit.detach().reshape(-1).cpu().numpy().tolist())
 
             irt_logit = details.get("irt_logit")
             if irt_logit is not None:
@@ -314,6 +319,7 @@ def _collect_debug_forward_stats(
         model.train()
 
     mf_abs_mean, mf_std = _safe_abs_mean_std(mf_vals)
+    residual_abs_mean, residual_std = _safe_abs_mean_std(residual_vals)
     gate_mean, gate_std = _safe_mean_std(gate_vals)
     irt_abs_mean, irt_std = _safe_abs_mean_std(irt_vals)
     delta_abs_mean, delta_std = _safe_abs_mean_std(delta_vals)
@@ -323,6 +329,8 @@ def _collect_debug_forward_stats(
     return {
         "mf_abs_mean": mf_abs_mean,
         "mf_std": mf_std,
+        "residual_abs_mean": residual_abs_mean,
+        "residual_std": residual_std,
         "gate_mean": gate_mean,
         "gate_std": gate_std,
         "irt_abs_mean": irt_abs_mean,
@@ -631,6 +639,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     use_soft_prototype = getattr(args, "use_soft_prototype", True)
     use_mf_branch = getattr(args, "use_mf_branch", getattr(args, "use_skill_encoder", True))
     use_concept_graph = getattr(args, "use_concept_graph", True)
+    use_q_aligned_residual = bool(getattr(args, "use_q_aligned_residual", True))
+    use_soft_prototype_main_path = bool(getattr(args, "use_soft_prototype_main_path", False))
     ablate_module1 = bool(getattr(args, "ablate_module1", False))
     ablate_module2 = bool(getattr(args, "ablate_module2", False))
     ablate_module3 = bool(getattr(args, "ablate_module3", False))
@@ -652,7 +662,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         "%s Ablation switches: "
         "ablate_module1=%s, ablate_module2=%s, ablate_module3=%s | "
         "enable_module1=%s, enable_module2=%s, enable_module3=%s | "
-        "use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s | "
+        "use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s, use_q_aligned_residual=%s, use_soft_prototype_main_path=%s | "
         "effective(num_gnn_layers=%d, num_prototypes=%d)",
         run_tag,
         ablate_module1,
@@ -664,6 +674,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         use_soft_prototype,
         use_mf_branch,
         use_concept_graph,
+        use_q_aligned_residual,
+        use_soft_prototype_main_path,
         eff_gnn_layers,
         eff_num_prototypes,
     )
@@ -687,10 +699,15 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         proto_tau=args.proto_tau,
         proto_lambda=args.proto_lambda,
         use_soft_prototype=use_soft_prototype,
+        use_soft_prototype_main_path=getattr(args, "use_soft_prototype_main_path", False),
         use_personal_graph=getattr(args, "use_personal_graph", False),
         ablate_module1=ablate_module1,
         ablate_module2=ablate_module2,
         ablate_module3=ablate_module3,
+        use_q_aligned_residual=getattr(args, "use_q_aligned_residual", True),
+        fusion_gate_max=getattr(args, "fusion_gate_max", 0.4),
+        fusion_gate_bias_init=getattr(args, "fusion_gate_bias_init", -2.5),
+        residual_clip_t=getattr(args, "residual_clip_t", 2.0),
         personal_rank=getattr(args, "personal_rank", 4),
         lambda_sparse_personal=args.lambda_sparse_personal,
         lambda_alpha=args.lambda_alpha,
@@ -749,6 +766,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
 
     history: Dict[str, Any] = {"train": [], "val": [], "best_epoch": 0, "best_val_auc": 0.0}
     alpha_zero_streak = 0
+    gate_high_streak = 0
+    delta_high_streak = 0
 
     logger.info("%s Starting training...", run_tag)
 
@@ -815,14 +834,16 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             )
             delta_over_irt = diag["delta_abs_mean"] / (diag["irt_abs_mean"] + 1e-12)
             logger.info(
-                "%s [Diag] Epoch [%03d] | "
-                "mf_abs_mean=%.4f, mf_std=%.4f, gate_mean=%.4f, gate_std=%.4f, "
+                "%s [Diag][M3] Epoch [%03d] | "
+                "residual_abs_mean=%.4f, residual_std=%.4f, mf_abs_mean=%.4f, mf_std=%.4f, gate_mean=%.4f, gate_std=%.4f, "
                 "irt_abs_mean=%.4f, irt_std=%.4f, delta_abs_mean=%.4f, delta_std=%.4f, "
                 "delta_over_irt=%.4f, "
                 "graph_row_entropy=%.4f, graph_entropy_ratio=%.4f, "
                 "alpha_mean=%.4f, alpha_std=%.4f, personal_row_entropy=%.4f",
                 run_tag,
                 epoch,
+                diag["residual_abs_mean"],
+                diag["residual_std"],
                 diag["mf_abs_mean"],
                 diag["mf_std"],
                 diag["gate_mean"],
@@ -838,6 +859,34 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["alpha_std"],
                 diag["personal_row_entropy"],
             )
+            if diag["gate_mean"] > 0.8:
+                gate_high_streak += 1
+            else:
+                gate_high_streak = 0
+
+            if delta_over_irt > 0.15:
+                delta_high_streak += 1
+            else:
+                delta_high_streak = 0
+
+            if gate_high_streak >= 2:
+                logger.warning(
+                    "%s [Diag Warning][M3] gate_mean has stayed high for %d epoch(s): gate_mean=%.4f, gate_std=%.4f",
+                    run_tag,
+                    gate_high_streak,
+                    diag["gate_mean"],
+                    diag["gate_std"],
+                )
+
+            if delta_high_streak >= 2:
+                logger.warning(
+                    "%s [Diag Warning][M3] delta_over_irt has stayed high for %d epoch(s): delta_over_irt=%.4f, delta_abs_mean=%.4f",
+                    run_tag,
+                    delta_high_streak,
+                    delta_over_irt,
+                    diag["delta_abs_mean"],
+                )
+
             if getattr(_get_base_model(model), "use_personal_graph", False):
                 if diag["alpha_std"] < 1e-6:
                     alpha_zero_streak += 1
@@ -1024,6 +1073,8 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         loaded_args.get("use_skill_encoder", getattr(args, "use_mf_branch", getattr(args, "use_skill_encoder", True))),
     )
     use_concept_graph = loaded_args.get("use_concept_graph", getattr(args, "use_concept_graph", True))
+    use_q_aligned_residual = bool(loaded_args.get("use_q_aligned_residual", getattr(args, "use_q_aligned_residual", True)))
+    use_soft_prototype_main_path = bool(loaded_args.get("use_soft_prototype_main_path", getattr(args, "use_soft_prototype_main_path", False)))
     ablate_module1 = bool(loaded_args.get("ablate_module1", getattr(args, "ablate_module1", False)))
     ablate_module2 = bool(loaded_args.get("ablate_module2", getattr(args, "ablate_module2", False)))
     ablate_module3 = bool(loaded_args.get("ablate_module3", getattr(args, "ablate_module3", False)))
@@ -1043,7 +1094,7 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         "Inference switches: "
         "ablate_module1=%s, ablate_module2=%s, ablate_module3=%s | "
         "enable_module1=%s, enable_module2=%s, enable_module3=%s | "
-        "use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s | "
+        "use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s, use_q_aligned_residual=%s, use_soft_prototype_main_path=%s | "
         "effective(num_gnn_layers=%d, num_prototypes=%d)",
         ablate_module1,
         ablate_module2,
@@ -1054,6 +1105,8 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         use_soft_prototype,
         use_mf_branch,
         use_concept_graph,
+        use_q_aligned_residual,
+        use_soft_prototype_main_path,
         eff_gnn_layers,
         eff_num_prototypes,
     )
@@ -1077,10 +1130,21 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         proto_tau=loaded_args.get("proto_tau", args.proto_tau),
         proto_lambda=loaded_args.get("proto_lambda", args.proto_lambda),
         use_soft_prototype=use_soft_prototype,
+        use_soft_prototype_main_path=loaded_args.get(
+            "use_soft_prototype_main_path", getattr(args, "use_soft_prototype_main_path", False)
+        ),
         use_personal_graph=loaded_args.get("use_personal_graph", getattr(args, "use_personal_graph", False)),
         ablate_module1=ablate_module1,
         ablate_module2=ablate_module2,
         ablate_module3=ablate_module3,
+        use_q_aligned_residual=loaded_args.get(
+            "use_q_aligned_residual", getattr(args, "use_q_aligned_residual", True)
+        ),
+        fusion_gate_max=loaded_args.get("fusion_gate_max", getattr(args, "fusion_gate_max", 0.4)),
+        fusion_gate_bias_init=loaded_args.get(
+            "fusion_gate_bias_init", getattr(args, "fusion_gate_bias_init", -2.5)
+        ),
+        residual_clip_t=loaded_args.get("residual_clip_t", getattr(args, "residual_clip_t", 2.0)),
         personal_rank=loaded_args.get("personal_rank", getattr(args, "personal_rank", 4)),
         lambda_sparse_personal=loaded_args.get("lambda_sparse_personal", args.lambda_sparse_personal),
         lambda_alpha=loaded_args.get("lambda_alpha", args.lambda_alpha),

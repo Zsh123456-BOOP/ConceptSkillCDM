@@ -329,13 +329,9 @@ class StudentLatentEncoder(nn.Module):
 
 class ExerciseDifficultyEncoder(nn.Module):
     """
-    题目参数编码（共享组件）：
-    - IRT 2PL：b_e（难度），a_e（区分度 > 0）  —— 可通过 use_irt 完全移除（不创建参数）
-    - MF/Q-conditioning：exercise_latent + gate * (Q-normalized concept_latent mix)
-
-    说明：
-    - 模块 2（D）完全消融时：use_irt=False => b/a 参数不存在，forward 返回 b=0, a=1（占位）
-    - 模块 3（B）完全消融时：use_mf_branch=False => MF 参数不存在，forward 返回 None（占位）
+    Shared item encoder:
+    - IRT 2PL params (b, a) controlled by use_irt
+    - Module3 Q-aligned branch: exercise_bias + concept_latent aggregated by Q-mask
     """
 
     def __init__(
@@ -360,22 +356,18 @@ class ExerciseDifficultyEncoder(nn.Module):
 
         self.register_buffer("q_matrix", q_matrix)
 
-        # MF/Q-conditioning 分支（可消融）
         if self.use_mf_branch:
-            self.exercise_latent = nn.Embedding(num_exercises, exercise_dim)
             self.exercise_bias = nn.Embedding(num_exercises, 1)
             self.concept_latent = nn.Embedding(num_concepts, exercise_dim)
-            self.q_gate_raw = nn.Parameter(torch.zeros(1))  # sigmoid -> [0,1]
+            self.q_gate_raw = nn.Parameter(torch.zeros(1))
         else:
-            self.exercise_latent = None
             self.exercise_bias = None
             self.concept_latent = None
             self.q_gate_raw = None
 
-        # IRT 2PL 分支（可完全消融：不创建任何参数）
         if self.use_irt:
             self.b = nn.Embedding(num_exercises, 1)
-            self.a_raw = nn.Embedding(num_exercises, 1)  # softplus -> >0
+            self.a_raw = nn.Embedding(num_exercises, 1)
         else:
             self.b = None
             self.a_raw = None
@@ -385,7 +377,6 @@ class ExerciseDifficultyEncoder(nn.Module):
 
     def _initialize_weights(self) -> None:
         if self.use_mf_branch:
-            nn.init.xavier_normal_(self.exercise_latent.weight)
             nn.init.zeros_(self.exercise_bias.weight)
             nn.init.xavier_normal_(self.concept_latent.weight)
 
@@ -400,44 +391,38 @@ class ExerciseDifficultyEncoder(nn.Module):
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], torch.Tensor, torch.Tensor]:
         """
         Returns:
-            exercise_latent: (B, De) or None
-            exercise_bias:   (B,) or None
-            b:               (B,)  （若 use_irt=False => 全0占位）
-            a:               (B,)  （若 use_irt=False => 全1占位）
+            q_latent:      (B, De) or None
+            exercise_bias: (B,) or None
+            b:             (B,)
+            a:             (B,)
         """
         device = exercise_ids.device
         B = exercise_ids.size(0)
 
-        # ----- MF/Q-conditioning -----
         if self.use_mf_branch:
-            base = self.exercise_latent(exercise_ids)              # (B, De)
-            e_bias = self.exercise_bias(exercise_ids).squeeze(-1)  # (B,)
-
+            e_bias = self.exercise_bias(exercise_ids).squeeze(-1)
+            if concept_mask is None:
+                concept_mask = self.q_matrix[exercise_ids]
+            q = concept_mask.float()
+            q_norm = q / (q.sum(dim=1, keepdim=True) + 1e-12)
+            c_lat = self.concept_latent.weight
+            q_latent = torch.matmul(q_norm, c_lat)
             if self.use_q_conditioning:
-                if concept_mask is None:
-                    concept_mask = self.q_matrix[exercise_ids]     # (B, C)
-                q = concept_mask.float()
-                q_norm = q / (q.sum(dim=1, keepdim=True) + 1e-12)  # (B, C)
-                c_lat = self.concept_latent.weight                 # (C, De)
-                q_lat = torch.matmul(q_norm, c_lat)                # (B, De)
-                gate = torch.sigmoid(self.q_gate_raw)              # scalar
-                base = base + gate * q_lat
-
-            base = self.dropout(base)
+                q_gate = torch.sigmoid(self.q_gate_raw)
+                q_latent = q_gate * q_latent
+            q_latent = self.dropout(q_latent)
         else:
-            base = None
+            q_latent = None
             e_bias = None
 
-        # ----- IRT -----
         if self.use_irt:
-            b = self.b(exercise_ids).squeeze(-1)  # (B,)
-            a = F.softplus(self.a_raw(exercise_ids).squeeze(-1)) + 1e-6  # (B,)
+            b = self.b(exercise_ids).squeeze(-1)
+            a = F.softplus(self.a_raw(exercise_ids).squeeze(-1)) + 1e-6
         else:
-            # 完全消融 module2 时：不产生任何 IRT 参数梯度，直接返回常量占位
             b = torch.zeros(B, device=device)
             a = torch.ones(B, device=device)
 
-        return base, e_bias, b, a
+        return q_latent, e_bias, b, a
 
 
 # ======================================================
@@ -487,82 +472,99 @@ class CognitiveDiagnosisHead(nn.Module):
 # 模块 3（B）：MF 残差头 - MFResidualHead
 # ======================================================
 
-class MFResidualHead(nn.Module):
-    """
-    模块 3 的一部分：MF/Q-conditioned 残差 logit
-    - cosine 相似度 + 正值 scale
-    """
+class QAlignedResidualHead(nn.Module):
+    """Low-capacity Q-aligned residual head for Module3."""
 
-    def __init__(self, student_latent_dim: int, exercise_dim: int, mf_dim: int = 64, dropout: float = 0.1):
+    def __init__(
+        self,
+        student_latent_dim: int,
+        concept_latent_dim: int,
+        residual_dim: int = 32,
+        dropout: float = 0.1,
+        residual_clip_t: float = 2.0,
+    ):
         super().__init__()
-        self.u_proj = nn.Linear(student_latent_dim, mf_dim, bias=False)
-        self.v_proj = nn.Linear(exercise_dim, mf_dim, bias=False)
+        self.u_proj = nn.Linear(student_latent_dim, residual_dim, bias=False)
+        self.v_proj = nn.Linear(concept_latent_dim, residual_dim, bias=False)
         nn.init.xavier_normal_(self.u_proj.weight)
         nn.init.xavier_normal_(self.v_proj.weight)
 
-        self.mf_scale_raw = nn.Parameter(torch.tensor(1.0))
+        self.mf_scale_raw = nn.Parameter(torch.tensor(0.0))
+        self.bias_scale_raw = nn.Parameter(torch.tensor(0.0))
         self.mf_bias = nn.Parameter(torch.zeros(1))
+        self.residual_clip_t = float(residual_clip_t)
         self.dropout = nn.Dropout(dropout)
 
     def forward(
         self,
-        student_latent: torch.Tensor,   # (B, Ds)
-        student_bias: torch.Tensor,     # (B,)
-        exercise_latent: torch.Tensor,  # (B, De)
-        exercise_bias: torch.Tensor,    # (B,)
+        student_latent: torch.Tensor,
+        student_bias: torch.Tensor,
+        q_latent: torch.Tensor,
+        exercise_bias: torch.Tensor,
         return_details: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
 
         u = self.u_proj(student_latent)
-        v = self.v_proj(exercise_latent)
+        v = self.v_proj(q_latent)
         u = F.normalize(u, dim=-1, eps=1e-12)
         v = F.normalize(v, dim=-1, eps=1e-12)
 
-        mf_scale = F.softplus(self.mf_scale_raw) + 1e-6
-        mf_logit = mf_scale * (u * v).sum(dim=-1) + self.mf_bias + student_bias + exercise_bias  # (B,)
-        mf_logit = self.dropout(mf_logit)
+        interaction_scale = F.softplus(self.mf_scale_raw) + 1e-6
+        bias_scale = F.softplus(self.bias_scale_raw) + 1e-6
+
+        interaction_residual = interaction_scale * (u * v).sum(dim=-1)
+        bias_residual = bias_scale * (student_bias + exercise_bias)
+        residual = interaction_residual + bias_residual + self.mf_bias
+
+        if self.residual_clip_t > 0:
+            t = self.residual_clip_t
+            residual = t * torch.tanh(residual / t)
+
+        residual = self.dropout(residual)
 
         if not return_details:
-            return mf_logit
+            return residual
 
         details = {
-            "mf_logit": mf_logit.detach(),
-            "mf_scale": mf_scale.detach(),
+            "mf_logit": residual.detach(),
+            "residual_logit": residual.detach(),
+            "interaction_residual": interaction_residual.detach(),
+            "bias_residual": bias_residual.detach(),
+            "mf_scale": interaction_scale.detach(),
+            "bias_scale": bias_scale.detach(),
         }
-        return mf_logit, details
+        return residual, details
 
 
-# ======================================================
-# 模块 3（B）：融合门控 - FusionGate
-# ======================================================
+class ConservativeFusionGate(nn.Module):
+    """Conservative residual fusion: gate_max * sigmoid(linear)."""
 
-class FusionGate(nn.Module):
-    """
-    门控残差融合（仅在 module2 & module3 同时启用时存在）
-    total_logit = irt_logit + gate(irt_logit, mf_logit) * mf_logit
-    """
-
-    def __init__(self):
+    def __init__(self, gate_max: float = 0.4, gate_bias_init: float = -2.5):
         super().__init__()
         self.fusion_gate = nn.Linear(2, 1)
-        nn.init.zeros_(self.fusion_gate.bias)
+        self.gate_max = float(gate_max)
+        nn.init.constant_(self.fusion_gate.bias, float(gate_bias_init))
         nn.init.constant_(self.fusion_gate.weight, 0.0)
 
     def forward(
         self,
-        irt_logit: torch.Tensor,   # (B,)
-        mf_logit: torch.Tensor,    # (B,)
+        irt_logit: torch.Tensor,
+        mf_logit: torch.Tensor,
         return_details: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
-        stack = torch.stack([irt_logit, mf_logit], dim=1)          # (B,2)
-        gate = torch.sigmoid(self.fusion_gate(stack)).squeeze(-1)  # (B,)
-        total_logit = irt_logit + gate * mf_logit
+        stack = torch.stack([irt_logit, mf_logit], dim=1)
+        gate_raw = self.fusion_gate(stack).squeeze(-1)
+        gate = self.gate_max * torch.sigmoid(gate_raw)
+        delta = gate * mf_logit
+        total_logit = irt_logit + delta
 
         if not return_details:
             return total_logit
 
         details = {
             "gate": gate.detach(),
+            "gate_raw": gate_raw.detach(),
+            "delta_logit": delta.detach(),
             "total_logit": total_logit.detach(),
         }
         return total_logit, details
@@ -855,12 +857,18 @@ class CognitiveDiagnosisModel(nn.Module):
         proto_tau: float = 1.0,
         proto_lambda: float = 0.5,
         use_soft_prototype: bool = True,
+        use_soft_prototype_main_path: bool = False,
         use_personal_graph: bool = False,
         personal_rank: int = 4,
         # ===== 模块级“完全消融”开关 =====
         ablate_module1: bool = False,
         ablate_module2: bool = False,
         ablate_module3: bool = False,
+        # ===== Module3 (Q-aligned residual + conservative fusion) =====
+        use_q_aligned_residual: bool = True,
+        fusion_gate_max: float = 0.4,
+        fusion_gate_bias_init: float = -2.5,
+        residual_clip_t: float = 2.0,
         # ===== 正则权重 =====
         lambda_sparse_personal: float = 0.0,
         lambda_alpha: float = 0.0,
@@ -904,9 +912,14 @@ class CognitiveDiagnosisModel(nn.Module):
         # 最终保存子模块开关（用于 details）
         self.use_concept_graph = bool(use_concept_graph)
         self.use_personal_graph = bool(use_personal_graph)
-        self.use_mf_branch = bool(use_mf_branch)
+        self.use_mf_branch = bool(use_mf_branch and use_q_aligned_residual)
         self.use_soft_prototype = bool(use_soft_prototype and num_prototypes > 0 and self.enable_module3 and self.enable_module2)
         self.proto_lambda = float(proto_lambda)
+        self.use_soft_prototype_main_path = bool(use_soft_prototype_main_path and self.use_soft_prototype)
+        self.use_q_aligned_residual = bool(use_q_aligned_residual)
+        self.fusion_gate_max = float(fusion_gate_max)
+        self.fusion_gate_bias_init = float(fusion_gate_bias_init)
+        self.residual_clip_t = float(residual_clip_t)
 
         # ===== 正则权重 =====
         self.lambda_graph_entropy = float(lambda_graph_entropy)
@@ -969,19 +982,23 @@ class CognitiveDiagnosisModel(nn.Module):
         # ------------------------------
         if self.enable_module3 and self.use_mf_branch:
             self.skill_encoder = StudentLatentEncoder(num_students, latent_dim=skill_dim)
-            self.mf_head = MFResidualHead(
+            self.mf_head = QAlignedResidualHead(
                 student_latent_dim=skill_dim,
-                exercise_dim=exercise_dim,
-                mf_dim=min(64, skill_dim, exercise_dim),
+                concept_latent_dim=exercise_dim,
+                residual_dim=min(64, skill_dim, exercise_dim),
                 dropout=dropout,
+                residual_clip_t=self.residual_clip_t,
             )
         else:
             self.skill_encoder = None
             self.mf_head = None
 
-        # Fusion 仅在 module2+module3 同时启用且 MF 启用时存在
+        # Fusion exists only when module2 + module3 are both enabled
         if self.enable_module2 and self.enable_module3 and self.use_mf_branch:
-            self.fusion = FusionGate()
+            self.fusion = ConservativeFusionGate(
+                gate_max=self.fusion_gate_max,
+                gate_bias_init=self.fusion_gate_bias_init,
+            )
         else:
             self.fusion = None
 
@@ -1035,11 +1052,12 @@ class CognitiveDiagnosisModel(nn.Module):
         proto_assign = None
         if self.prototype_module is not None:
             proto_mix, proto_assign = self.prototype_module(student_repr)  # (B,D), (B,K)
-            proto_broadcast = proto_mix.unsqueeze(1).expand(-1, self.num_concepts, -1)
-            knowledge_state = (1.0 - self.proto_lambda) * knowledge_state + self.proto_lambda * proto_broadcast
+            if self.use_soft_prototype_main_path:
+                proto_broadcast = proto_mix.unsqueeze(1).expand(-1, self.num_concepts, -1)
+                knowledge_state = (1.0 - self.proto_lambda) * knowledge_state + self.proto_lambda * proto_broadcast
 
-        # ========== 3) 共享：题目参数（b,a）与（可选）exercise_latent ==========
-        exercise_latent, exercise_bias, b, a = self.exercise_encoder(exercise_ids, concept_mask=q_vector)
+        # ========== 3) 共享：题目参数（b,a）与 module3 q-latent ==========
+        q_latent, exercise_bias, b, a = self.exercise_encoder(exercise_ids, concept_mask=q_vector)
 
         # ========== 4) Module 2：IRT head（可完全消融） ==========
         if self.enable_module2:
@@ -1072,14 +1090,14 @@ class CognitiveDiagnosisModel(nn.Module):
 
             student_latent, student_bias = self.skill_encoder(student_ids)
 
-            if exercise_latent is None or exercise_bias is None:
-                raise RuntimeError("MF is enabled but exercise_latent/exercise_bias is None. Check exercise_encoder wiring.")
+            if q_latent is None or exercise_bias is None:
+                raise RuntimeError("Module3 is enabled but q_latent/exercise_bias is None. Check exercise_encoder wiring.")
 
             if return_details:
                 mf_logit, mf_details = self.mf_head(
                     student_latent=student_latent,
                     student_bias=student_bias,
-                    exercise_latent=exercise_latent,
+                    q_latent=q_latent,
                     exercise_bias=exercise_bias,
                     return_details=True,
                 )
@@ -1087,7 +1105,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 mf_logit = self.mf_head(
                     student_latent=student_latent,
                     student_bias=student_bias,
-                    exercise_latent=exercise_latent,
+                    q_latent=q_latent,
                     exercise_bias=exercise_bias,
                     return_details=False,
                 )
@@ -1119,12 +1137,20 @@ class CognitiveDiagnosisModel(nn.Module):
         # 情况2：仅 module2 启用（或 module3 被完全消融/或 MF 被消融）=> 纯 IRT
         elif self.enable_module2:
             total_logit = irt_logit
-            fuse_details = {"gate": torch.zeros_like(irt_logit).detach()} if return_details else None
+            if return_details:
+                zero = torch.zeros_like(irt_logit).detach()
+                fuse_details = {"gate": zero, "gate_raw": zero, "delta_logit": zero}
+            else:
+                fuse_details = None
 
-        # 情况3：module2 完全消融，但 module3(MF) 启用 => 纯 MF（无 gate 参数、无 gate 计算）
+        # 情况3：module2 完全消融，但 module3 启用 => 纯 residual（无 gate 计算）
         elif self.enable_module3 and self.use_mf_branch:
             total_logit = mf_logit
-            fuse_details = {"gate": torch.zeros_like(mf_logit).detach()} if return_details else None
+            if return_details:
+                zero = torch.zeros_like(mf_logit).detach()
+                fuse_details = {"gate": zero, "gate_raw": zero, "delta_logit": zero}
+            else:
+                fuse_details = None
 
         # 情况4：无预测路径（已在 init 报错，forward 再兜底）
         else:
@@ -1148,6 +1174,7 @@ class CognitiveDiagnosisModel(nn.Module):
             "use_personal_graph": torch.tensor(int(self.use_personal_graph), device=device),
             "use_mf_branch": torch.tensor(int(self.use_mf_branch), device=device),
             "use_soft_prototype": torch.tensor(int(self.prototype_module is not None), device=device),
+            "use_soft_prototype_main_path": torch.tensor(int(self.use_soft_prototype_main_path), device=device),
 
             # 模块 1 输出
             "relation_matrices": relation_matrices,
@@ -1165,6 +1192,7 @@ class CognitiveDiagnosisModel(nn.Module):
             # logits
             "irt_logit": irt_logit.detach(),
             "mf_logit": mf_logit.detach(),
+            "residual_logit": mf_logit.detach(),
             "logits": total_logit.detach(),
         }
 
@@ -1238,10 +1266,12 @@ class CognitiveDiagnosisModel(nn.Module):
             if self.enable_module3 and self.use_mf_branch:
                 if self.skill_encoder is not None:
                     reg_terms.append(self.skill_encoder.latent_emb.weight.pow(2).mean())
-                if self.exercise_encoder.use_mf_branch and self.exercise_encoder.exercise_latent is not None:
-                    reg_terms.append(self.exercise_encoder.exercise_latent.weight.pow(2).mean())
                 if self.exercise_encoder.use_mf_branch and self.exercise_encoder.concept_latent is not None:
                     reg_terms.append(self.exercise_encoder.concept_latent.weight.pow(2).mean())
+                if self.exercise_encoder.use_mf_branch and self.exercise_encoder.exercise_bias is not None:
+                    reg_terms.append(self.exercise_encoder.exercise_bias.weight.pow(2).mean())
+                if self.exercise_encoder.use_mf_branch and self.exercise_encoder.q_gate_raw is not None:
+                    reg_terms.append(self.exercise_encoder.q_gate_raw.pow(2).mean())
 
             if len(reg_terms) > 0:
                 terms["mf_l2"] = self.mf_l2_lambda * sum(reg_terms)

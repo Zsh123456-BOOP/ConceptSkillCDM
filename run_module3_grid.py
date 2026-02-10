@@ -1,20 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-run_module3_grid.py
+"""Run module3-focused grid search based on BEST_CFG.
 
-面向 module3（B + C: MF residual + prototype + fusion gate）的最小网格脚本。
+Design goals:
+1) Use BEST_CFG from `best_configs.py` as the base config for each dataset.
+2) For each grid point, always run paired variants: `full` and `no_module3`.
+3) Reuse multi-GPU scheduling with `max_concurrent` and `max_per_gpu` limits.
+4) Write summary rows to `results/module3_grid_results.csv`.
+5) Support `--dry_run` to print commands without executing.
 
-设计目标：
-1) 所有非网格参数都来自 best_configs.py 的 BEST_CFG（按数据集读取）。
-2) 每个网格点都成对运行 full vs no_module3，仅差异在 --ablate_module3。
-3) 支持多 GPU + 并发调度，结果写入 results/module3_grid_results.csv。
-4) 支持 --dry_run：只打印命令，不实际运行。
-
-快速示例（串行单卡）：
+Examples:
 python run_module3_grid.py --datasets assist_09,junyi --seeds 42 --gpus 0 --max_concurrent 1 --max_per_gpu 1 --epochs 15
-
-多卡并发示例：
 python run_module3_grid.py --datasets assist_09,junyi --seeds 42 --gpus 0,1,2,3 --max_concurrent 4 --max_per_gpu 1 --poll_interval 15
 """
 
@@ -79,10 +75,10 @@ def parse_cli() -> argparse.Namespace:
         default=15,
         help="Epochs for quick diagnosis (default=15). If not explicitly provided and BEST_CFG has epochs, BEST_CFG is used.",
     )
-    parser.add_argument("--gpus", type=str, default="0,3", help="Comma-separated GPU ids.")
-    parser.add_argument("--max_concurrent", type=int, default=2)
+    parser.add_argument("--gpus", type=str, default="0", help="Comma-separated GPU ids.")
+    parser.add_argument("--max_concurrent", type=int, default=1)
     parser.add_argument("--max_per_gpu", type=int, default=1)
-    parser.add_argument("--poll_interval", type=int, default=25)
+    parser.add_argument("--poll_interval", type=int, default=15)
     parser.add_argument("--dry_run", action="store_true", help="Print commands only.")
     parser.add_argument("--ablation_set", type=str, default="model", help="Currently only supports model.")
     parser.add_argument(
@@ -138,45 +134,25 @@ def append_arg(cmd: List[str], key: str, value: Any) -> None:
 
 
 def build_grid_points(base_cfg: Dict[str, Any]) -> Tuple[List[GridPoint], List[str]]:
+    # Direction-2: remove proto_relax style points by default (prototype stays off unless explicitly enabled).
     points: List[GridPoint] = [
         GridPoint("baseline", {}),
         GridPoint("sparse001", {"lambda_sparse": 0.01}),
-        GridPoint("proto_relax", {"proto_lambda": 1.0, "lambda_proto_div": 0.01, "lambda_proto_usage": 0.01}),
+        GridPoint("gate03_bm30", {"fusion_gate_max": 0.30, "fusion_gate_bias_init": -3.0}),
+        GridPoint("clip15", {"residual_clip_t": 1.5}),
+        GridPoint(
+            "sparse_gate_clip",
+            {"lambda_sparse": 0.01, "fusion_gate_max": 0.30, "fusion_gate_bias_init": -3.0, "residual_clip_t": 1.5},
+        ),
     ]
     skip_msgs: List[str] = []
 
     base_dropout = float(base_cfg.get("dropout", 0.0) or 0.0)
     if base_dropout >= 0.2:
-        points.extend(
-            [
-                GridPoint("drop02", {"dropout": 0.2}),
-                GridPoint(
-                    "sparse001_proto_relax",
-                    {"lambda_sparse": 0.01, "proto_lambda": 1.0, "lambda_proto_div": 0.01, "lambda_proto_usage": 0.01},
-                ),
-                GridPoint(
-                    "sparse001_proto_relax_drop02",
-                    {
-                        "lambda_sparse": 0.01,
-                        "proto_lambda": 1.0,
-                        "lambda_proto_div": 0.01,
-                        "lambda_proto_usage": 0.01,
-                        "dropout": 0.2,
-                    },
-                ),
-            ]
-        )
+        points.append(GridPoint("drop02", {"dropout": 0.2}))
     else:
         skip_msgs.append(
-            f"base dropout={base_dropout:.4f} < 0.2, skip grid points containing dropout=0.2 (no reverse increase)."
-        )
-        points.extend(
-            [
-                GridPoint(
-                    "sparse001_proto_relax",
-                    {"lambda_sparse": 0.01, "proto_lambda": 1.0, "lambda_proto_div": 0.01, "lambda_proto_usage": 0.01},
-                ),
-            ]
+            f"base dropout={base_dropout:.4f} < 0.2, skip drop02 point (no reverse increase)."
         )
 
     return points, skip_msgs
@@ -202,13 +178,25 @@ def build_shared_params(
             f"[{dataset}] BEST_CFG has ablate_module2=True, incompatible with no_module3 pair runs."
         )
 
-    # Enforce "full" semantics for module3 baseline.
+    # Enforce "full" semantics for module3 baseline while keeping prototype off by default.
     params["ablate_module3"] = False
     params["ablate_skill_encoder"] = False
-    params["ablate_soft_prototype"] = False
-    params["disable_soft_prototype"] = False
-    if int(params.get("num_prototypes", 3) or 0) <= 0:
-        params["num_prototypes"] = 3
+    params["disable_q_aligned_residual"] = False
+
+    # Prototype stays disabled unless user explicitly overrides in cfg/grid.
+    params.setdefault("enable_soft_prototype", False)
+    params["disable_soft_prototype"] = True
+    params["ablate_soft_prototype"] = True
+    params["use_soft_prototype_main_path"] = False
+    params["num_prototypes"] = 0
+    params["proto_lambda"] = float(params.get("proto_lambda", 0.0) or 0.0)
+    params["lambda_proto_div"] = 0.0
+    params["lambda_proto_usage"] = 0.0
+
+    # Conservative fusion defaults.
+    params.setdefault("fusion_gate_max", 0.4)
+    params.setdefault("fusion_gate_bias_init", -2.5)
+    params.setdefault("residual_clip_t", 2.0)
 
     return params
 
@@ -217,7 +205,7 @@ def build_variant_params(shared_params: Dict[str, Any], variant: str) -> Dict[st
     params = dict(shared_params)
     if variant == "no_module3":
         params["ablate_module3"] = True
-        # 如果有显式 "开启 module3 子路径" 参数，统一移除，避免冲突歧义。
+        # Remove explicit submodule toggles to avoid conflicts; ablate_module3 is the source of truth.
         params.pop("use_mf_branch", None)
         params.pop("use_soft_prototype", None)
     elif variant == "full":
@@ -283,6 +271,7 @@ def parse_diag_from_log(log_file: Path) -> Dict[str, Optional[float]]:
         "reg_bce_ratio": None,
         "delta_over_irt": None,
         "mf_abs_mean": None,
+        "residual_abs_mean": None,
         "gate_mean": None,
         "graph_entropy_ratio": None,
         "alpha_std": None,
@@ -299,8 +288,9 @@ def parse_diag_from_log(log_file: Path) -> Dict[str, Optional[float]]:
                 if val_ratio is not None:
                     out["reg_bce_ratio"] = val_ratio
 
-            if "[Diag] Epoch" in line:
+            if "[Diag][M3] Epoch" in line or "[Diag] Epoch" in line:
                 mf = extract_float(line, "mf_abs_mean")
+                residual = extract_float(line, "residual_abs_mean")
                 gate = extract_float(line, "gate_mean")
                 irt = extract_float(line, "irt_abs_mean")
                 delta = extract_float(line, "delta_abs_mean")
@@ -310,6 +300,8 @@ def parse_diag_from_log(log_file: Path) -> Dict[str, Optional[float]]:
 
                 if mf is not None:
                     out["mf_abs_mean"] = mf
+                if residual is not None:
+                    out["residual_abs_mean"] = residual
                 if gate is not None:
                     out["gate_mean"] = gate
                 if ger is not None:
@@ -387,6 +379,7 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "reg_bce_ratio",
         "delta_over_irt",
         "mf_abs_mean",
+        "residual_abs_mean",
         "gate_mean",
         "graph_entropy_ratio",
         "alpha_std",
@@ -591,3 +584,9 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
