@@ -407,9 +407,9 @@ class ExerciseDifficultyEncoder(nn.Module):
             q_norm = q / (q.sum(dim=1, keepdim=True) + 1e-12)
             c_lat = self.concept_latent.weight
             q_latent = torch.matmul(q_norm, c_lat)
-            if self.use_q_conditioning:
-                q_gate = torch.sigmoid(self.q_gate_raw)
-                q_latent = q_gate * q_latent
+            # NOTE:
+            # Keep q_latent unscaled here. q_gate is applied after cosine interaction
+            # in QAlignedResidualHead so its gradient is not canceled by normalization.
             q_latent = self.dropout(q_latent)
         else:
             q_latent = None
@@ -501,6 +501,7 @@ class QAlignedResidualHead(nn.Module):
         student_bias: torch.Tensor,
         q_latent: torch.Tensor,
         exercise_bias: torch.Tensor,
+        q_gate: Optional[torch.Tensor] = None,
         return_details: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
 
@@ -512,7 +513,12 @@ class QAlignedResidualHead(nn.Module):
         interaction_scale = F.softplus(self.mf_scale_raw) + 1e-6
         bias_scale = F.softplus(self.bias_scale_raw) + 1e-6
 
-        interaction_residual = interaction_scale * (u * v).sum(dim=-1)
+        if q_gate is None:
+            q_gate_value = interaction_scale.new_tensor(1.0)
+        else:
+            q_gate_value = q_gate.to(dtype=interaction_scale.dtype, device=interaction_scale.device)
+
+        interaction_residual = interaction_scale * q_gate_value * (u * v).sum(dim=-1)
         bias_residual = bias_scale * (student_bias + exercise_bias)
         residual = interaction_residual + bias_residual + self.mf_bias
 
@@ -532,6 +538,7 @@ class QAlignedResidualHead(nn.Module):
             "bias_residual": bias_residual.detach(),
             "mf_scale": interaction_scale.detach(),
             "bias_scale": bias_scale.detach(),
+            "q_gate": q_gate_value.detach(),
         }
         return residual, details
 
@@ -1093,12 +1100,20 @@ class CognitiveDiagnosisModel(nn.Module):
             if q_latent is None or exercise_bias is None:
                 raise RuntimeError("Module3 is enabled but q_latent/exercise_bias is None. Check exercise_encoder wiring.")
 
+            module3_q_gate = None
+            if (
+                getattr(self.exercise_encoder, "use_q_conditioning", False)
+                and getattr(self.exercise_encoder, "q_gate_raw", None) is not None
+            ):
+                module3_q_gate = torch.sigmoid(self.exercise_encoder.q_gate_raw)
+
             if return_details:
                 mf_logit, mf_details = self.mf_head(
                     student_latent=student_latent,
                     student_bias=student_bias,
                     q_latent=q_latent,
                     exercise_bias=exercise_bias,
+                    q_gate=module3_q_gate,
                     return_details=True,
                 )
             else:
@@ -1107,6 +1122,7 @@ class CognitiveDiagnosisModel(nn.Module):
                     student_bias=student_bias,
                     q_latent=q_latent,
                     exercise_bias=exercise_bias,
+                    q_gate=module3_q_gate,
                     return_details=False,
                 )
                 mf_details = None
