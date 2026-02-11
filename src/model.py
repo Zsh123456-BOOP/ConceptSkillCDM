@@ -897,6 +897,7 @@ class CognitiveDiagnosisModel(nn.Module):
         lambda_graph_entropy: float = 0.01,  # mapped from args.lambda_sparse
         graph_entropy_min: float = 0.15,
         graph_entropy_max: float = 0.95,
+        lambda_graph_diag: float = 0.05,
         mf_l2_lambda: float = 5e-5,          # mapped from args.exercise_l2_lambda
         gnn_residual_weight: float = 0.5,
         use_q_conditioning: bool = True,
@@ -952,6 +953,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_entropy_max = float(graph_entropy_max)
         if self.graph_entropy_min > self.graph_entropy_max:
             self.graph_entropy_min, self.graph_entropy_max = self.graph_entropy_max, self.graph_entropy_min
+        self.lambda_graph_diag = float(lambda_graph_diag)
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
         self.mf_l2_lambda = float(mf_l2_lambda)
@@ -1266,6 +1268,7 @@ class CognitiveDiagnosisModel(nn.Module):
         device = relation_matrices.device
         terms: Dict[str, torch.Tensor] = {
             "graph_entropy": torch.tensor(0.0, device=device),
+            "graph_diag": torch.tensor(0.0, device=device),
             "mf_l2": torch.tensor(0.0, device=device),
             "proto_div": torch.tensor(0.0, device=device),
             "proto_usage": torch.tensor(0.0, device=device),
@@ -1290,6 +1293,12 @@ class CognitiveDiagnosisModel(nn.Module):
                     details["graph_entropy_raw"] = entropy.detach()
                     details["graph_entropy_norm"] = h_norm.detach()
                     details["graph_entropy_pen"] = pen.detach()
+
+                if self.lambda_graph_diag > 0:
+                    diag_mass = torch.diagonal(relation_matrices, dim1=-2, dim2=-1).mean()
+                    terms["graph_diag"] = self.lambda_graph_diag * diag_mass
+                    if details is not None:
+                        details["graph_diag_mass"] = diag_mass.detach()
 
         # (2) MF/IRT L2
         if self.mf_l2_lambda > 0:
@@ -1358,6 +1367,7 @@ class CognitiveDiagnosisModel(nn.Module):
 
         total = (
             terms["graph_entropy"]
+            + terms["graph_diag"]
             + terms["mf_l2"]
             + terms["proto_div"]
             + terms["proto_usage"]
