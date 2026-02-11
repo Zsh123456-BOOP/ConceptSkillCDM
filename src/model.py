@@ -445,9 +445,12 @@ class CognitiveDiagnosisHead(nn.Module):
     - irt_logit = a * (theta_e - b)
     """
 
-    def __init__(self, knowledge_dim: int):
+    def __init__(self, knowledge_dim: int, use_weight_norm: bool = True):
         super().__init__()
-        self.theta_proj = parametrizations.weight_norm(nn.Linear(knowledge_dim, 1, bias=True))
+        base = nn.Linear(knowledge_dim, 1, bias=True)
+        # Module1 完全消融时 knowledge_state 恒为 0；此时 theta_proj.weight 仅受优化器衰减，
+        # 使用 weight_norm 会在极小范数下带来数值不稳定风险，因此改用普通线性层。
+        self.theta_proj = parametrizations.weight_norm(base) if use_weight_norm else base
 
     def forward(
         self,
@@ -977,7 +980,10 @@ class CognitiveDiagnosisModel(nn.Module):
         # Module 2：认知诊断头（D）
         # ------------------------------
         if self.enable_module2:
-            self.diagnosis_head = CognitiveDiagnosisHead(knowledge_dim=knowledge_dim)
+            self.diagnosis_head = CognitiveDiagnosisHead(
+                knowledge_dim=knowledge_dim,
+                use_weight_norm=self.enable_module1,
+            )
         else:
             self.diagnosis_head = None
 
