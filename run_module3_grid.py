@@ -79,6 +79,16 @@ def parse_cli() -> argparse.Namespace:
     parser.add_argument("--max_concurrent", type=int, default=1)
     parser.add_argument("--max_per_gpu", type=int, default=1)
     parser.add_argument("--poll_interval", type=int, default=15)
+    parser.add_argument(
+        "--grid_points",
+        type=int,
+        default=16,
+        help=(
+            "Per-dataset grid-point budget. "
+            "Approx runs = len(datasets) * len(seeds) * grid_points * len(variants). "
+            "Default 16 => about 64 runs for 2 datasets with full/no_module3."
+        ),
+    )
     parser.add_argument("--dry_run", action="store_true", help="Print commands only.")
     parser.add_argument("--ablation_set", type=str, default="model", help="Currently only supports model.")
     parser.add_argument(
@@ -133,27 +143,135 @@ def append_arg(cmd: List[str], key: str, value: Any) -> None:
     cmd.extend([f"--{key}", str(value)])
 
 
-def build_grid_points(base_cfg: Dict[str, Any]) -> Tuple[List[GridPoint], List[str]]:
-    # Direction-2: remove proto_relax style points by default (prototype stays off unless explicitly enabled).
-    points: List[GridPoint] = [
-        GridPoint("baseline", {}),
-        GridPoint("sparse001", {"lambda_sparse": 0.01}),
-        GridPoint("gate03_bm30", {"fusion_gate_max": 0.30, "fusion_gate_bias_init": -3.0}),
-        GridPoint("clip15", {"residual_clip_t": 1.5}),
-        GridPoint(
-            "sparse_gate_clip",
-            {"lambda_sparse": 0.01, "fusion_gate_max": 0.30, "fusion_gate_bias_init": -3.0, "residual_clip_t": 1.5},
-        ),
-    ]
+def _uniq_keep_order(values: Sequence[float]) -> List[float]:
+    out: List[float] = []
+    seen: Set[float] = set()
+    for v in values:
+        key = round(float(v), 6)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(float(v))
+    return out
+
+
+def _fmt_float_tag(v: float) -> str:
+    txt = f"{float(v):.3f}".rstrip("0").rstrip(".")
+    txt = txt.replace("-", "m").replace(".", "p")
+    return txt
+
+
+def _point_key(overrides: Dict[str, Any]) -> Tuple[Tuple[str, Any], ...]:
+    def _norm(v: Any) -> Any:
+        if isinstance(v, float):
+            return round(v, 6)
+        return v
+
+    return tuple((k, _norm(v)) for k, v in sorted(overrides.items(), key=lambda x: x[0]))
+
+
+def build_grid_points(base_cfg: Dict[str, Any], grid_points: int) -> Tuple[List[GridPoint], List[str]]:
+    """
+    Focused mini-grid for module3 rescue:
+    - prioritize lambda_sparse / fusion gate / residual clip / dropout
+    - keep prototype path off by default (handled in shared params)
+    - default budget tuned so 2 datasets * 1 seed * 2 variants * 16 points ~= 64 runs
+    """
+    budget = max(1, int(grid_points))
     skip_msgs: List[str] = []
 
+    base_sparse = float(base_cfg.get("lambda_sparse", 1.0) or 1.0)
     base_dropout = float(base_cfg.get("dropout", 0.0) or 0.0)
-    if base_dropout >= 0.2:
-        points.append(GridPoint("drop02", {"dropout": 0.2}))
-    else:
-        skip_msgs.append(
-            f"base dropout={base_dropout:.4f} < 0.2, skip drop02 point (no reverse increase)."
+    base_gate_max = float(base_cfg.get("fusion_gate_max", 0.4) or 0.4)
+    base_gate_bias = float(base_cfg.get("fusion_gate_bias_init", -2.5) or -2.5)
+    base_clip_t = float(base_cfg.get("residual_clip_t", 2.0) or 2.0)
+
+    sparse_vals = _uniq_keep_order([base_sparse, 0.3, 0.1, 0.03, 0.01])
+    gate_bias_vals = _uniq_keep_order([base_gate_bias, -3.0, -2.0, -1.5])
+    gate_max_vals = _uniq_keep_order([base_gate_max, 0.3, 0.5, 0.6])
+    clip_vals = _uniq_keep_order([base_clip_t, 1.5, 2.5, 3.0])
+
+    dropout_vals: List[float] = [base_dropout]
+    for delta in (0.05, 0.10, 0.15):
+        cand = round(max(0.05, base_dropout - delta), 3)
+        if cand + 1e-9 < base_dropout:
+            dropout_vals.append(cand)
+    dropout_vals = _uniq_keep_order(dropout_vals)
+    if len(dropout_vals) == 1:
+        skip_msgs.append(f"base dropout={base_dropout:.4f} already small; no lower-dropout points added.")
+
+    points: List[GridPoint] = []
+    seen: Set[Tuple[Tuple[str, Any], ...]] = set()
+
+    def add_point(tag: str, overrides: Dict[str, Any]) -> None:
+        key = _point_key(overrides)
+        if key in seen:
+            return
+        seen.add(key)
+        points.append(GridPoint(tag, overrides))
+
+    # baseline
+    add_point("baseline", {})
+
+    # single-axis points (high-priority diagnostics)
+    for s in sparse_vals[1:]:
+        add_point(f"sparse_{_fmt_float_tag(s)}", {"lambda_sparse": s})
+    for b in gate_bias_vals[1:]:
+        add_point(f"gbias_{_fmt_float_tag(b)}", {"fusion_gate_bias_init": b})
+    for g in gate_max_vals[1:]:
+        add_point(f"gmax_{_fmt_float_tag(g)}", {"fusion_gate_max": g})
+    for c in clip_vals[1:]:
+        add_point(f"clip_{_fmt_float_tag(c)}", {"residual_clip_t": c})
+    for d in dropout_vals[1:]:
+        add_point(f"drop_{_fmt_float_tag(d)}", {"dropout": d})
+
+    # pairwise points: sparse + gate bias (ease conservative gate)
+    for s in (0.1, 0.03, 0.01):
+        for b in (-2.0, -1.5):
+            add_point(
+                f"s{_fmt_float_tag(s)}_b{_fmt_float_tag(b)}",
+                {"lambda_sparse": s, "fusion_gate_bias_init": b},
+            )
+
+    # pairwise points: sparse + gate max (allow stronger residual if needed)
+    for s in (0.1, 0.03, 0.01):
+        for g in (0.5, 0.6):
+            add_point(
+                f"s{_fmt_float_tag(s)}_g{_fmt_float_tag(g)}",
+                {"lambda_sparse": s, "fusion_gate_max": g},
+            )
+
+    # pairwise points: sparse + lower dropout (assist_09 rescue-oriented)
+    for s in (0.1, 0.03, 0.01):
+        for d in dropout_vals[1:3]:
+            add_point(
+                f"s{_fmt_float_tag(s)}_d{_fmt_float_tag(d)}",
+                {"lambda_sparse": s, "dropout": d},
+            )
+
+    # triple points: sparse + relaxed gate + stronger cap
+    triple_candidates = [
+        (0.1, -2.0, 0.5, 2.5),
+        (0.03, -2.0, 0.6, 2.5),
+        (0.01, -1.5, 0.6, 3.0),
+        (0.03, -1.5, 0.5, 3.0),
+    ]
+    for s, b, g, c in triple_candidates:
+        add_point(
+            f"s{_fmt_float_tag(s)}_b{_fmt_float_tag(b)}_g{_fmt_float_tag(g)}_c{_fmt_float_tag(c)}",
+            {
+                "lambda_sparse": s,
+                "fusion_gate_bias_init": b,
+                "fusion_gate_max": g,
+                "residual_clip_t": c,
+            },
         )
+
+    if len(points) > budget:
+        skip_msgs.append(f"generated {len(points)} points, truncating to budget={budget}.")
+        points = points[:budget]
+    elif len(points) < budget:
+        skip_msgs.append(f"generated {len(points)} unique points (< budget={budget}).")
 
     return points, skip_msgs
 
@@ -404,6 +522,7 @@ def make_jobs(
     seeds: Sequence[int],
     variants: Sequence[str],
     epochs_override: Optional[int],
+    grid_points: int,
     main_arg_dests: Set[str],
 ) -> List[JobSpec]:
     jobs: List[JobSpec] = []
@@ -412,12 +531,12 @@ def make_jobs(
         if dataset not in BEST_CFG:
             raise ValueError(f"Dataset '{dataset}' is missing in BEST_CFG.")
         base_cfg = dict(BEST_CFG[dataset])
-        grid_points, skip_msgs = build_grid_points(base_cfg)
+        grid_list, skip_msgs = build_grid_points(base_cfg, grid_points=grid_points)
         for msg in skip_msgs:
             print(f"[GRID-SKIP] dataset={dataset}: {msg}")
 
         for seed in seeds:
-            for gp in grid_points:
+            for gp in grid_list:
                 shared = build_shared_params(
                     dataset=dataset,
                     base_cfg=base_cfg,
@@ -555,17 +674,19 @@ def main() -> None:
         seeds=seeds,
         variants=variants,
         epochs_override=epochs_override,
+        grid_points=args.grid_points,
         main_arg_dests=main_arg_dests,
     )
 
     print(f"Datasets: {datasets}")
     print(f"Seeds: {seeds}")
     print(f"Variants: {variants}")
+    print(f"Grid points per dataset: {max(1, int(args.grid_points))}")
     print(
         f"GPUs: {gpus}, max_concurrent={args.max_concurrent}, "
         f"max_per_gpu={max_per_gpu}, effective_max={max_concurrent}"
     )
-    print(f"Jobs: {len(jobs)}")
+    print(f"Jobs: {len(jobs)} (approx target = datasets*seeds*grid_points*variants)")
     print(f"Result CSV: {RESULT_CSV}")
     print(f"Dry run: {args.dry_run}")
 
