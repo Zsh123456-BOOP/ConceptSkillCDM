@@ -895,6 +895,8 @@ class CognitiveDiagnosisModel(nn.Module):
         lambda_sparse_personal: float = 0.0,
         lambda_alpha: float = 0.0,
         lambda_graph_entropy: float = 0.01,  # mapped from args.lambda_sparse
+        graph_entropy_min: float = 0.15,
+        graph_entropy_max: float = 0.95,
         mf_l2_lambda: float = 5e-5,          # mapped from args.exercise_l2_lambda
         gnn_residual_weight: float = 0.5,
         use_q_conditioning: bool = True,
@@ -946,6 +948,10 @@ class CognitiveDiagnosisModel(nn.Module):
 
         # ===== 正则权重 =====
         self.lambda_graph_entropy = float(lambda_graph_entropy)
+        self.graph_entropy_min = float(graph_entropy_min)
+        self.graph_entropy_max = float(graph_entropy_max)
+        if self.graph_entropy_min > self.graph_entropy_max:
+            self.graph_entropy_min, self.graph_entropy_max = self.graph_entropy_max, self.graph_entropy_min
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
         self.mf_l2_lambda = float(mf_l2_lambda)
@@ -1267,11 +1273,23 @@ class CognitiveDiagnosisModel(nn.Module):
             "alpha_var": torch.tensor(0.0, device=device),  # signed term (negative when maximizing variance)
         }
 
-        # (1) Global graph entropy
+        # (1) Global graph entropy band penalty
         if self.enable_module1 and self.use_concept_graph and self.lambda_graph_entropy > 0:
             if self.structure_module.relation_learning is not None:
+                # Keep raw entropy computation for diagnostics/logging.
                 entropy = self.structure_module.relation_learning.get_entropy_sparsity(relation_matrices)
-                terms["graph_entropy"] = self.lambda_graph_entropy * entropy
+                num_nodes = max(2, int(relation_matrices.size(-1)))
+                h_norm = entropy / (math.log(float(num_nodes)) + 1e-8)
+
+                h_min = torch.tensor(self.graph_entropy_min, device=device, dtype=entropy.dtype)
+                h_max = torch.tensor(self.graph_entropy_max, device=device, dtype=entropy.dtype)
+                pen = F.relu(h_min - h_norm) + F.relu(h_norm - h_max)
+                terms["graph_entropy"] = self.lambda_graph_entropy * pen
+
+                if details is not None:
+                    details["graph_entropy_raw"] = entropy.detach()
+                    details["graph_entropy_norm"] = h_norm.detach()
+                    details["graph_entropy_pen"] = pen.detach()
 
         # (2) MF/IRT L2
         if self.mf_l2_lambda > 0:
