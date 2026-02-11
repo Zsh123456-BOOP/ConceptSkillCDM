@@ -268,6 +268,8 @@ def _row_entropy_mean(A: np.ndarray) -> float:
 
 _REG_COMPONENT_KEYS: Tuple[str, ...] = (
     "graph_entropy",
+    "graph_diag",
+    "graph_reg_scale",
     "mf_l2",
     "proto_div",
     "proto_usage",
@@ -499,6 +501,7 @@ def train_epoch(
             details=details,
             lambda_proto_div=lambda_proto_div,
             lambda_proto_usage=lambda_proto_usage,
+            base_loss=bce_loss,
         )
         reg_loss = reg_terms["total"]
         loss = bce_loss + reg_loss
@@ -586,6 +589,7 @@ def validate(
                 details=details,
                 lambda_proto_div=lambda_proto_div,
                 lambda_proto_usage=lambda_proto_usage,
+                base_loss=bce_loss,
             )
             reg_loss = reg_terms["total"]
             loss = bce_loss + reg_loss
@@ -759,6 +763,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         lambda_alpha=args.lambda_alpha,
         lambda_graph_entropy=args.lambda_sparse,
         graph_reg_warmup_epochs=getattr(args, "graph_reg_warmup_epochs", 3),
+        graph_reg_cap_ratio=getattr(args, "graph_reg_cap_ratio", 6.0),
         mf_l2_lambda=getattr(args, "exercise_l2_lambda", 5e-5),
         gnn_residual_weight=getattr(args, "gnn_residual_weight", 0.5),
         use_q_conditioning=not getattr(args, "disable_q_conditioning", False),
@@ -854,11 +859,13 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         )
         logger.info(
             "%s [Reg Terms] Epoch [%03d] | "
-            "Train: graph_entropy=%.6f, mf_l2=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_var=%.6f, reg_bce_ratio=%.4f | "
-            "Val: graph_entropy=%.6f, mf_l2=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_var=%.6f, reg_bce_ratio=%.4f",
+            "Train: graph_entropy=%.6f, graph_diag=%.6f, graph_reg_scale=%.4f, mf_l2=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_var=%.6f, reg_bce_ratio=%.4f | "
+            "Val: graph_entropy=%.6f, graph_diag=%.6f, graph_reg_scale=%.4f, mf_l2=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_var=%.6f, reg_bce_ratio=%.4f",
             run_tag,
             epoch,
             train_metrics.get("reg_graph_entropy", 0.0),
+            train_metrics.get("reg_graph_diag", 0.0),
+            train_metrics.get("reg_graph_reg_scale", 1.0),
             train_metrics.get("reg_mf_l2", 0.0),
             train_metrics.get("reg_proto_div", 0.0),
             train_metrics.get("reg_proto_usage", 0.0),
@@ -866,6 +873,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             train_metrics.get("reg_alpha_var", 0.0),
             train_metrics.get("reg_bce_ratio", 0.0),
             val_metrics.get("reg_graph_entropy", 0.0),
+            val_metrics.get("reg_graph_diag", 0.0),
+            val_metrics.get("reg_graph_reg_scale", 1.0),
             val_metrics.get("reg_mf_l2", 0.0),
             val_metrics.get("reg_proto_div", 0.0),
             val_metrics.get("reg_proto_usage", 0.0),
@@ -1202,6 +1211,7 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         graph_reg_warmup_epochs=loaded_args.get(
             "graph_reg_warmup_epochs", getattr(args, "graph_reg_warmup_epochs", 3)
         ),
+        graph_reg_cap_ratio=loaded_args.get("graph_reg_cap_ratio", getattr(args, "graph_reg_cap_ratio", 6.0)),
         mf_l2_lambda=loaded_args.get("exercise_l2_lambda", getattr(args, "exercise_l2_lambda", 5e-5)),
         gnn_residual_weight=loaded_args.get("gnn_residual_weight", getattr(args, "gnn_residual_weight", 0.5)),
         use_q_conditioning=not loaded_args.get("disable_q_conditioning", getattr(args, "disable_q_conditioning", False)),

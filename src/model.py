@@ -899,6 +899,7 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_entropy_max: float = 0.95,
         lambda_graph_diag: float = 0.05,
         graph_reg_warmup_epochs: int = 3,
+        graph_reg_cap_ratio: float = 6.0,
         mf_l2_lambda: float = 5e-5,          # mapped from args.exercise_l2_lambda
         gnn_residual_weight: float = 0.5,
         use_q_conditioning: bool = True,
@@ -956,6 +957,7 @@ class CognitiveDiagnosisModel(nn.Module):
             self.graph_entropy_min, self.graph_entropy_max = self.graph_entropy_max, self.graph_entropy_min
         self.lambda_graph_diag = float(lambda_graph_diag)
         self.graph_reg_warmup_epochs = max(0, int(graph_reg_warmup_epochs))
+        self.graph_reg_cap_ratio = max(0.0, float(graph_reg_cap_ratio))
         self._current_epoch = 1
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
@@ -1273,6 +1275,7 @@ class CognitiveDiagnosisModel(nn.Module):
         details: Optional[Dict[str, torch.Tensor]] = None,
         lambda_proto_div: float = 0.0,
         lambda_proto_usage: float = 0.0,
+        base_loss: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Return decomposed regularization terms.
@@ -1282,6 +1285,7 @@ class CognitiveDiagnosisModel(nn.Module):
         terms: Dict[str, torch.Tensor] = {
             "graph_entropy": torch.tensor(0.0, device=device),
             "graph_diag": torch.tensor(0.0, device=device),
+            "graph_reg_scale": torch.tensor(1.0, device=device),
             "mf_l2": torch.tensor(0.0, device=device),
             "proto_div": torch.tensor(0.0, device=device),
             "proto_usage": torch.tensor(0.0, device=device),
@@ -1315,6 +1319,21 @@ class CognitiveDiagnosisModel(nn.Module):
                     terms["graph_diag"] = self.lambda_graph_diag * diag_mass * graph_reg_ramp_t
                     if details is not None:
                         details["graph_diag_mass"] = diag_mass.detach()
+        # Graph regularization cap relative to base loss.
+        # Only scales graph-specific terms; non-graph regularizers remain unchanged.
+        if base_loss is not None and self.graph_reg_cap_ratio > 0:
+            graph_reg_raw = terms["graph_entropy"] + terms["graph_diag"]
+            cap = self.graph_reg_cap_ratio * base_loss.detach().abs()
+            denom = graph_reg_raw.detach().abs() + 1e-8
+            scale = torch.clamp(cap / denom, max=1.0)
+            scale = torch.where(torch.isfinite(scale), scale, torch.ones_like(scale))
+            terms["graph_reg_scale"] = scale.detach()
+            terms["graph_entropy"] = terms["graph_entropy"] * scale
+            terms["graph_diag"] = terms["graph_diag"] * scale
+            if details is not None:
+                details["graph_reg_raw"] = graph_reg_raw.detach()
+                details["graph_reg_cap"] = cap.detach()
+                details["graph_reg_scale"] = scale.detach()
 
         # (2) MF/IRT L2
         if self.mf_l2_lambda > 0:
@@ -1401,6 +1420,7 @@ class CognitiveDiagnosisModel(nn.Module):
         details: Optional[Dict[str, torch.Tensor]] = None,
         lambda_proto_div: float = 0.0,
         lambda_proto_usage: float = 0.0,
+        base_loss: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         正则项汇总：
@@ -1414,6 +1434,7 @@ class CognitiveDiagnosisModel(nn.Module):
             details=details,
             lambda_proto_div=lambda_proto_div,
             lambda_proto_usage=lambda_proto_usage,
+            base_loss=base_loss,
         )
         return terms["total"]
 
