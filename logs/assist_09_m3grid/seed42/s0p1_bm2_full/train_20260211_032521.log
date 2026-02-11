@@ -1,0 +1,257 @@
+2026-02-11 03:25:21,669 - INFO - Arguments:
+2026-02-11 03:25:21,670 - INFO -   ablate_concept_graph: False
+2026-02-11 03:25:21,670 - INFO -   ablate_module1: False
+2026-02-11 03:25:21,670 - INFO -   ablate_module2: False
+2026-02-11 03:25:21,670 - INFO -   ablate_module3: False
+2026-02-11 03:25:21,670 - INFO -   ablate_skill_encoder: False
+2026-02-11 03:25:21,670 - INFO -   ablate_soft_prototype: True
+2026-02-11 03:25:21,670 - INFO -   allow_self_loop: True
+2026-02-11 03:25:21,670 - INFO -   batch_size: 128
+2026-02-11 03:25:21,670 - INFO -   data_dir: ./data/assist_09
+2026-02-11 03:25:21,670 - INFO -   dataset_name: assist_09
+2026-02-11 03:25:21,670 - INFO -   debug_module3_diag: True
+2026-02-11 03:25:21,670 - INFO -   diag_batches: 2
+2026-02-11 03:25:21,670 - INFO -   disable_q_aligned_residual: False
+2026-02-11 03:25:21,670 - INFO -   disable_q_conditioning: False
+2026-02-11 03:25:21,670 - INFO -   disable_self_loop: False
+2026-02-11 03:25:21,670 - INFO -   disable_soft_prototype: True
+2026-02-11 03:25:21,670 - INFO -   dropout: 0.2
+2026-02-11 03:25:21,670 - INFO -   early_stop_patience: 3
+2026-02-11 03:25:21,670 - INFO -   enable_module1: True
+2026-02-11 03:25:21,670 - INFO -   enable_module2: True
+2026-02-11 03:25:21,670 - INFO -   enable_module3: True
+2026-02-11 03:25:21,670 - INFO -   enable_soft_prototype: False
+2026-02-11 03:25:21,670 - INFO -   epochs: 30
+2026-02-11 03:25:21,670 - INFO -   exercise_dim: 64
+2026-02-11 03:25:21,670 - INFO -   exercise_l2_lambda: 5e-05
+2026-02-11 03:25:21,670 - INFO -   fusion_gate_bias_init: -2.0
+2026-02-11 03:25:21,671 - INFO -   fusion_gate_max: 0.4
+2026-02-11 03:25:21,671 - INFO -   generate_diagnosis: False
+2026-02-11 03:25:21,671 - INFO -   gnn_residual_weight: 0.5
+2026-02-11 03:25:21,671 - INFO -   gpu_candidates: None
+2026-02-11 03:25:21,671 - INFO -   gpu_ids: None
+2026-02-11 03:25:21,671 - INFO -   gpu_memory_threshold: 2000
+2026-02-11 03:25:21,671 - INFO -   gpus: None
+2026-02-11 03:25:21,671 - INFO -   graph_topk: None
+2026-02-11 03:25:21,671 - INFO -   knowledge_dim: 64
+2026-02-11 03:25:21,671 - INFO -   lambda_alpha: 0.01
+2026-02-11 03:25:21,671 - INFO -   lambda_proto_div: 0.0
+2026-02-11 03:25:21,671 - INFO -   lambda_proto_usage: 0.0
+2026-02-11 03:25:21,671 - INFO -   lambda_sparse: 0.1
+2026-02-11 03:25:21,671 - INFO -   lambda_sparse_personal: 0.005
+2026-02-11 03:25:21,671 - INFO -   learning_rate: 0.0003
+2026-02-11 03:25:21,671 - INFO -   log_dir: logs/assist_09_m3grid/seed42/s0p1_bm2_full
+2026-02-11 03:25:21,671 - INFO -   min_exer_interactions: 0
+2026-02-11 03:25:21,671 - INFO -   min_poison_count: 0
+2026-02-11 03:25:21,671 - INFO -   min_stu_interactions: 15
+2026-02-11 03:25:21,671 - INFO -   model_variant: assist_09_m3grid_s0p1_bm2_full
+2026-02-11 03:25:21,671 - INFO -   multi_gpu: False
+2026-02-11 03:25:21,671 - INFO -   no_cuda: False
+2026-02-11 03:25:21,671 - INFO -   num_gnn_layers: 1
+2026-02-11 03:25:21,671 - INFO -   num_gpus: 1
+2026-02-11 03:25:21,671 - INFO -   num_prototypes: 0
+2026-02-11 03:25:21,671 - INFO -   num_relation_heads: 2
+2026-02-11 03:25:21,671 - INFO -   num_workers: 4
+2026-02-11 03:25:21,671 - INFO -   patience: 5
+2026-02-11 03:25:21,671 - INFO -   personal_rank: 4
+2026-02-11 03:25:21,671 - INFO -   proto_lambda: 0.0
+2026-02-11 03:25:21,671 - INFO -   proto_tau: 1.0
+2026-02-11 03:25:21,671 - INFO -   residual_clip_t: 2.0
+2026-02-11 03:25:21,671 - INFO -   save_dir: checkpoints/assist_09_m3grid/seed42/s0p1_bm2_full
+2026-02-11 03:25:21,671 - INFO -   save_interval: 10
+2026-02-11 03:25:21,671 - INFO -   seed: 42
+2026-02-11 03:25:21,671 - INFO -   skill_dim: 128
+2026-02-11 03:25:21,671 - INFO -   use_concept_graph: True
+2026-02-11 03:25:21,671 - INFO -   use_exercise_graph: True
+2026-02-11 03:25:21,671 - INFO -   use_mf_branch: True
+2026-02-11 03:25:21,671 - INFO -   use_personal_graph: True
+2026-02-11 03:25:21,671 - INFO -   use_q_aligned_residual: True
+2026-02-11 03:25:21,671 - INFO -   use_q_conditioning: True
+2026-02-11 03:25:21,671 - INFO -   use_skill_encoder: True
+2026-02-11 03:25:21,672 - INFO -   use_soft_prototype: False
+2026-02-11 03:25:21,672 - INFO -   use_soft_prototype_main_path: False
+2026-02-11 03:25:21,672 - INFO -   weight_decay: 1e-05
+2026-02-11 03:25:21,755 - INFO - Using device: cuda:0 (physical gpu 1)
+2026-02-11 03:25:21,755 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Loading datasets...
+2026-02-11 03:25:21,756 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Regularization: graph_entropy(lambda_sparse)=0.100000, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.005000, alpha_penalty=0.010000, mf_l2(exercise_l2_lambda)=0.000050
+2026-02-11 03:25:21,854 - INFO - [数据清洗] 学生交互次数 < 15 次的学生：共移除 0 个学生（仅统计用户数）
+2026-02-11 03:25:21,865 - INFO - [数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 0 条记录。
+2026-02-11 03:25:21,865 - INFO - [数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。
+2026-02-11 03:25:21,865 - INFO - [数据清洗] 跳过毒题清洗（min_poison_count <= 0）。
+2026-02-11 03:25:32,894 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Train samples: 194489, Val samples: 20385
+2026-02-11 03:25:32,895 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Number of students: 2493
+2026-02-11 03:25:32,895 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Number of exercises: 17676
+2026-02-11 03:25:32,895 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Number of concepts: 123
+2026-02-11 03:25:32,895 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Creating model...
+2026-02-11 03:25:32,895 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Ablation switches: ablate_module1=False, ablate_module2=False, ablate_module3=False | enable_module1=True, enable_module2=True, enable_module3=True | use_soft_prototype=False, use_mf_branch=True, use_concept_graph=True, use_q_aligned_residual=True, use_soft_prototype_main_path=False | effective(num_gnn_layers=1, num_prototypes=0)
+2026-02-11 03:25:33,051 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Ablation runtime check: args(ablate_module1=False,ablate_module2=False,ablate_module3=False) | model(enable_module1=True,enable_module2=True,enable_module3=True) | physical(has_knowledge_encoder=True,has_mf_branch=True,has_soft_prototype=False)
+2026-02-11 03:25:33,051 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Debug diagnostics enabled: diag_batches=2
+2026-02-11 03:25:33,052 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Total parameters: 652,399
+2026-02-11 03:25:33,052 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Trainable parameters: 652,399
+2026-02-11 03:25:34,087 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Starting training...
+2026-02-11 03:26:04,359 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [001/30] | Train: Loss=1.0578, BCE=0.5880, Reg=0.4698, AUC=0.6893, ACC=0.6946, RMSE=0.4483 | Val: Loss=1.0494, BCE=0.5647, Reg=0.4847, AUC=0.7305, ACC=0.7137, RMSE=0.4370
+2026-02-11 03:26:04,359 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [001] | Train: graph_entropy=0.458806, mf_l2=0.000002, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.012730, alpha_var=-0.001756, reg_bce_ratio=0.7990 | Val: graph_entropy=0.481218, mf_l2=0.000005, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.004924, alpha_var=-0.001485, reg_bce_ratio=0.8583
+2026-02-11 03:26:04,558 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [001] | residual_abs_mean=0.1685, residual_std=0.1159, mf_abs_mean=0.1685, mf_std=0.1159, gate_mean=0.0874, gate_std=0.0121, irt_abs_mean=1.3071, irt_std=0.5717, delta_abs_mean=0.0151, delta_std=0.0114, delta_over_irt=0.0116, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.1603, alpha_std=0.3660, personal_row_entropy=0.6272
+2026-02-11 03:26:04,558 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [001] | mf_u_proj=0.002402, mf_v_proj=0.002493, fusion_gate=0.000684, q_gate_raw=0.000093, skill_latent=0.013504
+2026-02-11 03:26:04,777 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> New best AUC=0.7305 at epoch 1
+2026-02-11 03:26:36,927 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [002/30] | Train: Loss=1.0081, BCE=0.5477, Reg=0.4603, AUC=0.7484, ACC=0.7247, RMSE=0.4290 | Val: Loss=1.0428, BCE=0.5601, Reg=0.4826, AUC=0.7371, ACC=0.7135, RMSE=0.4351
+2026-02-11 03:26:36,927 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [002] | Train: graph_entropy=0.458799, mf_l2=0.000012, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.003788, alpha_var=-0.002279, reg_bce_ratio=0.8404 | Val: graph_entropy=0.481218, mf_l2=0.000019, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.002941, alpha_var=-0.001536, reg_bce_ratio=0.8617
+2026-02-11 03:26:37,133 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [002] | residual_abs_mean=0.2591, residual_std=0.1766, mf_abs_mean=0.2591, mf_std=0.1766, gate_mean=0.1639, gate_std=0.0394, irt_abs_mean=1.3327, irt_std=0.5821, delta_abs_mean=0.0436, delta_std=0.0358, delta_over_irt=0.0327, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.1614, alpha_std=0.3659, personal_row_entropy=0.7014
+2026-02-11 03:26:37,133 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [002] | mf_u_proj=0.005278, mf_v_proj=0.005749, fusion_gate=0.001790, q_gate_raw=0.000850, skill_latent=0.026568
+2026-02-11 03:26:37,463 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> New best AUC=0.7371 at epoch 2
+2026-02-11 03:27:09,707 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [003/30] | Train: Loss=0.9919, BCE=0.5329, Reg=0.4589, AUC=0.7665, ACC=0.7330, RMSE=0.4223 | Val: Loss=1.0394, BCE=0.5577, Reg=0.4817, AUC=0.7421, ACC=0.7185, RMSE=0.4338
+2026-02-11 03:27:09,707 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [003] | Train: graph_entropy=0.458793, mf_l2=0.000030, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.002432, alpha_var=-0.002314, reg_bce_ratio=0.8612 | Val: graph_entropy=0.481218, mf_l2=0.000039, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.001975, alpha_var=-0.001564, reg_bce_ratio=0.8637
+2026-02-11 03:27:09,935 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [003] | residual_abs_mean=0.3398, residual_std=0.2203, mf_abs_mean=0.3398, mf_std=0.2203, gate_mean=0.2560, gate_std=0.0622, irt_abs_mean=1.4104, irt_std=0.6154, delta_abs_mean=0.0887, delta_std=0.0681, delta_over_irt=0.0629, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.1843, alpha_std=0.3863, personal_row_entropy=0.4180
+2026-02-11 03:27:09,936 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [003] | mf_u_proj=0.008094, mf_v_proj=0.008325, fusion_gate=0.003966, q_gate_raw=0.001947, skill_latent=0.034568
+2026-02-11 03:27:10,293 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> New best AUC=0.7421 at epoch 3
+2026-02-11 03:27:42,553 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [004/30] | Train: Loss=0.9785, BCE=0.5202, Reg=0.4583, AUC=0.7822, ACC=0.7391, RMSE=0.4166 | Val: Loss=1.0350, BCE=0.5537, Reg=0.4813, AUC=0.7464, ACC=0.7199, RMSE=0.4319
+2026-02-11 03:27:42,553 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [004] | Train: graph_entropy=0.458790, mf_l2=0.000053, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.001839, alpha_var=-0.002361, reg_bce_ratio=0.8811 | Val: graph_entropy=0.481218, mf_l2=0.000062, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.001605, alpha_var=-0.001587, reg_bce_ratio=0.8692
+2026-02-11 03:27:42,791 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [004] | residual_abs_mean=0.3941, residual_std=0.2561, mf_abs_mean=0.3941, mf_std=0.2561, gate_mean=0.3143, gate_std=0.0686, irt_abs_mean=1.4219, irt_std=0.6175, delta_abs_mean=0.1240, delta_std=0.0890, delta_over_irt=0.0872, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.1840, alpha_std=0.3860, personal_row_entropy=0.3977
+2026-02-11 03:27:42,791 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [004] | mf_u_proj=0.017882, mf_v_proj=0.017615, fusion_gate=0.002379, q_gate_raw=0.001887, skill_latent=0.067602
+2026-02-11 03:27:43,108 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> New best AUC=0.7464 at epoch 4
+2026-02-11 03:28:15,510 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [005/30] | Train: Loss=0.9655, BCE=0.5075, Reg=0.4580, AUC=0.7971, ACC=0.7464, RMSE=0.4108 | Val: Loss=1.0308, BCE=0.5498, Reg=0.4810, AUC=0.7514, ACC=0.7234, RMSE=0.4299
+2026-02-11 03:28:15,511 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [005] | Train: graph_entropy=0.458800, mf_l2=0.000076, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.001484, alpha_var=-0.002367, reg_bce_ratio=0.9025 | Val: graph_entropy=0.481218, mf_l2=0.000083, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.001301, alpha_var=-0.001572, reg_bce_ratio=0.8750
+2026-02-11 03:28:15,713 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [005] | residual_abs_mean=0.4672, residual_std=0.3026, mf_abs_mean=0.4672, mf_std=0.3026, gate_mean=0.3456, gate_std=0.0662, irt_abs_mean=1.4345, irt_std=0.6395, delta_abs_mean=0.1613, delta_std=0.1118, delta_over_irt=0.1124, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.1838, alpha_std=0.3859, personal_row_entropy=0.4005
+2026-02-11 03:28:15,713 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [005] | mf_u_proj=0.025974, mf_v_proj=0.024786, fusion_gate=0.004215, q_gate_raw=0.002502, skill_latent=0.090109
+2026-02-11 03:28:16,001 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> New best AUC=0.7514 at epoch 5
+2026-02-11 03:28:48,632 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [006/30] | Train: Loss=0.9548, BCE=0.4970, Reg=0.4577, AUC=0.8085, ACC=0.7524, RMSE=0.4060 | Val: Loss=1.0297, BCE=0.5488, Reg=0.4808, AUC=0.7543, ACC=0.7261, RMSE=0.4294
+2026-02-11 03:28:48,633 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [006] | Train: graph_entropy=0.458800, mf_l2=0.000095, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.001213, alpha_var=-0.002377, reg_bce_ratio=0.9209 | Val: graph_entropy=0.481218, mf_l2=0.000102, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.001071, alpha_var=-0.001558, reg_bce_ratio=0.8761
+2026-02-11 03:28:48,861 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [006] | residual_abs_mean=0.5064, residual_std=0.3497, mf_abs_mean=0.5064, mf_std=0.3497, gate_mean=0.3618, gate_std=0.0636, irt_abs_mean=1.4863, irt_std=0.6631, delta_abs_mean=0.1844, delta_std=0.1335, delta_over_irt=0.1240, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.1843, alpha_std=0.3864, personal_row_entropy=0.2746
+2026-02-11 03:28:48,862 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [006] | mf_u_proj=0.026983, mf_v_proj=0.027582, fusion_gate=0.003742, q_gate_raw=0.003789, skill_latent=0.087466
+2026-02-11 03:28:49,195 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> New best AUC=0.7543 at epoch 6
+2026-02-11 03:29:19,840 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [007/30] | Train: Loss=0.9461, BCE=0.4885, Reg=0.4576, AUC=0.8169, ACC=0.7566, RMSE=0.4022 | Val: Loss=1.0286, BCE=0.5479, Reg=0.4807, AUC=0.7572, ACC=0.7276, RMSE=0.4286
+2026-02-11 03:29:19,840 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [007] | Train: graph_entropy=0.458797, mf_l2=0.000112, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.001054, alpha_var=-0.002379, reg_bce_ratio=0.9366 | Val: graph_entropy=0.481218, mf_l2=0.000117, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000937, alpha_var=-0.001597, reg_bce_ratio=0.8773
+2026-02-11 03:29:20,059 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [007] | residual_abs_mean=0.5370, residual_std=0.3735, mf_abs_mean=0.5370, mf_std=0.3735, gate_mean=0.3697, gate_std=0.0621, irt_abs_mean=1.5490, irt_std=0.7068, delta_abs_mean=0.1992, delta_std=0.1455, delta_over_irt=0.1286, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.1854, alpha_std=0.3851, personal_row_entropy=0.2019
+2026-02-11 03:29:20,059 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [007] | mf_u_proj=0.039038, mf_v_proj=0.037167, fusion_gate=0.002836, q_gate_raw=0.001403, skill_latent=0.104926
+2026-02-11 03:29:20,413 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> New best AUC=0.7572 at epoch 7
+2026-02-11 03:29:50,817 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [008/30] | Train: Loss=0.9383, BCE=0.4808, Reg=0.4574, AUC=0.8244, ACC=0.7613, RMSE=0.3986 | Val: Loss=1.0265, BCE=0.5458, Reg=0.4806, AUC=0.7592, ACC=0.7286, RMSE=0.4275
+2026-02-11 03:29:50,817 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [008] | Train: graph_entropy=0.458796, mf_l2=0.000127, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000915, alpha_var=-0.002389, reg_bce_ratio=0.9514 | Val: graph_entropy=0.481218, mf_l2=0.000130, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000856, alpha_var=-0.001579, reg_bce_ratio=0.8805
+2026-02-11 03:29:51,021 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [008] | residual_abs_mean=0.6018, residual_std=0.3840, mf_abs_mean=0.6018, mf_std=0.3840, gate_mean=0.3743, gate_std=0.0587, irt_abs_mean=1.5260, irt_std=0.7357, delta_abs_mean=0.2255, delta_std=0.1513, delta_over_irt=0.1478, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.1865, alpha_std=0.3833, personal_row_entropy=0.1677
+2026-02-11 03:29:51,021 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [008] | mf_u_proj=0.033535, mf_v_proj=0.034925, fusion_gate=0.001853, q_gate_raw=0.000654, skill_latent=0.098551
+2026-02-11 03:29:51,364 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> New best AUC=0.7592 at epoch 8
+2026-02-11 03:30:23,450 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [009/30] | Train: Loss=0.9305, BCE=0.4731, Reg=0.4574, AUC=0.8315, ACC=0.7652, RMSE=0.3950 | Val: Loss=1.0257, BCE=0.5452, Reg=0.4805, AUC=0.7603, ACC=0.7307, RMSE=0.4271
+2026-02-11 03:30:23,450 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [009] | Train: graph_entropy=0.458797, mf_l2=0.000141, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000826, alpha_var=-0.002400, reg_bce_ratio=0.9667 | Val: graph_entropy=0.481218, mf_l2=0.000144, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000758, alpha_var=-0.001581, reg_bce_ratio=0.8814
+2026-02-11 03:30:23,683 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [009] | residual_abs_mean=0.6353, residual_std=0.4207, mf_abs_mean=0.6353, mf_std=0.4207, gate_mean=0.3799, gate_std=0.0548, irt_abs_mean=1.5484, irt_std=0.7250, delta_abs_mean=0.2413, delta_std=0.1660, delta_over_irt=0.1558, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.1875, alpha_std=0.3845, personal_row_entropy=0.1225
+2026-02-11 03:30:23,683 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [009] | mf_u_proj=0.035387, mf_v_proj=0.034436, fusion_gate=0.000909, q_gate_raw=0.001616, skill_latent=0.095454
+2026-02-11 03:30:24,032 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> New best AUC=0.7603 at epoch 9
+2026-02-11 03:30:56,043 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [010/30] | Train: Loss=0.9248, BCE=0.4674, Reg=0.4573, AUC=0.8367, ACC=0.7685, RMSE=0.3924 | Val: Loss=1.0266, BCE=0.5461, Reg=0.4805, AUC=0.7624, ACC=0.7315, RMSE=0.4271
+2026-02-11 03:30:56,043 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [010] | Train: graph_entropy=0.458805, mf_l2=0.000153, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000766, alpha_var=-0.002403, reg_bce_ratio=0.9783 | Val: graph_entropy=0.481218, mf_l2=0.000156, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000699, alpha_var=-0.001574, reg_bce_ratio=0.8798
+2026-02-11 03:30:56,265 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [010] | residual_abs_mean=0.6930, residual_std=0.4367, mf_abs_mean=0.6930, mf_std=0.4367, gate_mean=0.3843, gate_std=0.0496, irt_abs_mean=1.6314, irt_std=0.7718, delta_abs_mean=0.2664, delta_std=0.1728, delta_over_irt=0.1633, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.1845, alpha_std=0.3843, personal_row_entropy=0.0991
+2026-02-11 03:30:56,265 - WARNING - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag Warning][M3] delta_over_irt has stayed high for 2 epoch(s): delta_over_irt=0.1633, delta_abs_mean=0.2664
+2026-02-11 03:30:56,265 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [010] | mf_u_proj=0.038749, mf_v_proj=0.041002, fusion_gate=0.002111, q_gate_raw=0.001276, skill_latent=0.099828
+2026-02-11 03:30:56,573 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> New best AUC=0.7624 at epoch 10
+2026-02-11 03:30:56,612 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Checkpoint saved: checkpoints/assist_09_m3grid/seed42/s0p1_bm2_full/checkpoint_epoch_10.pth
+2026-02-11 03:30:56,795 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Module Activity] Epoch 10: Graph✗ Personal✓ MF✓
+2026-02-11 03:31:29,012 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [011/30] | Train: Loss=0.9190, BCE=0.4617, Reg=0.4572, AUC=0.8412, ACC=0.7717, RMSE=0.3898 | Val: Loss=1.0239, BCE=0.5434, Reg=0.4805, AUC=0.7637, ACC=0.7324, RMSE=0.4257
+2026-02-11 03:31:29,013 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [011] | Train: graph_entropy=0.458785, mf_l2=0.000166, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000701, alpha_var=-0.002407, reg_bce_ratio=0.9903 | Val: graph_entropy=0.481218, mf_l2=0.000168, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000655, alpha_var=-0.001566, reg_bce_ratio=0.8841
+2026-02-11 03:31:29,226 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [011] | residual_abs_mean=0.7400, residual_std=0.4619, mf_abs_mean=0.7400, mf_std=0.4619, gate_mean=0.3838, gate_std=0.0497, irt_abs_mean=1.4989, irt_std=0.7767, delta_abs_mean=0.2832, delta_std=0.1828, delta_over_irt=0.1889, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.1849, alpha_std=0.3855, personal_row_entropy=0.0858
+2026-02-11 03:31:29,226 - WARNING - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag Warning][M3] delta_over_irt has stayed high for 3 epoch(s): delta_over_irt=0.1889, delta_abs_mean=0.2832
+2026-02-11 03:31:29,226 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [011] | mf_u_proj=0.032510, mf_v_proj=0.033017, fusion_gate=0.000368, q_gate_raw=0.000012, skill_latent=0.090252
+2026-02-11 03:31:29,531 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> New best AUC=0.7637 at epoch 11
+2026-02-11 03:32:01,932 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [012/30] | Train: Loss=0.9140, BCE=0.4567, Reg=0.4572, AUC=0.8454, ACC=0.7758, RMSE=0.3874 | Val: Loss=1.0234, BCE=0.5430, Reg=0.4804, AUC=0.7650, ACC=0.7333, RMSE=0.4253
+2026-02-11 03:32:01,932 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [012] | Train: graph_entropy=0.458799, mf_l2=0.000178, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000647, alpha_var=-0.002409, reg_bce_ratio=1.0010 | Val: graph_entropy=0.481218, mf_l2=0.000180, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000594, alpha_var=-0.001566, reg_bce_ratio=0.8848
+2026-02-11 03:32:02,163 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [012] | residual_abs_mean=0.7771, residual_std=0.4793, mf_abs_mean=0.7771, mf_std=0.4793, gate_mean=0.3868, gate_std=0.0446, irt_abs_mean=1.5357, irt_std=0.7947, delta_abs_mean=0.3002, delta_std=0.1898, delta_over_irt=0.1955, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.1875, alpha_std=0.3843, personal_row_entropy=0.0793
+2026-02-11 03:32:02,164 - WARNING - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag Warning][M3] delta_over_irt has stayed high for 4 epoch(s): delta_over_irt=0.1955, delta_abs_mean=0.3002
+2026-02-11 03:32:02,164 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [012] | mf_u_proj=0.048309, mf_v_proj=0.050423, fusion_gate=0.000552, q_gate_raw=0.001403, skill_latent=0.132549
+2026-02-11 03:32:02,526 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> New best AUC=0.7650 at epoch 12
+2026-02-11 03:32:31,298 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [013/30] | Train: Loss=0.9098, BCE=0.4526, Reg=0.4572, AUC=0.8485, ACC=0.7775, RMSE=0.3855 | Val: Loss=1.0244, BCE=0.5440, Reg=0.4804, AUC=0.7647, ACC=0.7320, RMSE=0.4258
+2026-02-11 03:32:31,298 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [013] | Train: graph_entropy=0.458795, mf_l2=0.000189, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000600, alpha_var=-0.002410, reg_bce_ratio=1.0101 | Val: graph_entropy=0.481218, mf_l2=0.000189, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000571, alpha_var=-0.001570, reg_bce_ratio=0.8830
+2026-02-11 03:32:31,522 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [013] | residual_abs_mean=0.8280, residual_std=0.4884, mf_abs_mean=0.8280, mf_std=0.4884, gate_mean=0.3849, gate_std=0.0491, irt_abs_mean=1.5177, irt_std=0.8002, delta_abs_mean=0.3201, delta_std=0.1946, delta_over_irt=0.2109, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.2672, alpha_std=0.4372, personal_row_entropy=0.0805
+2026-02-11 03:32:31,522 - WARNING - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag Warning][M3] delta_over_irt has stayed high for 5 epoch(s): delta_over_irt=0.2109, delta_abs_mean=0.3201
+2026-02-11 03:32:31,522 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [013] | mf_u_proj=0.044387, mf_v_proj=0.043382, fusion_gate=0.000550, q_gate_raw=0.000393, skill_latent=0.105098
+2026-02-11 03:32:31,522 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> No improvement 1 epoch(s) (best AUC=0.7650 @ 12)
+2026-02-11 03:33:03,255 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [014/30] | Train: Loss=0.9065, BCE=0.4494, Reg=0.4572, AUC=0.8511, ACC=0.7788, RMSE=0.3840 | Val: Loss=1.0247, BCE=0.5443, Reg=0.4804, AUC=0.7656, ACC=0.7332, RMSE=0.4255
+2026-02-11 03:33:03,255 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [014] | Train: graph_entropy=0.458811, mf_l2=0.000199, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000581, alpha_var=-0.002420, reg_bce_ratio=1.0174 | Val: graph_entropy=0.481218, mf_l2=0.000200, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000524, alpha_var=-0.001575, reg_bce_ratio=0.8825
+2026-02-11 03:33:03,525 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [014] | residual_abs_mean=0.8648, residual_std=0.5007, mf_abs_mean=0.8648, mf_std=0.5007, gate_mean=0.3871, gate_std=0.0467, irt_abs_mean=1.5731, irt_std=0.8188, delta_abs_mean=0.3344, delta_std=0.1997, delta_over_irt=0.2126, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.2736, alpha_std=0.4371, personal_row_entropy=0.0835
+2026-02-11 03:33:03,525 - WARNING - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag Warning][M3] delta_over_irt has stayed high for 6 epoch(s): delta_over_irt=0.2126, delta_abs_mean=0.3344
+2026-02-11 03:33:03,525 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [014] | mf_u_proj=0.045649, mf_v_proj=0.045880, fusion_gate=0.001392, q_gate_raw=0.003123, skill_latent=0.116596
+2026-02-11 03:33:03,875 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> New best AUC=0.7656 at epoch 14
+2026-02-11 03:33:36,235 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [015/30] | Train: Loss=0.9023, BCE=0.4452, Reg=0.4571, AUC=0.8543, ACC=0.7816, RMSE=0.3821 | Val: Loss=1.0256, BCE=0.5453, Reg=0.4804, AUC=0.7655, ACC=0.7330, RMSE=0.4257
+2026-02-11 03:33:36,235 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [015] | Train: graph_entropy=0.458801, mf_l2=0.000211, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000548, alpha_var=-0.002419, reg_bce_ratio=1.0269 | Val: graph_entropy=0.481218, mf_l2=0.000212, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000518, alpha_var=-0.001577, reg_bce_ratio=0.8810
+2026-02-11 03:33:36,439 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [015] | residual_abs_mean=0.8933, residual_std=0.5305, mf_abs_mean=0.8933, mf_std=0.5305, gate_mean=0.3897, gate_std=0.0379, irt_abs_mean=1.5603, irt_std=0.8401, delta_abs_mean=0.3483, delta_std=0.2102, delta_over_irt=0.2232, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.2676, alpha_std=0.4386, personal_row_entropy=0.0900
+2026-02-11 03:33:36,439 - WARNING - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag Warning][M3] delta_over_irt has stayed high for 7 epoch(s): delta_over_irt=0.2232, delta_abs_mean=0.3483
+2026-02-11 03:33:36,439 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [015] | mf_u_proj=0.051367, mf_v_proj=0.051964, fusion_gate=0.003011, q_gate_raw=0.000246, skill_latent=0.125925
+2026-02-11 03:33:36,439 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> No improvement 1 epoch(s) (best AUC=0.7656 @ 14)
+2026-02-11 03:34:08,653 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [016/30] | Train: Loss=0.8992, BCE=0.4420, Reg=0.4571, AUC=0.8562, ACC=0.7837, RMSE=0.3806 | Val: Loss=1.0276, BCE=0.5473, Reg=0.4803, AUC=0.7657, ACC=0.7307, RMSE=0.4262
+2026-02-11 03:34:08,653 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [016] | Train: graph_entropy=0.458794, mf_l2=0.000221, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000521, alpha_var=-0.002425, reg_bce_ratio=1.0341 | Val: graph_entropy=0.481218, mf_l2=0.000222, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000476, alpha_var=-0.001581, reg_bce_ratio=0.8777
+2026-02-11 03:34:08,869 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [016] | residual_abs_mean=0.9367, residual_std=0.5359, mf_abs_mean=0.9367, mf_std=0.5359, gate_mean=0.3906, gate_std=0.0370, irt_abs_mean=1.6025, irt_std=0.8647, delta_abs_mean=0.3652, delta_std=0.2135, delta_over_irt=0.2279, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.2672, alpha_std=0.4399, personal_row_entropy=0.0716
+2026-02-11 03:34:08,870 - WARNING - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag Warning][M3] delta_over_irt has stayed high for 8 epoch(s): delta_over_irt=0.2279, delta_abs_mean=0.3652
+2026-02-11 03:34:08,870 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [016] | mf_u_proj=0.051340, mf_v_proj=0.053770, fusion_gate=0.003107, q_gate_raw=0.000768, skill_latent=0.123735
+2026-02-11 03:34:09,212 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> New best AUC=0.7657 at epoch 16
+2026-02-11 03:34:38,823 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [017/30] | Train: Loss=0.8962, BCE=0.4391, Reg=0.4571, AUC=0.8584, ACC=0.7852, RMSE=0.3792 | Val: Loss=1.0277, BCE=0.5474, Reg=0.4803, AUC=0.7664, ACC=0.7339, RMSE=0.4260
+2026-02-11 03:34:38,823 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [017] | Train: graph_entropy=0.458801, mf_l2=0.000232, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000484, alpha_var=-0.002424, reg_bce_ratio=1.0410 | Val: graph_entropy=0.481218, mf_l2=0.000233, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000466, alpha_var=-0.001580, reg_bce_ratio=0.8775
+2026-02-11 03:34:39,050 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [017] | residual_abs_mean=0.9761, residual_std=0.5435, mf_abs_mean=0.9761, mf_std=0.5435, gate_mean=0.3916, gate_std=0.0308, irt_abs_mean=1.6125, irt_std=0.8847, delta_abs_mean=0.3815, delta_std=0.2158, delta_over_irt=0.2366, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.2666, alpha_std=0.4407, personal_row_entropy=0.0672
+2026-02-11 03:34:39,051 - WARNING - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag Warning][M3] delta_over_irt has stayed high for 9 epoch(s): delta_over_irt=0.2366, delta_abs_mean=0.3815
+2026-02-11 03:34:39,051 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [017] | mf_u_proj=0.050803, mf_v_proj=0.053005, fusion_gate=0.003392, q_gate_raw=0.001454, skill_latent=0.117773
+2026-02-11 03:34:39,450 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> New best AUC=0.7664 at epoch 17
+2026-02-11 03:35:12,041 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [018/30] | Train: Loss=0.8936, BCE=0.4365, Reg=0.4571, AUC=0.8601, ACC=0.7869, RMSE=0.3780 | Val: Loss=1.0273, BCE=0.5470, Reg=0.4803, AUC=0.7659, ACC=0.7326, RMSE=0.4261
+2026-02-11 03:35:12,041 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [018] | Train: graph_entropy=0.458805, mf_l2=0.000240, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000482, alpha_var=-0.002419, reg_bce_ratio=1.0471 | Val: graph_entropy=0.481218, mf_l2=0.000239, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000454, alpha_var=-0.001576, reg_bce_ratio=0.8781
+2026-02-11 03:35:12,255 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [018] | residual_abs_mean=1.0141, residual_std=0.5582, mf_abs_mean=1.0141, mf_std=0.5582, gate_mean=0.3931, gate_std=0.0247, irt_abs_mean=1.5899, irt_std=0.8574, delta_abs_mean=0.3980, delta_std=0.2214, delta_over_irt=0.2503, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.2671, alpha_std=0.4404, personal_row_entropy=0.0632
+2026-02-11 03:35:12,255 - WARNING - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag Warning][M3] delta_over_irt has stayed high for 10 epoch(s): delta_over_irt=0.2503, delta_abs_mean=0.3980
+2026-02-11 03:35:12,255 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [018] | mf_u_proj=0.051527, mf_v_proj=0.055222, fusion_gate=0.004409, q_gate_raw=0.000817, skill_latent=0.120020
+2026-02-11 03:35:12,255 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> No improvement 1 epoch(s) (best AUC=0.7664 @ 17)
+2026-02-11 03:35:44,160 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [019/30] | Train: Loss=0.8851, BCE=0.4281, Reg=0.4571, AUC=0.8671, ACC=0.7921, RMSE=0.3738 | Val: Loss=1.0320, BCE=0.5517, Reg=0.4803, AUC=0.7654, ACC=0.7330, RMSE=0.4270
+2026-02-11 03:35:44,160 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [019] | Train: graph_entropy=0.458802, mf_l2=0.000247, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000440, alpha_var=-0.002424, reg_bce_ratio=1.0677 | Val: graph_entropy=0.481218, mf_l2=0.000252, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000405, alpha_var=-0.001575, reg_bce_ratio=0.8706
+2026-02-11 03:35:44,390 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [019] | residual_abs_mean=1.0301, residual_std=0.5645, mf_abs_mean=1.0301, mf_std=0.5645, gate_mean=0.3937, gate_std=0.0238, irt_abs_mean=1.6740, irt_std=0.9112, delta_abs_mean=0.4050, delta_std=0.2241, delta_over_irt=0.2420, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.2663, alpha_std=0.4405, personal_row_entropy=0.0662
+2026-02-11 03:35:44,390 - WARNING - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag Warning][M3] delta_over_irt has stayed high for 11 epoch(s): delta_over_irt=0.2420, delta_abs_mean=0.4050
+2026-02-11 03:35:44,390 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [019] | mf_u_proj=0.044335, mf_v_proj=0.042851, fusion_gate=0.002813, q_gate_raw=0.000229, skill_latent=0.150374
+2026-02-11 03:35:44,390 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> No improvement 2 epoch(s) (best AUC=0.7664 @ 17)
+2026-02-11 03:36:16,694 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Epoch [020/30] | Train: Loss=0.8828, BCE=0.4258, Reg=0.4570, AUC=0.8684, ACC=0.7932, RMSE=0.3728 | Val: Loss=1.0328, BCE=0.5525, Reg=0.4803, AUC=0.7651, ACC=0.7321, RMSE=0.4273
+2026-02-11 03:36:16,694 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [020] | Train: graph_entropy=0.458792, mf_l2=0.000259, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000404, alpha_var=-0.002423, reg_bce_ratio=1.0733 | Val: graph_entropy=0.481218, mf_l2=0.000264, proto_div=0.000000, proto_usage=0.000000, personal_sparse=0.000371, alpha_var=-0.001579, reg_bce_ratio=0.8693
+2026-02-11 03:36:16,909 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag][M3] Epoch [020] | residual_abs_mean=1.0433, residual_std=0.5741, mf_abs_mean=1.0433, mf_std=0.5741, gate_mean=0.3937, gate_std=0.0245, irt_abs_mean=1.6697, irt_std=0.9234, delta_abs_mean=0.4104, delta_std=0.2280, delta_over_irt=0.2458, graph_row_entropy=4.8122, graph_entropy_ratio=1.0000, alpha_mean=0.2670, alpha_std=0.4401, personal_row_entropy=0.0643
+2026-02-11 03:36:16,909 - WARNING - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Diag Warning][M3] delta_over_irt has stayed high for 12 epoch(s): delta_over_irt=0.2458, delta_abs_mean=0.4104
+2026-02-11 03:36:16,909 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [020] | mf_u_proj=0.055609, mf_v_proj=0.058337, fusion_gate=0.008828, q_gate_raw=0.000230, skill_latent=0.130873
+2026-02-11 03:36:16,909 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] -> No improvement 3 epoch(s) (best AUC=0.7664 @ 17)
+2026-02-11 03:36:16,909 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Early stopping at epoch 20 (best AUC=0.7664 @ 17)
+2026-02-11 03:36:16,915 - INFO - Epoch-wise metrics saved to checkpoints/assist_09_m3grid/seed42/s0p1_bm2_full/metrics_history.csv
+2026-02-11 03:36:16,916 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Training completed! Best Val AUC=0.7664 @ epoch 17
+2026-02-11 03:36:17,111 - INFO - 
+============================================================
+         MODULE ACTIVITY REPORT
+============================================================
+Dataset: assist_09 | Seed: 42 | Epoch: 20
+
+1. Soft Prototype Module:
+   - Status: DISABLED (num_prototypes=0 or use_soft_prototype=False)
+
+2. Concept Graph Module:
+   - Mean row entropy: 4.812 / 4.812
+   - Entropy ratio: 100.0%
+   - Status: ✗ TRIVIAL (uniform distribution, not learning)
+   → Consider: increase lambda_sparse or training longer
+
+3. Personal Graph Module:
+   - Gate alpha mean: 0.310
+   - Gate alpha std: 0.461
+   - Status: ✓ ACTIVE (using personalization)
+
+4. Skill/MF Module:
+   - MF logit |mean|: 1.0281
+   - MF logit std: 1.1457
+   - Fusion gate mean: 0.395
+   - Status: ✓ ACTIVE (contributing to predictions)
+
+------------------------------------------------------------
+SUMMARY:
+   Active modules: Personal Graph, Skill/MF
+   ⚠ Inactive modules: Concept Graph
+============================================================
+2026-02-11 03:36:17,111 - INFO - [assist_09|assist_09_m3grid_s0p1_bm2_full|lr=0.0003|drop=0.20] Module activity saved to checkpoints/assist_09_m3grid/seed42/s0p1_bm2_full/module_activity.json
+2026-02-11 03:36:17,169 - INFO - Using device: cuda:0 (physical gpu 1)
+2026-02-11 03:36:17,169 - INFO - Loading model from checkpoints/assist_09_m3grid/seed42/s0p1_bm2_full/best_model.pth...
+2026-02-11 03:36:17,696 - INFO - Inference switches: ablate_module1=False, ablate_module2=False, ablate_module3=False | enable_module1=True, enable_module2=True, enable_module3=True | use_soft_prototype=False, use_mf_branch=True, use_concept_graph=True, use_q_aligned_residual=True, use_soft_prototype_main_path=False | effective(num_gnn_layers=1, num_prototypes=0)
+2026-02-11 03:36:17,726 - INFO - [Inference] Ablation runtime check: args(ablate_module1=False,ablate_module2=False,ablate_module3=False) | model(enable_module1=True,enable_module2=True,enable_module3=True) | physical(has_knowledge_encoder=True,has_mf_branch=True,has_soft_prototype=False)
+2026-02-11 03:36:17,728 - INFO - Model loaded from epoch 17. Start testing...
+2026-02-11 03:36:19,085 - INFO - [Test] 200/411 batches done, samples=25600
+2026-02-11 03:36:20,264 - INFO - [Test] 400/411 batches done, samples=51200
+2026-02-11 03:36:20,372 - INFO - 
+==================================================
+2026-02-11 03:36:20,372 - INFO - Test Results:
+2026-02-11 03:36:20,372 - INFO - AUC: 0.7699
+2026-02-11 03:36:20,372 - INFO - ACC: 0.7369
+2026-02-11 03:36:20,372 - INFO - RMSE: 0.4232
+2026-02-11 03:36:20,372 - INFO - ==================================================
+2026-02-11 03:36:20,384 - INFO - Summary appended to /home/zsh/ConceptSkillCDM/results/experiment_results.csv
+2026-02-11 03:36:20,388 - INFO - Run completed.
+2026-02-11 03:36:20,389 - INFO - Best validation AUC: 0.7664 at epoch 17
+2026-02-11 03:36:20,389 - INFO - Test metrics - AUC: 0.7699, ACC: 0.7369, RMSE: 0.4232
