@@ -48,9 +48,10 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
 
         # Module3 residual / fusion
         "exercise_l2_lambda": 5e-5,
-        "fusion_gate_max": 0.4,
-        "fusion_gate_bias_init": -2.5,
+        "fusion_gate_max": 1.0,
+        "fusion_gate_bias_init": -1.1,
         "residual_clip_t": 2.0,
+        "residual_scale_init": 0.1,
         "disable_q_aligned_residual": False,
 
         # Data filtering
@@ -104,9 +105,10 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
 
         # Module3 residual / fusion
         "exercise_l2_lambda": 5e-5,
-        "fusion_gate_max": 0.4,
-        "fusion_gate_bias_init": -2.5,
+        "fusion_gate_max": 1.0,
+        "fusion_gate_bias_init": -1.1,
         "residual_clip_t": 2.0,
+        "residual_scale_init": 0.1,
         "disable_q_aligned_residual": False,
 
         # Data filtering

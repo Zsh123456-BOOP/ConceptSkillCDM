@@ -490,6 +490,7 @@ class QAlignedResidualHead(nn.Module):
         residual_dim: int = 32,
         dropout: float = 0.1,
         residual_clip_t: float = 2.0,
+        residual_scale_init: float = 0.1,
     ):
         super().__init__()
         self.u_proj = nn.Linear(student_latent_dim, residual_dim, bias=False)
@@ -497,8 +498,10 @@ class QAlignedResidualHead(nn.Module):
         nn.init.xavier_normal_(self.u_proj.weight)
         nn.init.xavier_normal_(self.v_proj.weight)
 
-        self.mf_scale_raw = nn.Parameter(torch.tensor(0.0))
-        self.bias_scale_raw = nn.Parameter(torch.tensor(0.0))
+        init_scale = max(1e-4, float(residual_scale_init))
+        raw_init = math.log(math.expm1(init_scale))
+        self.mf_scale_raw = nn.Parameter(torch.tensor(raw_init))
+        self.bias_scale_raw = nn.Parameter(torch.tensor(raw_init))
         self.mf_bias = nn.Parameter(torch.zeros(1))
         self.residual_clip_t = float(residual_clip_t)
         self.dropout = nn.Dropout(dropout)
@@ -554,7 +557,7 @@ class QAlignedResidualHead(nn.Module):
 class ConservativeFusionGate(nn.Module):
     """Conservative residual fusion: gate_max * sigmoid(linear)."""
 
-    def __init__(self, gate_max: float = 0.4, gate_bias_init: float = -2.5):
+    def __init__(self, gate_max: float = 1.0, gate_bias_init: float = -1.1):
         super().__init__()
         self.fusion_gate = nn.Linear(2, 1)
         self.gate_max = float(gate_max)
@@ -881,9 +884,10 @@ class CognitiveDiagnosisModel(nn.Module):
         ablate_module3: bool = False,
         # ===== Module3 (Q-aligned residual + conservative fusion) =====
         use_q_aligned_residual: bool = True,
-        fusion_gate_max: float = 0.4,
-        fusion_gate_bias_init: float = -2.5,
+        fusion_gate_max: float = 1.0,
+        fusion_gate_bias_init: float = -1.1,
         residual_clip_t: float = 2.0,
+        residual_scale_init: float = 0.1,
         # ===== 正则权重 =====
         lambda_sparse_personal: float = 0.0,
         lambda_alpha: float = 0.0,
@@ -935,6 +939,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.fusion_gate_max = float(fusion_gate_max)
         self.fusion_gate_bias_init = float(fusion_gate_bias_init)
         self.residual_clip_t = float(residual_clip_t)
+        self.residual_scale_init = float(residual_scale_init)
 
         # ===== 正则权重 =====
         self.lambda_graph_entropy = float(lambda_graph_entropy)
@@ -1003,6 +1008,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 residual_dim=min(64, skill_dim, exercise_dim),
                 dropout=dropout,
                 residual_clip_t=self.residual_clip_t,
+                residual_scale_init=self.residual_scale_init,
             )
         else:
             self.skill_encoder = None

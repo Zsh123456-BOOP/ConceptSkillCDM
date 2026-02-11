@@ -175,12 +175,14 @@ def parse_args():
                         help="Residual weight in GNN update.")
 
     # Module3 conservative fusion / residual knobs
-    parser.add_argument("--fusion_gate_max", type=float, default=0.4,
+    parser.add_argument("--fusion_gate_max", type=float, default=1.0,
                         help="Maximum residual gate amplitude in conservative fusion.")
-    parser.add_argument("--fusion_gate_bias_init", type=float, default=-2.5,
+    parser.add_argument("--fusion_gate_bias_init", type=float, default=-1.1,
                         help="Initial bias for conservative fusion gate (negative => small initial gate).")
     parser.add_argument("--residual_clip_t", type=float, default=2.0,
                         help="T for residual clipping: residual = T * tanh(residual / T).")
+    parser.add_argument("--residual_scale_init", type=float, default=0.1,
+                        help="Initial positive scale for module3 residual branches (after softplus).")
     parser.add_argument("--disable_q_aligned_residual", action="store_true",
                         help="Compatibility flag; q-aligned residual is enabled by default.")
     parser.add_argument("--use_soft_prototype_main_path", action="store_true",
@@ -417,9 +419,10 @@ def main():
                 ablate_module2=getattr(args, "ablate_module2", False),
                 ablate_module3=getattr(args, "ablate_module3", False),
                 use_q_aligned_residual=getattr(args, "use_q_aligned_residual", True),
-                fusion_gate_max=getattr(args, "fusion_gate_max", 0.4),
-                fusion_gate_bias_init=getattr(args, "fusion_gate_bias_init", -2.5),
+                fusion_gate_max=getattr(args, "fusion_gate_max", 1.0),
+                fusion_gate_bias_init=getattr(args, "fusion_gate_bias_init", -1.1),
                 residual_clip_t=getattr(args, "residual_clip_t", 2.0),
+                residual_scale_init=getattr(args, "residual_scale_init", 0.1),
                 personal_rank=getattr(args, "personal_rank", 4),
             ).to(device)
             model.load_state_dict(checkpoint["model_state_dict"])

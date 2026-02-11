@@ -1,4 +1,5 @@
 # src/trainer.py
+import math
 import json
 import os
 import warnings
@@ -128,6 +129,50 @@ def _log_and_assert_ablation_consistency(
         raise RuntimeError("Ablation mismatch: ablate_module3=True but prototype_module still exists.")
 
     return facts
+
+
+def _log_module3_init_state(model: nn.Module, logger, context: str) -> None:
+    """
+    记录 module3 初始化态，便于快速判断是否“开局过保守”：
+    - fusion_gate bias / gate_max / implied initial gate
+    - q_gate 初始值
+    - residual scale 初始值（softplus 后）
+    """
+    base_model = _get_base_model(model)
+    fusion = getattr(base_model, "fusion", None)
+    exercise_encoder = getattr(base_model, "exercise_encoder", None)
+    mf_head = getattr(base_model, "mf_head", None)
+
+    gate_bias = None
+    gate_max = None
+    implied_gate = None
+    if fusion is not None and getattr(fusion, "fusion_gate", None) is not None:
+        gate_bias = float(fusion.fusion_gate.bias.detach().mean().item())
+        gate_max = float(getattr(fusion, "gate_max", 1.0))
+        implied_gate = gate_max * (1.0 / (1.0 + math.exp(-gate_bias)))
+
+    q_gate = None
+    if exercise_encoder is not None and getattr(exercise_encoder, "q_gate_raw", None) is not None:
+        q_gate = float(torch.sigmoid(exercise_encoder.q_gate_raw.detach()).item())
+
+    mf_scale = None
+    bias_scale = None
+    if mf_head is not None and getattr(mf_head, "mf_scale_raw", None) is not None:
+        mf_scale = float(F.softplus(mf_head.mf_scale_raw.detach()).item())
+    if mf_head is not None and getattr(mf_head, "bias_scale_raw", None) is not None:
+        bias_scale = float(F.softplus(mf_head.bias_scale_raw.detach()).item())
+
+    logger.info(
+        "%s [Module3 Init] fusion_gate_bias=%.4f, fusion_gate_max=%.4f, "
+        "implied_gate=%.4f, q_gate=%.4f, mf_scale=%.4f, bias_scale=%.4f",
+        context,
+        gate_bias if gate_bias is not None else 0.0,
+        gate_max if gate_max is not None else 0.0,
+        implied_gate if implied_gate is not None else 0.0,
+        q_gate if q_gate is not None else 0.0,
+        mf_scale if mf_scale is not None else 0.0,
+        bias_scale if bias_scale is not None else 0.0,
+    )
 
 
 def _convert_legacy_weight_norm_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -705,9 +750,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         ablate_module2=ablate_module2,
         ablate_module3=ablate_module3,
         use_q_aligned_residual=getattr(args, "use_q_aligned_residual", True),
-        fusion_gate_max=getattr(args, "fusion_gate_max", 0.4),
-        fusion_gate_bias_init=getattr(args, "fusion_gate_bias_init", -2.5),
+        fusion_gate_max=getattr(args, "fusion_gate_max", 1.0),
+        fusion_gate_bias_init=getattr(args, "fusion_gate_bias_init", -1.1),
         residual_clip_t=getattr(args, "residual_clip_t", 2.0),
+        residual_scale_init=getattr(args, "residual_scale_init", 0.1),
         personal_rank=getattr(args, "personal_rank", 4),
         lambda_sparse_personal=args.lambda_sparse_personal,
         lambda_alpha=args.lambda_alpha,
@@ -741,6 +787,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     if debug_module3_diag:
         _debug_assert_module3_wiring(model, ablate_module3=ablate_module3)
         logger.info("%s Debug diagnostics enabled: diag_batches=%d", run_tag, diag_batches)
+    _log_module3_init_state(model, logger=logger, context=run_tag)
 
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -1140,11 +1187,12 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         use_q_aligned_residual=loaded_args.get(
             "use_q_aligned_residual", getattr(args, "use_q_aligned_residual", True)
         ),
-        fusion_gate_max=loaded_args.get("fusion_gate_max", getattr(args, "fusion_gate_max", 0.4)),
+        fusion_gate_max=loaded_args.get("fusion_gate_max", getattr(args, "fusion_gate_max", 1.0)),
         fusion_gate_bias_init=loaded_args.get(
-            "fusion_gate_bias_init", getattr(args, "fusion_gate_bias_init", -2.5)
+            "fusion_gate_bias_init", getattr(args, "fusion_gate_bias_init", -1.1)
         ),
         residual_clip_t=loaded_args.get("residual_clip_t", getattr(args, "residual_clip_t", 2.0)),
+        residual_scale_init=loaded_args.get("residual_scale_init", getattr(args, "residual_scale_init", 0.1)),
         personal_rank=loaded_args.get("personal_rank", getattr(args, "personal_rank", 4)),
         lambda_sparse_personal=loaded_args.get("lambda_sparse_personal", args.lambda_sparse_personal),
         lambda_alpha=loaded_args.get("lambda_alpha", args.lambda_alpha),
@@ -1162,6 +1210,7 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ablate_module2=ablate_module2,
         ablate_module3=ablate_module3,
     )
+    _log_module3_init_state(model, logger=logger, context="[Inference]")
 
     # compatibility for legacy weight_norm checkpoints
     state_dict = checkpoint["model_state_dict"]
