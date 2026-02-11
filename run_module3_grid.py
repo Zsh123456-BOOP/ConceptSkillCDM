@@ -26,6 +26,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from itertools import product
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -90,6 +91,11 @@ def parse_cli() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--dry_run", action="store_true", help="Print commands only.")
+    parser.add_argument(
+        "--rerun_existing",
+        action="store_true",
+        help="Force rerun even if the same (dataset,seed,grid_tag,variant) already succeeded in results/module3_grid_results.csv.",
+    )
     parser.add_argument("--ablation_set", type=str, default="model", help="Currently only supports model.")
     parser.add_argument(
         "--only_variants",
@@ -143,6 +149,23 @@ def append_arg(cmd: List[str], key: str, value: Any) -> None:
     cmd.extend([f"--{key}", str(value)])
 
 
+def variant_csv_name(variant: str) -> str:
+    return "no3" if variant == "no_module3" else "full"
+
+
+def variant_internal_name(csv_variant: str) -> Optional[str]:
+    raw = str(csv_variant).strip().lower()
+    if raw == "full":
+        return "full"
+    if raw in {"no3", "no_module3"}:
+        return "no_module3"
+    return None
+
+
+def make_job_key(dataset: str, seed: int, grid_tag: str, variant: str) -> Tuple[str, int, str, str]:
+    return (str(dataset), int(seed), str(grid_tag), str(variant))
+
+
 def _uniq_keep_order(values: Sequence[float]) -> List[float]:
     out: List[float] = []
     seen: Set[float] = set()
@@ -186,10 +209,10 @@ def build_grid_points(base_cfg: Dict[str, Any], grid_points: int) -> Tuple[List[
     base_gate_bias = float(base_cfg.get("fusion_gate_bias_init", -2.5) or -2.5)
     base_clip_t = float(base_cfg.get("residual_clip_t", 2.0) or 2.0)
 
-    sparse_vals = _uniq_keep_order([base_sparse, 0.3, 0.1, 0.03, 0.01])
-    gate_bias_vals = _uniq_keep_order([base_gate_bias, -3.0, -2.0, -1.5])
-    gate_max_vals = _uniq_keep_order([base_gate_max, 0.3, 0.5, 0.6])
-    clip_vals = _uniq_keep_order([base_clip_t, 1.5, 2.5, 3.0])
+    sparse_vals = _uniq_keep_order([base_sparse, 0.5, 0.3, 0.1, 0.03, 0.01, 0.003])
+    gate_bias_vals = _uniq_keep_order([base_gate_bias, -3.5, -3.0, -2.5, -2.0, -1.5, -1.0])
+    gate_max_vals = _uniq_keep_order([base_gate_max, 0.3, 0.4, 0.5, 0.6, 0.7])
+    clip_vals = _uniq_keep_order([base_clip_t, 1.5, 2.0, 2.5, 3.0, 4.0])
 
     dropout_vals: List[float] = [base_dropout]
     for delta in (0.05, 0.10, 0.15):
@@ -226,27 +249,35 @@ def build_grid_points(base_cfg: Dict[str, Any], grid_points: int) -> Tuple[List[
         add_point(f"drop_{_fmt_float_tag(d)}", {"dropout": d})
 
     # pairwise points: sparse + gate bias (ease conservative gate)
-    for s in (0.1, 0.03, 0.01):
-        for b in (-2.0, -1.5):
+    for s in (0.3, 0.1, 0.03, 0.01):
+        for b in (-2.5, -2.0, -1.5):
             add_point(
                 f"s{_fmt_float_tag(s)}_b{_fmt_float_tag(b)}",
                 {"lambda_sparse": s, "fusion_gate_bias_init": b},
             )
 
     # pairwise points: sparse + gate max (allow stronger residual if needed)
-    for s in (0.1, 0.03, 0.01):
-        for g in (0.5, 0.6):
+    for s in (0.3, 0.1, 0.03, 0.01):
+        for g in (0.5, 0.6, 0.7):
             add_point(
                 f"s{_fmt_float_tag(s)}_g{_fmt_float_tag(g)}",
                 {"lambda_sparse": s, "fusion_gate_max": g},
             )
 
     # pairwise points: sparse + lower dropout (assist_09 rescue-oriented)
-    for s in (0.1, 0.03, 0.01):
-        for d in dropout_vals[1:3]:
+    for s in (0.3, 0.1, 0.03, 0.01):
+        for d in dropout_vals[1:]:
             add_point(
                 f"s{_fmt_float_tag(s)}_d{_fmt_float_tag(d)}",
                 {"lambda_sparse": s, "dropout": d},
+            )
+
+    # pairwise points: sparse + clip threshold
+    for s in (0.3, 0.1, 0.03, 0.01):
+        for c in (1.5, 2.5, 3.0):
+            add_point(
+                f"s{_fmt_float_tag(s)}_c{_fmt_float_tag(c)}",
+                {"lambda_sparse": s, "residual_clip_t": c},
             )
 
     # triple points: sparse + relaxed gate + stronger cap
@@ -255,6 +286,10 @@ def build_grid_points(base_cfg: Dict[str, Any], grid_points: int) -> Tuple[List[
         (0.03, -2.0, 0.6, 2.5),
         (0.01, -1.5, 0.6, 3.0),
         (0.03, -1.5, 0.5, 3.0),
+        (0.3, -2.5, 0.5, 2.5),
+        (0.1, -2.5, 0.6, 3.0),
+        (0.01, -2.0, 0.7, 3.0),
+        (0.03, -1.0, 0.7, 4.0),
     ]
     for s, b, g, c in triple_candidates:
         add_point(
@@ -266,6 +301,42 @@ def build_grid_points(base_cfg: Dict[str, Any], grid_points: int) -> Tuple[List[
                 "residual_clip_t": c,
             },
         )
+
+    # Auto-fill stage:
+    # If hand-crafted points are insufficient for a requested budget (e.g. 64),
+    # expand with deterministic cartesian combinations until budget is reached.
+    if len(points) < budget:
+        for s, b, g, c, d in product(sparse_vals, gate_bias_vals, gate_max_vals, clip_vals, dropout_vals):
+            overrides: Dict[str, Any] = {}
+            if abs(s - base_sparse) > 1e-9:
+                overrides["lambda_sparse"] = s
+            if abs(b - base_gate_bias) > 1e-9:
+                overrides["fusion_gate_bias_init"] = b
+            if abs(g - base_gate_max) > 1e-9:
+                overrides["fusion_gate_max"] = g
+            if abs(c - base_clip_t) > 1e-9:
+                overrides["residual_clip_t"] = c
+            if abs(d - base_dropout) > 1e-9:
+                overrides["dropout"] = d
+
+            if not overrides:
+                continue
+
+            tag_parts: List[str] = ["auto"]
+            if "lambda_sparse" in overrides:
+                tag_parts.append(f"s{_fmt_float_tag(overrides['lambda_sparse'])}")
+            if "fusion_gate_bias_init" in overrides:
+                tag_parts.append(f"b{_fmt_float_tag(overrides['fusion_gate_bias_init'])}")
+            if "fusion_gate_max" in overrides:
+                tag_parts.append(f"g{_fmt_float_tag(overrides['fusion_gate_max'])}")
+            if "residual_clip_t" in overrides:
+                tag_parts.append(f"c{_fmt_float_tag(overrides['residual_clip_t'])}")
+            if "dropout" in overrides:
+                tag_parts.append(f"d{_fmt_float_tag(overrides['dropout'])}")
+            add_point("_".join(tag_parts), overrides)
+
+            if len(points) >= budget:
+                break
 
     if len(points) > budget:
         skip_msgs.append(f"generated {len(points)} points, truncating to budget={budget}.")
@@ -441,12 +512,38 @@ def read_json(path: Path) -> Optional[Dict[str, Any]]:
         return json.load(f)
 
 
+def load_completed_job_keys(path: Path) -> Set[Tuple[str, int, str, str]]:
+    done: Set[Tuple[str, int, str, str]] = set()
+    if not path.exists():
+        return done
+
+    with open(path, "r", encoding="utf-8-sig", errors="ignore") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            status = str(row.get("status", "")).strip().lower()
+            if status != "ok":
+                continue
+            dataset = row.get("dataset")
+            seed_raw = row.get("seed")
+            grid_tag = row.get("grid_tag")
+            variant_raw = row.get("variant")
+            variant = variant_internal_name(variant_raw)
+            if not dataset or seed_raw is None or not grid_tag or variant is None:
+                continue
+            try:
+                seed = int(seed_raw)
+            except Exception:
+                continue
+            done.add(make_job_key(dataset, seed, grid_tag, variant))
+    return done
+
+
 def collect_result(job: JobSpec, exit_code: int) -> Dict[str, Any]:
     row: Dict[str, Any] = {
         "dataset": job.dataset,
         "seed": job.seed,
         "grid_tag": job.grid_tag,
-        "variant": "no3" if job.variant == "no_module3" else "full",
+        "variant": variant_csv_name(job.variant),
         "model_variant": job.model_variant,
         "save_dir": str(job.save_dir),
         "log_dir": str(job.log_dir),
@@ -524,8 +621,13 @@ def make_jobs(
     epochs_override: Optional[int],
     grid_points: int,
     main_arg_dests: Set[str],
+    completed_keys: Optional[Set[Tuple[str, int, str, str]]] = None,
+    skip_completed: bool = True,
 ) -> List[JobSpec]:
     jobs: List[JobSpec] = []
+    completed_keys = completed_keys or set()
+    skipped_done = 0
+    skipped_ckpt = 0
 
     for dataset in datasets:
         if dataset not in BEST_CFG:
@@ -551,6 +653,20 @@ def make_jobs(
                     model_variant = f"{dataset}_m3grid_{gp.tag}_{suffix}"
                     save_dir = Path("checkpoints") / f"{dataset}_m3grid" / f"seed{seed}" / f"{gp.tag}_{suffix}"
                     log_dir = Path("logs") / f"{dataset}_m3grid" / f"seed{seed}" / f"{gp.tag}_{suffix}"
+
+                    job_key = make_job_key(dataset, int(seed), gp.tag, variant)
+                    if skip_completed and job_key in completed_keys:
+                        skipped_done += 1
+                        continue
+                    # Fallback skip: successful checkpoint exists even if CSV row is missing.
+                    if skip_completed:
+                        test_json = read_json(save_dir / "test_results.json")
+                        metrics = test_json.get("metrics", {}) if isinstance(test_json, dict) else {}
+                        if isinstance(metrics, dict) and metrics.get("auc") is not None:
+                            skipped_ckpt += 1
+                            completed_keys.add(job_key)
+                            continue
+
                     save_dir.mkdir(parents=True, exist_ok=True)
                     log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -574,6 +690,11 @@ def make_jobs(
                         raise RuntimeError(f"[{model_variant}] no_module3 command misses --ablate_module3.")
 
                     jobs.append(job)
+    if skip_completed and (skipped_done > 0 or skipped_ckpt > 0):
+        print(
+            f"[RESUME] skipped completed jobs: from_csv={skipped_done}, "
+            f"from_checkpoint={skipped_ckpt}"
+        )
     return jobs
 
 
@@ -668,6 +789,7 @@ def main() -> None:
     poll_interval = max(1, int(args.poll_interval))
     main_arg_dests = get_main_arg_dests()
     epochs_override = int(args.epochs) if epochs_was_explicitly_set(sys.argv[1:]) else None
+    completed_keys = set() if args.rerun_existing else load_completed_job_keys(RESULT_CSV)
 
     jobs = make_jobs(
         datasets=datasets,
@@ -676,6 +798,8 @@ def main() -> None:
         epochs_override=epochs_override,
         grid_points=args.grid_points,
         main_arg_dests=main_arg_dests,
+        completed_keys=completed_keys,
+        skip_completed=not args.rerun_existing,
     )
 
     print(f"Datasets: {datasets}")
@@ -689,6 +813,7 @@ def main() -> None:
     print(f"Jobs: {len(jobs)} (approx target = datasets*seeds*grid_points*variants)")
     print(f"Result CSV: {RESULT_CSV}")
     print(f"Dry run: {args.dry_run}")
+    print(f"Rerun existing: {args.rerun_existing}")
 
     if args.dry_run:
         run_dry(jobs, gpus)
