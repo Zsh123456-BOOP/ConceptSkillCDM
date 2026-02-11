@@ -79,6 +79,12 @@ def parse_args():
         default=0.01,
         help="Graph sparsity weight (mapped to graph entropy weight in the new model).",
     )
+    parser.add_argument(
+        "--graph_reg_warmup_epochs",
+        type=int,
+        default=3,
+        help="Linear warmup epochs for graph-related regularization terms (<=0 disables warmup).",
+    )
     parser.add_argument("--lambda_proto_div", type=float, default=0.0)
     parser.add_argument("--lambda_proto_usage", type=float, default=0.0)
     parser.add_argument("--lambda_sparse_personal", type=float, default=0.0)

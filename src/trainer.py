@@ -758,6 +758,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         lambda_sparse_personal=args.lambda_sparse_personal,
         lambda_alpha=args.lambda_alpha,
         lambda_graph_entropy=args.lambda_sparse,
+        graph_reg_warmup_epochs=getattr(args, "graph_reg_warmup_epochs", 3),
         mf_l2_lambda=getattr(args, "exercise_l2_lambda", 5e-5),
         gnn_residual_weight=getattr(args, "gnn_residual_weight", 0.5),
         use_q_conditioning=not getattr(args, "disable_q_conditioning", False),
@@ -819,6 +820,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     logger.info("%s Starting training...", run_tag)
 
     for epoch in range(1, args.epochs + 1):
+        _get_base_model(model).set_epoch(epoch)
         train_metrics = train_epoch(
             model,
             train_loader,
@@ -1197,6 +1199,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         lambda_sparse_personal=loaded_args.get("lambda_sparse_personal", args.lambda_sparse_personal),
         lambda_alpha=loaded_args.get("lambda_alpha", args.lambda_alpha),
         lambda_graph_entropy=loaded_args.get("lambda_sparse", args.lambda_sparse),
+        graph_reg_warmup_epochs=loaded_args.get(
+            "graph_reg_warmup_epochs", getattr(args, "graph_reg_warmup_epochs", 3)
+        ),
         mf_l2_lambda=loaded_args.get("exercise_l2_lambda", getattr(args, "exercise_l2_lambda", 5e-5)),
         gnn_residual_weight=loaded_args.get("gnn_residual_weight", getattr(args, "gnn_residual_weight", 0.5)),
         use_q_conditioning=not loaded_args.get("disable_q_conditioning", getattr(args, "disable_q_conditioning", False)),

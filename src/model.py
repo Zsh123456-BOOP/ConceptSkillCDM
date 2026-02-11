@@ -898,6 +898,7 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_entropy_min: float = 0.15,
         graph_entropy_max: float = 0.95,
         lambda_graph_diag: float = 0.05,
+        graph_reg_warmup_epochs: int = 3,
         mf_l2_lambda: float = 5e-5,          # mapped from args.exercise_l2_lambda
         gnn_residual_weight: float = 0.5,
         use_q_conditioning: bool = True,
@@ -954,6 +955,8 @@ class CognitiveDiagnosisModel(nn.Module):
         if self.graph_entropy_min > self.graph_entropy_max:
             self.graph_entropy_min, self.graph_entropy_max = self.graph_entropy_max, self.graph_entropy_min
         self.lambda_graph_diag = float(lambda_graph_diag)
+        self.graph_reg_warmup_epochs = max(0, int(graph_reg_warmup_epochs))
+        self._current_epoch = 1
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
         self.mf_l2_lambda = float(mf_l2_lambda)
@@ -1046,6 +1049,16 @@ class CognitiveDiagnosisModel(nn.Module):
     # ------------------------------
     # Fix #1：行熵稀疏度（用于 personal graph 正则）
     # ------------------------------
+    def set_epoch(self, epoch: int) -> None:
+        """Set current epoch for graph-regularizer warmup (1-based)."""
+        self._current_epoch = max(1, int(epoch))
+
+    def _get_graph_reg_ramp(self) -> float:
+        """Linear warmup factor for graph-related regularization terms."""
+        if self.graph_reg_warmup_epochs <= 0:
+            return 1.0
+        return min(1.0, float(self._current_epoch) / float(self.graph_reg_warmup_epochs))
+
     @staticmethod
     def _row_entropy(A: torch.Tensor) -> torch.Tensor:
         """Row-Entropy：对 row-stochastic 矩阵的稀疏性更有意义。"""
@@ -1275,6 +1288,9 @@ class CognitiveDiagnosisModel(nn.Module):
             "personal_sparse": torch.tensor(0.0, device=device),
             "alpha_var": torch.tensor(0.0, device=device),  # signed term (negative when maximizing variance)
         }
+        graph_reg_ramp_t = relation_matrices.new_tensor(self._get_graph_reg_ramp())
+        if details is not None:
+            details["graph_reg_ramp"] = graph_reg_ramp_t.detach()
 
         # (1) Global graph entropy band penalty
         if self.enable_module1 and self.use_concept_graph and self.lambda_graph_entropy > 0:
@@ -1287,7 +1303,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 h_min = torch.tensor(self.graph_entropy_min, device=device, dtype=entropy.dtype)
                 h_max = torch.tensor(self.graph_entropy_max, device=device, dtype=entropy.dtype)
                 pen = F.relu(h_min - h_norm) + F.relu(h_norm - h_max)
-                terms["graph_entropy"] = self.lambda_graph_entropy * pen
+                terms["graph_entropy"] = self.lambda_graph_entropy * pen * graph_reg_ramp_t
 
                 if details is not None:
                     details["graph_entropy_raw"] = entropy.detach()
@@ -1296,7 +1312,7 @@ class CognitiveDiagnosisModel(nn.Module):
 
                 if self.lambda_graph_diag > 0:
                     diag_mass = torch.diagonal(relation_matrices, dim1=-2, dim2=-1).mean()
-                    terms["graph_diag"] = self.lambda_graph_diag * diag_mass
+                    terms["graph_diag"] = self.lambda_graph_diag * diag_mass * graph_reg_ramp_t
                     if details is not None:
                         details["graph_diag_mass"] = diag_mass.detach()
 
@@ -1358,7 +1374,9 @@ class CognitiveDiagnosisModel(nn.Module):
                 and self.lambda_sparse_personal > 0
             ):
                 pm = details["personal_matrices"]
-                terms["personal_sparse"] = self.lambda_sparse_personal * self._row_entropy(pm)
+                terms["personal_sparse"] = (
+                    self.lambda_sparse_personal * self._row_entropy(pm) * graph_reg_ramp_t
+                )
 
             if "alpha" in details and details["alpha"] is not None and self.lambda_alpha > 0:
                 alpha_flat = details["alpha"].view(-1)
