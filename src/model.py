@@ -331,7 +331,7 @@ class ExerciseDifficultyEncoder(nn.Module):
     """
     Shared item encoder:
     - IRT 2PL params (b, a) controlled by use_irt
-    - Module3 Q-aligned branch: exercise_bias + concept_latent aggregated by Q-mask
+    - Module3 item branch: exercise_latent + Q-conditioned concept_latent
     """
 
     def __init__(
@@ -357,10 +357,12 @@ class ExerciseDifficultyEncoder(nn.Module):
         self.register_buffer("q_matrix", q_matrix)
 
         if self.use_mf_branch:
+            self.exercise_latent = nn.Embedding(num_exercises, exercise_dim)
             self.exercise_bias = nn.Embedding(num_exercises, 1)
             self.concept_latent = nn.Embedding(num_concepts, exercise_dim)
             self.q_gate_raw = nn.Parameter(torch.zeros(1))
         else:
+            self.exercise_latent = None
             self.exercise_bias = None
             self.concept_latent = None
             self.q_gate_raw = None
@@ -377,6 +379,7 @@ class ExerciseDifficultyEncoder(nn.Module):
 
     def _initialize_weights(self) -> None:
         if self.use_mf_branch:
+            nn.init.xavier_normal_(self.exercise_latent.weight)
             nn.init.zeros_(self.exercise_bias.weight)
             nn.init.xavier_normal_(self.concept_latent.weight)
 
@@ -391,7 +394,7 @@ class ExerciseDifficultyEncoder(nn.Module):
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], torch.Tensor, torch.Tensor]:
         """
         Returns:
-            q_latent:      (B, De) or None
+            item_latent:   (B, De) or None
             exercise_bias: (B,) or None
             b:             (B,)
             a:             (B,)
@@ -400,6 +403,7 @@ class ExerciseDifficultyEncoder(nn.Module):
         B = exercise_ids.size(0)
 
         if self.use_mf_branch:
+            e_latent = self.exercise_latent(exercise_ids)
             e_bias = self.exercise_bias(exercise_ids).squeeze(-1)
             if concept_mask is None:
                 concept_mask = self.q_matrix[exercise_ids]
@@ -407,12 +411,16 @@ class ExerciseDifficultyEncoder(nn.Module):
             q_norm = q / (q.sum(dim=1, keepdim=True) + 1e-12)
             c_lat = self.concept_latent.weight
             q_latent = torch.matmul(q_norm, c_lat)
-            # NOTE:
-            # Keep q_latent unscaled here. q_gate is applied after cosine interaction
-            # in QAlignedResidualHead so its gradient is not canceled by normalization.
-            q_latent = self.dropout(q_latent)
+
+            if self.use_q_conditioning and self.q_gate_raw is not None:
+                q_gate = torch.sigmoid(self.q_gate_raw)
+                item_latent = e_latent + q_gate * q_latent
+            else:
+                item_latent = e_latent
+
+            item_latent = self.dropout(item_latent)
         else:
-            q_latent = None
+            item_latent = None
             e_bias = None
 
         if self.use_irt:
@@ -422,7 +430,7 @@ class ExerciseDifficultyEncoder(nn.Module):
             b = torch.zeros(B, device=device)
             a = torch.ones(B, device=device)
 
-        return q_latent, e_bias, b, a
+        return item_latent, e_bias, b, a
 
 
 # ======================================================
@@ -499,14 +507,14 @@ class QAlignedResidualHead(nn.Module):
         self,
         student_latent: torch.Tensor,
         student_bias: torch.Tensor,
-        q_latent: torch.Tensor,
+        item_latent: torch.Tensor,
         exercise_bias: torch.Tensor,
         q_gate: Optional[torch.Tensor] = None,
         return_details: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
 
         u = self.u_proj(student_latent)
-        v = self.v_proj(q_latent)
+        v = self.v_proj(item_latent)
         u = F.normalize(u, dim=-1, eps=1e-12)
         v = F.normalize(v, dim=-1, eps=1e-12)
 
@@ -1063,8 +1071,8 @@ class CognitiveDiagnosisModel(nn.Module):
                 proto_broadcast = proto_mix.unsqueeze(1).expand(-1, self.num_concepts, -1)
                 knowledge_state = (1.0 - self.proto_lambda) * knowledge_state + self.proto_lambda * proto_broadcast
 
-        # ========== 3) 共享：题目参数（b,a）与 module3 q-latent ==========
-        q_latent, exercise_bias, b, a = self.exercise_encoder(exercise_ids, concept_mask=q_vector)
+        # ========== 3) 共享：题目参数（b,a）与 module3 item-latent ==========
+        item_latent, exercise_bias, b, a = self.exercise_encoder(exercise_ids, concept_mask=q_vector)
 
         # ========== 4) Module 2：IRT head（可完全消融） ==========
         if self.enable_module2:
@@ -1097,32 +1105,23 @@ class CognitiveDiagnosisModel(nn.Module):
 
             student_latent, student_bias = self.skill_encoder(student_ids)
 
-            if q_latent is None or exercise_bias is None:
-                raise RuntimeError("Module3 is enabled but q_latent/exercise_bias is None. Check exercise_encoder wiring.")
-
-            module3_q_gate = None
-            if (
-                getattr(self.exercise_encoder, "use_q_conditioning", False)
-                and getattr(self.exercise_encoder, "q_gate_raw", None) is not None
-            ):
-                module3_q_gate = torch.sigmoid(self.exercise_encoder.q_gate_raw)
+            if item_latent is None or exercise_bias is None:
+                raise RuntimeError("Module3 is enabled but item_latent/exercise_bias is None. Check exercise_encoder wiring.")
 
             if return_details:
                 mf_logit, mf_details = self.mf_head(
                     student_latent=student_latent,
                     student_bias=student_bias,
-                    q_latent=q_latent,
+                    item_latent=item_latent,
                     exercise_bias=exercise_bias,
-                    q_gate=module3_q_gate,
                     return_details=True,
                 )
             else:
                 mf_logit = self.mf_head(
                     student_latent=student_latent,
                     student_bias=student_bias,
-                    q_latent=q_latent,
+                    item_latent=item_latent,
                     exercise_bias=exercise_bias,
-                    q_gate=module3_q_gate,
                     return_details=False,
                 )
                 mf_details = None
@@ -1282,6 +1281,8 @@ class CognitiveDiagnosisModel(nn.Module):
             if self.enable_module3 and self.use_mf_branch:
                 if self.skill_encoder is not None:
                     reg_terms.append(self.skill_encoder.latent_emb.weight.pow(2).mean())
+                if self.exercise_encoder.use_mf_branch and self.exercise_encoder.exercise_latent is not None:
+                    reg_terms.append(self.exercise_encoder.exercise_latent.weight.pow(2).mean())
                 if self.exercise_encoder.use_mf_branch and self.exercise_encoder.concept_latent is not None:
                     reg_terms.append(self.exercise_encoder.concept_latent.weight.pow(2).mean())
                 if self.exercise_encoder.use_mf_branch and self.exercise_encoder.exercise_bias is not None:
