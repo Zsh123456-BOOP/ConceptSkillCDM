@@ -91,6 +91,48 @@ def parse_args():
         default=6.0,
         help="Cap ratio for graph regularizers relative to base BCE loss.",
     )
+    parser.add_argument(
+        "--graph_entropy_min",
+        type=float,
+        default=0.15,
+        help="Lower bound of normalized graph entropy band.",
+    )
+    parser.add_argument(
+        "--graph_entropy_max",
+        type=float,
+        default=0.95,
+        help="Upper bound of normalized graph entropy band.",
+    )
+    parser.add_argument(
+        "--lambda_graph_diag",
+        type=float,
+        default=0.05,
+        help="Penalty weight for graph diagonal mass (near-identity suppressor).",
+    )
+    parser.add_argument(
+        "--lambda_graph_uniform",
+        type=float,
+        default=0.02,
+        help="Penalty weight to keep graph away from uniform adjacency.",
+    )
+    parser.add_argument(
+        "--graph_uniform_margin",
+        type=float,
+        default=0.08,
+        help="Minimum L2 distance from uniform adjacency before graph_uniform penalty becomes zero.",
+    )
+    parser.add_argument(
+        "--graph_dropout",
+        type=float,
+        default=-1.0,
+        help="Dropout used inside graph relation learning; <0 means follow global dropout.",
+    )
+    parser.add_argument(
+        "--graph_tau_init",
+        type=float,
+        default=1.0,
+        help="Initial temperature for graph relation learning softmax.",
+    )
     parser.add_argument("--lambda_proto_div", type=float, default=0.0)
     parser.add_argument("--lambda_proto_usage", type=float, default=0.0)
     parser.add_argument("--lambda_sparse_personal", type=float, default=0.0)
@@ -435,7 +477,20 @@ def main():
                 fusion_gate_bias_init=getattr(args, "fusion_gate_bias_init", -1.1),
                 residual_clip_t=getattr(args, "residual_clip_t", 2.0),
                 residual_scale_init=getattr(args, "residual_scale_init", 0.1),
+                graph_dropout=None if float(getattr(args, "graph_dropout", -1.0)) < 0 else float(getattr(args, "graph_dropout", -1.0)),
+                graph_tau_init=getattr(args, "graph_tau_init", 1.0),
                 personal_rank=getattr(args, "personal_rank", 4),
+                lambda_graph_entropy=getattr(args, "lambda_sparse", 0.01),
+                graph_entropy_min=getattr(args, "graph_entropy_min", 0.15),
+                graph_entropy_max=getattr(args, "graph_entropy_max", 0.95),
+                lambda_graph_diag=getattr(args, "lambda_graph_diag", 0.05),
+                lambda_graph_uniform=getattr(args, "lambda_graph_uniform", 0.02),
+                graph_uniform_margin=getattr(args, "graph_uniform_margin", 0.08),
+                graph_reg_warmup_epochs=getattr(args, "graph_reg_warmup_epochs", 3),
+                graph_reg_cap_ratio=getattr(args, "graph_reg_cap_ratio", 6.0),
+                lambda_sparse_personal=getattr(args, "lambda_sparse_personal", 0.0),
+                lambda_alpha=getattr(args, "lambda_alpha", 0.0),
+                mf_l2_lambda=getattr(args, "exercise_l2_lambda", 5e-5),
             ).to(device)
             model.load_state_dict(checkpoint["model_state_dict"])
             

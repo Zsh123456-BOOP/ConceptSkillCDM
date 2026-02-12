@@ -50,6 +50,17 @@ def _ensure_1d(t: torch.Tensor) -> torch.Tensor:
     return t.reshape(-1)
 
 
+def _resolve_optional_graph_dropout(value: Any) -> Optional[float]:
+    """Compatibility: graph_dropout < 0 or invalid means follow global dropout."""
+    if value is None:
+        return None
+    try:
+        val = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if val < 0 else val
+
+
 def _get_base_model(model: nn.Module) -> CognitiveDiagnosisModel:
     """获取基础模型（处理 DataParallel 包装）"""
     if isinstance(model, nn.DataParallel):
@@ -142,6 +153,7 @@ def _log_module3_init_state(model: nn.Module, logger, context: str) -> None:
     fusion = getattr(base_model, "fusion", None)
     exercise_encoder = getattr(base_model, "exercise_encoder", None)
     mf_head = getattr(base_model, "mf_head", None)
+    relation_learning = getattr(getattr(base_model, "structure_module", None), "relation_learning", None)
 
     gate_bias = None
     gate_max = None
@@ -162,9 +174,19 @@ def _log_module3_init_state(model: nn.Module, logger, context: str) -> None:
     if mf_head is not None and getattr(mf_head, "bias_scale_raw", None) is not None:
         bias_scale = float(F.softplus(mf_head.bias_scale_raw.detach()).item())
 
+    graph_tau_mean = 0.0
+    graph_tau_std = 0.0
+    graph_dropout = 0.0
+    if relation_learning is not None and getattr(relation_learning, "tau_raw", None) is not None:
+        tau = F.softplus(relation_learning.tau_raw.detach()) + 1e-6
+        graph_tau_mean = float(tau.mean().item())
+        graph_tau_std = float(tau.std(unbiased=False).item())
+        graph_dropout = float(getattr(getattr(relation_learning, "dropout", None), "p", 0.0))
+
     logger.info(
         "%s [Module3 Init] fusion_gate_bias=%.4f, fusion_gate_max=%.4f, "
-        "implied_gate=%.4f, q_gate=%.4f, mf_scale=%.4f, bias_scale=%.4f",
+        "implied_gate=%.4f, q_gate=%.4f, mf_scale=%.4f, bias_scale=%.4f, "
+        "graph_tau_mean=%.4f, graph_tau_std=%.4f, graph_dropout=%.3f",
         context,
         gate_bias if gate_bias is not None else 0.0,
         gate_max if gate_max is not None else 0.0,
@@ -172,6 +194,9 @@ def _log_module3_init_state(model: nn.Module, logger, context: str) -> None:
         q_gate if q_gate is not None else 0.0,
         mf_scale if mf_scale is not None else 0.0,
         bias_scale if bias_scale is not None else 0.0,
+        graph_tau_mean,
+        graph_tau_std,
+        graph_dropout,
     )
 
 
@@ -269,6 +294,7 @@ def _row_entropy_mean(A: np.ndarray) -> float:
 _REG_COMPONENT_KEYS: Tuple[str, ...] = (
     "graph_entropy",
     "graph_diag",
+    "graph_uniform",
     "graph_reg_scale",
     "mf_l2",
     "proto_div",
@@ -302,7 +328,19 @@ def _collect_debug_forward_stats(
 
     graph_row_entropy_mean = 0.0
     graph_entropy_ratio = 0.0
+    graph_diag_mass = 0.0
+    graph_to_uniform_l2 = 0.0
+    graph_to_identity_l2 = 0.0
     graph_ready = False
+
+    base_model = _get_base_model(model)
+    tau_mean = 0.0
+    tau_std = 0.0
+    relation_learning = getattr(getattr(base_model, "structure_module", None), "relation_learning", None)
+    if relation_learning is not None and getattr(relation_learning, "tau_raw", None) is not None:
+        tau = F.softplus(relation_learning.tau_raw.detach()) + 1e-6
+        tau_mean = float(tau.mean().item())
+        tau_std = float(tau.std(unbiased=False).item())
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(data_loader):
@@ -360,6 +398,11 @@ def _collect_debug_forward_stats(
                     graph_entropy_ratio = (
                         graph_row_entropy_mean / max_row_entropy if max_row_entropy > 0 else 0.0
                     )
+                    graph_diag_mass = float(np.diagonal(rm, axis1=-2, axis2=-1).mean())
+                    uniform_val = 1.0 / float(max(1, rm.shape[-1]))
+                    graph_to_uniform_l2 = float(np.sqrt(np.mean((rm - uniform_val) ** 2)))
+                    identity = np.eye(rm.shape[-1], dtype=rm.dtype)
+                    graph_to_identity_l2 = float(np.sqrt(np.mean((rm - identity) ** 2)))
                     graph_ready = True
 
     if was_training:
@@ -386,6 +429,11 @@ def _collect_debug_forward_stats(
         "delta_std": delta_std,
         "graph_row_entropy_mean": graph_row_entropy_mean,
         "graph_entropy_ratio": graph_entropy_ratio,
+        "graph_diag_mass": graph_diag_mass,
+        "graph_to_uniform_l2": graph_to_uniform_l2,
+        "graph_to_identity_l2": graph_to_identity_l2,
+        "graph_tau_mean": tau_mean,
+        "graph_tau_std": tau_std,
         "alpha_mean": alpha_mean,
         "alpha_std": alpha_std,
         "personal_row_entropy": personal_row_entropy,
@@ -408,12 +456,34 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
     fusion = getattr(base_model, "fusion", None)
     exercise_encoder = getattr(base_model, "exercise_encoder", None)
     skill_encoder = getattr(base_model, "skill_encoder", None)
+    structure_module = getattr(base_model, "structure_module", None)
+    relation_learning = getattr(structure_module, "relation_learning", None) if structure_module is not None else None
+    personal_generator = getattr(structure_module, "personal_generator", None) if structure_module is not None else None
 
     mf_u = getattr(getattr(mf_head, "u_proj", None), "weight", None)
     mf_v = getattr(getattr(mf_head, "v_proj", None), "weight", None)
     fusion_w = getattr(getattr(fusion, "fusion_gate", None), "weight", None)
     q_gate = getattr(exercise_encoder, "q_gate_raw", None) if exercise_encoder is not None else None
     skill_latent = getattr(getattr(skill_encoder, "latent_emb", None), "weight", None)
+    relation_emb = getattr(relation_learning, "concept_embeddings", None) if relation_learning is not None else None
+    relation_tau = getattr(relation_learning, "tau_raw", None) if relation_learning is not None else None
+    relation_wq = None
+    relation_wk = None
+    if relation_learning is not None:
+        wq_layers = getattr(relation_learning, "Wq", [])
+        wk_layers = getattr(relation_learning, "Wk", [])
+        wq_norms = [
+            _grad_norm_or_zero(getattr(layer, "weight", None))
+            for layer in wq_layers
+        ]
+        wk_norms = [
+            _grad_norm_or_zero(getattr(layer, "weight", None))
+            for layer in wk_layers
+        ]
+        relation_wq = float(np.mean(wq_norms)) if wq_norms else 0.0
+        relation_wk = float(np.mean(wk_norms)) if wk_norms else 0.0
+    personal_u = getattr(getattr(personal_generator, "to_u", None), "weight", None)
+    personal_v = getattr(getattr(personal_generator, "to_v", None), "weight", None)
 
     return {
         "mf_u_proj": _grad_norm_or_zero(mf_u),
@@ -421,6 +491,12 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
         "fusion_gate": _grad_norm_or_zero(fusion_w),
         "q_gate_raw": _grad_norm_or_zero(q_gate),
         "skill_latent": _grad_norm_or_zero(skill_latent),
+        "relation_emb": _grad_norm_or_zero(relation_emb),
+        "relation_tau": _grad_norm_or_zero(relation_tau),
+        "relation_wq": relation_wq if relation_wq is not None else 0.0,
+        "relation_wk": relation_wk if relation_wk is not None else 0.0,
+        "personal_u": _grad_norm_or_zero(personal_u),
+        "personal_v": _grad_norm_or_zero(personal_v),
     }
 
 
@@ -643,10 +719,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
 
     logger.info("%s Loading datasets...", run_tag)
     logger.info(
-        "%s Regularization: graph_entropy(lambda_sparse)=%.6f, proto_div=%.6f, proto_usage=%.6f, "
-        "personal_sparse=%.6f, alpha_penalty=%.6f, mf_l2(exercise_l2_lambda)=%.6f",
+        "%s Regularization: graph_entropy(lambda_sparse)=%.6f, graph_diag=%.6f, graph_uniform=%.6f, "
+        "proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_penalty=%.6f, mf_l2(exercise_l2_lambda)=%.6f",
         run_tag,
         args.lambda_sparse,
+        getattr(args, "lambda_graph_diag", 0.05),
+        getattr(args, "lambda_graph_uniform", 0.02),
         args.lambda_proto_div,
         args.lambda_proto_usage,
         args.lambda_sparse_personal,
@@ -758,10 +836,17 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         fusion_gate_bias_init=getattr(args, "fusion_gate_bias_init", -1.1),
         residual_clip_t=getattr(args, "residual_clip_t", 2.0),
         residual_scale_init=getattr(args, "residual_scale_init", 0.1),
+        graph_dropout=_resolve_optional_graph_dropout(getattr(args, "graph_dropout", -1.0)),
+        graph_tau_init=getattr(args, "graph_tau_init", 1.0),
         personal_rank=getattr(args, "personal_rank", 4),
         lambda_sparse_personal=args.lambda_sparse_personal,
         lambda_alpha=args.lambda_alpha,
         lambda_graph_entropy=args.lambda_sparse,
+        graph_entropy_min=getattr(args, "graph_entropy_min", 0.15),
+        graph_entropy_max=getattr(args, "graph_entropy_max", 0.95),
+        lambda_graph_diag=getattr(args, "lambda_graph_diag", 0.05),
+        lambda_graph_uniform=getattr(args, "lambda_graph_uniform", 0.02),
+        graph_uniform_margin=getattr(args, "graph_uniform_margin", 0.08),
         graph_reg_warmup_epochs=getattr(args, "graph_reg_warmup_epochs", 3),
         graph_reg_cap_ratio=getattr(args, "graph_reg_cap_ratio", 6.0),
         mf_l2_lambda=getattr(args, "exercise_l2_lambda", 5e-5),
@@ -821,6 +906,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     alpha_zero_streak = 0
     gate_high_streak = 0
     delta_high_streak = 0
+    graph_uniform_streak = 0
+    graph_low_grad_streak = 0
 
     logger.info("%s Starting training...", run_tag)
 
@@ -859,12 +946,13 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         )
         logger.info(
             "%s [Reg Terms] Epoch [%03d] | "
-            "Train: graph_entropy=%.6f, graph_diag=%.6f, graph_reg_scale=%.4f, mf_l2=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_var=%.6f, reg_bce_ratio=%.4f | "
-            "Val: graph_entropy=%.6f, graph_diag=%.6f, graph_reg_scale=%.4f, mf_l2=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_var=%.6f, reg_bce_ratio=%.4f",
+            "Train: graph_entropy=%.6f, graph_diag=%.6f, graph_uniform=%.6f, graph_reg_scale=%.4f, mf_l2=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_var=%.6f, reg_bce_ratio=%.4f | "
+            "Val: graph_entropy=%.6f, graph_diag=%.6f, graph_uniform=%.6f, graph_reg_scale=%.4f, mf_l2=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_var=%.6f, reg_bce_ratio=%.4f",
             run_tag,
             epoch,
             train_metrics.get("reg_graph_entropy", 0.0),
             train_metrics.get("reg_graph_diag", 0.0),
+            train_metrics.get("reg_graph_uniform", 0.0),
             train_metrics.get("reg_graph_reg_scale", 1.0),
             train_metrics.get("reg_mf_l2", 0.0),
             train_metrics.get("reg_proto_div", 0.0),
@@ -874,6 +962,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             train_metrics.get("reg_bce_ratio", 0.0),
             val_metrics.get("reg_graph_entropy", 0.0),
             val_metrics.get("reg_graph_diag", 0.0),
+            val_metrics.get("reg_graph_uniform", 0.0),
             val_metrics.get("reg_graph_reg_scale", 1.0),
             val_metrics.get("reg_mf_l2", 0.0),
             val_metrics.get("reg_proto_div", 0.0),
@@ -916,6 +1005,21 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["alpha_mean"],
                 diag["alpha_std"],
                 diag["personal_row_entropy"],
+            )
+            logger.info(
+                "%s [Diag][Graph] Epoch [%03d] | "
+                "entropy_ratio=%.4f, diag_mass=%.4f, to_uniform_l2=%.6f, to_identity_l2=%.6f, "
+                "tau_mean=%.4f, tau_std=%.4f, graph_reg_scale(train/val)=%.4f/%.4f",
+                run_tag,
+                epoch,
+                diag["graph_entropy_ratio"],
+                diag["graph_diag_mass"],
+                diag["graph_to_uniform_l2"],
+                diag["graph_to_identity_l2"],
+                diag["graph_tau_mean"],
+                diag["graph_tau_std"],
+                train_metrics.get("reg_graph_reg_scale", 1.0),
+                val_metrics.get("reg_graph_reg_scale", 1.0),
             )
             if diag["gate_mean"] > 0.8:
                 gate_high_streak += 1
@@ -960,9 +1064,49 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                         diag["alpha_std"],
                         diag["personal_row_entropy"],
                     )
+            if diag["graph_entropy_ratio"] > 0.98:
+                graph_uniform_streak += 1
+            else:
+                graph_uniform_streak = 0
+            if graph_uniform_streak >= 3:
+                logger.warning(
+                    "%s [Diag Warning][Graph] graph entropy ratio has stayed too high for %d epoch(s): "
+                    "entropy_ratio=%.4f, to_uniform_l2=%.6f",
+                    run_tag,
+                    graph_uniform_streak,
+                    diag["graph_entropy_ratio"],
+                    diag["graph_to_uniform_l2"],
+                )
+
+            graph_grad_total = (
+                grad_norms["relation_emb"]
+                + grad_norms["relation_tau"]
+                + grad_norms["relation_wq"]
+                + grad_norms["relation_wk"]
+                + grad_norms["personal_u"]
+                + grad_norms["personal_v"]
+            )
+            if graph_grad_total < 1e-8:
+                graph_low_grad_streak += 1
+            else:
+                graph_low_grad_streak = 0
+            if graph_low_grad_streak >= 2 and getattr(_get_base_model(model), "use_concept_graph", False):
+                logger.warning(
+                    "%s [Diag Warning][Graph] graph-related grad norms are near zero for %d epoch(s): "
+                    "relation_emb=%.6e, relation_tau=%.6e, relation_wq=%.6e, relation_wk=%.6e, personal_u=%.6e, personal_v=%.6e",
+                    run_tag,
+                    graph_low_grad_streak,
+                    grad_norms["relation_emb"],
+                    grad_norms["relation_tau"],
+                    grad_norms["relation_wq"],
+                    grad_norms["relation_wk"],
+                    grad_norms["personal_u"],
+                    grad_norms["personal_v"],
+                )
             logger.info(
                 "%s [Grad Norms] Epoch [%03d] | "
-                "mf_u_proj=%.6f, mf_v_proj=%.6f, fusion_gate=%.6f, q_gate_raw=%.6f, skill_latent=%.6f",
+                "mf_u_proj=%.6f, mf_v_proj=%.6f, fusion_gate=%.6f, q_gate_raw=%.6f, skill_latent=%.6f, "
+                "relation_emb=%.6e, relation_tau=%.6e, relation_wq=%.6e, relation_wk=%.6e, personal_u=%.6e, personal_v=%.6e",
                 run_tag,
                 epoch,
                 grad_norms["mf_u_proj"],
@@ -970,6 +1114,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 grad_norms["fusion_gate"],
                 grad_norms["q_gate_raw"],
                 grad_norms["skill_latent"],
+                grad_norms["relation_emb"],
+                grad_norms["relation_tau"],
+                grad_norms["relation_wq"],
+                grad_norms["relation_wk"],
+                grad_norms["personal_u"],
+                grad_norms["personal_v"],
             )
 
         scheduler.step(val_metrics["loss"])
@@ -1204,10 +1354,23 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         residual_clip_t=loaded_args.get("residual_clip_t", getattr(args, "residual_clip_t", 2.0)),
         residual_scale_init=loaded_args.get("residual_scale_init", getattr(args, "residual_scale_init", 0.1)),
+        graph_dropout=_resolve_optional_graph_dropout(
+            loaded_args.get("graph_dropout", getattr(args, "graph_dropout", -1.0))
+        ),
+        graph_tau_init=loaded_args.get("graph_tau_init", getattr(args, "graph_tau_init", 1.0)),
         personal_rank=loaded_args.get("personal_rank", getattr(args, "personal_rank", 4)),
         lambda_sparse_personal=loaded_args.get("lambda_sparse_personal", args.lambda_sparse_personal),
         lambda_alpha=loaded_args.get("lambda_alpha", args.lambda_alpha),
         lambda_graph_entropy=loaded_args.get("lambda_sparse", args.lambda_sparse),
+        graph_entropy_min=loaded_args.get("graph_entropy_min", getattr(args, "graph_entropy_min", 0.15)),
+        graph_entropy_max=loaded_args.get("graph_entropy_max", getattr(args, "graph_entropy_max", 0.95)),
+        lambda_graph_diag=loaded_args.get("lambda_graph_diag", getattr(args, "lambda_graph_diag", 0.05)),
+        lambda_graph_uniform=loaded_args.get(
+            "lambda_graph_uniform", getattr(args, "lambda_graph_uniform", 0.02)
+        ),
+        graph_uniform_margin=loaded_args.get(
+            "graph_uniform_margin", getattr(args, "graph_uniform_margin", 0.08)
+        ),
         graph_reg_warmup_epochs=loaded_args.get(
             "graph_reg_warmup_epochs", getattr(args, "graph_reg_warmup_epochs", 3)
         ),

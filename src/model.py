@@ -695,6 +695,8 @@ class ConceptStructureModeling(nn.Module):
         num_relation_heads: int,
         num_gnn_layers: int,
         dropout: float,
+        graph_dropout: Optional[float],
+        graph_tau_init: float,
         gnn_residual_weight: float,
         use_concept_graph: bool,
         graph_topk: Optional[int],
@@ -729,11 +731,13 @@ class ConceptStructureModeling(nn.Module):
 
         # A) 全局概念图学习
         if self.use_concept_graph:
+            graph_dropout_val = dropout if graph_dropout is None else float(graph_dropout)
             self.relation_learning = MultiHeadRelationLearning(
                 num_concepts=num_concepts,
                 concept_dim=knowledge_dim,
                 num_heads=num_relation_heads,
-                dropout=dropout,
+                dropout=graph_dropout_val,
+                tau_init=float(graph_tau_init),
                 topk=graph_topk,
                 allow_self_loop=allow_self_loop,
             )
@@ -898,8 +902,12 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_entropy_min: float = 0.15,
         graph_entropy_max: float = 0.95,
         lambda_graph_diag: float = 0.05,
+        lambda_graph_uniform: float = 0.02,
+        graph_uniform_margin: float = 0.08,
         graph_reg_warmup_epochs: int = 3,
         graph_reg_cap_ratio: float = 6.0,
+        graph_dropout: Optional[float] = None,
+        graph_tau_init: float = 1.0,
         mf_l2_lambda: float = 5e-5,          # mapped from args.exercise_l2_lambda
         gnn_residual_weight: float = 0.5,
         use_q_conditioning: bool = True,
@@ -956,8 +964,12 @@ class CognitiveDiagnosisModel(nn.Module):
         if self.graph_entropy_min > self.graph_entropy_max:
             self.graph_entropy_min, self.graph_entropy_max = self.graph_entropy_max, self.graph_entropy_min
         self.lambda_graph_diag = float(lambda_graph_diag)
+        self.lambda_graph_uniform = float(lambda_graph_uniform)
+        self.graph_uniform_margin = max(0.0, float(graph_uniform_margin))
         self.graph_reg_warmup_epochs = max(0, int(graph_reg_warmup_epochs))
         self.graph_reg_cap_ratio = max(0.0, float(graph_reg_cap_ratio))
+        self.graph_dropout = graph_dropout
+        self.graph_tau_init = float(graph_tau_init)
         self._current_epoch = 1
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
@@ -980,6 +992,8 @@ class CognitiveDiagnosisModel(nn.Module):
             num_relation_heads=num_relation_heads,
             num_gnn_layers=num_gnn_layers,
             dropout=dropout,
+            graph_dropout=self.graph_dropout,
+            graph_tau_init=self.graph_tau_init,
             gnn_residual_weight=gnn_residual_weight,
             use_concept_graph=self.use_concept_graph,
             graph_topk=graph_topk,
@@ -1285,6 +1299,7 @@ class CognitiveDiagnosisModel(nn.Module):
         terms: Dict[str, torch.Tensor] = {
             "graph_entropy": torch.tensor(0.0, device=device),
             "graph_diag": torch.tensor(0.0, device=device),
+            "graph_uniform": torch.tensor(0.0, device=device),
             "graph_reg_scale": torch.tensor(1.0, device=device),
             "mf_l2": torch.tensor(0.0, device=device),
             "proto_div": torch.tensor(0.0, device=device),
@@ -1319,10 +1334,43 @@ class CognitiveDiagnosisModel(nn.Module):
                     terms["graph_diag"] = self.lambda_graph_diag * diag_mass * graph_reg_ramp_t
                     if details is not None:
                         details["graph_diag_mass"] = diag_mass.detach()
+
+                num_nodes = max(2, int(relation_matrices.size(-1)))
+                uniform_val = 1.0 / float(num_nodes)
+                uniform_dist = torch.sqrt(
+                    torch.clamp((relation_matrices - uniform_val).pow(2).mean(), min=1e-12)
+                )
+                identity = torch.eye(
+                    num_nodes, device=device, dtype=relation_matrices.dtype
+                ).unsqueeze(0).expand_as(relation_matrices)
+                identity_dist = torch.sqrt(
+                    torch.clamp((relation_matrices - identity).pow(2).mean(), min=1e-12)
+                )
+
+                if self.lambda_graph_uniform > 0:
+                    uniform_margin = torch.tensor(
+                        self.graph_uniform_margin, device=device, dtype=uniform_dist.dtype
+                    )
+                    uniform_pen = F.relu(uniform_margin - uniform_dist)
+                    terms["graph_uniform"] = (
+                        self.lambda_graph_uniform * uniform_pen * graph_reg_ramp_t
+                    )
+                    if details is not None:
+                        details["graph_uniform_pen"] = uniform_pen.detach()
+
+                if details is not None:
+                    details["graph_to_uniform_l2"] = uniform_dist.detach()
+                    details["graph_to_identity_l2"] = identity_dist.detach()
+
+                tau = F.softplus(self.structure_module.relation_learning.tau_raw) + 1e-6
+                if details is not None:
+                    details["graph_tau_mean"] = tau.mean().detach()
+                    details["graph_tau_std"] = tau.std(unbiased=False).detach()
+
         # Graph regularization cap relative to base loss.
         # Only scales graph-specific terms; non-graph regularizers remain unchanged.
         if base_loss is not None and self.graph_reg_cap_ratio > 0:
-            graph_reg_raw = terms["graph_entropy"] + terms["graph_diag"]
+            graph_reg_raw = terms["graph_entropy"] + terms["graph_diag"] + terms["graph_uniform"]
             cap = self.graph_reg_cap_ratio * base_loss.detach().abs()
             denom = graph_reg_raw.detach().abs() + 1e-8
             scale = torch.clamp(cap / denom, max=1.0)
@@ -1330,6 +1378,7 @@ class CognitiveDiagnosisModel(nn.Module):
             terms["graph_reg_scale"] = scale.detach()
             terms["graph_entropy"] = terms["graph_entropy"] * scale
             terms["graph_diag"] = terms["graph_diag"] * scale
+            terms["graph_uniform"] = terms["graph_uniform"] * scale
             if details is not None:
                 details["graph_reg_raw"] = graph_reg_raw.detach()
                 details["graph_reg_cap"] = cap.detach()
@@ -1405,6 +1454,7 @@ class CognitiveDiagnosisModel(nn.Module):
         total = (
             terms["graph_entropy"]
             + terms["graph_diag"]
+            + terms["graph_uniform"]
             + terms["mf_l2"]
             + terms["proto_div"]
             + terms["proto_usage"]
