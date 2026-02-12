@@ -27,6 +27,7 @@ import os
 import subprocess
 import time
 import sys
+from datetime import datetime
 from typing import Dict, Any, List, Tuple, Optional
 
 from best_configs import BEST_CFG, DEFAULT_SEEDS
@@ -94,9 +95,10 @@ def launch_experiment(
     gpu_id: int,
     generate_diagnosis: bool,
     dry_run: bool,
+    run_session: str,
 ) -> Optional[subprocess.Popen]:
     abl_name = ablation["name"]
-    tag = f"{dataset_name}_ablation_{abl_name}_seed{seed}"
+    tag = f"{dataset_name}_ablation_{abl_name}_seed{seed}_{run_session}"
 
     save_dir = os.path.join("checkpoints", tag)
     log_dir = os.path.join("logs", tag)
@@ -186,6 +188,12 @@ def main():
 
     parser.add_argument("--dry_run", action="store_true", help="Print commands only, do not run.")
     parser.add_argument("--poll_interval", type=int, default=10, help="Seconds between polling processes.")
+    parser.add_argument(
+        "--run_id",
+        type=str,
+        default=None,
+        help="Optional run identifier appended to output directories. Default uses current timestamp.",
+    )
 
     args = parser.parse_args()
 
@@ -225,6 +233,8 @@ def main():
     print(f"Ablations: {[a['name'] for a in ablations]}")
     print(f"Generate diagnosis: {args.generate_diagnosis}")
     print(f"Dry run: {args.dry_run}")
+    run_session = args.run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+    print(f"Run session: {run_session}")
 
     jobs: List[Tuple[str, Dict[str, Any], Dict[str, Any], int]] = []
     for dataset in datasets:
@@ -268,6 +278,7 @@ def main():
                 gpu_id=gpu_id,
                 generate_diagnosis=args.generate_diagnosis,
                 dry_run=args.dry_run,
+                run_session=run_session,
             )
 
             if not args.dry_run and proc is not None:
