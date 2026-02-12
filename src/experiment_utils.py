@@ -122,9 +122,73 @@ def save_epoch_history_csv(history: dict, save_dir: str, logger):
 
 import os
 import json
+import hashlib
+import subprocess
+import logging
 from datetime import datetime
 
 import pandas as pd
+
+
+def _get_git_sha(project_root: str) -> str:
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=project_root,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        return sha or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _get_log_path_from_logger(logger) -> str:
+    try:
+        for handler in getattr(logger, "handlers", []):
+            if isinstance(handler, logging.FileHandler):
+                return os.path.abspath(getattr(handler, "baseFilename", ""))
+    except Exception:
+        pass
+    return ""
+
+
+def _build_config_hash(args) -> str:
+    # Keep hash stable and comparable across runs: exclude path/timestamp-only fields.
+    keys = [
+        "dataset_name",
+        "seed",
+        "model_variant",
+        "ablate_module1",
+        "ablate_module2",
+        "ablate_module3",
+        "learning_rate",
+        "dropout",
+        "batch_size",
+        "lambda_sparse",
+        "lambda_sparse_personal",
+        "lambda_alpha",
+        "lambda_proto_div",
+        "lambda_proto_usage",
+        "exercise_l2_lambda",
+        "fusion_gate_max",
+        "fusion_gate_bias_init",
+        "residual_clip_t",
+        "residual_scale_init",
+        "graph_reg_warmup_epochs",
+        "graph_reg_cap_ratio",
+        "use_mf_branch",
+        "use_concept_graph",
+        "use_personal_graph",
+        "use_soft_prototype",
+    ]
+    payload = {}
+    for k in keys:
+        if hasattr(args, k):
+            payload[k] = getattr(args, k)
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
 
 def append_summary_csv(
     args,
@@ -158,6 +222,10 @@ def append_summary_csv(
     row["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     row["dataset"] = getattr(args, "dataset_name", "unknown")
     row["model_variant"] = getattr(args, "model_variant", "full")
+    row["git_sha"] = _get_git_sha(project_root)
+    row["run_dir"] = os.path.abspath(getattr(args, "save_dir", ""))
+    row["log_path"] = _get_log_path_from_logger(logger)
+    row["config_hash"] = _build_config_hash(args)
 
     # 消融标记，方便后续筛选
     ablation_flags = []
@@ -187,6 +255,8 @@ def append_summary_csv(
             row[out_key] = bool(final_model_facts[key])
         elif hasattr(args, key):
             row[out_key] = bool(getattr(args, key))
+    if final_model_facts is not None and "has_mf_branch" in final_model_facts:
+        row["final_has_mf_branch"] = bool(final_model_facts["has_mf_branch"])
 
     # === 3. 把 args 里的超参数摊平成后面的列 ===
     skip_keys = {
@@ -244,6 +314,10 @@ def append_summary_csv(
         "timestamp",
         "dataset",
         "model_variant",
+        "git_sha",
+        "run_dir",
+        "log_path",
+        "config_hash",
         "ablation_flags",
         "seed",
         "test_auc",
@@ -254,6 +328,7 @@ def append_summary_csv(
         "final_enable_module1",
         "final_enable_module2",
         "final_enable_module3",
+        "final_has_mf_branch",
     ]
     front_cols = [c for c in front_cols if c in df.columns]
     other_cols = [c for c in df.columns if c not in front_cols]
