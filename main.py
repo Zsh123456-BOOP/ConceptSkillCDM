@@ -82,7 +82,7 @@ def parse_args():
     parser.add_argument(
         "--graph_reg_warmup_epochs",
         type=int,
-        default=3,
+        default=1,
         help="Linear warmup epochs for graph-related regularization terms (<=0 disables warmup).",
     )
     parser.add_argument(
@@ -100,25 +100,25 @@ def parse_args():
     parser.add_argument(
         "--graph_entropy_max",
         type=float,
-        default=0.95,
+        default=0.85,
         help="Upper bound of normalized graph entropy band.",
     )
     parser.add_argument(
         "--lambda_graph_diag",
         type=float,
-        default=0.05,
+        default=0.10,
         help="Penalty weight for graph diagonal mass (near-identity suppressor).",
     )
     parser.add_argument(
         "--lambda_graph_uniform",
         type=float,
-        default=0.02,
+        default=0.04,
         help="Penalty weight to keep graph away from uniform adjacency.",
     )
     parser.add_argument(
         "--graph_uniform_margin",
         type=float,
-        default=0.08,
+        default=0.10,
         help="Minimum L2 distance from uniform adjacency before graph_uniform penalty becomes zero.",
     )
     parser.add_argument(
@@ -482,11 +482,11 @@ def main():
                 personal_rank=getattr(args, "personal_rank", 4),
                 lambda_graph_entropy=getattr(args, "lambda_sparse", 0.01),
                 graph_entropy_min=getattr(args, "graph_entropy_min", 0.15),
-                graph_entropy_max=getattr(args, "graph_entropy_max", 0.95),
-                lambda_graph_diag=getattr(args, "lambda_graph_diag", 0.05),
-                lambda_graph_uniform=getattr(args, "lambda_graph_uniform", 0.02),
-                graph_uniform_margin=getattr(args, "graph_uniform_margin", 0.08),
-                graph_reg_warmup_epochs=getattr(args, "graph_reg_warmup_epochs", 3),
+                graph_entropy_max=getattr(args, "graph_entropy_max", 0.85),
+                lambda_graph_diag=getattr(args, "lambda_graph_diag", 0.10),
+                lambda_graph_uniform=getattr(args, "lambda_graph_uniform", 0.04),
+                graph_uniform_margin=getattr(args, "graph_uniform_margin", 0.10),
+                graph_reg_warmup_epochs=getattr(args, "graph_reg_warmup_epochs", 1),
                 graph_reg_cap_ratio=getattr(args, "graph_reg_cap_ratio", 6.0),
                 lambda_sparse_personal=getattr(args, "lambda_sparse_personal", 0.0),
                 lambda_alpha=getattr(args, "lambda_alpha", 0.0),

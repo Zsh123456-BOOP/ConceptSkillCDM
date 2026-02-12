@@ -35,6 +35,15 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "lambda_sparse_personal": 0.005,
         "lambda_alpha": 0.01,
         "use_personal_graph": True,
+        "graph_entropy_min": 0.15,
+        "graph_entropy_max": 0.80,
+        "lambda_graph_diag": 0.10,
+        "lambda_graph_uniform": 0.04,
+        "graph_uniform_margin": 0.10,
+        "graph_reg_warmup_epochs": 1,
+        "graph_reg_cap_ratio": 6.0,
+        "graph_dropout": -1.0,
+        "graph_tau_init": 1.0,
 
         # Module3 prototype (Direction-2: default OFF)
         "num_prototypes": 0,
@@ -53,6 +62,8 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "residual_clip_t": 2.0,
         "residual_scale_init": 0.1,
         "disable_q_aligned_residual": False,
+        "debug_module3_diag": True,
+        "diag_batches": 1,
 
         # Data filtering
         "min_stu_interactions": 15,
@@ -92,6 +103,15 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "lambda_sparse_personal": 0.005,
         "lambda_alpha": 0.01,
         "use_personal_graph": True,
+        "graph_entropy_min": 0.15,
+        "graph_entropy_max": 0.70,
+        "lambda_graph_diag": 0.12,
+        "lambda_graph_uniform": 0.06,
+        "graph_uniform_margin": 0.12,
+        "graph_reg_warmup_epochs": 1,
+        "graph_reg_cap_ratio": 6.0,
+        "graph_dropout": -1.0,
+        "graph_tau_init": 1.0,
 
         # Module3 prototype (Direction-2: default OFF)
         "num_prototypes": 0,
@@ -110,6 +130,8 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "residual_clip_t": 2.0,
         "residual_scale_init": 0.1,
         "disable_q_aligned_residual": False,
+        "debug_module3_diag": True,
+        "diag_batches": 1,
 
         # Data filtering
         "min_stu_interactions": 15,

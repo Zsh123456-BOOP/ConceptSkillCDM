@@ -196,7 +196,7 @@ def _point_key(overrides: Dict[str, Any]) -> Tuple[Tuple[str, Any], ...]:
 def build_grid_points(base_cfg: Dict[str, Any], grid_points: int) -> Tuple[List[GridPoint], List[str]]:
     """
     Focused mini-grid for module3 rescue:
-    - prioritize lambda_sparse / fusion gate / residual clip / dropout
+    - prioritize lambda_sparse / graph-regularization / fusion gate / residual clip / dropout
     - keep prototype path off by default (handled in shared params)
     - default budget tuned so 2 datasets * 1 seed * 2 variants * 16 points ~= 64 runs
     """
@@ -205,14 +205,24 @@ def build_grid_points(base_cfg: Dict[str, Any], grid_points: int) -> Tuple[List[
 
     base_sparse = float(base_cfg.get("lambda_sparse", 1.0) or 1.0)
     base_dropout = float(base_cfg.get("dropout", 0.0) or 0.0)
-    base_gate_max = float(base_cfg.get("fusion_gate_max", 0.4) or 0.4)
-    base_gate_bias = float(base_cfg.get("fusion_gate_bias_init", -2.5) or -2.5)
+    base_gate_max = float(base_cfg.get("fusion_gate_max", 1.0) or 1.0)
+    base_gate_bias = float(base_cfg.get("fusion_gate_bias_init", -1.1) or -1.1)
     base_clip_t = float(base_cfg.get("residual_clip_t", 2.0) or 2.0)
+    base_hmax = float(base_cfg.get("graph_entropy_max", 0.85) or 0.85)
+    base_diag = float(base_cfg.get("lambda_graph_diag", 0.10) or 0.10)
+    base_uniform = float(base_cfg.get("lambda_graph_uniform", 0.04) or 0.04)
+    base_margin = float(base_cfg.get("graph_uniform_margin", 0.10) or 0.10)
+    base_warmup = int(base_cfg.get("graph_reg_warmup_epochs", 1) or 1)
 
     sparse_vals = _uniq_keep_order([base_sparse, 0.5, 0.3, 0.1, 0.03, 0.01, 0.003])
     gate_bias_vals = _uniq_keep_order([base_gate_bias, -3.5, -3.0, -2.5, -2.0, -1.5, -1.0])
     gate_max_vals = _uniq_keep_order([base_gate_max, 0.3, 0.4, 0.5, 0.6, 0.7])
     clip_vals = _uniq_keep_order([base_clip_t, 1.5, 2.0, 2.5, 3.0, 4.0])
+    graph_hmax_vals = _uniq_keep_order([base_hmax, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65, 0.60])
+    graph_diag_vals = _uniq_keep_order([base_diag, 0.08, 0.10, 0.12, 0.15])
+    graph_uniform_vals = _uniq_keep_order([base_uniform, 0.02, 0.04, 0.06, 0.08])
+    graph_margin_vals = _uniq_keep_order([base_margin, 0.08, 0.10, 0.12, 0.15])
+    graph_warmup_vals = list(dict.fromkeys([base_warmup, 0, 1, 2]))
 
     dropout_vals: List[float] = [base_dropout]
     for delta in (0.05, 0.10, 0.15):
@@ -236,9 +246,56 @@ def build_grid_points(base_cfg: Dict[str, Any], grid_points: int) -> Tuple[List[
     # baseline
     add_point("baseline", {})
 
+    # curated high-priority points (keep early order useful when budget is small)
+    priority_points: List[Tuple[str, Dict[str, Any]]] = [
+        ("prio_sparse_0p3", {"lambda_sparse": 0.3}),
+        ("prio_hmax_0p7", {"graph_entropy_max": 0.7}),
+        ("prio_gdiag_0p12", {"lambda_graph_diag": 0.12}),
+        ("prio_gwarm_0", {"graph_reg_warmup_epochs": 0}),
+        (
+            "prio_s0p1_h0p7",
+            {"lambda_sparse": 0.1, "graph_entropy_max": 0.7},
+        ),
+        (
+            "prio_s0p1_h0p7_gd0p12",
+            {"lambda_sparse": 0.1, "graph_entropy_max": 0.7, "lambda_graph_diag": 0.12},
+        ),
+        (
+            "prio_s0p03_h0p6_gd0p15_gw0",
+            {
+                "lambda_sparse": 0.03,
+                "graph_entropy_max": 0.6,
+                "lambda_graph_diag": 0.15,
+                "graph_reg_warmup_epochs": 0,
+            },
+        ),
+        (
+            "prio_s0p1_bm1p5",
+            {"lambda_sparse": 0.1, "fusion_gate_bias_init": -1.5},
+        ),
+        (
+            "prio_s0p03_bm1p1_g1p0",
+            {"lambda_sparse": 0.03, "fusion_gate_bias_init": -1.1, "fusion_gate_max": 1.0},
+        ),
+    ]
+    for tag, overrides in priority_points:
+        add_point(tag, overrides)
+
     # single-axis points (high-priority diagnostics)
     for s in sparse_vals[1:]:
         add_point(f"sparse_{_fmt_float_tag(s)}", {"lambda_sparse": s})
+    for h in graph_hmax_vals[1:]:
+        add_point(f"hmax_{_fmt_float_tag(h)}", {"graph_entropy_max": h})
+    for d in graph_diag_vals[1:]:
+        add_point(f"gdiag_{_fmt_float_tag(d)}", {"lambda_graph_diag": d})
+    for u in graph_uniform_vals[1:]:
+        add_point(f"guni_{_fmt_float_tag(u)}", {"lambda_graph_uniform": u})
+    for m in graph_margin_vals[1:]:
+        add_point(f"gmargin_{_fmt_float_tag(m)}", {"graph_uniform_margin": m})
+    for w in graph_warmup_vals:
+        if int(w) == int(base_warmup):
+            continue
+        add_point(f"gwarm_{int(w)}", {"graph_reg_warmup_epochs": int(w)})
     for b in gate_bias_vals[1:]:
         add_point(f"gbias_{_fmt_float_tag(b)}", {"fusion_gate_bias_init": b})
     for g in gate_max_vals[1:]:
@@ -247,6 +304,24 @@ def build_grid_points(base_cfg: Dict[str, Any], grid_points: int) -> Tuple[List[
         add_point(f"clip_{_fmt_float_tag(c)}", {"residual_clip_t": c})
     for d in dropout_vals[1:]:
         add_point(f"drop_{_fmt_float_tag(d)}", {"dropout": d})
+
+    # pairwise points: sparse + graph range constraints
+    for s in (0.5, 0.3, 0.1, 0.03):
+        for h in (0.80, 0.70, 0.60):
+            add_point(
+                f"s{_fmt_float_tag(s)}_h{_fmt_float_tag(h)}",
+                {"lambda_sparse": s, "graph_entropy_max": h},
+            )
+        for d in (0.10, 0.12, 0.15):
+            add_point(
+                f"s{_fmt_float_tag(s)}_gd{_fmt_float_tag(d)}",
+                {"lambda_sparse": s, "lambda_graph_diag": d},
+            )
+        for w in (0, 1):
+            add_point(
+                f"s{_fmt_float_tag(s)}_gw{int(w)}",
+                {"lambda_sparse": s, "graph_reg_warmup_epochs": int(w)},
+            )
 
     # pairwise points: sparse + gate bias (ease conservative gate)
     for s in (0.3, 0.1, 0.03, 0.01):
@@ -280,6 +355,28 @@ def build_grid_points(base_cfg: Dict[str, Any], grid_points: int) -> Tuple[List[
                 {"lambda_sparse": s, "residual_clip_t": c},
             )
 
+    # triple points: sparse + graph constraints + warmup
+    graph_triples = [
+        (0.3, 0.80, 0.10, 1),
+        (0.1, 0.80, 0.10, 1),
+        (0.1, 0.70, 0.12, 1),
+        (0.1, 0.70, 0.12, 0),
+        (0.03, 0.70, 0.12, 1),
+        (0.03, 0.70, 0.12, 0),
+        (0.03, 0.60, 0.15, 1),
+        (0.03, 0.60, 0.15, 0),
+    ]
+    for s, h, d, w in graph_triples:
+        add_point(
+            f"s{_fmt_float_tag(s)}_h{_fmt_float_tag(h)}_gd{_fmt_float_tag(d)}_gw{int(w)}",
+            {
+                "lambda_sparse": s,
+                "graph_entropy_max": h,
+                "lambda_graph_diag": d,
+                "graph_reg_warmup_epochs": int(w),
+            },
+        )
+
     # triple points: sparse + relaxed gate + stronger cap
     triple_candidates = [
         (0.1, -2.0, 0.5, 2.5),
@@ -306,10 +403,25 @@ def build_grid_points(base_cfg: Dict[str, Any], grid_points: int) -> Tuple[List[
     # If hand-crafted points are insufficient for a requested budget (e.g. 64),
     # expand with deterministic cartesian combinations until budget is reached.
     if len(points) < budget:
-        for s, b, g, c, d in product(sparse_vals, gate_bias_vals, gate_max_vals, clip_vals, dropout_vals):
+        for s, h, dreg, w, b, g, c, d in product(
+            sparse_vals,
+            graph_hmax_vals,
+            graph_diag_vals,
+            graph_warmup_vals,
+            gate_bias_vals,
+            gate_max_vals,
+            clip_vals,
+            dropout_vals,
+        ):
             overrides: Dict[str, Any] = {}
             if abs(s - base_sparse) > 1e-9:
                 overrides["lambda_sparse"] = s
+            if abs(h - base_hmax) > 1e-9:
+                overrides["graph_entropy_max"] = h
+            if abs(dreg - base_diag) > 1e-9:
+                overrides["lambda_graph_diag"] = dreg
+            if int(w) != int(base_warmup):
+                overrides["graph_reg_warmup_epochs"] = int(w)
             if abs(b - base_gate_bias) > 1e-9:
                 overrides["fusion_gate_bias_init"] = b
             if abs(g - base_gate_max) > 1e-9:
@@ -325,6 +437,12 @@ def build_grid_points(base_cfg: Dict[str, Any], grid_points: int) -> Tuple[List[
             tag_parts: List[str] = ["auto"]
             if "lambda_sparse" in overrides:
                 tag_parts.append(f"s{_fmt_float_tag(overrides['lambda_sparse'])}")
+            if "graph_entropy_max" in overrides:
+                tag_parts.append(f"h{_fmt_float_tag(overrides['graph_entropy_max'])}")
+            if "lambda_graph_diag" in overrides:
+                tag_parts.append(f"gd{_fmt_float_tag(overrides['lambda_graph_diag'])}")
+            if "graph_reg_warmup_epochs" in overrides:
+                tag_parts.append(f"gw{int(overrides['graph_reg_warmup_epochs'])}")
             if "fusion_gate_bias_init" in overrides:
                 tag_parts.append(f"b{_fmt_float_tag(overrides['fusion_gate_bias_init'])}")
             if "fusion_gate_max" in overrides:
@@ -383,8 +501,8 @@ def build_shared_params(
     params["lambda_proto_usage"] = 0.0
 
     # Conservative fusion defaults.
-    params.setdefault("fusion_gate_max", 0.4)
-    params.setdefault("fusion_gate_bias_init", -2.5)
+    params.setdefault("fusion_gate_max", 1.0)
+    params.setdefault("fusion_gate_bias_init", -1.1)
     params.setdefault("residual_clip_t", 2.0)
 
     return params
@@ -413,6 +531,8 @@ def validate_params(dataset: str, params: Dict[str, Any], main_arg_dests: Set[st
 
 
 def build_command(job: JobSpec) -> List[str]:
+    debug_diag = bool(job.params.get("debug_module3_diag", True))
+    diag_batches = max(1, int(job.params.get("diag_batches", 2)))
     cmd = [
         sys.executable,
         "main.py",
@@ -428,12 +548,21 @@ def build_command(job: JobSpec) -> List[str]:
         str(job.seed),
         "--generate_diagnosis",
         "False",
-        "--debug_module3_diag",
-        "--diag_batches",
-        "2",
     ]
+    if debug_diag:
+        cmd.extend(["--debug_module3_diag", "--diag_batches", str(diag_batches)])
 
-    skip_keys = {"dataset_name", "model_variant", "save_dir", "log_dir", "seed", "generate_diagnosis", "gpus"}
+    skip_keys = {
+        "dataset_name",
+        "model_variant",
+        "save_dir",
+        "log_dir",
+        "seed",
+        "generate_diagnosis",
+        "gpus",
+        "debug_module3_diag",
+        "diag_batches",
+    }
     for key in sorted(job.params.keys()):
         if key in skip_keys:
             continue

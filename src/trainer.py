@@ -723,13 +723,24 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         "proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_penalty=%.6f, mf_l2(exercise_l2_lambda)=%.6f",
         run_tag,
         args.lambda_sparse,
-        getattr(args, "lambda_graph_diag", 0.05),
-        getattr(args, "lambda_graph_uniform", 0.02),
+        getattr(args, "lambda_graph_diag", 0.10),
+        getattr(args, "lambda_graph_uniform", 0.04),
         args.lambda_proto_div,
         args.lambda_proto_usage,
         args.lambda_sparse_personal,
         args.lambda_alpha,
         getattr(args, "exercise_l2_lambda", 5e-5),
+    )
+    logger.info(
+        "%s Graph controls: entropy_band=[%.2f, %.2f], uniform_margin=%.2f, warmup_epochs=%d, cap_ratio=%.2f, graph_dropout=%.3f, graph_tau_init=%.3f",
+        run_tag,
+        getattr(args, "graph_entropy_min", 0.15),
+        getattr(args, "graph_entropy_max", 0.85),
+        getattr(args, "graph_uniform_margin", 0.10),
+        getattr(args, "graph_reg_warmup_epochs", 1),
+        getattr(args, "graph_reg_cap_ratio", 6.0),
+        getattr(args, "graph_dropout", -1.0),
+        getattr(args, "graph_tau_init", 1.0),
     )
 
     data_dir = args.data_dir
@@ -843,11 +854,11 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         lambda_alpha=args.lambda_alpha,
         lambda_graph_entropy=args.lambda_sparse,
         graph_entropy_min=getattr(args, "graph_entropy_min", 0.15),
-        graph_entropy_max=getattr(args, "graph_entropy_max", 0.95),
-        lambda_graph_diag=getattr(args, "lambda_graph_diag", 0.05),
-        lambda_graph_uniform=getattr(args, "lambda_graph_uniform", 0.02),
-        graph_uniform_margin=getattr(args, "graph_uniform_margin", 0.08),
-        graph_reg_warmup_epochs=getattr(args, "graph_reg_warmup_epochs", 3),
+        graph_entropy_max=getattr(args, "graph_entropy_max", 0.85),
+        lambda_graph_diag=getattr(args, "lambda_graph_diag", 0.10),
+        lambda_graph_uniform=getattr(args, "lambda_graph_uniform", 0.04),
+        graph_uniform_margin=getattr(args, "graph_uniform_margin", 0.10),
+        graph_reg_warmup_epochs=getattr(args, "graph_reg_warmup_epochs", 1),
         graph_reg_cap_ratio=getattr(args, "graph_reg_cap_ratio", 6.0),
         mf_l2_lambda=getattr(args, "exercise_l2_lambda", 5e-5),
         gnn_residual_weight=getattr(args, "gnn_residual_weight", 0.5),
@@ -1363,16 +1374,16 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         lambda_alpha=loaded_args.get("lambda_alpha", args.lambda_alpha),
         lambda_graph_entropy=loaded_args.get("lambda_sparse", args.lambda_sparse),
         graph_entropy_min=loaded_args.get("graph_entropy_min", getattr(args, "graph_entropy_min", 0.15)),
-        graph_entropy_max=loaded_args.get("graph_entropy_max", getattr(args, "graph_entropy_max", 0.95)),
-        lambda_graph_diag=loaded_args.get("lambda_graph_diag", getattr(args, "lambda_graph_diag", 0.05)),
+        graph_entropy_max=loaded_args.get("graph_entropy_max", getattr(args, "graph_entropy_max", 0.85)),
+        lambda_graph_diag=loaded_args.get("lambda_graph_diag", getattr(args, "lambda_graph_diag", 0.10)),
         lambda_graph_uniform=loaded_args.get(
-            "lambda_graph_uniform", getattr(args, "lambda_graph_uniform", 0.02)
+            "lambda_graph_uniform", getattr(args, "lambda_graph_uniform", 0.04)
         ),
         graph_uniform_margin=loaded_args.get(
-            "graph_uniform_margin", getattr(args, "graph_uniform_margin", 0.08)
+            "graph_uniform_margin", getattr(args, "graph_uniform_margin", 0.10)
         ),
         graph_reg_warmup_epochs=loaded_args.get(
-            "graph_reg_warmup_epochs", getattr(args, "graph_reg_warmup_epochs", 3)
+            "graph_reg_warmup_epochs", getattr(args, "graph_reg_warmup_epochs", 1)
         ),
         graph_reg_cap_ratio=loaded_args.get("graph_reg_cap_ratio", getattr(args, "graph_reg_cap_ratio", 6.0)),
         mf_l2_lambda=loaded_args.get("exercise_l2_lambda", getattr(args, "exercise_l2_lambda", 5e-5)),
