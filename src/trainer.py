@@ -297,10 +297,12 @@ _REG_COMPONENT_KEYS: Tuple[str, ...] = (
     "graph_uniform",
     "graph_reg_scale",
     "mf_l2",
+    "delta_ratio",
     "proto_div",
     "proto_usage",
     "personal_sparse",
     "alpha_var",
+    "alpha_collapse",
 )
 
 
@@ -325,6 +327,8 @@ def _collect_debug_forward_stats(
     delta_vals: List[float] = []
     alpha_vals: List[float] = []
     personal_entropy_vals: List[float] = []
+    proto_conf_vals: List[float] = []
+    proto_gate_vals: List[float] = []
 
     graph_row_entropy_mean = 0.0
     graph_entropy_ratio = 0.0
@@ -332,6 +336,9 @@ def _collect_debug_forward_stats(
     graph_to_uniform_l2 = 0.0
     graph_to_identity_l2 = 0.0
     graph_ready = False
+    mf_warmup_scale = 1.0
+    proto_warmup_scale = 1.0
+    personal_warmup_scale = 1.0
 
     base_model = _get_base_model(model)
     tau_mean = 0.0
@@ -380,7 +387,7 @@ def _collect_debug_forward_stats(
                 delta = gate.detach().reshape(-1) * mf_logit.detach().reshape(-1)
                 delta_vals.extend(delta.cpu().numpy().tolist())
 
-            alpha = details.get("alpha")
+            alpha = details.get("alpha_effective", details.get("alpha"))
             if alpha is not None:
                 alpha_vals.extend(alpha.detach().reshape(-1).cpu().numpy().tolist())
 
@@ -388,6 +395,21 @@ def _collect_debug_forward_stats(
             if personal_matrices is not None:
                 pm = personal_matrices.detach().cpu().numpy()
                 personal_entropy_vals.append(_row_entropy_mean(pm))
+
+            proto_conf = details.get("prototype_conf_effective", details.get("prototype_conf"))
+            if proto_conf is not None:
+                proto_conf_vals.extend(proto_conf.detach().reshape(-1).cpu().numpy().tolist())
+
+            proto_gate = details.get("prototype_gate")
+            if proto_gate is not None:
+                proto_gate_vals.extend(proto_gate.detach().reshape(-1).cpu().numpy().tolist())
+
+            if details.get("mf_warmup_scale") is not None:
+                mf_warmup_scale = float(details["mf_warmup_scale"].detach().reshape(-1)[0].item())
+            if details.get("proto_warmup_scale") is not None:
+                proto_warmup_scale = float(details["proto_warmup_scale"].detach().reshape(-1)[0].item())
+            if details.get("personal_warmup_scale") is not None:
+                personal_warmup_scale = float(details["personal_warmup_scale"].detach().reshape(-1)[0].item())
 
             if not graph_ready:
                 relation_matrices = details.get("relation_matrices")
@@ -415,6 +437,8 @@ def _collect_debug_forward_stats(
     delta_abs_mean, delta_std = _safe_abs_mean_std(delta_vals)
     alpha_mean, alpha_std = _safe_mean_std(alpha_vals)
     personal_row_entropy, _ = _safe_mean_std(personal_entropy_vals)
+    proto_conf_mean, _ = _safe_mean_std(proto_conf_vals)
+    proto_gate_mean, _ = _safe_mean_std(proto_gate_vals)
 
     return {
         "mf_abs_mean": mf_abs_mean,
@@ -437,6 +461,11 @@ def _collect_debug_forward_stats(
         "alpha_mean": alpha_mean,
         "alpha_std": alpha_std,
         "personal_row_entropy": personal_row_entropy,
+        "proto_conf_mean": proto_conf_mean,
+        "proto_gate_mean": proto_gate_mean,
+        "mf_warmup_scale": mf_warmup_scale,
+        "proto_warmup_scale": proto_warmup_scale,
+        "personal_warmup_scale": personal_warmup_scale,
     }
 
 
@@ -720,7 +749,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     logger.info("%s Loading datasets...", run_tag)
     logger.info(
         "%s Regularization: graph_entropy(lambda_sparse)=%.6f, graph_diag=%.6f, graph_uniform=%.6f, "
-        "proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_penalty=%.6f, mf_l2(exercise_l2_lambda)=%.6f",
+        "proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_penalty=%.6f, "
+        "alpha_min=%.6f, delta_ratio=%.6f, mf_l2(exercise_l2_lambda)=%.6f",
         run_tag,
         args.lambda_sparse,
         getattr(args, "lambda_graph_diag", 0.10),
@@ -729,6 +759,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         args.lambda_proto_usage,
         args.lambda_sparse_personal,
         args.lambda_alpha,
+        getattr(args, "lambda_alpha_min", 0.0),
+        getattr(args, "lambda_delta_ratio", 0.0),
         getattr(args, "exercise_l2_lambda", 5e-5),
     )
     logger.info(
@@ -741,6 +773,21 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         getattr(args, "graph_reg_cap_ratio", 6.0),
         getattr(args, "graph_dropout", -1.0),
         getattr(args, "graph_tau_init", 1.0),
+    )
+    logger.info(
+        "%s Rescue controls: mf_warmup_epochs=%d, delta_ratio_target=%.4f, proto_conf_threshold=%.3f, "
+        "proto_gate_scale=%.3f, proto_warmup_epochs=%d, personal_max_alpha=%.3f, "
+        "personal_delta_scale=%.3f, personal_warmup_epochs=%d, alpha_min_target=%.4f",
+        run_tag,
+        int(getattr(args, "mf_warmup_epochs", 0)),
+        float(getattr(args, "delta_ratio_target", 0.15)),
+        float(getattr(args, "proto_conf_threshold", 0.0)),
+        float(getattr(args, "proto_gate_scale", 1.0)),
+        int(getattr(args, "proto_warmup_epochs", 0)),
+        float(getattr(args, "personal_max_alpha", 0.35)),
+        float(getattr(args, "personal_delta_scale", 1.0)),
+        int(getattr(args, "personal_warmup_epochs", 0)),
+        float(getattr(args, "alpha_min_target", 0.0)),
     )
 
     data_dir = args.data_dir
@@ -863,6 +910,17 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         mf_l2_lambda=getattr(args, "exercise_l2_lambda", 5e-5),
         gnn_residual_weight=getattr(args, "gnn_residual_weight", 0.5),
         use_q_conditioning=not getattr(args, "disable_q_conditioning", False),
+        mf_warmup_epochs=getattr(args, "mf_warmup_epochs", 0),
+        lambda_delta_ratio=getattr(args, "lambda_delta_ratio", 0.0),
+        delta_ratio_target=getattr(args, "delta_ratio_target", 0.15),
+        proto_conf_threshold=getattr(args, "proto_conf_threshold", 0.0),
+        proto_gate_scale=getattr(args, "proto_gate_scale", 1.0),
+        proto_warmup_epochs=getattr(args, "proto_warmup_epochs", 0),
+        personal_max_alpha=getattr(args, "personal_max_alpha", 0.35),
+        personal_delta_scale=getattr(args, "personal_delta_scale", 1.0),
+        personal_warmup_epochs=getattr(args, "personal_warmup_epochs", 0),
+        lambda_alpha_min=getattr(args, "lambda_alpha_min", 0.0),
+        alpha_min_target=getattr(args, "alpha_min_target", 0.0),
     ).to(device)
 
     # 多 GPU 支持（DataParallel）
@@ -957,8 +1015,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         )
         logger.info(
             "%s [Reg Terms] Epoch [%03d] | "
-            "Train: graph_entropy=%.6f, graph_diag=%.6f, graph_uniform=%.6f, graph_reg_scale=%.4f, mf_l2=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_var=%.6f, reg_bce_ratio=%.4f | "
-            "Val: graph_entropy=%.6f, graph_diag=%.6f, graph_uniform=%.6f, graph_reg_scale=%.4f, mf_l2=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_var=%.6f, reg_bce_ratio=%.4f",
+            "Train: graph_entropy=%.6f, graph_diag=%.6f, graph_uniform=%.6f, graph_reg_scale=%.4f, "
+            "mf_l2=%.6f, delta_ratio=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, "
+            "alpha_var=%.6f, alpha_collapse=%.6f, reg_bce_ratio=%.4f | "
+            "Val: graph_entropy=%.6f, graph_diag=%.6f, graph_uniform=%.6f, graph_reg_scale=%.4f, "
+            "mf_l2=%.6f, delta_ratio=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, "
+            "alpha_var=%.6f, alpha_collapse=%.6f, reg_bce_ratio=%.4f",
             run_tag,
             epoch,
             train_metrics.get("reg_graph_entropy", 0.0),
@@ -966,20 +1028,24 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             train_metrics.get("reg_graph_uniform", 0.0),
             train_metrics.get("reg_graph_reg_scale", 1.0),
             train_metrics.get("reg_mf_l2", 0.0),
+            train_metrics.get("reg_delta_ratio", 0.0),
             train_metrics.get("reg_proto_div", 0.0),
             train_metrics.get("reg_proto_usage", 0.0),
             train_metrics.get("reg_personal_sparse", 0.0),
             train_metrics.get("reg_alpha_var", 0.0),
+            train_metrics.get("reg_alpha_collapse", 0.0),
             train_metrics.get("reg_bce_ratio", 0.0),
             val_metrics.get("reg_graph_entropy", 0.0),
             val_metrics.get("reg_graph_diag", 0.0),
             val_metrics.get("reg_graph_uniform", 0.0),
             val_metrics.get("reg_graph_reg_scale", 1.0),
             val_metrics.get("reg_mf_l2", 0.0),
+            val_metrics.get("reg_delta_ratio", 0.0),
             val_metrics.get("reg_proto_div", 0.0),
             val_metrics.get("reg_proto_usage", 0.0),
             val_metrics.get("reg_personal_sparse", 0.0),
             val_metrics.get("reg_alpha_var", 0.0),
+            val_metrics.get("reg_alpha_collapse", 0.0),
             val_metrics.get("reg_bce_ratio", 0.0),
         )
 
@@ -995,7 +1061,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "%s [Diag][M3] Epoch [%03d] | "
                 "residual_abs_mean=%.4f, residual_std=%.4f, mf_abs_mean=%.4f, mf_std=%.4f, gate_mean=%.4f, gate_std=%.4f, "
                 "irt_abs_mean=%.4f, irt_std=%.4f, delta_abs_mean=%.4f, delta_std=%.4f, "
-                "delta_over_irt=%.4f, "
+                "delta_over_irt=%.4f, proto_conf_mean=%.4f, proto_gate_mean=%.4f, "
+                "warmup(mf/proto/personal)=%.2f/%.2f/%.2f, "
                 "graph_row_entropy=%.4f, graph_entropy_ratio=%.4f, "
                 "alpha_mean=%.4f, alpha_std=%.4f, personal_row_entropy=%.4f",
                 run_tag,
@@ -1011,6 +1078,11 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["delta_abs_mean"],
                 diag["delta_std"],
                 delta_over_irt,
+                diag["proto_conf_mean"],
+                diag["proto_gate_mean"],
+                diag["mf_warmup_scale"],
+                diag["proto_warmup_scale"],
+                diag["personal_warmup_scale"],
                 diag["graph_row_entropy_mean"],
                 diag["graph_entropy_ratio"],
                 diag["alpha_mean"],
@@ -1389,6 +1461,23 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         mf_l2_lambda=loaded_args.get("exercise_l2_lambda", getattr(args, "exercise_l2_lambda", 5e-5)),
         gnn_residual_weight=loaded_args.get("gnn_residual_weight", getattr(args, "gnn_residual_weight", 0.5)),
         use_q_conditioning=not loaded_args.get("disable_q_conditioning", getattr(args, "disable_q_conditioning", False)),
+        mf_warmup_epochs=loaded_args.get("mf_warmup_epochs", getattr(args, "mf_warmup_epochs", 0)),
+        lambda_delta_ratio=loaded_args.get("lambda_delta_ratio", getattr(args, "lambda_delta_ratio", 0.0)),
+        delta_ratio_target=loaded_args.get("delta_ratio_target", getattr(args, "delta_ratio_target", 0.15)),
+        proto_conf_threshold=loaded_args.get(
+            "proto_conf_threshold", getattr(args, "proto_conf_threshold", 0.0)
+        ),
+        proto_gate_scale=loaded_args.get("proto_gate_scale", getattr(args, "proto_gate_scale", 1.0)),
+        proto_warmup_epochs=loaded_args.get("proto_warmup_epochs", getattr(args, "proto_warmup_epochs", 0)),
+        personal_max_alpha=loaded_args.get("personal_max_alpha", getattr(args, "personal_max_alpha", 0.35)),
+        personal_delta_scale=loaded_args.get(
+            "personal_delta_scale", getattr(args, "personal_delta_scale", 1.0)
+        ),
+        personal_warmup_epochs=loaded_args.get(
+            "personal_warmup_epochs", getattr(args, "personal_warmup_epochs", 0)
+        ),
+        lambda_alpha_min=loaded_args.get("lambda_alpha_min", getattr(args, "lambda_alpha_min", 0.0)),
+        alpha_min_target=loaded_args.get("alpha_min_target", getattr(args, "alpha_min_target", 0.0)),
     ).to(device)
 
     runtime_facts = _log_and_assert_ablation_consistency(
@@ -1407,6 +1496,7 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     state_dict = _strip_module_prefix(state_dict)  # 处理 DataParallel 的 module. 前缀
 
     incompatible = model.load_state_dict(state_dict, strict=False)
+    _get_base_model(model).set_epoch(int(checkpoint.get("epoch", loaded_args.get("epochs", 1))))
     missing_keys = list(getattr(incompatible, "missing_keys", []))
     unexpected_keys = list(getattr(incompatible, "unexpected_keys", []))
 

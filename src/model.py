@@ -739,6 +739,9 @@ class ConceptStructureModeling(nn.Module):
         # personal graph
         use_personal_graph: bool,
         personal_rank: int,
+        personal_max_alpha: float,
+        personal_delta_scale: float,
+        personal_warmup_epochs: int,
         # 完全消融开关
         enable_module: bool = True,
     ):
@@ -749,6 +752,10 @@ class ConceptStructureModeling(nn.Module):
         self.num_concepts = int(num_concepts)
         self.knowledge_dim = int(knowledge_dim)
         self.num_relation_heads = int(num_relation_heads)
+        self.personal_max_alpha = float(personal_max_alpha)
+        self.personal_delta_scale = max(0.0, float(personal_delta_scale))
+        self.personal_warmup_epochs = max(0, int(personal_warmup_epochs))
+        self._current_epoch = 1
 
         # -------- 完全消融：不创建任何可训练参数 --------
         if not self.enable_module:
@@ -793,11 +800,19 @@ class ConceptStructureModeling(nn.Module):
         # E) 个性化图（可选）
         if self.use_personal_graph:
             personal_input_dim = knowledge_dim * 3
-            self.adaptive_gate = AdaptiveGate(personal_input_dim)
+            self.adaptive_gate = AdaptiveGate(personal_input_dim, max_alpha=self.personal_max_alpha)
             self.personal_generator = PersonalRelationGenerator(personal_input_dim, num_concepts, personal_rank)
         else:
             self.adaptive_gate = None
             self.personal_generator = None
+
+    def set_epoch(self, epoch: int) -> None:
+        self._current_epoch = max(1, int(epoch))
+
+    def _get_personal_warmup_scale(self) -> float:
+        if self.personal_warmup_epochs <= 0:
+            return 1.0
+        return min(1.0, float(self._current_epoch) / float(self.personal_warmup_epochs))
 
     def forward(
         self,
@@ -837,6 +852,7 @@ class ConceptStructureModeling(nn.Module):
         # 3) 个性化图（E，可选）：生成并混合，再编码第二遍
         #    优化：避免创建 (B,H,C,C) 4D 张量，改用逐 head 计算
         gate_alpha = None
+        gate_alpha_effective = None
         personal_matrices = None
         relation_used = relation_matrices
 
@@ -847,9 +863,13 @@ class ConceptStructureModeling(nn.Module):
                 dim=-1,
             )
             gate_alpha = self.adaptive_gate(personal_input)                   # (B,1,1,1)
+            personal_warmup_scale = self._get_personal_warmup_scale()
+            gate_alpha_effective = gate_alpha * personal_warmup_scale
             personal_delta = self.personal_generator(personal_input)          # (B,C,C)
             global_prior = relation_matrices.mean(dim=0).clamp(min=1e-8).log().unsqueeze(0)
-            personal_logits = global_prior + gate_alpha.squeeze(-1) * personal_delta
+            personal_logits = global_prior + gate_alpha_effective.squeeze(-1) * (
+                self.personal_delta_scale * personal_delta
+            )
             personal_matrices = F.softmax(personal_logits, dim=-1)            # (B,C,C)
 
             # 优化：不展开为 (B,H,C,C)，而是保存 gate_alpha 和 personal_matrices
@@ -858,7 +878,7 @@ class ConceptStructureModeling(nn.Module):
             relation_used = {
                 "global_matrices": relation_matrices,        # (H,C,C)
                 "personal_matrices": personal_matrices,      # (B,C,C)
-                "gate_alpha": gate_alpha.squeeze(-1).squeeze(-1).squeeze(-1),  # (B,)
+                "gate_alpha": gate_alpha_effective.squeeze(-1).squeeze(-1).squeeze(-1),  # (B,)
             }
 
             knowledge_state = self.knowledge_encoder(student_ids, relation_used)
@@ -870,7 +890,11 @@ class ConceptStructureModeling(nn.Module):
             "knowledge_state": knowledge_state,
             "student_repr": student_repr,
             "alpha": gate_alpha,
+            "alpha_effective": gate_alpha_effective,
             "personal_matrices": personal_matrices,
+            "personal_warmup_scale": torch.tensor(
+                self._get_personal_warmup_scale(), device=device, dtype=dtype
+            ),
         }
 
 
@@ -947,6 +971,18 @@ class CognitiveDiagnosisModel(nn.Module):
         mf_l2_lambda: float = 5e-5,          # mapped from args.exercise_l2_lambda
         gnn_residual_weight: float = 0.5,
         use_q_conditioning: bool = True,
+        # ===== Rescue knobs (default off for baseline compatibility) =====
+        mf_warmup_epochs: int = 0,
+        lambda_delta_ratio: float = 0.0,
+        delta_ratio_target: float = 0.15,
+        proto_conf_threshold: float = 0.0,
+        proto_gate_scale: float = 1.0,
+        proto_warmup_epochs: int = 0,
+        personal_max_alpha: float = 0.35,
+        personal_delta_scale: float = 1.0,
+        personal_warmup_epochs: int = 0,
+        lambda_alpha_min: float = 0.0,
+        alpha_min_target: float = 0.0,
     ):
         super().__init__()
         self.num_students = int(num_students)
@@ -1010,6 +1046,17 @@ class CognitiveDiagnosisModel(nn.Module):
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
         self.mf_l2_lambda = float(mf_l2_lambda)
+        self.mf_warmup_epochs = max(0, int(mf_warmup_epochs))
+        self.lambda_delta_ratio = max(0.0, float(lambda_delta_ratio))
+        self.delta_ratio_target = max(0.0, float(delta_ratio_target))
+        self.proto_conf_threshold = min(0.999, max(0.0, float(proto_conf_threshold)))
+        self.proto_gate_scale = max(0.0, float(proto_gate_scale))
+        self.proto_warmup_epochs = max(0, int(proto_warmup_epochs))
+        self.personal_max_alpha = max(0.0, float(personal_max_alpha))
+        self.personal_delta_scale = max(0.0, float(personal_delta_scale))
+        self.personal_warmup_epochs = max(0, int(personal_warmup_epochs))
+        self.lambda_alpha_min = max(0.0, float(lambda_alpha_min))
+        self.alpha_min_target = max(0.0, float(alpha_min_target))
 
         # 固定 Q 矩阵
         self.register_buffer("q_matrix", q_matrix)
@@ -1036,6 +1083,9 @@ class CognitiveDiagnosisModel(nn.Module):
             allow_self_loop=allow_self_loop,
             use_personal_graph=self.use_personal_graph,
             personal_rank=personal_rank,
+            personal_max_alpha=self.personal_max_alpha,
+            personal_delta_scale=self.personal_delta_scale,
+            personal_warmup_epochs=self.personal_warmup_epochs,
             enable_module=self.enable_module1,  # 关键：模块级完全消融
         )
 
@@ -1110,12 +1160,19 @@ class CognitiveDiagnosisModel(nn.Module):
     def set_epoch(self, epoch: int) -> None:
         """Set current epoch for graph-regularizer warmup (1-based)."""
         self._current_epoch = max(1, int(epoch))
+        if self.structure_module is not None and hasattr(self.structure_module, "set_epoch"):
+            self.structure_module.set_epoch(epoch)
 
     def _get_graph_reg_ramp(self) -> float:
         """Linear warmup factor for graph-related regularization terms."""
         if self.graph_reg_warmup_epochs <= 0:
             return 1.0
         return min(1.0, float(self._current_epoch) / float(self.graph_reg_warmup_epochs))
+
+    def _get_linear_warmup(self, warmup_epochs: int) -> float:
+        if warmup_epochs <= 0:
+            return 1.0
+        return min(1.0, float(self._current_epoch) / float(warmup_epochs))
 
     @staticmethod
     def _row_entropy(A: torch.Tensor) -> torch.Tensor:
@@ -1157,6 +1214,7 @@ class CognitiveDiagnosisModel(nn.Module):
         proto_mix = None
         proto_assign = None
         proto_conf = None
+        proto_conf_effective = None
         proto_gate = None
         if self.prototype_module is not None:
             proto_mix, proto_assign = self.prototype_module(student_repr)  # (B,D), (B,K)
@@ -1164,7 +1222,18 @@ class CognitiveDiagnosisModel(nn.Module):
             max_entropy = math.log(float(max(2, proto_assign.size(1))))
             proto_conf = 1.0 - proto_entropy / (max_entropy + 1e-12)
             proto_conf = proto_conf.clamp(min=0.0, max=1.0)
-            proto_gate = self.proto_lambda * proto_conf
+            if self.proto_conf_threshold > 0.0:
+                denom = max(1e-6, 1.0 - self.proto_conf_threshold)
+                proto_conf_effective = F.relu(proto_conf - self.proto_conf_threshold) / denom
+            else:
+                proto_conf_effective = proto_conf
+            proto_conf_effective = proto_conf_effective.clamp(min=0.0, max=1.0)
+            proto_gate = (
+                self.proto_lambda
+                * self.proto_gate_scale
+                * self._get_linear_warmup(self.proto_warmup_epochs)
+                * proto_conf_effective
+            )
             if self.use_soft_prototype_main_path:
                 proto_broadcast = proto_mix.unsqueeze(1).expand(-1, self.num_concepts, -1)
                 knowledge_state = knowledge_state + proto_gate.view(-1, 1, 1) * (proto_broadcast - knowledge_state)
@@ -1228,6 +1297,14 @@ class CognitiveDiagnosisModel(nn.Module):
                     return_details=False,
                 )
                 mf_details = None
+            mf_warmup_scale = self._get_linear_warmup(self.mf_warmup_epochs)
+            mf_logit = mf_logit * mf_warmup_scale
+            if mf_details is not None:
+                mf_details["mf_logit_raw"] = mf_details["mf_logit"]
+                mf_details["residual_logit_raw"] = mf_details["residual_logit"]
+                mf_details["mf_logit"] = mf_logit.detach()
+                mf_details["residual_logit"] = mf_logit.detach()
+                mf_details["mf_warmup_scale"] = mf_logit.new_tensor(mf_warmup_scale).detach()
         else:
             student_latent, student_bias = None, None
             mf_logit = torch.zeros_like(irt_logit)
@@ -1314,6 +1391,10 @@ class CognitiveDiagnosisModel(nn.Module):
             "logits": total_logit.detach(),
         }
 
+        details["irt_logit_for_reg"] = irt_logit
+        if self.enable_module2 and (self.enable_module3 and self.use_mf_branch):
+            details["delta_logit_for_reg"] = total_logit - irt_logit
+
         if diag_details is not None:
             details.update(diag_details)
         if mf_details is not None:
@@ -1324,20 +1405,30 @@ class CognitiveDiagnosisModel(nn.Module):
         if self.prototype_module is not None and proto_assign is not None:
             details["prototype_mix"] = proto_mix.detach()
             details["prototype_assign"] = proto_assign.detach()
+            details["prototype_assign_for_reg"] = proto_assign
             if proto_conf is not None:
                 details["prototype_conf"] = proto_conf.detach()
+            if proto_conf_effective is not None:
+                details["prototype_conf_effective"] = proto_conf_effective.detach()
             if proto_gate is not None:
                 details["prototype_gate"] = proto_gate.detach()
+            details["proto_warmup_scale"] = proto_gate.new_tensor(
+                self._get_linear_warmup(self.proto_warmup_epochs)
+            ).detach()
 
         if self.use_personal_graph:
             if gate_alpha is not None:
                 # Keep gradient path for personal regularizers in training.
                 details["alpha"] = gate_alpha
                 details["alpha_detached"] = gate_alpha.detach()
+            if s_out.get("alpha_effective") is not None:
+                details["alpha_effective"] = s_out["alpha_effective"]
+                details["alpha_effective_detached"] = s_out["alpha_effective"].detach()
             if personal_matrices is not None:
                 # Keep gradient path for personal regularizers in training.
                 details["personal_matrices"] = personal_matrices
                 details["personal_matrices_detached"] = personal_matrices.detach()
+            details["personal_warmup_scale"] = s_out["personal_warmup_scale"].detach()
 
         return out_main, details
 
@@ -1360,10 +1451,12 @@ class CognitiveDiagnosisModel(nn.Module):
             "graph_uniform": torch.tensor(0.0, device=device),
             "graph_reg_scale": torch.tensor(1.0, device=device),
             "mf_l2": torch.tensor(0.0, device=device),
+            "delta_ratio": torch.tensor(0.0, device=device),
             "proto_div": torch.tensor(0.0, device=device),
             "proto_usage": torch.tensor(0.0, device=device),
             "personal_sparse": torch.tensor(0.0, device=device),
             "alpha_var": torch.tensor(0.0, device=device),  # signed term (negative when maximizing variance)
+            "alpha_collapse": torch.tensor(0.0, device=device),
         }
         graph_reg_ramp_t = relation_matrices.new_tensor(self._get_graph_reg_ramp())
         if details is not None:
@@ -1474,9 +1567,27 @@ class CognitiveDiagnosisModel(nn.Module):
             if len(reg_terms) > 0:
                 terms["mf_l2"] = self.mf_l2_lambda * sum(reg_terms)
 
+        if (
+            self.enable_module2
+            and self.enable_module3
+            and self.use_mf_branch
+            and self.lambda_delta_ratio > 0
+            and details is not None
+            and details.get("delta_logit_for_reg") is not None
+            and details.get("irt_logit_for_reg") is not None
+        ):
+            delta = details["delta_logit_for_reg"]
+            irt_logit = details["irt_logit_for_reg"]
+            delta_ratio = delta.abs().mean() / (irt_logit.abs().mean() + 1e-6)
+            delta_target = torch.tensor(self.delta_ratio_target, device=device, dtype=delta_ratio.dtype)
+            delta_pen = F.relu(delta_ratio - delta_target)
+            terms["delta_ratio"] = self.lambda_delta_ratio * delta_pen
+            details["delta_ratio_value"] = delta_ratio.detach()
+            details["delta_ratio_pen"] = delta_pen.detach()
+
         # (3) Prototype regularizers
         if self.prototype_module is not None and details is not None and "prototype_assign" in details:
-            assign = details["prototype_assign"]  # (B,K)
+            assign = details.get("prototype_assign_for_reg", details["prototype_assign"])  # (B,K)
             K = assign.size(1)
 
             if lambda_proto_div > 0.0:
@@ -1509,15 +1620,26 @@ class CognitiveDiagnosisModel(nn.Module):
                 alpha_var = alpha_flat.var() + 1e-6
                 terms["alpha_var"] = -self.lambda_alpha * alpha_var
 
+            if "alpha" in details and details["alpha"] is not None and self.lambda_alpha_min > 0:
+                alpha_flat = details["alpha"].view(-1)
+                alpha_std = alpha_flat.std(unbiased=False)
+                alpha_target = torch.tensor(self.alpha_min_target, device=device, dtype=alpha_std.dtype)
+                alpha_pen = F.relu(alpha_target - alpha_std)
+                terms["alpha_collapse"] = self.lambda_alpha_min * alpha_pen
+                details["alpha_std_runtime"] = alpha_std.detach()
+                details["alpha_collapse_pen"] = alpha_pen.detach()
+
         total = (
             terms["graph_entropy"]
             + terms["graph_diag"]
             + terms["graph_uniform"]
             + terms["mf_l2"]
+            + terms["delta_ratio"]
             + terms["proto_div"]
             + terms["proto_usage"]
             + terms["personal_sparse"]
             + terms["alpha_var"]
+            + terms["alpha_collapse"]
         )
         terms["total"] = total
         return terms

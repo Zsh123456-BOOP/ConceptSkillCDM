@@ -241,6 +241,28 @@ def parse_args():
                         help="Compatibility flag; q-aligned residual is enabled by default.")
     parser.add_argument("--use_soft_prototype_main_path", action="store_true",
                         help="If set, prototype mix is injected into knowledge_state. Default off.")
+    parser.add_argument("--mf_warmup_epochs", type=int, default=0,
+                        help="Linear warmup epochs for B residual contribution. 0 disables rescue warmup.")
+    parser.add_argument("--lambda_delta_ratio", type=float, default=0.0,
+                        help="Penalty weight for overly large residual delta relative to IRT logit.")
+    parser.add_argument("--delta_ratio_target", type=float, default=0.15,
+                        help="Target upper bound for mean(|delta|)/mean(|irt|) before penalty activates.")
+    parser.add_argument("--proto_conf_threshold", type=float, default=0.0,
+                        help="Only prototype confidence above this threshold contributes to C path.")
+    parser.add_argument("--proto_gate_scale", type=float, default=1.0,
+                        help="Extra multiplicative scale for prototype gate after confidence filtering.")
+    parser.add_argument("--proto_warmup_epochs", type=int, default=0,
+                        help="Linear warmup epochs for prototype gate. 0 disables rescue warmup.")
+    parser.add_argument("--personal_max_alpha", type=float, default=0.35,
+                        help="Upper bound for personal-graph mixing alpha.")
+    parser.add_argument("--personal_delta_scale", type=float, default=1.0,
+                        help="Scale factor on personal graph delta before softmax.")
+    parser.add_argument("--personal_warmup_epochs", type=int, default=0,
+                        help="Linear warmup epochs for personal graph mixing. 0 disables rescue warmup.")
+    parser.add_argument("--lambda_alpha_min", type=float, default=0.0,
+                        help="Penalty weight when personal alpha std falls below target.")
+    parser.add_argument("--alpha_min_target", type=float, default=0.0,
+                        help="Minimum desired std of personal alpha before collapse penalty becomes zero.")
 
     #  GPU 
     parser.add_argument("--multi_gpu", action="store_true",
@@ -463,12 +485,15 @@ def main():
                 dropout=args.dropout,
                 use_mf_branch=args.use_mf_branch,
                 use_concept_graph=args.use_concept_graph,
+                graph_topk=getattr(args, "graph_topk", None),
+                allow_self_loop=not getattr(args, "disable_self_loop", False),
                 num_prototypes=args.num_prototypes if args.use_soft_prototype else 0,
                 proto_tau=args.proto_tau,
                 proto_lambda=args.proto_lambda,
                 use_soft_prototype=args.use_soft_prototype,
                 use_soft_prototype_main_path=args.use_soft_prototype_main_path,
                 use_personal_graph=args.use_personal_graph,
+                personal_rank=getattr(args, "personal_rank", 4),
                 ablate_module1=getattr(args, "ablate_module1", False),
                 ablate_module2=getattr(args, "ablate_module2", False),
                 ablate_module3=getattr(args, "ablate_module3", False),
@@ -479,7 +504,6 @@ def main():
                 residual_scale_init=getattr(args, "residual_scale_init", 0.1),
                 graph_dropout=None if float(getattr(args, "graph_dropout", -1.0)) < 0 else float(getattr(args, "graph_dropout", -1.0)),
                 graph_tau_init=getattr(args, "graph_tau_init", 1.0),
-                personal_rank=getattr(args, "personal_rank", 4),
                 lambda_graph_entropy=getattr(args, "lambda_sparse", 0.01),
                 graph_entropy_min=getattr(args, "graph_entropy_min", 0.15),
                 graph_entropy_max=getattr(args, "graph_entropy_max", 0.85),
@@ -491,8 +515,22 @@ def main():
                 lambda_sparse_personal=getattr(args, "lambda_sparse_personal", 0.0),
                 lambda_alpha=getattr(args, "lambda_alpha", 0.0),
                 mf_l2_lambda=getattr(args, "exercise_l2_lambda", 5e-5),
+                gnn_residual_weight=getattr(args, "gnn_residual_weight", 0.5),
+                use_q_conditioning=not getattr(args, "disable_q_conditioning", False),
+                mf_warmup_epochs=getattr(args, "mf_warmup_epochs", 0),
+                lambda_delta_ratio=getattr(args, "lambda_delta_ratio", 0.0),
+                delta_ratio_target=getattr(args, "delta_ratio_target", 0.15),
+                proto_conf_threshold=getattr(args, "proto_conf_threshold", 0.0),
+                proto_gate_scale=getattr(args, "proto_gate_scale", 1.0),
+                proto_warmup_epochs=getattr(args, "proto_warmup_epochs", 0),
+                personal_max_alpha=getattr(args, "personal_max_alpha", 0.35),
+                personal_delta_scale=getattr(args, "personal_delta_scale", 1.0),
+                personal_warmup_epochs=getattr(args, "personal_warmup_epochs", 0),
+                lambda_alpha_min=getattr(args, "lambda_alpha_min", 0.0),
+                alpha_min_target=getattr(args, "alpha_min_target", 0.0),
             ).to(device)
             model.load_state_dict(checkpoint["model_state_dict"])
+            model.set_epoch(int(checkpoint.get("epoch", getattr(args, "epochs", 1))))
             
             # 
             train_file = os.path.join(args.data_dir, "train.csv")
@@ -543,5 +581,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

@@ -15,6 +15,13 @@ Outputs:
 - results/abce_ablation_diagnosis.csv
 - results/abce_ablation_summary.csv
 - results/abce_ablation_summary_mean.csv
+
+Profiles:
+- best: baseline best config
+- b_rescue: conservative B rescue
+- c_rescue: confidence-thresholded C rescue
+- e_rescue: warmup + anti-collapse E rescue
+- all_rescue: combine B/C/E rescue knobs
 """
 
 from __future__ import annotations
@@ -652,6 +659,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run A/B/C/E sub-module ablation with diagnosis summary.")
     parser.add_argument("--datasets", type=str, default="assist_09,junyi")
     parser.add_argument("--seeds", type=str, default=None, help="Comma-separated seeds. Default uses DEFAULT_SEEDS.")
+    parser.add_argument(
+        "--profiles",
+        type=str,
+        default=None,
+        help="Optional filter: best,b_rescue,c_rescue,e_rescue,all_rescue,c_probe",
+    )
     parser.add_argument("--gpus", type=str, default="0")
     parser.add_argument("--max_concurrent", type=int, default=1)
     parser.add_argument("--max_per_gpu", type=int, default=1)
@@ -682,6 +695,39 @@ def parse_args() -> argparse.Namespace:
 def _profile_overrides(profile: str, args: argparse.Namespace) -> Dict[str, Any]:
     if profile == "best":
         return {}
+    if profile == "b_rescue":
+        return {
+            "mf_warmup_epochs": 5,
+            "lambda_delta_ratio": 0.02,
+            "delta_ratio_target": 0.15,
+            "fusion_gate_max": 0.85,
+            "fusion_gate_bias_init": -1.4,
+            "residual_scale_init": 0.18,
+        }
+    if profile == "c_rescue":
+        return {
+            "enable_soft_prototype": True,
+            "disable_soft_prototype": False,
+            "use_soft_prototype_main_path": True,
+            "proto_lambda": 0.08,
+            "proto_conf_threshold": 0.35,
+            "proto_gate_scale": 0.70,
+            "proto_warmup_epochs": 4,
+        }
+    if profile == "e_rescue":
+        return {
+            "use_personal_graph": True,
+            "personal_max_alpha": 0.50,
+            "personal_delta_scale": 1.50,
+            "personal_warmup_epochs": 4,
+            "lambda_alpha_min": 0.05,
+            "alpha_min_target": 0.02,
+        }
+    if profile == "all_rescue":
+        merged: Dict[str, Any] = {}
+        for rescue_name in ("b_rescue", "c_rescue", "e_rescue"):
+            merged.update(_profile_overrides(rescue_name, args))
+        return merged
     if profile == "c_probe":
         return {
             "enable_soft_prototype": True,
@@ -693,6 +739,19 @@ def _profile_overrides(profile: str, args: argparse.Namespace) -> Dict[str, Any]
             "lambda_proto_usage": float(args.c_probe_lambda_proto_usage),
         }
     raise ValueError(f"Unknown profile '{profile}'.")
+
+
+def _selected_profiles(all_profiles: List[str], filters: Optional[str]) -> List[str]:
+    if not filters:
+        return all_profiles
+    names = set(parse_csv_tokens(filters))
+    chosen = [p for p in all_profiles if p in names]
+    missing = names - set(all_profiles)
+    if missing:
+        raise ValueError(f"Unknown profile names: {sorted(missing)}")
+    if not chosen:
+        raise ValueError("No profiles selected after filtering.")
+    return chosen
 
 
 def _selected_ablations(all_abls: List[AblationSpec], filters: Optional[str]) -> List[AblationSpec]:
@@ -720,9 +779,10 @@ def make_jobs(args: argparse.Namespace, run_id: str) -> List[JobSpec]:
             raise ValueError(f"Dataset '{dataset}' not found in BEST_CFG.")
         base_cfg = dict(BEST_CFG[dataset])
         is_c_active = c_effectively_active(base_cfg)
-        profiles = ["best"]
+        profiles = ["best", "b_rescue", "c_rescue", "e_rescue", "all_rescue"]
         if args.auto_c_probe and not is_c_active:
             profiles.append("c_probe")
+        profiles = _selected_profiles(profiles, args.profiles)
 
         for profile in profiles:
             profile_cfg = _profile_overrides(profile, args)

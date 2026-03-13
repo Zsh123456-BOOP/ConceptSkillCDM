@@ -218,24 +218,24 @@ def format_activity_brief(activity: Dict[str, Any]) -> str:
     """
     格式化为简短的一行报告（用于训练过程中输出）。
 
-    Example: "Proto✓ Graph✓ Personal✗ MF✓"
+    Example: "Proto[OK] Graph[OK] Personal[X] MF[OK]"
     """
     parts = []
 
     if activity.get("proto_enabled"):
-        status = "✓" if activity.get("proto_active") else "✗"
+        status = "[OK]" if activity.get("proto_active") else "[X]"
         parts.append(f"Proto{status}")
 
     if activity.get("graph_enabled"):
-        status = "✓" if activity.get("graph_active") else "✗"
+        status = "[OK]" if activity.get("graph_active") else "[X]"
         parts.append(f"Graph{status}")
 
     if activity.get("personal_graph_enabled"):
-        status = "✓" if activity.get("personal_graph_active") else "✗"
+        status = "[OK]" if activity.get("personal_graph_active") else "[X]"
         parts.append(f"Personal{status}")
 
     if activity.get("mf_enabled"):
-        status = "✓" if activity.get("mf_active") else "✗"
+        status = "[OK]" if activity.get("mf_active") else "[X]"
         parts.append(f"MF{status}")
 
     if not parts:
@@ -269,14 +269,14 @@ def format_activity_report(
         mean_assign = activity.get("proto_mean_assign", [])
 
         if activity.get("proto_active"):
-            status = "✓ ACTIVE"
+            status = "ACTIVE"
             advice = ""
         elif activity.get("proto_dominant"):
-            status = "✗ INACTIVE (one prototype dominates)"
-            advice = "   → Consider: increase proto_tau or lambda_proto_usage"
+            status = "INACTIVE (one prototype dominates)"
+            advice = "   -> Consider: increase proto_tau or lambda_proto_usage"
         else:
-            status = "✗ INACTIVE (low usage entropy)"
-            advice = "   → Consider: increase proto_lambda or lambda_proto_usage"
+            status = "INACTIVE (low usage entropy)"
+            advice = "   -> Consider: increase proto_lambda or lambda_proto_usage"
 
         lines.append(f"   - Usage entropy: {activity.get('proto_usage_entropy', 0):.3f} / {activity.get('proto_max_entropy', 0):.3f}")
         lines.append(f"   - Usage ratio: {usage_pct:.1f}%")
@@ -295,16 +295,16 @@ def format_activity_report(
         entropy_ratio = activity.get("graph_entropy_ratio", 0.0)
 
         if activity.get("graph_active"):
-            status = "✓ ACTIVE (learning meaningful structure)"
+            status = "ACTIVE (learning meaningful structure)"
             advice = ""
         elif activity.get("graph_over_sparse"):
-            status = "✗ OVER-SPARSE (degenerated to near-identity)"
-            advice = "   → Consider: decrease lambda_sparse"
+            status = "OVER-SPARSE (degenerated to near-identity)"
+            advice = "   -> Consider: decrease lambda_sparse"
         elif activity.get("graph_trivial"):
-            status = "✗ TRIVIAL (uniform distribution, not learning)"
-            advice = "   → Consider: increase lambda_sparse or training longer"
+            status = "TRIVIAL (uniform distribution, not learning)"
+            advice = "   -> Consider: increase lambda_sparse or training longer"
         else:
-            status = "✗ INACTIVE"
+            status = "INACTIVE"
             advice = ""
 
         lines.append(f"   - Mean row entropy: {activity.get('graph_mean_row_entropy', 0):.3f} / {activity.get('graph_max_row_entropy', 0):.3f}")
@@ -324,12 +324,13 @@ def format_activity_report(
         gate_std = activity.get("personal_gate_std", 0.0)
 
         if activity.get("personal_graph_active"):
-            status = "✓ ACTIVE (using personalization)"
+            status = "ACTIVE (using personalization)"
+            advice = ""
         elif activity.get("personal_graph_trivial"):
-            status = "✗ INACTIVE (gate alpha ≈ 0, not using personal graph)"
-            advice = "   → Consider: increase lambda_alpha or lambda_sparse_personal"
+            status = "INACTIVE (gate alpha ~= 0, not using personal graph)"
+            advice = "   -> Consider: increase lambda_alpha or lambda_sparse_personal"
         else:
-            status = "⚠ MARGINAL (low alpha values)"
+            status = "MARGINAL (low alpha values)"
             advice = ""
 
         lines.append(f"   - Gate alpha mean: {gate_mean:.3f}")
@@ -350,12 +351,13 @@ def format_activity_report(
         fusion_gate = activity.get("fusion_gate_mean", 0.0)
 
         if activity.get("mf_active"):
-            status = "✓ ACTIVE (contributing to predictions)"
+            status = "ACTIVE (contributing to predictions)"
+            advice = ""
         elif activity.get("mf_trivial"):
-            status = "✗ INACTIVE (near-zero contribution)"
-            advice = "   → Consider: check skill_dim or learning_rate"
+            status = "INACTIVE (near-zero contribution)"
+            advice = "   -> Consider: check skill_dim or learning_rate"
         else:
-            status = "⚠ MARGINAL"
+            status = "MARGINAL"
             advice = ""
 
         lines.append(f"   - MF logit |mean|: {mf_abs:.4f}")
@@ -390,7 +392,7 @@ def format_activity_report(
     if all_active:
         lines.append(f"   Active modules: {', '.join(all_active)}")
     if all_inactive:
-        lines.append(f"   ⚠ Inactive modules: {', '.join(all_inactive)}")
+        lines.append(f"   Inactive modules: {', '.join(all_inactive)}")
     if not all_inactive:
         lines.append("   All enabled modules are functioning properly!")
     lines.append("=" * 60)
