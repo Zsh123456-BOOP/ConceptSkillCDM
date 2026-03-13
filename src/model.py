@@ -76,9 +76,14 @@ class MultiHeadRelationLearning(nn.Module):
         self.num_heads = int(num_heads)
         self.topk = topk
         self.allow_self_loop = bool(allow_self_loop)
+        rel_rank = max(4, min(16, concept_dim // 4 if concept_dim >= 4 else 4))
+        self.relation_rank = int(rel_rank)
 
         # 注意：concept_embeddings 会在主模型里“可选绑定”到 knowledge_encoder.concept_emb.weight
         self.concept_embeddings = nn.Parameter(torch.randn(num_concepts, concept_dim))  # Fix: 移除 0.02
+        self.rel_query_anchor = nn.Parameter(torch.randn(num_heads, num_concepts, self.relation_rank) * 0.02)
+        self.rel_key_anchor = nn.Parameter(torch.randn(num_heads, num_concepts, self.relation_rank) * 0.02)
+        self.self_loop_bias = nn.Parameter(torch.ones(num_heads) * 0.75)
 
         self.Wq = nn.ModuleList([nn.Linear(concept_dim, concept_dim, bias=False) for _ in range(num_heads)])
         self.Wk = nn.ModuleList([nn.Linear(concept_dim, concept_dim, bias=False) for _ in range(num_heads)])
@@ -91,6 +96,8 @@ class MultiHeadRelationLearning(nn.Module):
 
     def _initialize_weights(self) -> None:
         nn.init.xavier_normal_(self.concept_embeddings, gain=1.0)  # Fix: gain=1.0 prevents softmax saturation
+        nn.init.xavier_normal_(self.rel_query_anchor)
+        nn.init.xavier_normal_(self.rel_key_anchor)
         for m in list(self.Wq) + list(self.Wk):
             nn.init.xavier_normal_(m.weight)
 
@@ -123,10 +130,15 @@ class MultiHeadRelationLearning(nn.Module):
             q = self.Wq[h](x)  # (C, D)
             k = self.Wk[h](x)  # (C, D)
             scores = (q @ k.t()) / math.sqrt(D)  # (C, C)
+            rel_bias = (self.rel_query_anchor[h] @ self.rel_key_anchor[h].t()) / math.sqrt(self.relation_rank)
+            scores = scores + rel_bias
             scores = scores / tau[h]
+            scores = scores - scores.mean(dim=-1, keepdim=True)
 
-            if not self.allow_self_loop:
-                eye = torch.eye(C, device=scores.device, dtype=torch.bool)
+            eye = torch.eye(C, device=scores.device, dtype=torch.bool)
+            if self.allow_self_loop:
+                scores = scores + self.self_loop_bias[h] * eye.to(dtype=scores.dtype)
+            else:
                 scores = scores.masked_fill(eye, float("-inf"))
 
             if self.topk is not None and 0 < self.topk < C:
@@ -501,13 +513,13 @@ class QAlignedResidualHead(nn.Module):
         nn.init.xavier_normal_(self.u_proj.weight)
         nn.init.xavier_normal_(self.v_proj.weight)
 
-        init_scale = max(1e-4, float(residual_scale_init))
+        init_scale = max(0.2, float(residual_scale_init))
         raw_init = math.log(math.expm1(init_scale))
         self.mf_scale_raw = nn.Parameter(torch.tensor(raw_init))
         self.bias_scale_raw = nn.Parameter(torch.tensor(raw_init))
         self.mf_bias = nn.Parameter(torch.zeros(1))
         self.residual_clip_t = float(residual_clip_t)
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(min(0.2, float(dropout)))
 
     def forward(
         self,
@@ -519,10 +531,10 @@ class QAlignedResidualHead(nn.Module):
         return_details: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
 
-        u = self.u_proj(student_latent)
-        v = self.v_proj(item_latent)
-        u = F.normalize(u, dim=-1, eps=1e-12)
-        v = F.normalize(v, dim=-1, eps=1e-12)
+        u_raw = self.u_proj(student_latent)
+        v_raw = self.v_proj(item_latent)
+        u = F.normalize(u_raw, dim=-1, eps=1e-12)
+        v = F.normalize(v_raw, dim=-1, eps=1e-12)
 
         interaction_scale = F.softplus(self.mf_scale_raw) + 1e-6
         bias_scale = F.softplus(self.bias_scale_raw) + 1e-6
@@ -532,7 +544,9 @@ class QAlignedResidualHead(nn.Module):
         else:
             q_gate_value = q_gate.to(dtype=interaction_scale.dtype, device=interaction_scale.device)
 
-        interaction_residual = interaction_scale * q_gate_value * (u * v).sum(dim=-1)
+        cosine_term = (u * v).sum(dim=-1)
+        magnitude_term = torch.tanh((u_raw * v_raw).mean(dim=-1))
+        interaction_residual = interaction_scale * q_gate_value * (0.7 * cosine_term + 0.3 * magnitude_term)
         bias_residual = bias_scale * (student_bias + exercise_bias)
         residual = interaction_residual + bias_residual + self.mf_bias
 
@@ -562,10 +576,13 @@ class ConservativeFusionGate(nn.Module):
 
     def __init__(self, gate_max: float = 1.0, gate_bias_init: float = -1.1):
         super().__init__()
-        self.fusion_gate = nn.Linear(2, 1)
+        self.fusion_gate = nn.Linear(5, 1)
         self.gate_max = float(gate_max)
         nn.init.constant_(self.fusion_gate.bias, float(gate_bias_init))
         nn.init.constant_(self.fusion_gate.weight, 0.0)
+        with torch.no_grad():
+            self.fusion_gate.weight[0, 3] = 0.35
+            self.fusion_gate.weight[0, 4] = 0.20
 
     def forward(
         self,
@@ -573,7 +590,16 @@ class ConservativeFusionGate(nn.Module):
         mf_logit: torch.Tensor,
         return_details: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
-        stack = torch.stack([irt_logit, mf_logit], dim=1)
+        stack = torch.stack(
+            [
+                irt_logit,
+                mf_logit,
+                torch.abs(irt_logit - mf_logit),
+                torch.abs(mf_logit),
+                torch.abs(irt_logit),
+            ],
+            dim=1,
+        )
         gate_raw = self.fusion_gate(stack).squeeze(-1)
         gate = self.gate_max * torch.sigmoid(gate_raw)
         delta = gate * mf_logit
@@ -625,20 +651,23 @@ class AdaptiveGate(nn.Module):
     Fix: 添加 LayerNorm 标准化输入，解决 student embedding variance 过低的问题。
     """
 
-    def __init__(self, student_dim: int):
+    def __init__(self, student_dim: int, max_alpha: float = 0.35):
         super().__init__()
         self.input_norm = nn.LayerNorm(student_dim)  # Fix: 标准化输入
         hid = max(1, student_dim // 2)
-        self.gate = nn.Sequential(
-            nn.Linear(student_dim, hid),
-            nn.ReLU(),
-            nn.Linear(hid, 1),
-            nn.Sigmoid(),
-        )
+        self.proj1 = nn.Linear(student_dim, hid)
+        self.proj2 = nn.Linear(hid, 1)
+        self.max_alpha = float(max_alpha)
+        nn.init.xavier_normal_(self.proj1.weight)
+        nn.init.zeros_(self.proj1.bias)
+        nn.init.xavier_normal_(self.proj2.weight, gain=0.5)
+        nn.init.constant_(self.proj2.bias, -1.0)
 
     def forward(self, student_repr: torch.Tensor) -> torch.Tensor:
         student_repr = self.input_norm(student_repr)  # Fix: 标准化输入
-        return self.gate(student_repr).view(-1, 1, 1, 1)
+        hidden = F.gelu(self.proj1(student_repr))
+        alpha = self.max_alpha * torch.sigmoid(self.proj2(hidden))
+        return alpha.view(-1, 1, 1, 1)
 
 
 class PersonalRelationGenerator(nn.Module):
@@ -652,19 +681,25 @@ class PersonalRelationGenerator(nn.Module):
         self.input_norm = nn.LayerNorm(student_dim)  # Fix: 标准化输入
         self.num_concepts = int(num_concepts)
         self.rank = int(rank)
+        self.base_u = nn.Parameter(torch.randn(num_concepts, rank) * 0.02)
+        self.base_v = nn.Parameter(torch.randn(num_concepts, rank) * 0.02)
         self.to_u = nn.Linear(student_dim, num_concepts * rank, bias=False)
         self.to_v = nn.Linear(student_dim, num_concepts * rank, bias=False)
         nn.init.xavier_normal_(self.to_u.weight)
         nn.init.xavier_normal_(self.to_v.weight)
+        nn.init.xavier_normal_(self.base_u)
+        nn.init.xavier_normal_(self.base_v)
 
     def forward(self, student_repr: torch.Tensor) -> torch.Tensor:
         student_repr = self.input_norm(student_repr)  # Fix: 标准化输入
         B = student_repr.size(0)
         u = self.to_u(student_repr).view(B, self.num_concepts, self.rank)
         v = self.to_v(student_repr).view(B, self.num_concepts, self.rank)
-        scores = torch.bmm(u, v.transpose(1, 2))  # (B,C,C)
-        A = F.softmax(scores, dim=-1)             # row-stochastic
-        return A
+        u = self.base_u.unsqueeze(0) + u
+        v = self.base_v.unsqueeze(0) + v
+        scores = torch.bmm(u, v.transpose(1, 2)) / math.sqrt(self.rank)  # (B,C,C)
+        scores = scores - scores.mean(dim=-1, keepdim=True)
+        return scores
 
 
 # ======================================================
@@ -755,15 +790,11 @@ class ConceptStructureModeling(nn.Module):
             gnn_residual_weight=gnn_residual_weight,
         )
 
-        # Fix #5：可选权重共享（只要启用概念图就绑定）
-        if self.use_concept_graph and self.relation_learning is not None:
-            if self.knowledge_encoder.concept_emb.weight.shape == self.relation_learning.concept_embeddings.shape:
-                self.knowledge_encoder.concept_emb.weight = self.relation_learning.concept_embeddings
-
         # E) 个性化图（可选）
         if self.use_personal_graph:
-            self.adaptive_gate = AdaptiveGate(knowledge_dim)
-            self.personal_generator = PersonalRelationGenerator(knowledge_dim, num_concepts, personal_rank)
+            personal_input_dim = knowledge_dim * 3
+            self.adaptive_gate = AdaptiveGate(personal_input_dim)
+            self.personal_generator = PersonalRelationGenerator(personal_input_dim, num_concepts, personal_rank)
         else:
             self.adaptive_gate = None
             self.personal_generator = None
@@ -810,11 +841,16 @@ class ConceptStructureModeling(nn.Module):
         relation_used = relation_matrices
 
         if self.use_personal_graph and self.adaptive_gate is not None and self.personal_generator is not None:
-            # Fix: 使用学生的 global embedding 作为个性化图生成的输入
-            # 这样每个学生有独特的表示，而不是经过概念平均后几乎相同的 student_repr
             student_global_repr = self.knowledge_encoder.student_global(student_ids)  # (B,D)
-            gate_alpha = self.adaptive_gate(student_global_repr)              # (B,1,1,1)
-            personal_matrices = self.personal_generator(student_global_repr)  # (B,C,C)
+            personal_input = torch.cat(
+                [student_global_repr, student_repr, student_repr - student_global_repr],
+                dim=-1,
+            )
+            gate_alpha = self.adaptive_gate(personal_input)                   # (B,1,1,1)
+            personal_delta = self.personal_generator(personal_input)          # (B,C,C)
+            global_prior = relation_matrices.mean(dim=0).clamp(min=1e-8).log().unsqueeze(0)
+            personal_logits = global_prior + gate_alpha.squeeze(-1) * personal_delta
+            personal_matrices = F.softmax(personal_logits, dim=-1)            # (B,C,C)
 
             # 优化：不展开为 (B,H,C,C)，而是保存 gate_alpha 和 personal_matrices
             # 让 GNN 层在需要时逐 head 混合，减少显存占用
@@ -1059,8 +1095,14 @@ class CognitiveDiagnosisModel(nn.Module):
         # Prototype 仅在 module2 启用（否则无输出贡献）且 module3 启用时存在
         if self.use_soft_prototype:
             self.prototype_module = SoftPrototypeModule(num_prototypes, knowledge_dim, proto_tau)
+            if self.enable_module3 and self.use_mf_branch:
+                self.proto_to_skill = nn.Linear(knowledge_dim, skill_dim, bias=False)
+                nn.init.xavier_normal_(self.proto_to_skill.weight)
+            else:
+                self.proto_to_skill = None
         else:
             self.prototype_module = None
+            self.proto_to_skill = None
 
     # ------------------------------
     # Fix #1：行熵稀疏度（用于 personal graph 正则）
@@ -1114,11 +1156,18 @@ class CognitiveDiagnosisModel(nn.Module):
         # ========== 2) Module 3（C）：Prototype 校正（只在 module2+module3 启用时存在） ==========
         proto_mix = None
         proto_assign = None
+        proto_conf = None
+        proto_gate = None
         if self.prototype_module is not None:
             proto_mix, proto_assign = self.prototype_module(student_repr)  # (B,D), (B,K)
+            proto_entropy = -(proto_assign.clamp(min=1e-12) * proto_assign.clamp(min=1e-12).log()).sum(dim=-1)
+            max_entropy = math.log(float(max(2, proto_assign.size(1))))
+            proto_conf = 1.0 - proto_entropy / (max_entropy + 1e-12)
+            proto_conf = proto_conf.clamp(min=0.0, max=1.0)
+            proto_gate = self.proto_lambda * proto_conf
             if self.use_soft_prototype_main_path:
                 proto_broadcast = proto_mix.unsqueeze(1).expand(-1, self.num_concepts, -1)
-                knowledge_state = (1.0 - self.proto_lambda) * knowledge_state + self.proto_lambda * proto_broadcast
+                knowledge_state = knowledge_state + proto_gate.view(-1, 1, 1) * (proto_broadcast - knowledge_state)
 
         # ========== 3) 共享：题目参数（b,a）与 module3 item-latent ==========
         item_latent, exercise_bias, b, a = self.exercise_encoder(exercise_ids, concept_mask=q_vector)
@@ -1156,6 +1205,11 @@ class CognitiveDiagnosisModel(nn.Module):
 
             if item_latent is None or exercise_bias is None:
                 raise RuntimeError("Module3 is enabled but item_latent/exercise_bias is None. Check exercise_encoder wiring.")
+
+            if proto_mix is not None and self.proto_to_skill is not None:
+                proto_skill = self.proto_to_skill(proto_mix)
+                proto_skill = F.layer_norm(proto_skill, (proto_skill.size(-1),))
+                student_latent = student_latent + proto_gate.view(-1, 1) * proto_skill
 
             if return_details:
                 mf_logit, mf_details = self.mf_head(
@@ -1270,6 +1324,10 @@ class CognitiveDiagnosisModel(nn.Module):
         if self.prototype_module is not None and proto_assign is not None:
             details["prototype_mix"] = proto_mix.detach()
             details["prototype_assign"] = proto_assign.detach()
+            if proto_conf is not None:
+                details["prototype_conf"] = proto_conf.detach()
+            if proto_gate is not None:
+                details["prototype_gate"] = proto_gate.detach()
 
         if self.use_personal_graph:
             if gate_alpha is not None:
