@@ -339,15 +339,13 @@ def _collect_debug_forward_stats(
             if batch_idx >= max_batches:
                 break
 
-            student_ids, exercise_ids, concept_vector, _ = batch
+            student_ids, exercise_ids, _ = batch
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)
-            concept_vector = concept_vector.to(device)
 
             _, details = model(
                 student_ids,
                 exercise_ids,
-                concept_vector=concept_vector,
                 return_details=True,
                 return_logits=True,
             )
@@ -606,7 +604,6 @@ def train_epoch(
         student_ids, exercise_ids, labels = batch
         student_ids = student_ids.to(device)
         exercise_ids = exercise_ids.to(device)
-        concept_vector = concept_vector.to(device)
         labels = _ensure_1d(labels.to(device).float())
 
         # get logits + details (for regularizers)
@@ -690,7 +687,6 @@ def validate(
             student_ids, exercise_ids, labels = batch
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)
-            concept_vector = concept_vector.to(device)
             labels = _ensure_1d(labels.to(device).float())
 
             logits, details = model(
@@ -1540,7 +1536,6 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
             student_ids, exercise_ids, labels = batch
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)
-            concept_vector = concept_vector.to(device)
             labels = _ensure_1d(labels.to(device).float())
 
             logits = model(

@@ -65,16 +65,14 @@ def compute_module_activity(
             if sample_count >= num_samples:
                 break
 
-            student_ids, exercise_ids, concept_vector, labels = batch
+            student_ids, exercise_ids, labels = batch
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)
-            concept_vector = concept_vector.to(device)
 
             # 获取详细输出
             _, details = model(
                 student_ids,
                 exercise_ids,
-                concept_vector=concept_vector,
                 return_details=True,
                 return_logits=True,
             )
