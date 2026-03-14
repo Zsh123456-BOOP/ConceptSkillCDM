@@ -2,115 +2,42 @@
 # -*- coding: utf-8 -*-
 
 """
-使用当前最优超参，同时跑 assist_09 和 junyi。
+Run best configs for assist_09 and junyi.
 
-默认：
-- 数据集：assist_09, junyi
-- GPU：0,1
-- 每个数据集只跑一组（gpd_base 的 best 配置）
-
-用法示例：
-    python run_all_datasets.py
-    python run_all_datasets.py --gpus 0,2
-    python run_all_datasets.py --datasets assist_09 --gpus 3
+配置从 best_configs.py 导入，修改配置请编辑该文件。
 """
 
 import argparse
 import os
 import subprocess
 import time
+from typing import Dict, List, Tuple
 
-# ===== 根据你贴出来的 CSV 行手工整理的“最佳配置” =====
-# 列名：
-# timestamp, dataset, model_variant, ablation_flags, seed, test_auc, test_acc,
-# test_rmse, best_val_auc, model_epoch, ablate_skill_encoder,
-# ablate_soft_prototype, batch_size, dataset_name, disable_soft_prototype,
-# dropout, early_stop_patience, epochs, exercise_dim, knowledge_dim,
-# lambda_proto_div, lambda_proto_usage, lambda_sparse,
-# learning_rate, min_exer_interactions, min_poison_count,
-# min_stu_interactions, no_cuda, num_gnn_layers, num_prototypes,
-# num_relation_heads, num_workers, patience, proto_lambda, proto_tau,
-# save_interval, skill_dim,
-# use_skill_encoder, use_soft_prototype, weight_decay
-
-BEST_CFG = {
-    "junyi": {
-        # 来自 CSV
-        "seed": 42,
-        "batch_size": 1024,
-        "disable_soft_prototype": False,
-        "dropout": 0.1,
-        "early_stop_patience": 5,
-        "epochs": 100,
-        "exercise_dim": 128,
-        "knowledge_dim": 128,
-        "lambda_proto_div": 0.0,
-        "lambda_proto_usage": 0.0,
-        "lambda_sparse": 0.1,
-        "learning_rate": 1e-3,
-        "min_exer_interactions": 0,
-        "min_poison_count": 0,
-        "min_stu_interactions": 15,
-        "no_cuda": False,
-        "num_gnn_layers": 2,
-        "num_prototypes": 3,
-        "num_relation_heads": 4,
-        "num_workers": 4,
-        "patience": 5,
-        "proto_lambda": 0.5,
-        "proto_tau": 1.0,
-        "save_interval": 10,
-        "skill_dim": 2,
-        "weight_decay": 1e-5,
-        # 消融/模块开关相关
-        "ablate_skill_encoder": False,
-        "ablate_soft_prototype": False,
-        # 其他
-        "model_variant": "gpd_base",
-    },
-    "assist_09": {
-        "seed": 42,
-        "batch_size": 128,
-        "disable_soft_prototype": False,
-        "dropout": 0.2,
-        "early_stop_patience": 5,
-        "epochs": 100,
-        "exercise_dim": 128,
-        "knowledge_dim": 128,
-        "lambda_proto_div": 0.0,
-        "lambda_proto_usage": 0.0,
-        "lambda_sparse": 0.05,
-        "learning_rate": 3e-4,  # assist_09 的最佳行是 0.0003
-        "min_exer_interactions": 0,
-        "min_poison_count": 0,
-        "min_stu_interactions": 15,
-        "no_cuda": False,
-        "num_gnn_layers": 2,
-        "num_prototypes": 3,
-        "num_relation_heads": 4,
-        "num_workers": 4,
-        "patience": 5,
-        "proto_lambda": 0.3,
-        "proto_tau": 1.0,
-        "save_interval": 10,
-        "skill_dim": 2,
-        "weight_decay": 1e-5,
-        "ablate_skill_encoder": False,
-        "ablate_soft_prototype": False,
-        "model_variant": "gpd_base",
-    },
-}
+from best_configs import BEST_CFG
+from gpu_utils import (
+    calc_effective_max_concurrent,
+    parse_gpu_ids,
+    pick_gpus_for_job,
+)
 
 
-def launch_experiment(dataset_name, cfg, gpu_id):
-    """
-    按照 BEST_CFG 构造 main.py 命令并启动子进程
-    """
+def launch_experiment(dataset_name, cfg, selected_gpus):
+    """启动单个实验，支持多 GPU"""
     tag = f"{dataset_name}_best_gpd_base"
     save_dir = os.path.join("checkpoints", tag)
     log_dir = os.path.join("logs", tag)
     os.makedirs(save_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
+
+    # 获取需要的 GPU 数量
+    num_gpus = cfg.get("num_gpus", 1)
+    if len(selected_gpus) < num_gpus:
+        raise ValueError(
+            f"Insufficient GPU assignment for dataset={dataset_name}: "
+            f"required={num_gpus}, got={selected_gpus}"
+        )
+
+    gpu_str = ",".join(str(g) for g in selected_gpus)
 
     cmd = [
         "python",
@@ -125,12 +52,10 @@ def launch_experiment(dataset_name, cfg, gpu_id):
         log_dir,
     ]
 
-    # 把 cfg 里和 argparse 对应的参数都转成命令行
+    # Convert cfg to CLI args
     for k, v in cfg.items():
-        if k == "model_variant":
-            continue  # 上面已经单独处理过
-
-        # bool 参数：True 才加 flag，False 不写（保持默认）
+        if k in ("model_variant", "num_gpus"):  # 跳过这些参数
+            continue
         if isinstance(v, bool):
             if v:
                 cmd.append(f"--{k}")
@@ -138,83 +63,92 @@ def launch_experiment(dataset_name, cfg, gpu_id):
             cmd.append(f"--{k}")
             cmd.append(str(v))
 
-    env = os.environ.copy()
-    # 直接用物理 GPU id；如果你想用逻辑映射，可以自己改成 "0" / "1" 等
-    env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    # 多 GPU 时添加参数
+    if num_gpus > 1:
+        cmd.append("--multi_gpu")
+        cmd.append("--gpu_ids")
+        cmd.append(gpu_str)
 
-    print(f"[LAUNCH] dataset={dataset_name}, gpu={gpu_id}")
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = gpu_str
+
+    print(f"[LAUNCH] dataset={dataset_name}, gpus={gpu_str} (n={num_gpus})")
     print("         CMD:", " ".join(cmd))
-    return subprocess.Popen(cmd, env=env)
+    return subprocess.Popen(cmd, env=env), selected_gpus
 
 
 def main():
     parser = argparse.ArgumentParser(description="Run best configs for assist_09 & junyi.")
-    parser.add_argument(
-        "--datasets",
-        type=str,
-        default="assist_09,junyi",
-        help="逗号分隔的数据集名称，例如 'assist_09,junyi' 或 'assist_09'",
-    )
-    parser.add_argument(
-        "--gpus",
-        type=str,
-        default="0,1",
-        help="逗号分隔的 GPU 编号，例如 '0,1' 或 '2,3'",
-    )
-    parser.add_argument(
-        "--max_concurrent",
-        type=int,
-        default=2,
-        help="最多并行的实验数（默认 2，刚好两个数据集一起跑）",
-    )
+    parser.add_argument("--datasets", type=str, default="assist_09,junyi")
+    parser.add_argument("--gpus", type=str, default="1,2")
+    parser.add_argument("--max_concurrent", type=int, default=2)
+    parser.add_argument("--max_per_gpu", type=int, default=1)
+    parser.add_argument("--poll_interval", type=int, default=10)
     args = parser.parse_args()
 
     datasets = [d.strip() for d in args.datasets.split(",") if d.strip()]
-    gpus = [int(x) for x in args.gpus.split(",") if x.strip()]
+    gpus = parse_gpu_ids(args.gpus)
     max_concurrent = max(1, args.max_concurrent)
+    max_per_gpu = max(1, args.max_per_gpu)
+    poll_interval = max(1, args.poll_interval)
+    if not gpus:
+        raise ValueError("No GPUs provided. Use --gpus 0 or set properly.")
+    effective_max_concurrent = calc_effective_max_concurrent(max_concurrent, gpus, max_per_gpu)
 
     print(f"Datasets: {datasets}")
-    print(f"GPUs: {gpus}, max_concurrent={max_concurrent}")
+    print(
+        f"GPUs: {gpus}, max_concurrent={max_concurrent}, "
+        f"max_per_gpu={max_per_gpu}, effective_max={effective_max_concurrent}"
+    )
 
-    # 构建任务队列：每个 dataset 跑一条 best 配置
     jobs = []
     for dataset in datasets:
         if dataset not in BEST_CFG:
             raise ValueError(f"Dataset '{dataset}' not in BEST_CFG.")
+        required_gpus = max(1, int(BEST_CFG[dataset].get("num_gpus", 1)))
+        if required_gpus > len(gpus):
+            raise ValueError(
+                f"Dataset '{dataset}' requires num_gpus={required_gpus}, "
+                f"but only {len(gpus)} GPU(s) were provided: {gpus}"
+            )
         jobs.append(dataset)
 
     print(f"Total experiments: {len(jobs)}")
 
-    running = []
+    running: List[Tuple[subprocess.Popen, List[int], str]] = []
+    gpu_load: Dict[int, int] = {gid: 0 for gid in gpus}
     job_idx = 0
-    gpu_rr = 0  # 简单 round-robin 分配 GPU
 
     while job_idx < len(jobs) or running:
-        # 清理已结束进程
         new_running = []
-        for proc, gpu, desc in running:
+        for proc, used_gpus, desc in running:
             ret = proc.poll()
             if ret is None:
-                new_running.append((proc, gpu, desc))
+                new_running.append((proc, used_gpus, desc))
             else:
-                print(f"[DONE] {desc} on gpu {gpu} exited with code {ret}")
+                gpu_desc = ",".join(str(g) for g in used_gpus)
+                print(f"[DONE] {desc} on gpu {gpu_desc} exited with code {ret}")
+                for gid in used_gpus:
+                    gpu_load[gid] = max(0, gpu_load.get(gid, 0) - 1)
         running = new_running
 
-        # 提交新任务
-        while job_idx < len(jobs) and len(running) < max_concurrent:
+        while job_idx < len(jobs) and len(running) < effective_max_concurrent:
             dataset = jobs[job_idx]
             cfg = BEST_CFG[dataset]
-
-            gpu_id = gpus[gpu_rr % len(gpus)]
-            gpu_rr += 1
+            required_gpus = max(1, int(cfg.get("num_gpus", 1)))
+            selected_gpus = pick_gpus_for_job(required_gpus, gpus, gpu_load, max_per_gpu)
+            if selected_gpus is None:
+                break
 
             desc = f"{dataset}|best_gpd_base"
-            proc = launch_experiment(dataset, cfg, gpu_id)
-            running.append((proc, gpu_id, desc))
+            proc, selected_gpus = launch_experiment(dataset, cfg, selected_gpus)
+            running.append((proc, selected_gpus, desc))
+            for gid in selected_gpus:
+                gpu_load[gid] += 1
             job_idx += 1
 
         if running:
-            time.sleep(10)
+            time.sleep(poll_interval)
 
 
 if __name__ == "__main__":

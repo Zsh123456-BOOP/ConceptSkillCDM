@@ -13,9 +13,7 @@ venv/
 .idea/
 .vscode/
 
-# 运行日志
-logs/
-*.log
+
 
 # 忽略所有的 .pth 和 .pt 模型文件
 *.pth

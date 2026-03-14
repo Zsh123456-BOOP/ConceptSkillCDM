@@ -6,12 +6,12 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import torch
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from sklearn.metrics import roc_auc_score, accuracy_score, mean_squared_error
-from gpu_utils import get_best_gpu
+from gpu_utils import get_best_gpu, parse_gpu_ids
 
 
-def setup_logging(log_dir: str, name: str | None = None) -> logging.Logger:
+def setup_logging(log_dir: str, name: Optional[str] = None) -> logging.Logger:
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, f'{name or "train"}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
 
@@ -48,13 +48,18 @@ def select_device(args, logger) -> torch.device:
         logger.info("Using device: cpu")
         return device
 
+    # DataParallel 要求主模型在 device_ids[0]，这里固定多卡主卡为可见卡 0。
+    if getattr(args, "multi_gpu", False) and torch.cuda.device_count() > 1:
+        device = torch.device("cuda:0")
+        torch.cuda.set_device(0)
+        logger.info("Using device: cuda:0 (DataParallel primary device)")
+        return device
+
     candidates = None
     raw_candidates = getattr(args, "gpu_candidates", None)
     if raw_candidates is not None:
         try:
-            candidates = [
-                int(x.strip()) for x in str(raw_candidates).split(",") if x.strip() != ""
-            ]
+            candidates = parse_gpu_ids(str(raw_candidates))
             if not candidates:
                 candidates = None
         except Exception:
@@ -64,9 +69,7 @@ def select_device(args, logger) -> torch.device:
     visible_list = None
     if visible_env:
         try:
-            visible_list = [
-                int(x.strip()) for x in visible_env.split(",") if x.strip() != ""
-            ]
+            visible_list = parse_gpu_ids(visible_env)
             if not visible_list:
                 visible_list = None
         except Exception:
@@ -119,9 +122,70 @@ def save_epoch_history_csv(history: dict, save_dir: str, logger):
 
 import os
 import json
+import hashlib
+import subprocess
+import logging
 from datetime import datetime
 
 import pandas as pd
+
+
+def _get_git_sha(project_root: str) -> str:
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=project_root,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        return sha or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _get_log_path_from_logger(logger) -> str:
+    try:
+        for handler in getattr(logger, "handlers", []):
+            if isinstance(handler, logging.FileHandler):
+                return os.path.abspath(getattr(handler, "baseFilename", ""))
+    except Exception:
+        pass
+    return ""
+
+
+def _build_config_hash(args) -> str:
+    # Keep hash stable and comparable across runs: exclude path/timestamp-only fields.
+    keys = [
+        "dataset_name",
+        "seed",
+        "model_variant",
+        "ablate_module1",
+        "ablate_module2",
+        "ablate_module3",
+        "learning_rate",
+        "dropout",
+        "batch_size",
+        "lambda_sparse",
+        "lambda_sparse_personal",
+        "lambda_alpha",
+        "exercise_l2_lambda",
+        "fusion_gate_max",
+        "fusion_gate_bias_init",
+        "residual_clip_t",
+        "residual_scale_init",
+        "graph_reg_warmup_epochs",
+        "graph_reg_cap_ratio",
+        "use_mf_branch",
+        "use_concept_graph",
+        "use_personal_graph",
+    ]
+    payload = {}
+    for k in keys:
+        if hasattr(args, k):
+            payload[k] = getattr(args, k)
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
 
 def append_summary_csv(
     args,
@@ -129,6 +193,7 @@ def append_summary_csv(
     best_val_auc: float,
     model_epoch: int,
     logger,
+    final_model_facts: Optional[Dict[str, Any]] = None,
 ):
     """
     将一次实验的结果追加到统一的 summary CSV 中：
@@ -154,12 +219,16 @@ def append_summary_csv(
     row["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     row["dataset"] = getattr(args, "dataset_name", "unknown")
     row["model_variant"] = getattr(args, "model_variant", "full")
+    row["git_sha"] = _get_git_sha(project_root)
+    row["run_dir"] = os.path.abspath(getattr(args, "save_dir", ""))
+    row["log_path"] = _get_log_path_from_logger(logger)
+    row["config_hash"] = _build_config_hash(args)
 
     # 消融标记，方便后续筛选
     ablation_flags = []
     for flag in [
-        "ablate_soft_prototype",
         "ablate_skill_encoder",
+        "ablate_concept_graph",
     ]:
         if hasattr(args, flag):
             ablation_flags.append(f"{flag}={getattr(args, flag)}")
@@ -173,6 +242,17 @@ def append_summary_csv(
     row["test_rmse"] = float(metrics["rmse"])
     row["best_val_auc"] = float(best_val_auc)
     row["model_epoch"] = int(model_epoch)
+
+    # 运行时事实：防止“CSV 标记消融，但模型实际未生效”
+    for idx in [1, 2, 3]:
+        key = f"enable_module{idx}"
+        out_key = f"final_enable_module{idx}"
+        if final_model_facts is not None and key in final_model_facts:
+            row[out_key] = bool(final_model_facts[key])
+        elif hasattr(args, key):
+            row[out_key] = bool(getattr(args, key))
+    if final_model_facts is not None and "has_mf_branch" in final_model_facts:
+        row["final_has_mf_branch"] = bool(final_model_facts["has_mf_branch"])
 
     # === 3. 把 args 里的超参数摊平成后面的列 ===
     skip_keys = {
@@ -216,11 +296,24 @@ def append_summary_csv(
     else:
         df = pd.DataFrame([row])
 
+    if "ablate_exercise_graph" in df.columns:
+        if "ablate_concept_graph" not in df.columns:
+            df["ablate_concept_graph"] = df["ablate_exercise_graph"]
+        df = df.drop(columns=["ablate_exercise_graph"])
+    if "ablation_flags" in df.columns:
+        df["ablation_flags"] = df["ablation_flags"].astype(str).str.replace(
+            "ablate_exercise_graph=", "ablate_concept_graph=", regex=False
+        )
+
     # === 5. 调整列顺序：指标和关键信息放前面 ===
     front_cols = [
         "timestamp",
         "dataset",
         "model_variant",
+        "git_sha",
+        "run_dir",
+        "log_path",
+        "config_hash",
         "ablation_flags",
         "seed",
         "test_auc",
@@ -228,6 +321,10 @@ def append_summary_csv(
         "test_rmse",
         "best_val_auc",
         "model_epoch",
+        "final_enable_module1",
+        "final_enable_module2",
+        "final_enable_module3",
+        "final_has_mf_branch",
     ]
     front_cols = [c for c in front_cols if c in df.columns]
     other_cols = [c for c in df.columns if c not in front_cols]

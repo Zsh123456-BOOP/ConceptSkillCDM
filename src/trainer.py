@@ -1,12 +1,20 @@
+# src/trainer.py
+import math
 import json
 import os
-from typing import Tuple, Dict, Any
+import warnings
+from typing import Tuple, Dict, Any, Optional, Union, List
 
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
+
+# 过滤 DataParallel 的 gather 标量警告（这是正常行为，不影响结果）
+warnings.filterwarnings("ignore", message="Was asked to gather along dimension 0")
 
 from src.dataset import CognitiveDiagnosisDataset, create_dataloaders
 from src.model import CognitiveDiagnosisModel
@@ -16,79 +24,644 @@ from src.experiment_utils import (
     save_epoch_history_csv,
     append_summary_csv,
 )
+from src.module_activity import (
+    compute_module_activity,
+    format_activity_brief,
+    format_activity_report,
+)
 
+# =========================
+# Global toggles
+# =========================
+# If True: fail fast when checkpoint/model keys mismatch (recommended for ablations)
+STRICT_CHECKPOINT_LOADING = True
+
+# ======================================================
+# Helpers
+# ======================================================
+
+def _sigmoid_torch(x: torch.Tensor) -> torch.Tensor:
+    """Numerically stable sigmoid for metrics; keep in torch for speed."""
+    return torch.sigmoid(x)
+
+
+def _ensure_1d(t: torch.Tensor) -> torch.Tensor:
+    """Ensure tensor shape (B,) for logits/labels. Use reshape to handle non-contiguous tensors."""
+    return t.reshape(-1)
+
+
+def _resolve_optional_graph_dropout(value: Any) -> Optional[float]:
+    """Compatibility: graph_dropout < 0 or invalid means follow global dropout."""
+    if value is None:
+        return None
+    try:
+        val = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if val < 0 else val
+
+
+def _get_base_model(model: nn.Module) -> CognitiveDiagnosisModel:
+    """获取基础模型（处理 DataParallel 包装）"""
+    if isinstance(model, nn.DataParallel):
+        return model.module
+    return model
+
+
+def _collect_runtime_ablation_facts(model: nn.Module) -> Dict[str, Any]:
+    """收集模型运行时的模块开关与物理存在性，用于防止“假消融”"""
+    base_model = _get_base_model(model)
+    structure_module = getattr(base_model, "structure_module", None)
+
+    has_knowledge_encoder = (
+        structure_module is not None and getattr(structure_module, "knowledge_encoder", None) is not None
+    )
+    has_mf_branch = (
+        getattr(base_model, "skill_encoder", None) is not None
+        and getattr(base_model, "mf_head", None) is not None
+    )
+
+    return {
+        "enable_module1": bool(getattr(base_model, "enable_module1", False)),
+        "enable_module2": bool(getattr(base_model, "enable_module2", False)),
+        "enable_module3": bool(getattr(base_model, "enable_module3", False)),
+        "has_knowledge_encoder": bool(has_knowledge_encoder),
+        "has_mf_branch": bool(has_mf_branch),
+    }
+
+
+def _log_and_assert_ablation_consistency(
+    *,
+    model: nn.Module,
+    logger,
+    context: str,
+    ablate_module1: bool,
+    ablate_module2: bool,
+    ablate_module3: bool,
+) -> Dict[str, Any]:
+    """
+    记录并校验消融一致性：
+    - args.ablate_module* 与 model.enable_module* 必须一致
+    - 关键模块的“物理存在性”必须符合预期
+    """
+    facts = _collect_runtime_ablation_facts(model)
+
+    logger.info(
+        "%s Ablation runtime check: "
+        "args(ablate_module1=%s,ablate_module2=%s,ablate_module3=%s) | "
+        "model(enable_module1=%s,enable_module2=%s,enable_module3=%s) | "
+        "physical(has_knowledge_encoder=%s,has_mf_branch=%s)",
+        context,
+        ablate_module1,
+        ablate_module2,
+        ablate_module3,
+        facts["enable_module1"],
+        facts["enable_module2"],
+        facts["enable_module3"],
+        facts["has_knowledge_encoder"],
+        facts["has_mf_branch"],
+    )
+
+    if ablate_module1 and facts["enable_module1"]:
+        raise RuntimeError("Ablation mismatch: ablate_module1=True but model.enable_module1=True.")
+    if ablate_module2 and facts["enable_module2"]:
+        raise RuntimeError("Ablation mismatch: ablate_module2=True but model.enable_module2=True.")
+    if ablate_module3 and facts["enable_module3"]:
+        raise RuntimeError("Ablation mismatch: ablate_module3=True but model.enable_module3=True.")
+
+    if ablate_module1 and facts["has_knowledge_encoder"]:
+        raise RuntimeError("Ablation mismatch: ablate_module1=True but knowledge_encoder still exists.")
+    if ablate_module3 and facts["has_mf_branch"]:
+        raise RuntimeError("Ablation mismatch: ablate_module3=True but MF branch modules still exist.")
+
+    return facts
+
+
+def _log_module3_init_state(model: nn.Module, logger, context: str) -> None:
+    """
+    记录 module3 初始化态，便于快速判断是否“开局过保守”：
+    - fusion_gate bias / gate_max / implied initial gate
+    - q_gate 初始值
+    - residual scale 初始值（softplus 后）
+    """
+    base_model = _get_base_model(model)
+    fusion = getattr(base_model, "fusion", None)
+    exercise_encoder = getattr(base_model, "exercise_encoder", None)
+    mf_head = getattr(base_model, "mf_head", None)
+    relation_learning = getattr(getattr(base_model, "structure_module", None), "relation_learning", None)
+
+    gate_bias = None
+    gate_max = None
+    implied_gate = None
+    if fusion is not None and getattr(fusion, "fusion_gate", None) is not None:
+        gate_bias = float(fusion.fusion_gate.bias.detach().mean().item())
+        gate_max = float(getattr(fusion, "gate_max", 1.0))
+        implied_gate = gate_max * (1.0 / (1.0 + math.exp(-gate_bias)))
+
+    q_gate = None
+    if exercise_encoder is not None and getattr(exercise_encoder, "q_gate_raw", None) is not None:
+        q_gate = float(torch.sigmoid(exercise_encoder.q_gate_raw.detach()).item())
+
+    mf_scale = None
+    bias_scale = None
+    if mf_head is not None and getattr(mf_head, "mf_scale_raw", None) is not None:
+        mf_scale = float(F.softplus(mf_head.mf_scale_raw.detach()).item())
+    if mf_head is not None and getattr(mf_head, "bias_scale_raw", None) is not None:
+        bias_scale = float(F.softplus(mf_head.bias_scale_raw.detach()).item())
+
+    graph_tau_mean = 0.0
+    graph_tau_std = 0.0
+    graph_dropout = 0.0
+    if relation_learning is not None and getattr(relation_learning, "tau_raw", None) is not None:
+        tau = F.softplus(relation_learning.tau_raw.detach()) + 1e-6
+        graph_tau_mean = float(tau.mean().item())
+        graph_tau_std = float(tau.std(unbiased=False).item())
+        graph_dropout = float(getattr(getattr(relation_learning, "dropout", None), "p", 0.0))
+
+    logger.info(
+        "%s [Module3 Init] fusion_gate_bias=%.4f, fusion_gate_max=%.4f, "
+        "implied_gate=%.4f, q_gate=%.4f, mf_scale=%.4f, bias_scale=%.4f, "
+        "graph_tau_mean=%.4f, graph_tau_std=%.4f, graph_dropout=%.3f",
+        context,
+        gate_bias if gate_bias is not None else 0.0,
+        gate_max if gate_max is not None else 0.0,
+        implied_gate if implied_gate is not None else 0.0,
+        q_gate if q_gate is not None else 0.0,
+        mf_scale if mf_scale is not None else 0.0,
+        bias_scale if bias_scale is not None else 0.0,
+        graph_tau_mean,
+        graph_tau_std,
+        graph_dropout,
+    )
+
+
+def _convert_legacy_weight_norm_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """
+    Compatibility helper:
+    Old torch.nn.utils.weight_norm produced:
+      ...theta_proj.weight_g, ...theta_proj.weight_v
+    New torch.nn.utils.parametrizations.weight_norm produces:
+      ...theta_proj.parametrizations.weight.original0 (g)
+      ...theta_proj.parametrizations.weight.original1 (v)
+    """
+    has_legacy = any(k.endswith("weight_g") or k.endswith("weight_v") for k in state_dict.keys())
+    if not has_legacy:
+        return state_dict
+
+    new_sd = dict(state_dict)
+    keys = list(state_dict.keys())
+    for k in keys:
+        if k.endswith("weight_g"):
+            base = k[:-len("weight_g")]
+            new_k = base + "parametrizations.weight.original0"
+            new_sd[new_k] = new_sd.pop(k)
+        elif k.endswith("weight_v"):
+            base = k[:-len("weight_v")]
+            new_k = base + "parametrizations.weight.original1"
+            new_sd[new_k] = new_sd.pop(k)
+    return new_sd
+
+
+def _strip_module_prefix(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """
+    移除 DataParallel 保存的 state_dict 中的 'module.' 前缀。
+    
+    DataParallel 训练时保存的权重格式为 'module.xxx'，
+    但在非 DataParallel 模型中加载时需要移除这个前缀。
+    """
+    has_module_prefix = any(k.startswith("module.") for k in state_dict.keys())
+    if not has_module_prefix:
+        return state_dict
+    
+    new_sd = {}
+    for k, v in state_dict.items():
+        if k.startswith("module."):
+            new_sd[k[7:]] = v  # 移除 "module." 前缀（7个字符）
+        else:
+            new_sd[k] = v
+    return new_sd
+
+
+def _hard_ablation_effective_hparams(
+    *,
+    use_concept_graph: bool,
+    num_gnn_layers: int,
+ ) -> int:
+    """
+    Hard-ablation safety:
+      - If concept graph is disabled, force num_gnn_layers=0 to prevent "I-graph GNN" leakage.
+    """
+    eff_gnn = int(num_gnn_layers)
+    if not use_concept_graph:
+        eff_gnn = 0
+    return eff_gnn
+
+
+def _safe_mean_std(values: List[float]) -> Tuple[float, float]:
+    if not values:
+        return 0.0, 0.0
+    arr = np.asarray(values, dtype=np.float64)
+    return float(arr.mean()), float(arr.std())
+
+
+def _safe_abs_mean_std(values: List[float]) -> Tuple[float, float]:
+    if not values:
+        return 0.0, 0.0
+    arr = np.abs(np.asarray(values, dtype=np.float64))
+    return float(arr.mean()), float(arr.std())
+
+
+def _row_entropy_mean(A: np.ndarray) -> float:
+    eps = 1e-12
+    A = np.clip(A, eps, None)
+    row_entropy = -(A * np.log(A)).sum(axis=-1)
+    return float(row_entropy.mean())
+
+
+_REG_COMPONENT_KEYS: Tuple[str, ...] = (
+    "graph_entropy",
+    "graph_diag",
+    "graph_uniform",
+    "graph_reg_scale",
+    "mf_l2",
+    "delta_ratio",
+    "personal_sparse",
+    "alpha_var",
+    "alpha_collapse",
+)
+
+
+def _collect_debug_forward_stats(
+    model: CognitiveDiagnosisModel,
+    data_loader: DataLoader,
+    device: torch.device,
+    max_batches: int = 2,
+) -> Dict[str, float]:
+    """
+    仅用于诊断日志：采样少量 batch 统计 module1/module3 关键信号。
+    不参与训练，也不改变任何训练逻辑。
+    """
+    max_batches = max(1, int(max_batches))
+    was_training = model.training
+    model.eval()
+
+    mf_vals: List[float] = []
+    residual_vals: List[float] = []
+    gate_vals: List[float] = []
+    irt_vals: List[float] = []
+    delta_vals: List[float] = []
+    alpha_vals: List[float] = []
+    alpha_bias_vals: List[float] = []
+    personal_entropy_vals: List[float] = []
+    personal_matrix_delta_vals: List[float] = []
+    personal_matrix_student_std_vals: List[float] = []
+
+    graph_row_entropy_mean = 0.0
+    graph_entropy_ratio = 0.0
+    graph_diag_mass = 0.0
+    graph_to_uniform_l2 = 0.0
+    graph_to_identity_l2 = 0.0
+    graph_ready = False
+    mf_warmup_scale = 1.0
+    personal_warmup_scale = 1.0
+
+    base_model = _get_base_model(model)
+    tau_mean = 0.0
+    tau_std = 0.0
+    relation_learning = getattr(getattr(base_model, "structure_module", None), "relation_learning", None)
+    if relation_learning is not None and getattr(relation_learning, "tau_raw", None) is not None:
+        tau = F.softplus(relation_learning.tau_raw.detach()) + 1e-6
+        tau_mean = float(tau.mean().item())
+        tau_std = float(tau.std(unbiased=False).item())
+
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(data_loader):
+            if batch_idx >= max_batches:
+                break
+
+            student_ids, exercise_ids, concept_vector, _ = batch
+            student_ids = student_ids.to(device)
+            exercise_ids = exercise_ids.to(device)
+            concept_vector = concept_vector.to(device)
+
+            _, details = model(
+                student_ids,
+                exercise_ids,
+                concept_vector=concept_vector,
+                return_details=True,
+                return_logits=True,
+            )
+
+            mf_logit = details.get("mf_logit")
+            if mf_logit is not None:
+                mf_vals.extend(mf_logit.detach().reshape(-1).cpu().numpy().tolist())
+
+            residual_logit = details.get("residual_logit", mf_logit)
+            if residual_logit is not None:
+                residual_vals.extend(residual_logit.detach().reshape(-1).cpu().numpy().tolist())
+
+            irt_logit = details.get("irt_logit")
+            if irt_logit is not None:
+                irt_vals.extend(irt_logit.detach().reshape(-1).cpu().numpy().tolist())
+
+            gate = details.get("gate")
+            if gate is not None:
+                gate_vals.extend(gate.detach().reshape(-1).cpu().numpy().tolist())
+
+            if mf_logit is not None and gate is not None:
+                delta = gate.detach().reshape(-1) * mf_logit.detach().reshape(-1)
+                delta_vals.extend(delta.cpu().numpy().tolist())
+
+            alpha = details.get("alpha_effective", details.get("alpha"))
+            if alpha is not None:
+                alpha_vals.extend(alpha.detach().reshape(-1).cpu().numpy().tolist())
+
+            alpha_student_bias = details.get("alpha_student_bias")
+            if alpha_student_bias is not None:
+                alpha_bias_vals.extend(alpha_student_bias.detach().reshape(-1).cpu().numpy().tolist())
+
+            personal_matrices = details.get("personal_matrices")
+            if personal_matrices is not None:
+                pm = personal_matrices.detach().cpu().numpy()
+                personal_entropy_vals.append(_row_entropy_mean(pm))
+                pm_delta = details.get("personal_matrix_delta")
+                if pm_delta is not None:
+                    personal_matrix_delta_vals.extend(pm_delta.detach().reshape(-1).cpu().numpy().tolist())
+                relation_matrices = details.get("relation_matrices")
+                if relation_matrices is not None:
+                    rm = relation_matrices.detach()
+                    global_matrix = rm.mean(dim=0, keepdim=True)
+                    if pm_delta is None:
+                        delta_mean = (personal_matrices.detach() - global_matrix).abs().mean(dim=(-1, -2))
+                        personal_matrix_delta_vals.extend(delta_mean.cpu().numpy().tolist())
+                    student_std = details.get("personal_matrix_student_std")
+                    if student_std is not None:
+                        personal_matrix_student_std_vals.append(float(student_std.detach().item()))
+                    else:
+                        matrix_std = personal_matrices.detach().std(dim=0, unbiased=False).mean()
+                        personal_matrix_student_std_vals.append(float(matrix_std.item()))
+
+            if details.get("mf_warmup_scale") is not None:
+                mf_warmup_scale = float(details["mf_warmup_scale"].detach().reshape(-1)[0].item())
+            if details.get("personal_warmup_scale") is not None:
+                personal_warmup_scale = float(details["personal_warmup_scale"].detach().reshape(-1)[0].item())
+
+            if not graph_ready:
+                relation_matrices = details.get("relation_matrices")
+                if relation_matrices is not None:
+                    rm = relation_matrices.detach().cpu().numpy()
+                    graph_row_entropy_mean = _row_entropy_mean(rm)
+                    max_row_entropy = float(np.log(rm.shape[-1])) if rm.shape[-1] > 1 else 0.0
+                    graph_entropy_ratio = (
+                        graph_row_entropy_mean / max_row_entropy if max_row_entropy > 0 else 0.0
+                    )
+                    graph_diag_mass = float(np.diagonal(rm, axis1=-2, axis2=-1).mean())
+                    uniform_val = 1.0 / float(max(1, rm.shape[-1]))
+                    graph_to_uniform_l2 = float(np.sqrt(np.mean((rm - uniform_val) ** 2)))
+                    identity = np.eye(rm.shape[-1], dtype=rm.dtype)
+                    graph_to_identity_l2 = float(np.sqrt(np.mean((rm - identity) ** 2)))
+                    graph_ready = True
+
+    if was_training:
+        model.train()
+
+    mf_abs_mean, mf_std = _safe_abs_mean_std(mf_vals)
+    residual_abs_mean, residual_std = _safe_abs_mean_std(residual_vals)
+    gate_mean, gate_std = _safe_mean_std(gate_vals)
+    irt_abs_mean, irt_std = _safe_abs_mean_std(irt_vals)
+    delta_abs_mean, delta_std = _safe_abs_mean_std(delta_vals)
+    alpha_mean, alpha_std = _safe_mean_std(alpha_vals)
+    alpha_bias_mean, alpha_bias_std = _safe_mean_std(alpha_bias_vals)
+    personal_row_entropy, _ = _safe_mean_std(personal_entropy_vals)
+    personal_matrix_delta_mean, _ = _safe_mean_std(personal_matrix_delta_vals)
+    personal_matrix_student_std_mean, _ = _safe_mean_std(personal_matrix_student_std_vals)
+
+    return {
+        "mf_abs_mean": mf_abs_mean,
+        "mf_std": mf_std,
+        "residual_abs_mean": residual_abs_mean,
+        "residual_std": residual_std,
+        "gate_mean": gate_mean,
+        "gate_std": gate_std,
+        "irt_abs_mean": irt_abs_mean,
+        "irt_std": irt_std,
+        "delta_abs_mean": delta_abs_mean,
+        "delta_std": delta_std,
+        "graph_row_entropy_mean": graph_row_entropy_mean,
+        "graph_entropy_ratio": graph_entropy_ratio,
+        "graph_diag_mass": graph_diag_mass,
+        "graph_to_uniform_l2": graph_to_uniform_l2,
+        "graph_to_identity_l2": graph_to_identity_l2,
+        "graph_tau_mean": tau_mean,
+        "graph_tau_std": tau_std,
+        "alpha_mean": alpha_mean,
+        "alpha_std": alpha_std,
+        "alpha_bias_mean": alpha_bias_mean,
+        "alpha_bias_std": alpha_bias_std,
+        "personal_row_entropy": personal_row_entropy,
+        "personal_matrix_delta": personal_matrix_delta_mean,
+        "personal_matrix_student_std": personal_matrix_student_std_mean,
+        "mf_warmup_scale": mf_warmup_scale,
+        "personal_warmup_scale": personal_warmup_scale,
+    }
+
+
+def _grad_norm_or_zero(param: Optional[torch.Tensor]) -> float:
+    if param is None:
+        return 0.0
+    grad = getattr(param, "grad", None)
+    if grad is None:
+        return 0.0
+    return float(grad.detach().norm(p=2).item())
+
+
+def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
+    base_model = _get_base_model(model)
+
+    mf_head = getattr(base_model, "mf_head", None)
+    fusion = getattr(base_model, "fusion", None)
+    exercise_encoder = getattr(base_model, "exercise_encoder", None)
+    skill_encoder = getattr(base_model, "skill_encoder", None)
+    structure_module = getattr(base_model, "structure_module", None)
+    relation_learning = getattr(structure_module, "relation_learning", None) if structure_module is not None else None
+    personal_generator = getattr(structure_module, "personal_generator", None) if structure_module is not None else None
+    adaptive_gate = getattr(structure_module, "adaptive_gate", None) if structure_module is not None else None
+    personal_gate_embedding = getattr(structure_module, "personal_gate_embedding", None) if structure_module is not None else None
+    personal_generator_embedding = getattr(structure_module, "personal_generator_embedding", None) if structure_module is not None else None
+    personal_alpha_bias = getattr(structure_module, "personal_alpha_bias", None) if structure_module is not None else None
+
+    mf_u = getattr(getattr(mf_head, "u_proj", None), "weight", None)
+    mf_v = getattr(getattr(mf_head, "v_proj", None), "weight", None)
+    fusion_w = getattr(getattr(fusion, "fusion_gate", None), "weight", None)
+    q_gate = getattr(exercise_encoder, "q_gate_raw", None) if exercise_encoder is not None else None
+    skill_latent = getattr(getattr(skill_encoder, "latent_emb", None), "weight", None)
+    relation_emb = getattr(relation_learning, "concept_embeddings", None) if relation_learning is not None else None
+    relation_tau = getattr(relation_learning, "tau_raw", None) if relation_learning is not None else None
+    relation_wq = None
+    relation_wk = None
+    if relation_learning is not None:
+        wq_layers = getattr(relation_learning, "Wq", [])
+        wk_layers = getattr(relation_learning, "Wk", [])
+        wq_norms = [
+            _grad_norm_or_zero(getattr(layer, "weight", None))
+            for layer in wq_layers
+        ]
+        wk_norms = [
+            _grad_norm_or_zero(getattr(layer, "weight", None))
+            for layer in wk_layers
+        ]
+        relation_wq = float(np.mean(wq_norms)) if wq_norms else 0.0
+        relation_wk = float(np.mean(wk_norms)) if wk_norms else 0.0
+    personal_u = getattr(personal_generator, "student_basis_u", None)
+    personal_v = getattr(personal_generator, "student_basis_v", None)
+    personal_gate_student_proj = getattr(getattr(adaptive_gate, "student_proj", None), "weight", None)
+    personal_gate_context_proj = getattr(getattr(adaptive_gate, "context_proj", None), "weight", None)
+    personal_gate_student_direct = getattr(getattr(adaptive_gate, "student_to_logit", None), "weight", None)
+    personal_gate_context_direct = getattr(getattr(adaptive_gate, "context_to_logit", None), "weight", None)
+    personal_gate_out = getattr(getattr(adaptive_gate, "out", None), "weight", None)
+    personal_generator_context_proj = getattr(getattr(personal_generator, "context_proj", None), "weight", None)
+    personal_generator_context_hidden = getattr(getattr(personal_generator, "hidden_proj", None), "weight", None)
+    personal_generator_context_to_u = getattr(getattr(personal_generator, "context_to_u", None), "weight", None)
+    personal_generator_context_to_v = getattr(getattr(personal_generator, "context_to_v", None), "weight", None)
+
+    return {
+        "mf_u_proj": _grad_norm_or_zero(mf_u),
+        "mf_v_proj": _grad_norm_or_zero(mf_v),
+        "fusion_gate": _grad_norm_or_zero(fusion_w),
+        "q_gate_raw": _grad_norm_or_zero(q_gate),
+        "skill_latent": _grad_norm_or_zero(skill_latent),
+        "relation_emb": _grad_norm_or_zero(relation_emb),
+        "relation_tau": _grad_norm_or_zero(relation_tau),
+        "relation_wq": relation_wq if relation_wq is not None else 0.0,
+        "relation_wk": relation_wk if relation_wk is not None else 0.0,
+        "personal_u": _grad_norm_or_zero(personal_u),
+        "personal_v": _grad_norm_or_zero(personal_v),
+        "personal_alpha_bias": _grad_norm_or_zero(getattr(personal_alpha_bias, "weight", None)),
+        "personal_gate_emb": _grad_norm_or_zero(getattr(personal_gate_embedding, "weight", None)),
+        "personal_gate_student_proj": _grad_norm_or_zero(personal_gate_student_proj),
+        "personal_gate_context_proj": _grad_norm_or_zero(personal_gate_context_proj),
+        "personal_gate_student_direct": _grad_norm_or_zero(personal_gate_student_direct),
+        "personal_gate_context_direct": _grad_norm_or_zero(personal_gate_context_direct),
+        "personal_gate_out": _grad_norm_or_zero(personal_gate_out),
+        "personal_generator_emb": _grad_norm_or_zero(getattr(personal_generator_embedding, "weight", None)),
+        "personal_generator_context_proj": _grad_norm_or_zero(personal_generator_context_proj),
+        "personal_generator_context_hidden": _grad_norm_or_zero(personal_generator_context_hidden),
+        "personal_generator_context_to_u": _grad_norm_or_zero(personal_generator_context_to_u),
+        "personal_generator_context_to_v": _grad_norm_or_zero(personal_generator_context_to_v),
+    }
+
+
+def _debug_assert_module3_wiring(model: nn.Module, *, ablate_module3: bool) -> None:
+    """
+    Debug 模式下的 module3 断言：
+    - enable_module3 & use_mf_branch 时，mf_head/skill_encoder/fusion 必须存在
+    - ablate_module3=True 时，module3 组件必须不存在
+    """
+    base_model = _get_base_model(model)
+    enable_module3 = bool(getattr(base_model, "enable_module3", False))
+    use_mf_branch = bool(getattr(base_model, "use_mf_branch", False))
+    mf_head = getattr(base_model, "mf_head", None)
+    skill_encoder = getattr(base_model, "skill_encoder", None)
+    fusion = getattr(base_model, "fusion", None)
+
+    if enable_module3 and use_mf_branch:
+        if mf_head is None or skill_encoder is None or fusion is None:
+            raise RuntimeError(
+                "Debug wiring assert failed: enable_module3=True & use_mf_branch=True, "
+                "but mf_head/skill_encoder/fusion is missing."
+            )
+
+    if ablate_module3:
+        if mf_head is not None or skill_encoder is not None or fusion is not None:
+            raise RuntimeError(
+                "Debug wiring assert failed: ablate_module3=True, but module3 components still exist."
+            )
+
+
+# ======================================================
+# Train / Validate (use BCEWithLogitsLoss)
+# ======================================================
 
 def train_epoch(
     model: CognitiveDiagnosisModel,
     train_loader: DataLoader,
     optimizer: optim.Optimizer,
     device: torch.device,
-    lambda_sparse: float,
-    lambda_proto_div: float,
-    lambda_proto_usage: float,
     logger,
 ) -> Dict[str, float]:
     model.train()
 
     total_loss = 0.0
-    total_bce_loss = 0.0
-    total_reg_loss = 0.0
+    total_bce = 0.0
+    total_reg = 0.0
+    reg_component_sums: Dict[str, float] = {k: 0.0 for k in _REG_COMPONENT_KEYS}
 
-    all_labels = []
-    all_predictions = []
-    all_probs = []
+    all_labels: List[float] = []
+    all_preds: List[float] = []
+    all_probs: List[float] = []
+
+    bce_fn = nn.BCEWithLogitsLoss()
 
     for batch_idx, batch in enumerate(train_loader):
         student_ids, exercise_ids, labels = batch
         student_ids = student_ids.to(device)
         exercise_ids = exercise_ids.to(device)
-        labels = labels.to(device).float()
+        concept_vector = concept_vector.to(device)
+        labels = _ensure_1d(labels.to(device).float())
 
-        pred_probs, details = model(
+        # get logits + details (for regularizers)
+        logits, details = model(
             student_ids,
             exercise_ids,
             return_details=True,
+            return_logits=True,
         )
+        logits = _ensure_1d(logits)
 
-        bce_loss = nn.BCELoss()(pred_probs, labels)
-
-        proto_assign = details.get("prototype_assign", None)
-        reg_loss = model.get_regularization_loss(
-            details["relation_matrices"],
-            details["skill_vector"],
-            details["knowledge_state"],
-            prototype_assign=proto_assign,
-            lambda_sparse=lambda_sparse,
-            lambda_proto_div=lambda_proto_div,
-            lambda_proto_usage=lambda_proto_usage,
+        bce_loss = bce_fn(logits, labels)
+        reg_terms = _get_base_model(model).get_regularization_components(
+            relation_matrices=details["relation_matrices"],
+            details=details,
+            base_loss=bce_loss,
         )
-
+        reg_loss = reg_terms["total"]
         loss = bce_loss + reg_loss
 
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
         optimizer.step()
 
-        total_loss += loss.item()
-        total_bce_loss += bce_loss.item()
-        total_reg_loss += reg_loss.item()
+        total_loss += float(loss.item())
+        total_bce += float(bce_loss.item())
+        total_reg += float(reg_loss.item())
+        for key in _REG_COMPONENT_KEYS:
+            reg_component_sums[key] += float(reg_terms[key].item())
 
-        predictions = (pred_probs > 0.5).float()
-        all_labels.extend(labels.cpu().detach().numpy())
-        all_predictions.extend(predictions.cpu().detach().numpy())
-        all_probs.extend(pred_probs.cpu().detach().numpy())
+        with torch.no_grad():
+            probs = _sigmoid_torch(logits)
+            preds = (probs > 0.5).float()
 
-    avg_loss = total_loss / len(train_loader)
-    avg_bce_loss = total_bce_loss / len(train_loader)
-    avg_reg_loss = total_reg_loss / len(train_loader)
+        all_labels.extend(labels.detach().cpu().numpy().tolist())
+        all_preds.extend(preds.detach().cpu().numpy().tolist())
+        all_probs.extend(probs.detach().cpu().numpy().tolist())
 
-    metrics = compute_metrics(all_labels, all_predictions, all_probs)
+    avg_loss = total_loss / max(1, len(train_loader))
+    avg_bce = total_bce / max(1, len(train_loader))
+    avg_reg = total_reg / max(1, len(train_loader))
+    avg_reg_components = {
+        f"reg_{key}": reg_component_sums[key] / max(1, len(train_loader))
+        for key in _REG_COMPONENT_KEYS
+    }
+    reg_bce_ratio = avg_reg / (abs(avg_bce) + 1e-12)
+    metrics = compute_metrics(all_labels, all_preds, all_probs)
 
     return {
         "loss": avg_loss,
-        "bce_loss": avg_bce_loss,
-        "reg_loss": avg_reg_loss,
+        "bce_loss": avg_bce,
+        "reg_loss": avg_reg,
+        "reg_bce_ratio": reg_bce_ratio,
+        **avg_reg_components,
         **metrics,
     }
 
@@ -97,75 +670,86 @@ def validate(
     model: CognitiveDiagnosisModel,
     val_loader: DataLoader,
     device: torch.device,
-    lambda_sparse: float,
-    lambda_proto_div: float,
-    lambda_proto_usage: float,
     logger,
 ) -> Dict[str, float]:
     model.eval()
 
     total_loss = 0.0
-    total_bce_loss = 0.0
-    total_reg_loss = 0.0
+    total_bce = 0.0
+    total_reg = 0.0
+    reg_component_sums: Dict[str, float] = {k: 0.0 for k in _REG_COMPONENT_KEYS}
 
-    all_labels = []
-    all_predictions = []
-    all_probs = []
+    all_labels: List[float] = []
+    all_preds: List[float] = []
+    all_probs: List[float] = []
+
+    bce_fn = nn.BCEWithLogitsLoss()
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(val_loader):
             student_ids, exercise_ids, labels = batch
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)
-            labels = labels.to(device).float()
+            concept_vector = concept_vector.to(device)
+            labels = _ensure_1d(labels.to(device).float())
 
-            pred_probs, details = model(
+            logits, details = model(
                 student_ids,
                 exercise_ids,
                 return_details=True,
+                return_logits=True,
             )
+            logits = _ensure_1d(logits)
 
-            bce_loss = nn.BCELoss()(pred_probs, labels)
-
-            proto_assign = details.get("prototype_assign", None)
-            reg_loss = model.get_regularization_loss(
-                details["relation_matrices"],
-                details["skill_vector"],
-                details["knowledge_state"],
-                prototype_assign=proto_assign,
-                lambda_sparse=lambda_sparse,
-                lambda_proto_div=lambda_proto_div,
-                lambda_proto_usage=lambda_proto_usage,
+            bce_loss = bce_fn(logits, labels)
+            reg_terms = _get_base_model(model).get_regularization_components(
+                relation_matrices=details["relation_matrices"],
+                details=details,
+                base_loss=bce_loss,
             )
-
+            reg_loss = reg_terms["total"]
             loss = bce_loss + reg_loss
 
-            total_loss += loss.item()
-            total_bce_loss += bce_loss.item()
-            total_reg_loss += reg_loss.item()
+            total_loss += float(loss.item())
+            total_bce += float(bce_loss.item())
+            total_reg += float(reg_loss.item())
+            for key in _REG_COMPONENT_KEYS:
+                reg_component_sums[key] += float(reg_terms[key].item())
 
-            predictions = (pred_probs > 0.5).float()
-            all_labels.extend(labels.cpu().numpy())
-            all_predictions.extend(predictions.cpu().numpy())
-            all_probs.extend(pred_probs.cpu().numpy())
+            probs = _sigmoid_torch(logits)
+            preds = (probs > 0.5).float()
 
-    avg_loss = total_loss / len(val_loader)
-    avg_bce_loss = total_bce_loss / len(val_loader)
-    avg_reg_loss = total_reg_loss / len(val_loader)
+            all_labels.extend(labels.cpu().numpy().tolist())
+            all_preds.extend(preds.cpu().numpy().tolist())
+            all_probs.extend(probs.cpu().numpy().tolist())
 
-    metrics = compute_metrics(all_labels, all_predictions, all_probs)
+    avg_loss = total_loss / max(1, len(val_loader))
+    avg_bce = total_bce / max(1, len(val_loader))
+    avg_reg = total_reg / max(1, len(val_loader))
+    avg_reg_components = {
+        f"reg_{key}": reg_component_sums[key] / max(1, len(val_loader))
+        for key in _REG_COMPONENT_KEYS
+    }
+    reg_bce_ratio = avg_reg / (abs(avg_bce) + 1e-12)
+    metrics = compute_metrics(all_labels, all_preds, all_probs)
 
     return {
         "loss": avg_loss,
-        "bce_loss": avg_bce_loss,
-        "reg_loss": avg_reg_loss,
+        "bce_loss": avg_bce,
+        "reg_loss": avg_reg,
+        "reg_bce_ratio": reg_bce_ratio,
+        **avg_reg_components,
         **metrics,
     }
+
+
+# ======================================================
+# Train / Inference
+# ======================================================
 
 def train_one_experiment(args, logger) -> Tuple[float, int]:
     device = select_device(args, logger)
 
-    # ========= 统一前缀：把这一轮实验的身份写清楚 =========
     run_tag = (
         f"[{getattr(args, 'dataset_name', 'unknown')}"
         f"|{getattr(args, 'model_variant', 'full')}"
@@ -175,26 +759,43 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
 
     logger.info("%s Loading datasets...", run_tag)
     logger.info(
-        "%s [Ablation] model_variant=%s | soft_proto=%s, skill=%s",
-        run_tag,
-        getattr(args, "model_variant", "full"),
-        str(getattr(args, "use_soft_prototype", True)),
-        str(getattr(args, "use_skill_encoder", True)),
-    )
-    logger.info(
-        "%s Regularization: sparse=%.4f, proto_div=%.4f, proto_usage=%.4f",
+        "%s Regularization: graph_entropy(lambda_sparse)=%.6f, graph_diag=%.6f, graph_uniform=%.6f, "
+        "personal_sparse=%.6f, alpha_penalty=%.6f, "
+        "alpha_min=%.6f, delta_ratio=%.6f, mf_l2(exercise_l2_lambda)=%.6f",
         run_tag,
         args.lambda_sparse,
-        args.lambda_proto_div,
-        args.lambda_proto_usage,
+        getattr(args, "lambda_graph_diag", 0.10),
+        getattr(args, "lambda_graph_uniform", 0.04),
+        args.lambda_sparse_personal,
+        args.lambda_alpha,
+        getattr(args, "lambda_alpha_min", 0.0),
+        getattr(args, "lambda_delta_ratio", 0.0),
+        getattr(args, "exercise_l2_lambda", 5e-5),
     )
-
     logger.info(
-        "[Config] dataset=%s | lambda_sparse=%.4f",
-        getattr(args, "dataset_name", "N/A"),
-        args.lambda_sparse,
+        "%s Graph controls: entropy_band=[%.2f, %.2f], uniform_margin=%.2f, warmup_epochs=%d, cap_ratio=%.2f, graph_dropout=%.3f, graph_tau_init=%.3f",
+        run_tag,
+        getattr(args, "graph_entropy_min", 0.15),
+        getattr(args, "graph_entropy_max", 0.85),
+        getattr(args, "graph_uniform_margin", 0.10),
+        getattr(args, "graph_reg_warmup_epochs", 1),
+        getattr(args, "graph_reg_cap_ratio", 6.0),
+        getattr(args, "graph_dropout", -1.0),
+        getattr(args, "graph_tau_init", 1.0),
     )
-
+    logger.info(
+        "%s Rescue controls: mf_warmup_epochs=%d, delta_ratio_target=%.4f, "
+        "personal_max_alpha=%.3f, personal_delta_scale=%.3f, personal_warmup_epochs=%d, "
+        "personal_student_dim=%s, alpha_min_target=%.4f",
+        run_tag,
+        int(getattr(args, "mf_warmup_epochs", 0)),
+        float(getattr(args, "delta_ratio_target", 0.15)),
+        float(getattr(args, "personal_max_alpha", 0.35)),
+        float(getattr(args, "personal_delta_scale", 1.0)),
+        int(getattr(args, "personal_warmup_epochs", 0)),
+        getattr(args, "personal_student_dim", None),
+        float(getattr(args, "alpha_min_target", 0.0)),
+    )
 
     data_dir = args.data_dir
     train_file = os.path.join(data_dir, "train.csv")
@@ -226,6 +827,45 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     logger.info("%s Number of concepts: %d", run_tag, info_dict["num_concepts"])
 
     logger.info("%s Creating model...", run_tag)
+
+    # switches from main.py (already normalized there)
+    use_mf_branch = getattr(args, "use_mf_branch", getattr(args, "use_skill_encoder", True))
+    use_concept_graph = getattr(args, "use_concept_graph", True)
+    use_q_aligned_residual = bool(getattr(args, "use_q_aligned_residual", True))
+    ablate_module1 = bool(getattr(args, "ablate_module1", False))
+    ablate_module2 = bool(getattr(args, "ablate_module2", False))
+    ablate_module3 = bool(getattr(args, "ablate_module3", False))
+    debug_module3_diag = bool(getattr(args, "debug_module3_diag", False))
+    diag_batches = max(1, int(getattr(args, "diag_batches", 2)))
+    expected_enable_module1 = not ablate_module1
+    expected_enable_module2 = not ablate_module2
+    expected_enable_module3 = not ablate_module3
+
+    # hard-ablation safety (prevents "half-ablation")
+    eff_gnn_layers = _hard_ablation_effective_hparams(
+        use_concept_graph=use_concept_graph,
+        num_gnn_layers=getattr(args, "num_gnn_layers", 0),
+    )
+
+    logger.info(
+        "%s Ablation switches: "
+        "ablate_module1=%s, ablate_module2=%s, ablate_module3=%s | "
+        "enable_module1=%s, enable_module2=%s, enable_module3=%s | "
+        "use_mf_branch=%s, use_concept_graph=%s, use_q_aligned_residual=%s | "
+        "effective(num_gnn_layers=%d)",
+        run_tag,
+        ablate_module1,
+        ablate_module2,
+        ablate_module3,
+        expected_enable_module1,
+        expected_enable_module2,
+        expected_enable_module3,
+        use_mf_branch,
+        use_concept_graph,
+        use_q_aligned_residual,
+        eff_gnn_layers,
+    )
+
     model = CognitiveDiagnosisModel(
         num_students=info_dict["num_students"],
         num_exercises=info_dict["num_exercises"],
@@ -235,15 +875,73 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         skill_dim=args.skill_dim,
         exercise_dim=args.exercise_dim,
         num_relation_heads=args.num_relation_heads,
-        num_gnn_layers=args.num_gnn_layers,
+        num_gnn_layers=eff_gnn_layers,
         dropout=args.dropout,
-        num_prototypes=args.num_prototypes,
-        proto_tau=args.proto_tau,
-        proto_lambda=args.proto_lambda,
-        use_soft_prototype=getattr(args, "use_soft_prototype", True),
-        use_skill_encoder=getattr(args, "use_skill_encoder", True),
+        use_mf_branch=use_mf_branch,
+        use_concept_graph=use_concept_graph,
+        graph_topk=getattr(args, "graph_topk", None),
+        allow_self_loop=not getattr(args, "disable_self_loop", False),
+        use_personal_graph=getattr(args, "use_personal_graph", False),
+        ablate_module1=ablate_module1,
+        ablate_module2=ablate_module2,
+        ablate_module3=ablate_module3,
+        use_q_aligned_residual=getattr(args, "use_q_aligned_residual", True),
+        fusion_gate_max=getattr(args, "fusion_gate_max", 1.0),
+        fusion_gate_bias_init=getattr(args, "fusion_gate_bias_init", -1.1),
+        residual_clip_t=getattr(args, "residual_clip_t", 2.0),
+        residual_scale_init=getattr(args, "residual_scale_init", 0.1),
+        graph_dropout=_resolve_optional_graph_dropout(getattr(args, "graph_dropout", -1.0)),
+        graph_tau_init=getattr(args, "graph_tau_init", 1.0),
+        personal_rank=getattr(args, "personal_rank", 4),
+        lambda_sparse_personal=args.lambda_sparse_personal,
+        lambda_alpha=args.lambda_alpha,
+        lambda_graph_entropy=args.lambda_sparse,
+        graph_entropy_min=getattr(args, "graph_entropy_min", 0.15),
+        graph_entropy_max=getattr(args, "graph_entropy_max", 0.85),
+        lambda_graph_diag=getattr(args, "lambda_graph_diag", 0.10),
+        lambda_graph_uniform=getattr(args, "lambda_graph_uniform", 0.04),
+        graph_uniform_margin=getattr(args, "graph_uniform_margin", 0.10),
+        graph_reg_warmup_epochs=getattr(args, "graph_reg_warmup_epochs", 1),
+        graph_reg_cap_ratio=getattr(args, "graph_reg_cap_ratio", 6.0),
+        mf_l2_lambda=getattr(args, "exercise_l2_lambda", 5e-5),
+        gnn_residual_weight=getattr(args, "gnn_residual_weight", 0.5),
+        use_q_conditioning=not getattr(args, "disable_q_conditioning", False),
+        mf_warmup_epochs=getattr(args, "mf_warmup_epochs", 0),
+        lambda_delta_ratio=getattr(args, "lambda_delta_ratio", 0.0),
+        delta_ratio_target=getattr(args, "delta_ratio_target", 0.15),
+        personal_max_alpha=getattr(args, "personal_max_alpha", 0.35),
+        personal_delta_scale=getattr(args, "personal_delta_scale", 1.0),
+        personal_warmup_epochs=getattr(args, "personal_warmup_epochs", 0),
+        personal_student_dim=getattr(args, "personal_student_dim", args.knowledge_dim),
+        lambda_alpha_min=getattr(args, "lambda_alpha_min", 0.0),
+        alpha_min_target=getattr(args, "alpha_min_target", 0.0),
     ).to(device)
 
+    # 多 GPU 支持（DataParallel）
+    is_multi_gpu = getattr(args, "multi_gpu", False) and torch.cuda.device_count() > 1
+    if is_multi_gpu:
+        gpu_ids_str = getattr(args, "gpu_ids", None)
+        if gpu_ids_str:
+            # 使用指定的 GPU（已通过 CUDA_VISIBLE_DEVICES 映射，这里用相对索引）
+            num_visible = torch.cuda.device_count()
+            device_ids = list(range(num_visible))
+        else:
+            device_ids = None
+        model = torch.nn.DataParallel(model, device_ids=device_ids)
+        logger.info("%s Multi-GPU enabled: using %d GPUs", run_tag, torch.cuda.device_count())
+
+    _log_and_assert_ablation_consistency(
+        model=model,
+        logger=logger,
+        context=run_tag,
+        ablate_module1=ablate_module1,
+        ablate_module2=ablate_module2,
+        ablate_module3=ablate_module3,
+    )
+    if debug_module3_diag:
+        _debug_assert_module3_wiring(model, ablate_module3=ablate_module3)
+        logger.info("%s Debug diagnostics enabled: diag_batches=%d", run_tag, diag_batches)
+    _log_module3_init_state(model, logger=logger, context=run_tag)
 
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -267,47 +965,279 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     best_epoch = 0
     patience_counter = 0
 
+    history: Dict[str, Any] = {"train": [], "val": [], "best_epoch": 0, "best_val_auc": 0.0}
+    alpha_zero_streak = 0
+    gate_high_streak = 0
+    delta_high_streak = 0
+    graph_uniform_streak = 0
+    graph_low_grad_streak = 0
+
     logger.info("%s Starting training...", run_tag)
 
-    history: Dict[str, Any] = {
-        "train": [],
-        "val": [],
-        "best_epoch": 0,
-        "best_val_auc": 0.0,
-    }
-
     for epoch in range(1, args.epochs + 1):
+        _get_base_model(model).set_epoch(epoch)
         train_metrics = train_epoch(
             model,
             train_loader,
             optimizer,
             device,
-            args.lambda_sparse,
-            args.lambda_proto_div,
-            args.lambda_proto_usage,
             logger,
         )
+        grad_norms = _collect_debug_grad_norms(model) if debug_module3_diag else None
 
         val_metrics = validate(
             model,
             val_loader,
             device,
-            args.lambda_sparse,
-            args.lambda_proto_div,
-            args.lambda_proto_usage,
             logger,
         )
 
-        summary_line = (
-            f"{run_tag} Epoch [{epoch:03d}/{args.epochs}] | "
-            f"Train: Loss={train_metrics['loss']:.4f}, BCE={train_metrics['bce_loss']:.4f}, "
-            f"Reg={train_metrics['reg_loss']:.4f}, AUC={train_metrics['auc']:.4f}, "
-            f"ACC={train_metrics['acc']:.4f}, RMSE={train_metrics['rmse']:.4f} | "
-            f"Val: Loss={val_metrics['loss']:.4f}, BCE={val_metrics['bce_loss']:.4f}, "
-            f"Reg={val_metrics['reg_loss']:.4f}, AUC={val_metrics['auc']:.4f}, "
-            f"ACC={val_metrics['acc']:.4f}, RMSE={val_metrics['rmse']:.4f}"
+        logger.info(
+            "%s Epoch [%03d/%d] | "
+            "Train: Loss=%.4f, BCE=%.4f, Reg=%.4f, AUC=%.4f, ACC=%.4f, RMSE=%.4f | "
+            "Val: Loss=%.4f, BCE=%.4f, Reg=%.4f, AUC=%.4f, ACC=%.4f, RMSE=%.4f",
+            run_tag,
+            epoch, args.epochs,
+            train_metrics["loss"], train_metrics["bce_loss"], train_metrics["reg_loss"],
+            train_metrics["auc"], train_metrics["acc"], train_metrics["rmse"],
+            val_metrics["loss"], val_metrics["bce_loss"], val_metrics["reg_loss"],
+            val_metrics["auc"], val_metrics["acc"], val_metrics["rmse"],
         )
-        logger.info(summary_line)
+        logger.info(
+            "%s [Reg Terms] Epoch [%03d] | "
+            "Train: graph_entropy=%.6f, graph_diag=%.6f, graph_uniform=%.6f, graph_reg_scale=%.4f, "
+            "mf_l2=%.6f, delta_ratio=%.6f, personal_sparse=%.6f, "
+            "alpha_var=%.6f, alpha_collapse=%.6f, reg_bce_ratio=%.4f | "
+            "Val: graph_entropy=%.6f, graph_diag=%.6f, graph_uniform=%.6f, graph_reg_scale=%.4f, "
+            "mf_l2=%.6f, delta_ratio=%.6f, personal_sparse=%.6f, "
+            "alpha_var=%.6f, alpha_collapse=%.6f, reg_bce_ratio=%.4f",
+            run_tag,
+            epoch,
+            train_metrics.get("reg_graph_entropy", 0.0),
+            train_metrics.get("reg_graph_diag", 0.0),
+            train_metrics.get("reg_graph_uniform", 0.0),
+            train_metrics.get("reg_graph_reg_scale", 1.0),
+            train_metrics.get("reg_mf_l2", 0.0),
+            train_metrics.get("reg_delta_ratio", 0.0),
+            train_metrics.get("reg_personal_sparse", 0.0),
+            train_metrics.get("reg_alpha_var", 0.0),
+            train_metrics.get("reg_alpha_collapse", 0.0),
+            train_metrics.get("reg_bce_ratio", 0.0),
+            val_metrics.get("reg_graph_entropy", 0.0),
+            val_metrics.get("reg_graph_diag", 0.0),
+            val_metrics.get("reg_graph_uniform", 0.0),
+            val_metrics.get("reg_graph_reg_scale", 1.0),
+            val_metrics.get("reg_mf_l2", 0.0),
+            val_metrics.get("reg_delta_ratio", 0.0),
+            val_metrics.get("reg_personal_sparse", 0.0),
+            val_metrics.get("reg_alpha_var", 0.0),
+            val_metrics.get("reg_alpha_collapse", 0.0),
+            val_metrics.get("reg_bce_ratio", 0.0),
+        )
+
+        if debug_module3_diag:
+            diag = _collect_debug_forward_stats(
+                model=model,
+                data_loader=val_loader,
+                device=device,
+                max_batches=diag_batches,
+            )
+            delta_over_irt = diag["delta_abs_mean"] / (diag["irt_abs_mean"] + 1e-12)
+            logger.info(
+                "%s [Diag][M3] Epoch [%03d] | "
+                "residual_abs_mean=%.4f, residual_std=%.4f, mf_abs_mean=%.4f, mf_std=%.4f, gate_mean=%.4f, gate_std=%.4f, "
+                "irt_abs_mean=%.4f, irt_std=%.4f, delta_abs_mean=%.4f, delta_std=%.4f, "
+                "delta_over_irt=%.4f, warmup(mf/personal)=%.2f/%.2f, "
+                "graph_row_entropy=%.4f, graph_entropy_ratio=%.4f, "
+                "alpha_mean=%.4f, alpha_std=%.4f, alpha_bias_std=%.4f, "
+                "personal_row_entropy=%.4f, personal_matrix_delta=%.4f, personal_matrix_student_std=%.4f",
+                run_tag,
+                epoch,
+                diag["residual_abs_mean"],
+                diag["residual_std"],
+                diag["mf_abs_mean"],
+                diag["mf_std"],
+                diag["gate_mean"],
+                diag["gate_std"],
+                diag["irt_abs_mean"],
+                diag["irt_std"],
+                diag["delta_abs_mean"],
+                diag["delta_std"],
+                delta_over_irt,
+                diag["mf_warmup_scale"],
+                diag["personal_warmup_scale"],
+                diag["graph_row_entropy_mean"],
+                diag["graph_entropy_ratio"],
+                diag["alpha_mean"],
+                diag["alpha_std"],
+                diag["alpha_bias_std"],
+                diag["personal_row_entropy"],
+                diag["personal_matrix_delta"],
+                diag["personal_matrix_student_std"],
+            )
+            logger.info(
+                "%s [Diag][Graph] Epoch [%03d] | "
+                "entropy_ratio=%.4f, diag_mass=%.4f, to_uniform_l2=%.6f, to_identity_l2=%.6f, "
+                "tau_mean=%.4f, tau_std=%.4f, graph_reg_scale(train/val)=%.4f/%.4f",
+                run_tag,
+                epoch,
+                diag["graph_entropy_ratio"],
+                diag["graph_diag_mass"],
+                diag["graph_to_uniform_l2"],
+                diag["graph_to_identity_l2"],
+                diag["graph_tau_mean"],
+                diag["graph_tau_std"],
+                train_metrics.get("reg_graph_reg_scale", 1.0),
+                val_metrics.get("reg_graph_reg_scale", 1.0),
+            )
+            if diag["gate_mean"] > 0.8:
+                gate_high_streak += 1
+            else:
+                gate_high_streak = 0
+
+            if delta_over_irt > 0.15:
+                delta_high_streak += 1
+            else:
+                delta_high_streak = 0
+
+            if gate_high_streak >= 2:
+                logger.warning(
+                    "%s [Diag Warning][M3] gate_mean has stayed high for %d epoch(s): gate_mean=%.4f, gate_std=%.4f",
+                    run_tag,
+                    gate_high_streak,
+                    diag["gate_mean"],
+                    diag["gate_std"],
+                )
+
+            if delta_high_streak >= 2:
+                logger.warning(
+                    "%s [Diag Warning][M3] delta_over_irt has stayed high for %d epoch(s): delta_over_irt=%.4f, delta_abs_mean=%.4f",
+                    run_tag,
+                    delta_high_streak,
+                    delta_over_irt,
+                    diag["delta_abs_mean"],
+                )
+
+            if getattr(_get_base_model(model), "use_personal_graph", False):
+                if diag["alpha_std"] < 1e-6:
+                    alpha_zero_streak += 1
+                else:
+                    alpha_zero_streak = 0
+                if alpha_zero_streak >= 3:
+                    logger.warning(
+                        "%s [Diag Warning] alpha_std has been near zero for %d epoch(s) "
+                        "(alpha_std=%.6f, personal_row_entropy=%.4f). "
+                        "This indicates personal-graph mixing may be collapsed/trivial.",
+                        run_tag,
+                        alpha_zero_streak,
+                        diag["alpha_std"],
+                        diag["personal_row_entropy"],
+                    )
+            if diag["graph_entropy_ratio"] > 0.98:
+                graph_uniform_streak += 1
+            else:
+                graph_uniform_streak = 0
+            if graph_uniform_streak >= 3:
+                logger.warning(
+                    "%s [Diag Warning][Graph] graph entropy ratio has stayed too high for %d epoch(s): "
+                    "entropy_ratio=%.4f, to_uniform_l2=%.6f",
+                    run_tag,
+                    graph_uniform_streak,
+                    diag["graph_entropy_ratio"],
+                    diag["graph_to_uniform_l2"],
+                )
+
+            graph_grad_total = (
+                grad_norms["relation_emb"]
+                + grad_norms["relation_tau"]
+                + grad_norms["relation_wq"]
+                + grad_norms["relation_wk"]
+                + grad_norms["personal_u"]
+                + grad_norms["personal_v"]
+                + grad_norms["personal_alpha_bias"]
+                + grad_norms["personal_gate_emb"]
+                + grad_norms["personal_gate_student_proj"]
+                + grad_norms["personal_gate_context_proj"]
+                + grad_norms["personal_gate_student_direct"]
+                + grad_norms["personal_gate_context_direct"]
+                + grad_norms["personal_gate_out"]
+                + grad_norms["personal_generator_emb"]
+                + grad_norms["personal_generator_context_proj"]
+                + grad_norms["personal_generator_context_hidden"]
+                + grad_norms["personal_generator_context_to_u"]
+                + grad_norms["personal_generator_context_to_v"]
+            )
+            if graph_grad_total < 1e-8:
+                graph_low_grad_streak += 1
+            else:
+                graph_low_grad_streak = 0
+            if graph_low_grad_streak >= 2 and getattr(_get_base_model(model), "use_concept_graph", False):
+                logger.warning(
+                    "%s [Diag Warning][Graph] graph-related grad norms are near zero for %d epoch(s): "
+                    "relation_emb=%.6e, relation_tau=%.6e, relation_wq=%.6e, relation_wk=%.6e, "
+                    "personal_u=%.6e, personal_v=%.6e, personal_alpha_bias=%.6e, personal_gate_emb=%.6e, "
+                    "personal_gate_student_proj=%.6e, personal_gate_context_proj=%.6e, "
+                    "personal_gate_student_direct=%.6e, personal_gate_context_direct=%.6e, personal_gate_out=%.6e, "
+                    "personal_generator_emb=%.6e, personal_generator_context_proj=%.6e, "
+                    "personal_generator_context_hidden=%.6e, personal_generator_context_to_u=%.6e, "
+                    "personal_generator_context_to_v=%.6e",
+                    run_tag,
+                    graph_low_grad_streak,
+                    grad_norms["relation_emb"],
+                    grad_norms["relation_tau"],
+                    grad_norms["relation_wq"],
+                    grad_norms["relation_wk"],
+                    grad_norms["personal_u"],
+                    grad_norms["personal_v"],
+                    grad_norms["personal_alpha_bias"],
+                    grad_norms["personal_gate_emb"],
+                    grad_norms["personal_gate_student_proj"],
+                    grad_norms["personal_gate_context_proj"],
+                    grad_norms["personal_gate_student_direct"],
+                    grad_norms["personal_gate_context_direct"],
+                    grad_norms["personal_gate_out"],
+                    grad_norms["personal_generator_emb"],
+                    grad_norms["personal_generator_context_proj"],
+                    grad_norms["personal_generator_context_hidden"],
+                    grad_norms["personal_generator_context_to_u"],
+                    grad_norms["personal_generator_context_to_v"],
+                )
+            logger.info(
+                "%s [Grad Norms] Epoch [%03d] | "
+                "mf_u_proj=%.6f, mf_v_proj=%.6f, fusion_gate=%.6f, q_gate_raw=%.6f, skill_latent=%.6f, "
+                "relation_emb=%.6e, relation_tau=%.6e, relation_wq=%.6e, relation_wk=%.6e, "
+                "personal_u=%.6e, personal_v=%.6e, personal_alpha_bias=%.6e, personal_gate_emb=%.6e, "
+                "personal_gate_student_proj=%.6e, personal_gate_context_proj=%.6e, "
+                "personal_gate_student_direct=%.6e, personal_gate_context_direct=%.6e, personal_gate_out=%.6e, "
+                "personal_generator_emb=%.6e, personal_generator_context_proj=%.6e, "
+                "personal_generator_context_hidden=%.6e, personal_generator_context_to_u=%.6e, "
+                "personal_generator_context_to_v=%.6e",
+                run_tag,
+                epoch,
+                grad_norms["mf_u_proj"],
+                grad_norms["mf_v_proj"],
+                grad_norms["fusion_gate"],
+                grad_norms["q_gate_raw"],
+                grad_norms["skill_latent"],
+                grad_norms["relation_emb"],
+                grad_norms["relation_tau"],
+                grad_norms["relation_wq"],
+                grad_norms["relation_wk"],
+                grad_norms["personal_u"],
+                grad_norms["personal_v"],
+                grad_norms["personal_alpha_bias"],
+                grad_norms["personal_gate_emb"],
+                grad_norms["personal_gate_student_proj"],
+                grad_norms["personal_gate_context_proj"],
+                grad_norms["personal_gate_student_direct"],
+                grad_norms["personal_gate_context_direct"],
+                grad_norms["personal_gate_out"],
+                grad_norms["personal_generator_emb"],
+                grad_norms["personal_generator_context_proj"],
+                grad_norms["personal_generator_context_hidden"],
+                grad_norms["personal_generator_context_to_u"],
+                grad_norms["personal_generator_context_to_v"],
+            )
 
         scheduler.step(val_metrics["loss"])
 
@@ -315,7 +1245,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         history["val"].append(val_metrics)
 
         if val_metrics["auc"] > best_val_auc:
-            best_val_auc = val_metrics["auc"]
+            best_val_auc = float(val_metrics["auc"])
             best_epoch = epoch
             patience_counter = 0
 
@@ -323,7 +1253,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             torch.save(
                 {
                     "epoch": epoch,
-                    "model_state_dict": model.state_dict(),
+                    "model_state_dict": _get_base_model(model).state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "val_auc": best_val_auc,
                     "val_metrics": val_metrics,
@@ -332,30 +1262,18 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 },
                 model_path,
             )
-
-            logger.info(
-                "%s   -> New best AUC=%.4f at epoch %d (patience reset)",
-                run_tag,
-                best_val_auc,
-                epoch,
-            )
+            logger.info("%s -> New best AUC=%.4f at epoch %d", run_tag, best_val_auc, epoch)
         else:
             patience_counter += 1
             logger.info(
-                "%s   -> No improvement for %d epoch(s) (best AUC=%.4f @ epoch %d)",
-                run_tag,
-                patience_counter,
-                best_val_auc,
-                best_epoch,
+                "%s -> No improvement %d epoch(s) (best AUC=%.4f @ %d)",
+                run_tag, patience_counter, best_val_auc, best_epoch
             )
 
         if patience_counter >= args.early_stop_patience:
             logger.info(
-                "%s Early stopping triggered at epoch %d (best AUC=%.4f @ epoch %d)",
-                run_tag,
-                epoch,
-                best_val_auc,
-                best_epoch,
+                "%s Early stopping at epoch %d (best AUC=%.4f @ %d)",
+                run_tag, epoch, best_val_auc, best_epoch
             )
             break
 
@@ -364,7 +1282,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             torch.save(
                 {
                     "epoch": epoch,
-                    "model_state_dict": model.state_dict(),
+                    "model_state_dict": _get_base_model(model).state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "val_metrics": val_metrics,
                     "train_metrics": train_metrics,
@@ -374,21 +1292,45 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             )
             logger.info("%s Checkpoint saved: %s", run_tag, checkpoint_path)
 
+            # 模块活跃度检测（每 save_interval 输出简报）
+            try:
+                activity = compute_module_activity(model, val_loader, device, num_samples=300)
+                brief = format_activity_brief(activity)
+                logger.info("%s [Module Activity] Epoch %d: %s", run_tag, epoch, brief)
+            except Exception as e:
+                logger.warning("%s [Module Activity] Failed: %s", run_tag, str(e))
+
     history["best_epoch"] = best_epoch
     history["best_val_auc"] = best_val_auc
 
     history_path = os.path.join(args.save_dir, "training_history.json")
     save_epoch_history_csv(history, args.save_dir, logger)
-
     with open(history_path, "w") as f:
-        json.dump(history, f, indent=4, default=lambda x: float(x) if torch.is_tensor(x) else x)
+        json.dump(history, f, indent=4)
 
-    logger.info("%s %s", run_tag, "=" * 50)
-    logger.info("%s Training completed!", run_tag)
-    logger.info("%s Best validation AUC: %.4f at epoch %d", run_tag, best_val_auc, best_epoch)
-    logger.info("%s %s", run_tag, "=" * 50)
+    logger.info("%s Training completed! Best Val AUC=%.4f @ epoch %d", run_tag, best_val_auc, best_epoch)
+
+    # ========== 训练结束：输出完整的模块活跃度报告 ==========
+    try:
+        activity = compute_module_activity(model, val_loader, device, num_samples=500)
+        report = format_activity_report(
+            activity,
+            dataset_name=getattr(args, 'dataset_name', 'unknown'),
+            seed=getattr(args, 'seed', 42),
+            epoch=epoch,
+        )
+        logger.info("\n%s", report)
+
+        # 保存活跃度数据到 JSON
+        activity_path = os.path.join(args.save_dir, "module_activity.json")
+        with open(activity_path, "w") as f:
+            json.dump(activity, f, indent=4)
+        logger.info("%s Module activity saved to %s", run_tag, activity_path)
+    except Exception as e:
+        logger.warning("%s [Module Activity Report] Failed: %s", run_tag, str(e))
 
     return best_val_auc, best_epoch
+
 
 def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     device = select_device(args, logger)
@@ -404,11 +1346,11 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         return {}, {}
 
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
-    loaded_args = checkpoint.get("args", {})
+    loaded_args: Dict[str, Any] = checkpoint.get("args", {})
     info_dict = checkpoint.get("info_dict", None)
 
     if info_dict is None:
-        logger.error("info_dict not found in checkpoint. Please retrain the model with the current code.")
+        logger.error("info_dict not found in checkpoint. Please retrain with current code.")
         return {}, {}
 
     stu_id_map = info_dict["stu_id_map"]
@@ -416,28 +1358,22 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     cpt_id_map = info_dict["cpt_id_map"]
     q_matrix = info_dict["q_matrix"]
 
-    logger.info("Building test dataloader with saved ID mappings...")
-
     raw_test_df = pd.read_csv(test_file)
 
     valid_stu_ids = set(stu_id_map.keys())
     valid_exer_ids = set(exer_id_map.keys())
-
     before_rows = len(raw_test_df)
     filtered_test_df = raw_test_df[
         raw_test_df["stu_id"].isin(valid_stu_ids) & raw_test_df["exer_id"].isin(valid_exer_ids)
     ].reset_index(drop=True)
     after_rows = len(filtered_test_df)
+    dropped = before_rows - after_rows
 
-    dropped_rows = before_rows - after_rows
-    if dropped_rows > 0:
+    if dropped > 0:
         logger.info(
-            f"[推理阶段数据过滤] 原始测试集共有 {before_rows} 条记录；"
-            f"由于学生/题目在训练阶段被清洗或未出现，本次测试集实际保留 {after_rows} 条记录，"
-            f"共丢弃 {dropped_rows} 条。"
+            f"[Inference Filter] before={before_rows}, after={after_rows}, dropped={dropped} "
+            f"(students/items not seen after cleaning)"
         )
-    else:
-        logger.info("[推理阶段数据过滤] 测试集中所有学生与题目均在训练阶段出现，无需额外过滤。")
 
     test_dataset = CognitiveDiagnosisDataset(
         csv_file=filtered_test_df,
@@ -446,31 +1382,52 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         cpt_id_map=cpt_id_map,
     )
 
+    pin_memory = bool(getattr(device, "type", "cpu") == "cuda")
     test_loader = DataLoader(
         test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=pin_memory,
     )
 
-    test_size = len(test_dataset)
-    logger.info(f"Test samples: {test_size}")
-
-    num_prototypes = loaded_args.get("num_prototypes", args.num_prototypes)
-    proto_tau = loaded_args.get("proto_tau", args.proto_tau)
-    proto_lambda = loaded_args.get("proto_lambda", args.proto_lambda)
-
-    # 兼容旧 checkpoint：缺省时默认启用
-    loaded_use_soft = loaded_args.get(
-        "use_soft_prototype",
-        not loaded_args.get("disable_soft_prototype", False),
+    # Build model from loaded args (fallback to current args)
+    use_mf_branch = loaded_args.get(
+        "use_mf_branch",
+        loaded_args.get("use_skill_encoder", getattr(args, "use_mf_branch", getattr(args, "use_skill_encoder", True))),
     )
-    loaded_use_skill = loaded_args.get("use_skill_encoder", True)
-    use_soft_prototype = loaded_use_soft and getattr(args, "use_soft_prototype", True)
-    use_skill_encoder = loaded_use_skill and getattr(args, "use_skill_encoder", True)
-    args.use_soft_prototype = use_soft_prototype
-    args.use_skill_encoder = use_skill_encoder
+    use_concept_graph = loaded_args.get("use_concept_graph", getattr(args, "use_concept_graph", True))
+    use_q_aligned_residual = bool(loaded_args.get("use_q_aligned_residual", getattr(args, "use_q_aligned_residual", True)))
+    ablate_module1 = bool(loaded_args.get("ablate_module1", getattr(args, "ablate_module1", False)))
+    ablate_module2 = bool(loaded_args.get("ablate_module2", getattr(args, "ablate_module2", False)))
+    ablate_module3 = bool(loaded_args.get("ablate_module3", getattr(args, "ablate_module3", False)))
+    expected_enable_module1 = not ablate_module1
+    expected_enable_module2 = not ablate_module2
+    expected_enable_module3 = not ablate_module3
+
+    # hard-ablation safety at inference too
+    eff_gnn_layers = _hard_ablation_effective_hparams(
+        use_concept_graph=use_concept_graph,
+        num_gnn_layers=int(loaded_args.get("num_gnn_layers", getattr(args, "num_gnn_layers", 0))),
+    )
+
+    logger.info(
+        "Inference switches: "
+        "ablate_module1=%s, ablate_module2=%s, ablate_module3=%s | "
+        "enable_module1=%s, enable_module2=%s, enable_module3=%s | "
+        "use_mf_branch=%s, use_concept_graph=%s, use_q_aligned_residual=%s | "
+        "effective(num_gnn_layers=%d)",
+        ablate_module1,
+        ablate_module2,
+        ablate_module3,
+        expected_enable_module1,
+        expected_enable_module2,
+        expected_enable_module3,
+        use_mf_branch,
+        use_concept_graph,
+        use_q_aligned_residual,
+        eff_gnn_layers,
+    )
 
     model = CognitiveDiagnosisModel(
         num_students=info_dict["num_students"],
@@ -481,58 +1438,135 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         skill_dim=loaded_args.get("skill_dim", args.skill_dim),
         exercise_dim=loaded_args.get("exercise_dim", args.exercise_dim),
         num_relation_heads=loaded_args.get("num_relation_heads", args.num_relation_heads),
-        num_gnn_layers=loaded_args.get("num_gnn_layers", args.num_gnn_layers),
+        num_gnn_layers=eff_gnn_layers,
         dropout=loaded_args.get("dropout", args.dropout),
-        num_prototypes=num_prototypes,
-        proto_tau=proto_tau,
-        proto_lambda=proto_lambda,
-        use_soft_prototype=use_soft_prototype,
-        use_skill_encoder=use_skill_encoder,
+        use_mf_branch=use_mf_branch,
+        use_concept_graph=use_concept_graph,
+        graph_topk=loaded_args.get("graph_topk", getattr(args, "graph_topk", None)),
+        allow_self_loop=not loaded_args.get("disable_self_loop", getattr(args, "disable_self_loop", False)),
+        use_personal_graph=loaded_args.get("use_personal_graph", getattr(args, "use_personal_graph", False)),
+        ablate_module1=ablate_module1,
+        ablate_module2=ablate_module2,
+        ablate_module3=ablate_module3,
+        use_q_aligned_residual=loaded_args.get(
+            "use_q_aligned_residual", getattr(args, "use_q_aligned_residual", True)
+        ),
+        fusion_gate_max=loaded_args.get("fusion_gate_max", getattr(args, "fusion_gate_max", 1.0)),
+        fusion_gate_bias_init=loaded_args.get(
+            "fusion_gate_bias_init", getattr(args, "fusion_gate_bias_init", -1.1)
+        ),
+        residual_clip_t=loaded_args.get("residual_clip_t", getattr(args, "residual_clip_t", 2.0)),
+        residual_scale_init=loaded_args.get("residual_scale_init", getattr(args, "residual_scale_init", 0.1)),
+        graph_dropout=_resolve_optional_graph_dropout(
+            loaded_args.get("graph_dropout", getattr(args, "graph_dropout", -1.0))
+        ),
+        graph_tau_init=loaded_args.get("graph_tau_init", getattr(args, "graph_tau_init", 1.0)),
+        personal_rank=loaded_args.get("personal_rank", getattr(args, "personal_rank", 4)),
+        lambda_sparse_personal=loaded_args.get("lambda_sparse_personal", args.lambda_sparse_personal),
+        lambda_alpha=loaded_args.get("lambda_alpha", args.lambda_alpha),
+        lambda_graph_entropy=loaded_args.get("lambda_sparse", args.lambda_sparse),
+        graph_entropy_min=loaded_args.get("graph_entropy_min", getattr(args, "graph_entropy_min", 0.15)),
+        graph_entropy_max=loaded_args.get("graph_entropy_max", getattr(args, "graph_entropy_max", 0.85)),
+        lambda_graph_diag=loaded_args.get("lambda_graph_diag", getattr(args, "lambda_graph_diag", 0.10)),
+        lambda_graph_uniform=loaded_args.get(
+            "lambda_graph_uniform", getattr(args, "lambda_graph_uniform", 0.04)
+        ),
+        graph_uniform_margin=loaded_args.get(
+            "graph_uniform_margin", getattr(args, "graph_uniform_margin", 0.10)
+        ),
+        graph_reg_warmup_epochs=loaded_args.get(
+            "graph_reg_warmup_epochs", getattr(args, "graph_reg_warmup_epochs", 1)
+        ),
+        graph_reg_cap_ratio=loaded_args.get("graph_reg_cap_ratio", getattr(args, "graph_reg_cap_ratio", 6.0)),
+        mf_l2_lambda=loaded_args.get("exercise_l2_lambda", getattr(args, "exercise_l2_lambda", 5e-5)),
+        gnn_residual_weight=loaded_args.get("gnn_residual_weight", getattr(args, "gnn_residual_weight", 0.5)),
+        use_q_conditioning=not loaded_args.get("disable_q_conditioning", getattr(args, "disable_q_conditioning", False)),
+        mf_warmup_epochs=loaded_args.get("mf_warmup_epochs", getattr(args, "mf_warmup_epochs", 0)),
+        lambda_delta_ratio=loaded_args.get("lambda_delta_ratio", getattr(args, "lambda_delta_ratio", 0.0)),
+        delta_ratio_target=loaded_args.get("delta_ratio_target", getattr(args, "delta_ratio_target", 0.15)),
+        personal_max_alpha=loaded_args.get("personal_max_alpha", getattr(args, "personal_max_alpha", 0.35)),
+        personal_delta_scale=loaded_args.get(
+            "personal_delta_scale", getattr(args, "personal_delta_scale", 1.0)
+        ),
+        personal_warmup_epochs=loaded_args.get(
+            "personal_warmup_epochs", getattr(args, "personal_warmup_epochs", 0)
+        ),
+        personal_student_dim=loaded_args.get(
+            "personal_student_dim", getattr(args, "personal_student_dim", args.knowledge_dim)
+        ),
+        lambda_alpha_min=loaded_args.get("lambda_alpha_min", getattr(args, "lambda_alpha_min", 0.0)),
+        alpha_min_target=loaded_args.get("alpha_min_target", getattr(args, "alpha_min_target", 0.0)),
     ).to(device)
 
+    runtime_facts = _log_and_assert_ablation_consistency(
+        model=model,
+        logger=logger,
+        context="[Inference]",
+        ablate_module1=ablate_module1,
+        ablate_module2=ablate_module2,
+        ablate_module3=ablate_module3,
+    )
+    _log_module3_init_state(model, logger=logger, context="[Inference]")
 
-    model.load_state_dict(checkpoint["model_state_dict"])
-    logger.info(f'Model loaded from epoch {checkpoint["epoch"]}')
+    # compatibility for legacy weight_norm checkpoints
+    state_dict = checkpoint["model_state_dict"]
+    state_dict = _convert_legacy_weight_norm_keys(state_dict)
+    state_dict = _strip_module_prefix(state_dict)  # 处理 DataParallel 的 module. 前缀
 
-    logger.info("Starting testing...")
+    incompatible = model.load_state_dict(state_dict, strict=False)
+    _get_base_model(model).set_epoch(int(checkpoint.get("epoch", loaded_args.get("epochs", 1))))
+    missing_keys = list(getattr(incompatible, "missing_keys", []))
+    unexpected_keys = list(getattr(incompatible, "unexpected_keys", []))
+
+    if missing_keys or unexpected_keys:
+        logger.warning("State dict mismatch detected.")
+        logger.warning("  Missing keys (%d): %s", len(missing_keys), missing_keys[:50])
+        logger.warning("  Unexpected keys (%d): %s", len(unexpected_keys), unexpected_keys[:50])
+
+        if STRICT_CHECKPOINT_LOADING:
+            raise RuntimeError(
+                f"Checkpoint/model architecture mismatch. missing={len(missing_keys)}, unexpected={len(unexpected_keys)}"
+            )
+
+    logger.info(f"Model loaded from epoch {checkpoint['epoch']}. Start testing...")
+
     model.eval()
-
-    all_labels = []
-    all_predictions = []
-    all_probs = []
+    all_labels: List[float] = []
+    all_preds: List[float] = []
+    all_probs: List[float] = []
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(test_loader):
             student_ids, exercise_ids, labels = batch
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)
-            labels = labels.to(device).float()
+            concept_vector = concept_vector.to(device)
+            labels = _ensure_1d(labels.to(device).float())
 
-            pred_probs = model(
+            logits = model(
                 student_ids,
                 exercise_ids,
                 return_details=False,
+                return_logits=True,
             )
+            logits = _ensure_1d(logits)
+            probs = _sigmoid_torch(logits)
+            preds = (probs > 0.5).float()
 
-            predictions = (pred_probs > 0.5).float()
-            all_labels.extend(labels.cpu().numpy())
-            all_predictions.extend(predictions.cpu().numpy())
-            all_probs.extend(pred_probs.cpu().numpy())
+            all_labels.extend(labels.detach().cpu().numpy().tolist())
+            all_preds.extend(preds.detach().cpu().numpy().tolist())
+            all_probs.extend(probs.detach().cpu().numpy().tolist())
 
             if (batch_idx + 1) % 200 == 0:
-                logger.info(
-                    f"[Test] 已完成 {batch_idx + 1} / {len(test_loader)} 个 batch，"
-                    f"累计样本数 {len(all_labels)}/{test_size}"
-                )
+                logger.info(f"[Test] {batch_idx + 1}/{len(test_loader)} batches done, samples={len(all_labels)}")
 
-    metrics = compute_metrics(all_labels, all_predictions, all_probs)
-
-    logger.info(f'\n{"=" * 50}')
+    metrics = compute_metrics(all_labels, all_preds, all_probs)
+    logger.info("\n" + "=" * 50)
     logger.info("Test Results:")
-    logger.info(f'AUC: {metrics["auc"]:.4f}')
-    logger.info(f'ACC: {metrics["acc"]:.4f}')
-    logger.info(f'RMSE: {metrics["rmse"]:.4f}')
-    logger.info(f'{"=" * 50}')
+    logger.info(f"AUC: {metrics['auc']:.4f}")
+    logger.info(f"ACC: {metrics['acc']:.4f}")
+    logger.info(f"RMSE: {metrics['rmse']:.4f}")
+    logger.info("=" * 50)
 
     results = {
         "metrics": metrics,
@@ -545,19 +1579,18 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     with open(result_path, "w") as f:
         json.dump(results, f, indent=4)
 
-    logger.info(f"Test results saved to {result_path}")
-
     append_summary_csv(
         args,
         metrics=metrics,
         best_val_auc=results["best_val_auc"],
         model_epoch=results["model_epoch"],
+        final_model_facts=runtime_facts,
         logger=logger,
     )
 
-    if args.generate_diagnosis:
+    # diagnosis
+    if getattr(args, "generate_diagnosis", False):
         logger.info("\nGenerating student diagnosis reports...")
-
         num_students_to_diagnose = min(5, info_dict["num_students"])
         diagnosis_results = []
 
@@ -568,14 +1601,79 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
                     "student_id": int(stu_id),
                     "original_student_id": int(info_dict["stu_id_reverse_map"].get(stu_id, stu_id)),
                     "knowledge_mastery": [float(x) for x in diagnosis["knowledge_mastery"].cpu().numpy().tolist()],
-                    "skill_level": [float(x) for x in diagnosis["skill_level"].cpu().numpy().tolist()],
+                    "skill_latent": [float(x) for x in diagnosis["skill_latent"].cpu().numpy().tolist()],
                 }
             )
 
         diagnosis_path = os.path.join(args.save_dir, "student_diagnosis.json")
         with open(diagnosis_path, "w") as f:
-            json.dump(diagnosis_results, f, indent=4, default=str)
+            json.dump(diagnosis_results, f, indent=4)
 
         logger.info(f"Student diagnosis reports saved to {diagnosis_path}")
 
     return metrics, results
+
+
+def save_component_analysis_data(
+    model: CognitiveDiagnosisModel,
+    train_loader: DataLoader,
+    device: torch.device,
+    save_dir: str,
+    logger,
+    num_samples: int = 100,
+) -> Dict[str, Any]:
+    """
+    保存组件可视化分析所需的数据：
+    1. 全局概念图 relation_matrices
+    2. Gate Alpha 分布（个性化图混合系数）
+    3. 个性化图采样
+    """
+    model.eval()
+    analysis_data = {}
+    
+    os.makedirs(save_dir, exist_ok=True)
+    
+    with torch.no_grad():
+        # ========== 1) 全局概念图分析 ==========
+        if model.structure_module.relation_learning is not None:
+            relation_matrices, _ = model.structure_module.relation_learning()
+            analysis_data["global_relation_matrices"] = relation_matrices.detach().cpu().numpy()
+            logger.info(f"[Component Analysis] Global graph: {relation_matrices.shape}")
+        
+        # ========== 2) 个性化图分析 ==========
+        if model.use_personal_graph and model.structure_module.personal_generator is not None:
+            gate_alphas = []
+            personal_graphs = []
+            sample_count = 0
+            
+            for batch in train_loader:
+                if sample_count >= num_samples:
+                    break
+                student_ids, _, _, _ = batch
+                student_ids = student_ids.to(device)
+                
+                s_out = model.structure_module(student_ids, identity_relations=model.identity_relations)
+                
+                if s_out["alpha"] is not None:
+                    gate_alphas.append(s_out["alpha"].squeeze().detach().cpu().numpy())
+                if s_out["personal_matrices"] is not None:
+                    personal_graphs.append(s_out["personal_matrices"].detach().cpu().numpy())
+                
+                sample_count += len(student_ids)
+            
+            if gate_alphas:
+                analysis_data["gate_alpha"] = np.concatenate([g.flatten() for g in gate_alphas])[:num_samples]
+                logger.info(f"[Component Analysis] Gate alpha samples: {len(analysis_data['gate_alpha'])}")
+            
+            if personal_graphs:
+                # 只保存少量个性化图样本（节省空间）
+                personal_arr = np.concatenate(personal_graphs, axis=0)[:min(10, num_samples)]
+                analysis_data["personal_matrices_samples"] = personal_arr
+                logger.info(f"[Component Analysis] Personal graph samples: {personal_arr.shape}")
+    
+    # ========== 保存数据 ==========
+    analysis_path = os.path.join(save_dir, "component_analysis_data.npz")
+    np.savez_compressed(analysis_path, **analysis_data)
+    logger.info(f"[Component Analysis] Data saved to {analysis_path}")
+    
+    return analysis_data
