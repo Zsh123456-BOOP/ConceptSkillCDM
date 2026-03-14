@@ -239,8 +239,10 @@ def parse_args():
                         help="Initial positive scale for module3 residual branches (after softplus).")
     parser.add_argument("--disable_q_aligned_residual", action="store_true",
                         help="Compatibility flag; q-aligned residual is enabled by default.")
+    parser.add_argument("--enable_prototype_prediction_path", action="store_true",
+                        help="Allow prototype branch to affect prediction path. Default keeps C as regularizer-only.")
     parser.add_argument("--use_soft_prototype_main_path", action="store_true",
-                        help="If set, prototype mix is injected into knowledge_state. Default off.")
+                        help="If set together with --enable_prototype_prediction_path, inject prototype mix into knowledge_state.")
     parser.add_argument("--mf_warmup_epochs", type=int, default=0,
                         help="Linear warmup epochs for B residual contribution. 0 disables rescue warmup.")
     parser.add_argument("--lambda_delta_ratio", type=float, default=0.0,
@@ -259,6 +261,8 @@ def parse_args():
                         help="Scale factor on personal graph delta before softmax.")
     parser.add_argument("--personal_warmup_epochs", type=int, default=0,
                         help="Linear warmup epochs for personal graph mixing. 0 disables rescue warmup.")
+    parser.add_argument("--personal_student_dim", type=int, default=None,
+                        help="Dedicated student embedding dim for E branch. Default follows knowledge_dim.")
     parser.add_argument("--lambda_alpha_min", type=float, default=0.0,
                         help="Penalty weight when personal alpha std falls below target.")
     parser.add_argument("--alpha_min_target", type=float, default=0.0,
@@ -393,8 +397,13 @@ def main():
     args.use_concept_graph = bool(use_concept_graph)
     args.use_personal_graph = bool(use_personal_graph)
     args.use_q_aligned_residual = not bool(getattr(args, "disable_q_aligned_residual", False))
+    args.enable_prototype_prediction_path = bool(
+        getattr(args, "enable_prototype_prediction_path", False) and args.use_soft_prototype
+    )
     args.use_soft_prototype_main_path = bool(
-        getattr(args, "use_soft_prototype_main_path", False) and args.use_soft_prototype
+        getattr(args, "use_soft_prototype_main_path", False)
+        and args.enable_prototype_prediction_path
+        and args.use_soft_prototype
     )
 
     # trainer/
@@ -492,6 +501,7 @@ def main():
                 proto_lambda=args.proto_lambda,
                 use_soft_prototype=args.use_soft_prototype,
                 use_soft_prototype_main_path=args.use_soft_prototype_main_path,
+                enable_prototype_prediction_path=getattr(args, "enable_prototype_prediction_path", False),
                 use_personal_graph=args.use_personal_graph,
                 personal_rank=getattr(args, "personal_rank", 4),
                 ablate_module1=getattr(args, "ablate_module1", False),
@@ -526,6 +536,7 @@ def main():
                 personal_max_alpha=getattr(args, "personal_max_alpha", 0.35),
                 personal_delta_scale=getattr(args, "personal_delta_scale", 1.0),
                 personal_warmup_epochs=getattr(args, "personal_warmup_epochs", 0),
+                personal_student_dim=getattr(args, "personal_student_dim", args.knowledge_dim),
                 lambda_alpha_min=getattr(args, "lambda_alpha_min", 0.0),
                 alpha_min_target=getattr(args, "alpha_min_target", 0.0),
             ).to(device)

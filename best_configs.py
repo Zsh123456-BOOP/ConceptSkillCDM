@@ -54,7 +54,8 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "lambda_proto_usage": 5e-4,
         "enable_soft_prototype": True,
         "disable_soft_prototype": False,
-        "use_soft_prototype_main_path": True,
+        "enable_prototype_prediction_path": False,
+        "use_soft_prototype_main_path": False,
 
         # Module3 residual / fusion
         "exercise_l2_lambda": 1e-5,
@@ -123,7 +124,8 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "lambda_proto_usage": 5e-4,
         "enable_soft_prototype": True,
         "disable_soft_prototype": False,
-        "use_soft_prototype_main_path": True,
+        "enable_prototype_prediction_path": False,
+        "use_soft_prototype_main_path": False,
 
         # Module3 residual / fusion
         "exercise_l2_lambda": 1e-5,
@@ -150,5 +152,4 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
 }
 
 DEFAULT_SEEDS = [42]
-
 

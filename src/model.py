@@ -513,7 +513,7 @@ class QAlignedResidualHead(nn.Module):
         nn.init.xavier_normal_(self.u_proj.weight)
         nn.init.xavier_normal_(self.v_proj.weight)
 
-        init_scale = max(0.2, float(residual_scale_init))
+        init_scale = max(1e-4, float(residual_scale_init))
         raw_init = math.log(math.expm1(init_scale))
         self.mf_scale_raw = nn.Parameter(torch.tensor(raw_init))
         self.bias_scale_raw = nn.Parameter(torch.tensor(raw_init))
@@ -651,10 +651,10 @@ class AdaptiveGate(nn.Module):
     Fix: 添加 LayerNorm 标准化输入，解决 student embedding variance 过低的问题。
     """
 
-    def __init__(self, student_dim: int, max_alpha: float = 0.35):
+    def __init__(self, student_dim: int, max_alpha: float = 0.35, hidden_dim: Optional[int] = None):
         super().__init__()
         self.input_norm = nn.LayerNorm(student_dim)  # Fix: 标准化输入
-        hid = max(1, student_dim // 2)
+        hid = max(1, student_dim // 2 if hidden_dim is None else int(hidden_dim))
         self.proj1 = nn.Linear(student_dim, hid)
         self.proj2 = nn.Linear(hid, 1)
         self.max_alpha = float(max_alpha)
@@ -676,15 +676,19 @@ class PersonalRelationGenerator(nn.Module):
     Fix: 添加 LayerNorm 标准化输入，解决 student embedding variance 过低的问题。
     """
 
-    def __init__(self, student_dim: int, num_concepts: int, rank: int = 4):
+    def __init__(self, student_dim: int, num_concepts: int, rank: int = 4, hidden_dim: Optional[int] = None):
         super().__init__()
         self.input_norm = nn.LayerNorm(student_dim)  # Fix: 标准化输入
         self.num_concepts = int(num_concepts)
         self.rank = int(rank)
         self.base_u = nn.Parameter(torch.randn(num_concepts, rank) * 0.02)
         self.base_v = nn.Parameter(torch.randn(num_concepts, rank) * 0.02)
-        self.to_u = nn.Linear(student_dim, num_concepts * rank, bias=False)
-        self.to_v = nn.Linear(student_dim, num_concepts * rank, bias=False)
+        proj_dim = student_dim if hidden_dim is None else max(1, int(hidden_dim))
+        self.proj = nn.Linear(student_dim, proj_dim)
+        self.to_u = nn.Linear(proj_dim, num_concepts * rank, bias=False)
+        self.to_v = nn.Linear(proj_dim, num_concepts * rank, bias=False)
+        nn.init.xavier_normal_(self.proj.weight)
+        nn.init.zeros_(self.proj.bias)
         nn.init.xavier_normal_(self.to_u.weight)
         nn.init.xavier_normal_(self.to_v.weight)
         nn.init.xavier_normal_(self.base_u)
@@ -692,6 +696,7 @@ class PersonalRelationGenerator(nn.Module):
 
     def forward(self, student_repr: torch.Tensor) -> torch.Tensor:
         student_repr = self.input_norm(student_repr)  # Fix: 标准化输入
+        student_repr = F.gelu(self.proj(student_repr))
         B = student_repr.size(0)
         u = self.to_u(student_repr).view(B, self.num_concepts, self.rank)
         v = self.to_v(student_repr).view(B, self.num_concepts, self.rank)
@@ -742,6 +747,7 @@ class ConceptStructureModeling(nn.Module):
         personal_max_alpha: float,
         personal_delta_scale: float,
         personal_warmup_epochs: int,
+        personal_student_dim: int,
         # 完全消融开关
         enable_module: bool = True,
     ):
@@ -755,6 +761,7 @@ class ConceptStructureModeling(nn.Module):
         self.personal_max_alpha = float(personal_max_alpha)
         self.personal_delta_scale = max(0.0, float(personal_delta_scale))
         self.personal_warmup_epochs = max(0, int(personal_warmup_epochs))
+        self.personal_student_dim = max(1, int(personal_student_dim))
         self._current_epoch = 1
 
         # -------- 完全消融：不创建任何可训练参数 --------
@@ -765,6 +772,7 @@ class ConceptStructureModeling(nn.Module):
             self.knowledge_encoder = None
             self.adaptive_gate = None
             self.personal_generator = None
+            self.personal_student_embedding = None
             return
 
         # -------- 正常启用：A/E 可选 --------
@@ -799,12 +807,25 @@ class ConceptStructureModeling(nn.Module):
 
         # E) 个性化图（可选）
         if self.use_personal_graph:
-            personal_input_dim = knowledge_dim * 3
-            self.adaptive_gate = AdaptiveGate(personal_input_dim, max_alpha=self.personal_max_alpha)
-            self.personal_generator = PersonalRelationGenerator(personal_input_dim, num_concepts, personal_rank)
+            self.personal_student_embedding = nn.Embedding(num_students, self.personal_student_dim)
+            nn.init.xavier_normal_(self.personal_student_embedding.weight)
+            personal_input_dim = self.personal_student_dim + knowledge_dim * 3
+            personal_hidden_dim = max(self.personal_student_dim, knowledge_dim)
+            self.adaptive_gate = AdaptiveGate(
+                personal_input_dim,
+                max_alpha=self.personal_max_alpha,
+                hidden_dim=personal_hidden_dim,
+            )
+            self.personal_generator = PersonalRelationGenerator(
+                personal_input_dim,
+                num_concepts,
+                personal_rank,
+                hidden_dim=personal_hidden_dim,
+            )
         else:
             self.adaptive_gate = None
             self.personal_generator = None
+            self.personal_student_embedding = None
 
     def set_epoch(self, epoch: int) -> None:
         self._current_epoch = max(1, int(epoch))
@@ -858,8 +879,14 @@ class ConceptStructureModeling(nn.Module):
 
         if self.use_personal_graph and self.adaptive_gate is not None and self.personal_generator is not None:
             student_global_repr = self.knowledge_encoder.student_global(student_ids)  # (B,D)
+            personal_student_repr = self.personal_student_embedding(student_ids)      # (B,Dp)
             personal_input = torch.cat(
-                [student_global_repr, student_repr, student_repr - student_global_repr],
+                [
+                    personal_student_repr,
+                    student_global_repr,
+                    student_repr,
+                    student_repr - student_global_repr,
+                ],
                 dim=-1,
             )
             gate_alpha = self.adaptive_gate(personal_input)                   # (B,1,1,1)
@@ -943,6 +970,7 @@ class CognitiveDiagnosisModel(nn.Module):
         proto_lambda: float = 0.5,
         use_soft_prototype: bool = True,
         use_soft_prototype_main_path: bool = False,
+        enable_prototype_prediction_path: bool = False,
         use_personal_graph: bool = False,
         personal_rank: int = 4,
         # ===== 模块级“完全消融”开关 =====
@@ -981,6 +1009,7 @@ class CognitiveDiagnosisModel(nn.Module):
         personal_max_alpha: float = 0.35,
         personal_delta_scale: float = 1.0,
         personal_warmup_epochs: int = 0,
+        personal_student_dim: Optional[int] = None,
         lambda_alpha_min: float = 0.0,
         alpha_min_target: float = 0.0,
     ):
@@ -1022,7 +1051,12 @@ class CognitiveDiagnosisModel(nn.Module):
         self.use_mf_branch = bool(use_mf_branch and use_q_aligned_residual)
         self.use_soft_prototype = bool(use_soft_prototype and num_prototypes > 0 and self.enable_module3 and self.enable_module2)
         self.proto_lambda = float(proto_lambda)
-        self.use_soft_prototype_main_path = bool(use_soft_prototype_main_path and self.use_soft_prototype)
+        self.enable_prototype_prediction_path = bool(
+            enable_prototype_prediction_path and self.use_soft_prototype and self.enable_module3 and self.enable_module2
+        )
+        self.use_soft_prototype_main_path = bool(
+            use_soft_prototype_main_path and self.enable_prototype_prediction_path
+        )
         self.use_q_aligned_residual = bool(use_q_aligned_residual)
         self.fusion_gate_max = float(fusion_gate_max)
         self.fusion_gate_bias_init = float(fusion_gate_bias_init)
@@ -1055,6 +1089,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_max_alpha = max(0.0, float(personal_max_alpha))
         self.personal_delta_scale = max(0.0, float(personal_delta_scale))
         self.personal_warmup_epochs = max(0, int(personal_warmup_epochs))
+        self.personal_student_dim = int(knowledge_dim if personal_student_dim is None else personal_student_dim)
         self.lambda_alpha_min = max(0.0, float(lambda_alpha_min))
         self.alpha_min_target = max(0.0, float(alpha_min_target))
 
@@ -1086,6 +1121,7 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_max_alpha=self.personal_max_alpha,
             personal_delta_scale=self.personal_delta_scale,
             personal_warmup_epochs=self.personal_warmup_epochs,
+            personal_student_dim=self.personal_student_dim,
             enable_module=self.enable_module1,  # 关键：模块级完全消融
         )
 
@@ -1145,7 +1181,7 @@ class CognitiveDiagnosisModel(nn.Module):
         # Prototype 仅在 module2 启用（否则无输出贡献）且 module3 启用时存在
         if self.use_soft_prototype:
             self.prototype_module = SoftPrototypeModule(num_prototypes, knowledge_dim, proto_tau)
-            if self.enable_module3 and self.use_mf_branch:
+            if self.enable_prototype_prediction_path and self.enable_module3 and self.use_mf_branch:
                 self.proto_to_skill = nn.Linear(knowledge_dim, skill_dim, bias=False)
                 nn.init.xavier_normal_(self.proto_to_skill.weight)
             else:
@@ -1275,7 +1311,11 @@ class CognitiveDiagnosisModel(nn.Module):
             if item_latent is None or exercise_bias is None:
                 raise RuntimeError("Module3 is enabled but item_latent/exercise_bias is None. Check exercise_encoder wiring.")
 
-            if proto_mix is not None and self.proto_to_skill is not None:
+            if (
+                self.enable_prototype_prediction_path
+                and proto_mix is not None
+                and self.proto_to_skill is not None
+            ):
                 proto_skill = self.proto_to_skill(proto_mix)
                 proto_skill = F.layer_norm(proto_skill, (proto_skill.size(-1),))
                 student_latent = student_latent + proto_gate.view(-1, 1) * proto_skill
@@ -1369,6 +1409,7 @@ class CognitiveDiagnosisModel(nn.Module):
             "use_personal_graph": torch.tensor(int(self.use_personal_graph), device=device),
             "use_mf_branch": torch.tensor(int(self.use_mf_branch), device=device),
             "use_soft_prototype": torch.tensor(int(self.prototype_module is not None), device=device),
+            "enable_prototype_prediction_path": torch.tensor(int(self.enable_prototype_prediction_path), device=device),
             "use_soft_prototype_main_path": torch.tensor(int(self.use_soft_prototype_main_path), device=device),
 
             # 模块 1 输出

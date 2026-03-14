@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import json
 import os
 import re
@@ -52,6 +53,9 @@ RESULT_CSV = Path("results") / "abce_ablation_diagnosis.csv"
 SUMMARY_CSV = Path("results") / "abce_ablation_summary.csv"
 MEAN_SUMMARY_CSV = Path("results") / "abce_ablation_summary_mean.csv"
 NUM_RE = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
+ROW_START_RE = re.compile(
+    r'(?<![\r\n])(?=(assist_09|assist_17|junyi),\d+,(best|b_rescue|c_rescue|e_rescue|all_rescue|c_probe),(full|no_A|no_B|no_C|no_E|no_AE|no_BC),)'
+)
 
 
 @dataclass
@@ -348,6 +352,15 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     need_header = not path.exists()
+
+    if not need_header and path.stat().st_size > 0:
+        with open(path, "rb") as fb:
+            fb.seek(-1, os.SEEK_END)
+            last_byte = fb.read(1)
+        if last_byte not in (b"\n", b"\r"):
+            with open(path, "a", encoding="utf-8", newline="") as f:
+                f.write("\n")
+
     with open(path, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if need_header:
@@ -355,12 +368,21 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         writer.writerow({k: row.get(k, "") for k in fieldnames})
 
 
+def _repair_glued_csv_rows(text: str) -> Tuple[str, int]:
+    repaired, count = ROW_START_RE.subn("\n", text)
+    return repaired, int(count)
+
+
 def load_result_rows(path: Path, run_id: str) -> List[Dict[str, Any]]:
     if not path.exists():
         return []
     rows: List[Dict[str, Any]] = []
     with open(path, "r", encoding="utf-8-sig", errors="ignore") as f:
-        for row in csv.DictReader(f):
+        text = f.read()
+    repaired_text, repaired_count = _repair_glued_csv_rows(text)
+    if repaired_count > 0:
+        print(f"[WARN] Auto-repaired {repaired_count} glued row boundary/boundaries in {path}.")
+    for row in csv.DictReader(io.StringIO(repaired_text)):
             if run_id and run_id not in row.get("save_dir", ""):
                 continue
             rows.append(row)
@@ -692,13 +714,22 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _profile_overrides(profile: str, args: argparse.Namespace) -> Dict[str, Any]:
+def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> Dict[str, Any]:
     if profile == "best":
         return {}
     if profile == "b_rescue":
+        if dataset == "assist_09":
+            return {
+                "mf_warmup_epochs": 4,
+                "lambda_delta_ratio": 0.0,
+                "delta_ratio_target": 0.20,
+                "fusion_gate_max": 1.0,
+                "fusion_gate_bias_init": -1.05,
+                "residual_scale_init": 0.24,
+            }
         return {
             "mf_warmup_epochs": 5,
-            "lambda_delta_ratio": 0.02,
+            "lambda_delta_ratio": 0.0,
             "delta_ratio_target": 0.15,
             "fusion_gate_max": 0.85,
             "fusion_gate_bias_init": -1.4,
@@ -708,7 +739,8 @@ def _profile_overrides(profile: str, args: argparse.Namespace) -> Dict[str, Any]
         return {
             "enable_soft_prototype": True,
             "disable_soft_prototype": False,
-            "use_soft_prototype_main_path": True,
+            "enable_prototype_prediction_path": False,
+            "use_soft_prototype_main_path": False,
             "proto_lambda": 0.08,
             "proto_conf_threshold": 0.35,
             "proto_gate_scale": 0.70,
@@ -719,20 +751,21 @@ def _profile_overrides(profile: str, args: argparse.Namespace) -> Dict[str, Any]
             "use_personal_graph": True,
             "personal_max_alpha": 0.50,
             "personal_delta_scale": 1.50,
-            "personal_warmup_epochs": 4,
+            "personal_warmup_epochs": 9,
             "lambda_alpha_min": 0.05,
             "alpha_min_target": 0.02,
         }
     if profile == "all_rescue":
         merged: Dict[str, Any] = {}
         for rescue_name in ("b_rescue", "c_rescue", "e_rescue"):
-            merged.update(_profile_overrides(rescue_name, args))
+            merged.update(_profile_overrides(rescue_name, dataset, args))
         return merged
     if profile == "c_probe":
         return {
             "enable_soft_prototype": True,
             "disable_soft_prototype": False,
-            "use_soft_prototype_main_path": True,
+            "enable_prototype_prediction_path": False,
+            "use_soft_prototype_main_path": False,
             "num_prototypes": int(args.c_probe_num_prototypes),
             "proto_lambda": float(args.c_probe_proto_lambda),
             "lambda_proto_div": float(args.c_probe_lambda_proto_div),
@@ -785,7 +818,7 @@ def make_jobs(args: argparse.Namespace, run_id: str) -> List[JobSpec]:
         profiles = _selected_profiles(profiles, args.profiles)
 
         for profile in profiles:
-            profile_cfg = _profile_overrides(profile, args)
+            profile_cfg = _profile_overrides(profile, dataset, args)
             if profile == "c_probe":
                 profile_abls = [a for a in base_abls if a.name in {"full", "no_C"}]
                 if not profile_abls:

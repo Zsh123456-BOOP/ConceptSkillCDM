@@ -776,17 +776,20 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     )
     logger.info(
         "%s Rescue controls: mf_warmup_epochs=%d, delta_ratio_target=%.4f, proto_conf_threshold=%.3f, "
-        "proto_gate_scale=%.3f, proto_warmup_epochs=%d, personal_max_alpha=%.3f, "
-        "personal_delta_scale=%.3f, personal_warmup_epochs=%d, alpha_min_target=%.4f",
+        "proto_gate_scale=%.3f, proto_warmup_epochs=%d, enable_prototype_prediction_path=%s, "
+        "personal_max_alpha=%.3f, personal_delta_scale=%.3f, personal_warmup_epochs=%d, "
+        "personal_student_dim=%s, alpha_min_target=%.4f",
         run_tag,
         int(getattr(args, "mf_warmup_epochs", 0)),
         float(getattr(args, "delta_ratio_target", 0.15)),
         float(getattr(args, "proto_conf_threshold", 0.0)),
         float(getattr(args, "proto_gate_scale", 1.0)),
         int(getattr(args, "proto_warmup_epochs", 0)),
+        bool(getattr(args, "enable_prototype_prediction_path", False)),
         float(getattr(args, "personal_max_alpha", 0.35)),
         float(getattr(args, "personal_delta_scale", 1.0)),
         int(getattr(args, "personal_warmup_epochs", 0)),
+        getattr(args, "personal_student_dim", None),
         float(getattr(args, "alpha_min_target", 0.0)),
     )
 
@@ -825,6 +828,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     use_mf_branch = getattr(args, "use_mf_branch", getattr(args, "use_skill_encoder", True))
     use_concept_graph = getattr(args, "use_concept_graph", True)
     use_q_aligned_residual = bool(getattr(args, "use_q_aligned_residual", True))
+    enable_prototype_prediction_path = bool(getattr(args, "enable_prototype_prediction_path", False))
     use_soft_prototype_main_path = bool(getattr(args, "use_soft_prototype_main_path", False))
     ablate_module1 = bool(getattr(args, "ablate_module1", False))
     ablate_module2 = bool(getattr(args, "ablate_module2", False))
@@ -847,7 +851,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         "%s Ablation switches: "
         "ablate_module1=%s, ablate_module2=%s, ablate_module3=%s | "
         "enable_module1=%s, enable_module2=%s, enable_module3=%s | "
-        "use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s, use_q_aligned_residual=%s, use_soft_prototype_main_path=%s | "
+        "use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s, use_q_aligned_residual=%s, "
+        "enable_prototype_prediction_path=%s, use_soft_prototype_main_path=%s | "
         "effective(num_gnn_layers=%d, num_prototypes=%d)",
         run_tag,
         ablate_module1,
@@ -860,6 +865,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         use_mf_branch,
         use_concept_graph,
         use_q_aligned_residual,
+        enable_prototype_prediction_path,
         use_soft_prototype_main_path,
         eff_gnn_layers,
         eff_num_prototypes,
@@ -885,6 +891,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         proto_lambda=args.proto_lambda,
         use_soft_prototype=use_soft_prototype,
         use_soft_prototype_main_path=getattr(args, "use_soft_prototype_main_path", False),
+        enable_prototype_prediction_path=enable_prototype_prediction_path,
         use_personal_graph=getattr(args, "use_personal_graph", False),
         ablate_module1=ablate_module1,
         ablate_module2=ablate_module2,
@@ -919,6 +926,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         personal_max_alpha=getattr(args, "personal_max_alpha", 0.35),
         personal_delta_scale=getattr(args, "personal_delta_scale", 1.0),
         personal_warmup_epochs=getattr(args, "personal_warmup_epochs", 0),
+        personal_student_dim=getattr(args, "personal_student_dim", args.knowledge_dim),
         lambda_alpha_min=getattr(args, "lambda_alpha_min", 0.0),
         alpha_min_target=getattr(args, "alpha_min_target", 0.0),
     ).to(device)
@@ -1365,6 +1373,12 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     )
     use_concept_graph = loaded_args.get("use_concept_graph", getattr(args, "use_concept_graph", True))
     use_q_aligned_residual = bool(loaded_args.get("use_q_aligned_residual", getattr(args, "use_q_aligned_residual", True)))
+    enable_prototype_prediction_path = bool(
+        loaded_args.get(
+            "enable_prototype_prediction_path",
+            getattr(args, "enable_prototype_prediction_path", False),
+        )
+    )
     use_soft_prototype_main_path = bool(loaded_args.get("use_soft_prototype_main_path", getattr(args, "use_soft_prototype_main_path", False)))
     ablate_module1 = bool(loaded_args.get("ablate_module1", getattr(args, "ablate_module1", False)))
     ablate_module2 = bool(loaded_args.get("ablate_module2", getattr(args, "ablate_module2", False)))
@@ -1385,7 +1399,8 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         "Inference switches: "
         "ablate_module1=%s, ablate_module2=%s, ablate_module3=%s | "
         "enable_module1=%s, enable_module2=%s, enable_module3=%s | "
-        "use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s, use_q_aligned_residual=%s, use_soft_prototype_main_path=%s | "
+        "use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s, use_q_aligned_residual=%s, "
+        "enable_prototype_prediction_path=%s, use_soft_prototype_main_path=%s | "
         "effective(num_gnn_layers=%d, num_prototypes=%d)",
         ablate_module1,
         ablate_module2,
@@ -1397,6 +1412,7 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         use_mf_branch,
         use_concept_graph,
         use_q_aligned_residual,
+        enable_prototype_prediction_path,
         use_soft_prototype_main_path,
         eff_gnn_layers,
         eff_num_prototypes,
@@ -1421,6 +1437,7 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         proto_tau=loaded_args.get("proto_tau", args.proto_tau),
         proto_lambda=loaded_args.get("proto_lambda", args.proto_lambda),
         use_soft_prototype=use_soft_prototype,
+        enable_prototype_prediction_path=enable_prototype_prediction_path,
         use_soft_prototype_main_path=loaded_args.get(
             "use_soft_prototype_main_path", getattr(args, "use_soft_prototype_main_path", False)
         ),
@@ -1475,6 +1492,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         personal_warmup_epochs=loaded_args.get(
             "personal_warmup_epochs", getattr(args, "personal_warmup_epochs", 0)
+        ),
+        personal_student_dim=loaded_args.get(
+            "personal_student_dim", getattr(args, "personal_student_dim", args.knowledge_dim)
         ),
         lambda_alpha_min=loaded_args.get("lambda_alpha_min", getattr(args, "lambda_alpha_min", 0.0)),
         alpha_min_target=loaded_args.get("alpha_min_target", getattr(args, "alpha_min_target", 0.0)),
