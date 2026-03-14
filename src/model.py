@@ -14,19 +14,17 @@ Cognitive Diagnosis Model - Reviewer-friendly Dual-Branch Version (模块化/可
   2PL-IRT：theta_c -> Q-masked pooling -> theta_e -> irt_logit = a*(theta_e - b)
   输出：irt_logit 及可解释中间量（theta_c, theta_e）
 
-模块 3：神经增强与校正（Neural Residual + Prototype Calibration）= B + C
+模块 3：神经增强与校正（Neural Residual）= B
   B) MF/Q-conditioning 残差分支（mf_logit）
-  C) Soft Prototype 表示校正（可选）
   Fusion：门控残差融合 total_logit = irt_logit + gate * mf_logit
 
 ------------------------------------------------------------
 关键：提供三个“模块级完全消融”开关（ablate_module1/2/3）
 - ablate_module1=True：模块1完全消融（A/E/knowledge_encoder 全部不实例化、forward 只返回全0 knowledge_state）
 - ablate_module2=True：模块2完全消融（diagnosis_head 不实例化，ExerciseDifficultyEncoder 不创建 b/a 参数；IRT 路径完全不存在）
-- ablate_module3=True：模块3完全消融（MF 分支/融合门控/Prototype 全部不实例化；forward 不计算任何 MF/Proto）
+- ablate_module3=True：模块3完全消融（MF 分支/融合门控全部不实例化；forward 不计算任何 residual）
 
 注意：
-- 当 module2 被消融（ablate_module2=True）时，Prototype（C）在结构上对输出无贡献且容易引入“伪路径”，因此强制关闭（完全消融语义更干净）。
 - FusionGate 仅在 module2 与 module3 同时启用时存在；若 module2 被消融，则直接使用 mf_logit 作为 total_logit（无 gate 参数/无 gate 计算）。
 
 ------------------------------------------------------------
@@ -618,91 +616,95 @@ class ConservativeFusionGate(nn.Module):
 
 
 # ======================================================
-# 模块 3（C）：Soft Prototype 校正 - SoftPrototypeModule
-# ======================================================
-
-class SoftPrototypeModule(nn.Module):
-    """Soft prototype（可消融）：用于对 student_repr/knowledge_state 做稳定校正。"""
-
-    def __init__(self, num_prototypes: int, dim: int, tau: float = 1.0):
-        super().__init__()
-        self.num_prototypes = int(num_prototypes)
-        self.tau = float(tau)
-        self.prototypes = nn.Parameter(torch.randn(num_prototypes, dim) * 0.1)
-        nn.init.xavier_normal_(self.prototypes)
-
-    def forward(self, student_repr: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        # eps 防止 student_repr 为零向量时 normalize NaN
-        s = F.normalize(student_repr, dim=-1, eps=1e-12)
-        p = F.normalize(self.prototypes, dim=-1, eps=1e-12)
-        logits = torch.matmul(s, p.t()) / (self.tau + 1e-12)
-        assign = F.softmax(logits, dim=-1)
-        mix = torch.matmul(assign, self.prototypes)
-        return mix, assign
-
-
-# ======================================================
 # 模块 1（E）：个性化图相关组件 - AdaptiveGate / PersonalRelationGenerator
 # ======================================================
 
 class AdaptiveGate(nn.Module):
     """个性化图混合系数 alpha（B,1,1,1）。
-    
-    Fix: 添加 LayerNorm 标准化输入，解决 student embedding variance 过低的问题。
+
+    设计原则：
+    - student-id 分支与 context 分支分开建模，避免个体信号被 LayerNorm 洗掉；
+    - gate 至少保留一条显式的 student-specific 路径，不只依赖状态表示。
     """
 
-    def __init__(self, student_dim: int, max_alpha: float = 0.35, hidden_dim: Optional[int] = None):
+    def __init__(
+        self,
+        student_dim: int,
+        context_dim: int,
+        max_alpha: float = 0.35,
+        hidden_dim: Optional[int] = None,
+    ):
         super().__init__()
-        self.input_norm = nn.LayerNorm(student_dim)  # Fix: 标准化输入
-        hid = max(1, student_dim // 2 if hidden_dim is None else int(hidden_dim))
-        self.proj1 = nn.Linear(student_dim, hid)
-        self.proj2 = nn.Linear(hid, 1)
+        hid = max(1, max(student_dim, context_dim) // 2 if hidden_dim is None else int(hidden_dim))
+        self.context_norm = nn.LayerNorm(context_dim)
+        self.student_proj = nn.Linear(student_dim, hid, bias=False)
+        self.context_proj = nn.Linear(context_dim, hid)
+        self.hidden_proj = nn.Linear(hid, hid)
+        self.out = nn.Linear(hid, 1)
         self.max_alpha = float(max_alpha)
-        nn.init.xavier_normal_(self.proj1.weight)
-        nn.init.zeros_(self.proj1.bias)
-        nn.init.xavier_normal_(self.proj2.weight, gain=0.5)
-        nn.init.constant_(self.proj2.bias, -1.0)
 
-    def forward(self, student_repr: torch.Tensor) -> torch.Tensor:
-        student_repr = self.input_norm(student_repr)  # Fix: 标准化输入
-        hidden = F.gelu(self.proj1(student_repr))
-        alpha = self.max_alpha * torch.sigmoid(self.proj2(hidden))
+        nn.init.xavier_normal_(self.student_proj.weight)
+        nn.init.xavier_normal_(self.context_proj.weight)
+        nn.init.zeros_(self.context_proj.bias)
+        nn.init.xavier_normal_(self.hidden_proj.weight)
+        nn.init.zeros_(self.hidden_proj.bias)
+        nn.init.xavier_normal_(self.out.weight, gain=0.5)
+        nn.init.constant_(self.out.bias, -1.0)
+
+    def forward(self, student_embedding: torch.Tensor, context_repr: torch.Tensor) -> torch.Tensor:
+        context_hidden = self.context_proj(self.context_norm(context_repr))
+        student_hidden = self.student_proj(student_embedding)
+        hidden = F.silu(context_hidden + student_hidden)
+        hidden = F.silu(self.hidden_proj(hidden))
+        alpha = self.max_alpha * torch.sigmoid(self.out(hidden))
         return alpha.view(-1, 1, 1, 1)
 
 
 class PersonalRelationGenerator(nn.Module):
-    """低秩分解生成个性化邻接（B,C,C），softmax 保证 row-stochastic。
-    
-    Fix: 添加 LayerNorm 标准化输入，解决 student embedding variance 过低的问题。
-    """
+    """低秩分解生成个性化邻接（B,C,C），softmax 保证 row-stochastic。"""
 
-    def __init__(self, student_dim: int, num_concepts: int, rank: int = 4, hidden_dim: Optional[int] = None):
+    def __init__(
+        self,
+        student_dim: int,
+        context_dim: int,
+        num_concepts: int,
+        rank: int = 4,
+        hidden_dim: Optional[int] = None,
+    ):
         super().__init__()
-        self.input_norm = nn.LayerNorm(student_dim)  # Fix: 标准化输入
+        self.context_norm = nn.LayerNorm(context_dim)
         self.num_concepts = int(num_concepts)
         self.rank = int(rank)
+        hidden = max(1, max(student_dim, context_dim) if hidden_dim is None else int(hidden_dim))
+
+        self.student_proj = nn.Linear(student_dim, hidden, bias=False)
+        self.context_proj = nn.Linear(context_dim, hidden)
+        self.hidden_proj = nn.Linear(hidden, hidden)
         self.base_u = nn.Parameter(torch.randn(num_concepts, rank) * 0.02)
         self.base_v = nn.Parameter(torch.randn(num_concepts, rank) * 0.02)
-        proj_dim = student_dim if hidden_dim is None else max(1, int(hidden_dim))
-        self.proj = nn.Linear(student_dim, proj_dim)
-        self.to_u = nn.Linear(proj_dim, num_concepts * rank, bias=False)
-        self.to_v = nn.Linear(proj_dim, num_concepts * rank, bias=False)
-        nn.init.xavier_normal_(self.proj.weight)
-        nn.init.zeros_(self.proj.bias)
+        self.to_u = nn.Linear(hidden, num_concepts * rank, bias=False)
+        self.to_v = nn.Linear(hidden, num_concepts * rank, bias=False)
+
+        nn.init.xavier_normal_(self.student_proj.weight)
+        nn.init.xavier_normal_(self.context_proj.weight)
+        nn.init.zeros_(self.context_proj.bias)
+        nn.init.xavier_normal_(self.hidden_proj.weight)
+        nn.init.zeros_(self.hidden_proj.bias)
         nn.init.xavier_normal_(self.to_u.weight)
         nn.init.xavier_normal_(self.to_v.weight)
         nn.init.xavier_normal_(self.base_u)
         nn.init.xavier_normal_(self.base_v)
 
-    def forward(self, student_repr: torch.Tensor) -> torch.Tensor:
-        student_repr = self.input_norm(student_repr)  # Fix: 标准化输入
-        student_repr = F.gelu(self.proj(student_repr))
-        B = student_repr.size(0)
-        u = self.to_u(student_repr).view(B, self.num_concepts, self.rank)
-        v = self.to_v(student_repr).view(B, self.num_concepts, self.rank)
+    def forward(self, student_embedding: torch.Tensor, context_repr: torch.Tensor) -> torch.Tensor:
+        hidden = self.student_proj(student_embedding) + self.context_proj(self.context_norm(context_repr))
+        hidden = F.silu(hidden)
+        hidden = F.silu(self.hidden_proj(hidden))
+        B = hidden.size(0)
+        u = self.to_u(hidden).view(B, self.num_concepts, self.rank)
+        v = self.to_v(hidden).view(B, self.num_concepts, self.rank)
         u = self.base_u.unsqueeze(0) + u
         v = self.base_v.unsqueeze(0) + v
-        scores = torch.bmm(u, v.transpose(1, 2)) / math.sqrt(self.rank)  # (B,C,C)
+        scores = torch.bmm(u, v.transpose(1, 2)) / math.sqrt(self.rank)
         scores = scores - scores.mean(dim=-1, keepdim=True)
         return scores
 
@@ -772,7 +774,8 @@ class ConceptStructureModeling(nn.Module):
             self.knowledge_encoder = None
             self.adaptive_gate = None
             self.personal_generator = None
-            self.personal_student_embedding = None
+            self.personal_gate_embedding = None
+            self.personal_generator_embedding = None
             return
 
         # -------- 正常启用：A/E 可选 --------
@@ -807,17 +810,21 @@ class ConceptStructureModeling(nn.Module):
 
         # E) 个性化图（可选）
         if self.use_personal_graph:
-            self.personal_student_embedding = nn.Embedding(num_students, self.personal_student_dim)
-            nn.init.xavier_normal_(self.personal_student_embedding.weight)
-            personal_input_dim = self.personal_student_dim + knowledge_dim * 3
+            self.personal_gate_embedding = nn.Embedding(num_students, self.personal_student_dim)
+            self.personal_generator_embedding = nn.Embedding(num_students, self.personal_student_dim)
+            nn.init.xavier_normal_(self.personal_gate_embedding.weight)
+            nn.init.xavier_normal_(self.personal_generator_embedding.weight)
+            context_dim = knowledge_dim * 3
             personal_hidden_dim = max(self.personal_student_dim, knowledge_dim)
             self.adaptive_gate = AdaptiveGate(
-                personal_input_dim,
+                self.personal_student_dim,
+                context_dim,
                 max_alpha=self.personal_max_alpha,
                 hidden_dim=personal_hidden_dim,
             )
             self.personal_generator = PersonalRelationGenerator(
-                personal_input_dim,
+                self.personal_student_dim,
+                context_dim,
                 num_concepts,
                 personal_rank,
                 hidden_dim=personal_hidden_dim,
@@ -825,7 +832,8 @@ class ConceptStructureModeling(nn.Module):
         else:
             self.adaptive_gate = None
             self.personal_generator = None
-            self.personal_student_embedding = None
+            self.personal_gate_embedding = None
+            self.personal_generator_embedding = None
 
     def set_epoch(self, epoch: int) -> None:
         self._current_epoch = max(1, int(epoch))
@@ -879,20 +887,20 @@ class ConceptStructureModeling(nn.Module):
 
         if self.use_personal_graph and self.adaptive_gate is not None and self.personal_generator is not None:
             student_global_repr = self.knowledge_encoder.student_global(student_ids)  # (B,D)
-            personal_student_repr = self.personal_student_embedding(student_ids)      # (B,Dp)
-            personal_input = torch.cat(
+            context_repr = torch.cat(
                 [
-                    personal_student_repr,
                     student_global_repr,
                     student_repr,
                     student_repr - student_global_repr,
                 ],
                 dim=-1,
             )
-            gate_alpha = self.adaptive_gate(personal_input)                   # (B,1,1,1)
+            gate_student_repr = self.personal_gate_embedding(student_ids)
+            generator_student_repr = self.personal_generator_embedding(student_ids)
+            gate_alpha = self.adaptive_gate(gate_student_repr, context_repr)         # (B,1,1,1)
             personal_warmup_scale = self._get_personal_warmup_scale()
             gate_alpha_effective = gate_alpha * personal_warmup_scale
-            personal_delta = self.personal_generator(personal_input)          # (B,C,C)
+            personal_delta = self.personal_generator(generator_student_repr, context_repr)  # (B,C,C)
             global_prior = relation_matrices.mean(dim=0).clamp(min=1e-8).log().unsqueeze(0)
             personal_logits = global_prior + gate_alpha_effective.squeeze(-1) * (
                 self.personal_delta_scale * personal_delta
@@ -935,17 +943,16 @@ class CognitiveDiagnosisModel(nn.Module):
 
     - Module 1: ConceptStructureModeling（A + E）
     - Module 2: CognitiveDiagnosisHead（D）
-    - Module 3: Neural Residual + Prototype Calibration（B + C）
+    - Module 3: Neural Residual（B）
 
     关键：支持三个“模块级完全消融”开关：
       - ablate_module1：完全移除模块1（A/E/knowledge_encoder 都不存在）
       - ablate_module2：完全移除模块2（theta_proj 不存在；IRT b/a 参数不存在）
-      - ablate_module3：完全移除模块3（MF/Proto/Fusion 都不存在）
+      - ablate_module3：完全移除模块3（MF/Fusion 都不存在）
 
     同时保留旧的“子模块消融”开关：
       - use_concept_graph / use_personal_graph
       - use_mf_branch
-      - use_soft_prototype
     """
 
     def __init__(
@@ -965,12 +972,6 @@ class CognitiveDiagnosisModel(nn.Module):
         use_concept_graph: bool = True,
         graph_topk: Optional[int] = None,
         allow_self_loop: bool = True,
-        num_prototypes: int = 3,
-        proto_tau: float = 1.0,
-        proto_lambda: float = 0.5,
-        use_soft_prototype: bool = True,
-        use_soft_prototype_main_path: bool = False,
-        enable_prototype_prediction_path: bool = False,
         use_personal_graph: bool = False,
         personal_rank: int = 4,
         # ===== 模块级“完全消融”开关 =====
@@ -1003,9 +1004,6 @@ class CognitiveDiagnosisModel(nn.Module):
         mf_warmup_epochs: int = 0,
         lambda_delta_ratio: float = 0.0,
         delta_ratio_target: float = 0.15,
-        proto_conf_threshold: float = 0.0,
-        proto_gate_scale: float = 1.0,
-        proto_warmup_epochs: int = 0,
         personal_max_alpha: float = 0.35,
         personal_delta_scale: float = 1.0,
         personal_warmup_epochs: int = 0,
@@ -1028,7 +1026,7 @@ class CognitiveDiagnosisModel(nn.Module):
 
         # 如果 module2 和 module3 都被消融，则模型没有任何预测路径：直接报错（避免“跑了但无意义”）
         if (not self.enable_module2) and (not self.enable_module3):
-            raise ValueError("Invalid ablation: both Module 2 (IRT head) and Module 3 (MF/Proto) are disabled; no prediction path.")
+            raise ValueError("Invalid ablation: both Module 2 (IRT head) and Module 3 (MF) are disabled; no prediction path.")
 
         # ===== 子模块开关：根据“模块级消融”强制覆盖，保证彻底 =====
         # 模块1完全消融 => A/E 全部关闭（且结构模块不创建参数）
@@ -1036,27 +1034,14 @@ class CognitiveDiagnosisModel(nn.Module):
             use_concept_graph = False
             use_personal_graph = False
 
-        # 模块3完全消融 => MF/Proto 都关闭
+        # 模块3完全消融 => MF 关闭
         if not self.enable_module3:
             use_mf_branch = False
-            use_soft_prototype = False
-
-        # 模块2完全消融 => 强制关闭 Prototype（C），避免“无输出贡献但仍计算/训练”的不彻底
-        if not self.enable_module2:
-            use_soft_prototype = False
 
         # 最终保存子模块开关（用于 details）
         self.use_concept_graph = bool(use_concept_graph)
         self.use_personal_graph = bool(use_personal_graph)
         self.use_mf_branch = bool(use_mf_branch and use_q_aligned_residual)
-        self.use_soft_prototype = bool(use_soft_prototype and num_prototypes > 0 and self.enable_module3 and self.enable_module2)
-        self.proto_lambda = float(proto_lambda)
-        self.enable_prototype_prediction_path = bool(
-            enable_prototype_prediction_path and self.use_soft_prototype and self.enable_module3 and self.enable_module2
-        )
-        self.use_soft_prototype_main_path = bool(
-            use_soft_prototype_main_path and self.enable_prototype_prediction_path
-        )
         self.use_q_aligned_residual = bool(use_q_aligned_residual)
         self.fusion_gate_max = float(fusion_gate_max)
         self.fusion_gate_bias_init = float(fusion_gate_bias_init)
@@ -1083,9 +1068,6 @@ class CognitiveDiagnosisModel(nn.Module):
         self.mf_warmup_epochs = max(0, int(mf_warmup_epochs))
         self.lambda_delta_ratio = max(0.0, float(lambda_delta_ratio))
         self.delta_ratio_target = max(0.0, float(delta_ratio_target))
-        self.proto_conf_threshold = min(0.999, max(0.0, float(proto_conf_threshold)))
-        self.proto_gate_scale = max(0.0, float(proto_gate_scale))
-        self.proto_warmup_epochs = max(0, int(proto_warmup_epochs))
         self.personal_max_alpha = max(0.0, float(personal_max_alpha))
         self.personal_delta_scale = max(0.0, float(personal_delta_scale))
         self.personal_warmup_epochs = max(0, int(personal_warmup_epochs))
@@ -1153,7 +1135,7 @@ class CognitiveDiagnosisModel(nn.Module):
         )
 
         # ------------------------------
-        # Module 3：神经增强与校正（B + C）
+        # Module 3：神经增强（B）
         # ------------------------------
         if self.enable_module3 and self.use_mf_branch:
             self.skill_encoder = StudentLatentEncoder(num_students, latent_dim=skill_dim)
@@ -1177,18 +1159,6 @@ class CognitiveDiagnosisModel(nn.Module):
             )
         else:
             self.fusion = None
-
-        # Prototype 仅在 module2 启用（否则无输出贡献）且 module3 启用时存在
-        if self.use_soft_prototype:
-            self.prototype_module = SoftPrototypeModule(num_prototypes, knowledge_dim, proto_tau)
-            if self.enable_prototype_prediction_path and self.enable_module3 and self.use_mf_branch:
-                self.proto_to_skill = nn.Linear(knowledge_dim, skill_dim, bias=False)
-                nn.init.xavier_normal_(self.proto_to_skill.weight)
-            else:
-                self.proto_to_skill = None
-        else:
-            self.prototype_module = None
-            self.proto_to_skill = None
 
     # ------------------------------
     # Fix #1：行熵稀疏度（用于 personal graph 正则）
@@ -1246,38 +1216,10 @@ class CognitiveDiagnosisModel(nn.Module):
         gate_alpha = s_out["alpha"]
         personal_matrices = s_out["personal_matrices"]
 
-        # ========== 2) Module 3（C）：Prototype 校正（只在 module2+module3 启用时存在） ==========
-        proto_mix = None
-        proto_assign = None
-        proto_conf = None
-        proto_conf_effective = None
-        proto_gate = None
-        if self.prototype_module is not None:
-            proto_mix, proto_assign = self.prototype_module(student_repr)  # (B,D), (B,K)
-            proto_entropy = -(proto_assign.clamp(min=1e-12) * proto_assign.clamp(min=1e-12).log()).sum(dim=-1)
-            max_entropy = math.log(float(max(2, proto_assign.size(1))))
-            proto_conf = 1.0 - proto_entropy / (max_entropy + 1e-12)
-            proto_conf = proto_conf.clamp(min=0.0, max=1.0)
-            if self.proto_conf_threshold > 0.0:
-                denom = max(1e-6, 1.0 - self.proto_conf_threshold)
-                proto_conf_effective = F.relu(proto_conf - self.proto_conf_threshold) / denom
-            else:
-                proto_conf_effective = proto_conf
-            proto_conf_effective = proto_conf_effective.clamp(min=0.0, max=1.0)
-            proto_gate = (
-                self.proto_lambda
-                * self.proto_gate_scale
-                * self._get_linear_warmup(self.proto_warmup_epochs)
-                * proto_conf_effective
-            )
-            if self.use_soft_prototype_main_path:
-                proto_broadcast = proto_mix.unsqueeze(1).expand(-1, self.num_concepts, -1)
-                knowledge_state = knowledge_state + proto_gate.view(-1, 1, 1) * (proto_broadcast - knowledge_state)
-
-        # ========== 3) 共享：题目参数（b,a）与 module3 item-latent ==========
+        # ========== 2) 共享：题目参数（b,a）与 module3 item-latent ==========
         item_latent, exercise_bias, b, a = self.exercise_encoder(exercise_ids, concept_mask=q_vector)
 
-        # ========== 4) Module 2：IRT head（可完全消融） ==========
+        # ========== 3) Module 2：IRT head（可完全消融） ==========
         if self.enable_module2:
             if self.diagnosis_head is None:
                 raise RuntimeError("enable_module2=True but diagnosis_head is None. Check init wiring.")
@@ -1301,7 +1243,7 @@ class CognitiveDiagnosisModel(nn.Module):
             irt_logit = torch.zeros(exercise_ids.size(0), device=device)
             diag_details = None
 
-        # ========== 5) Module 3：MF residual（可完全消融） ==========
+        # ========== 4) Module 3：MF residual（可完全消融） ==========
         if self.enable_module3 and self.use_mf_branch:
             if self.skill_encoder is None or self.mf_head is None:
                 raise RuntimeError("enable_module3 & use_mf_branch=True but MF modules are None. Check init wiring.")
@@ -1310,15 +1252,6 @@ class CognitiveDiagnosisModel(nn.Module):
 
             if item_latent is None or exercise_bias is None:
                 raise RuntimeError("Module3 is enabled but item_latent/exercise_bias is None. Check exercise_encoder wiring.")
-
-            if (
-                self.enable_prototype_prediction_path
-                and proto_mix is not None
-                and self.proto_to_skill is not None
-            ):
-                proto_skill = self.proto_to_skill(proto_mix)
-                proto_skill = F.layer_norm(proto_skill, (proto_skill.size(-1),))
-                student_latent = student_latent + proto_gate.view(-1, 1) * proto_skill
 
             if return_details:
                 mf_logit, mf_details = self.mf_head(
@@ -1350,7 +1283,7 @@ class CognitiveDiagnosisModel(nn.Module):
             mf_logit = torch.zeros_like(irt_logit)
             mf_details = None
 
-        # ========== 6) 组合输出：严格避免“半消融” ==========
+        # ========== 5) 组合输出：严格避免“半消融” ==========
         # 情况1：module2+module3 均启用且 MF 存在 => 使用 fusion gate
         if self.enable_module2 and (self.enable_module3 and self.use_mf_branch):
             if self.fusion is None:
@@ -1391,13 +1324,13 @@ class CognitiveDiagnosisModel(nn.Module):
         else:
             raise RuntimeError("No valid prediction path. Check ablation flags.")
 
-        # ========== 7) 返回 logits 或 prob ==========
+        # ========== 6) 返回 logits 或 prob ==========
         out_main = total_logit if return_logits else torch.sigmoid(total_logit)
 
         if not return_details:
             return out_main
 
-        # ========== 8) details（用于正则、可解释输出、排查消融是否生效） ==========
+        # ========== 7) details（用于正则、可解释输出、排查消融是否生效） ==========
         details: Dict[str, torch.Tensor] = {
             # 模块级开关（用于日志对齐）
             "enable_module1": torch.tensor(int(self.enable_module1), device=device),
@@ -1408,9 +1341,6 @@ class CognitiveDiagnosisModel(nn.Module):
             "use_concept_graph": torch.tensor(int(self.use_concept_graph), device=device),
             "use_personal_graph": torch.tensor(int(self.use_personal_graph), device=device),
             "use_mf_branch": torch.tensor(int(self.use_mf_branch), device=device),
-            "use_soft_prototype": torch.tensor(int(self.prototype_module is not None), device=device),
-            "enable_prototype_prediction_path": torch.tensor(int(self.enable_prototype_prediction_path), device=device),
-            "use_soft_prototype_main_path": torch.tensor(int(self.use_soft_prototype_main_path), device=device),
 
             # 模块 1 输出
             "relation_matrices": relation_matrices,
@@ -1443,20 +1373,6 @@ class CognitiveDiagnosisModel(nn.Module):
         if fuse_details is not None:
             details.update(fuse_details)
 
-        if self.prototype_module is not None and proto_assign is not None:
-            details["prototype_mix"] = proto_mix.detach()
-            details["prototype_assign"] = proto_assign.detach()
-            details["prototype_assign_for_reg"] = proto_assign
-            if proto_conf is not None:
-                details["prototype_conf"] = proto_conf.detach()
-            if proto_conf_effective is not None:
-                details["prototype_conf_effective"] = proto_conf_effective.detach()
-            if proto_gate is not None:
-                details["prototype_gate"] = proto_gate.detach()
-            details["proto_warmup_scale"] = proto_gate.new_tensor(
-                self._get_linear_warmup(self.proto_warmup_epochs)
-            ).detach()
-
         if self.use_personal_graph:
             if gate_alpha is not None:
                 # Keep gradient path for personal regularizers in training.
@@ -1477,8 +1393,6 @@ class CognitiveDiagnosisModel(nn.Module):
         self,
         relation_matrices: torch.Tensor,
         details: Optional[Dict[str, torch.Tensor]] = None,
-        lambda_proto_div: float = 0.0,
-        lambda_proto_usage: float = 0.0,
         base_loss: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """
@@ -1493,8 +1407,6 @@ class CognitiveDiagnosisModel(nn.Module):
             "graph_reg_scale": torch.tensor(1.0, device=device),
             "mf_l2": torch.tensor(0.0, device=device),
             "delta_ratio": torch.tensor(0.0, device=device),
-            "proto_div": torch.tensor(0.0, device=device),
-            "proto_usage": torch.tensor(0.0, device=device),
             "personal_sparse": torch.tensor(0.0, device=device),
             "alpha_var": torch.tensor(0.0, device=device),  # signed term (negative when maximizing variance)
             "alpha_collapse": torch.tensor(0.0, device=device),
@@ -1626,25 +1538,7 @@ class CognitiveDiagnosisModel(nn.Module):
             details["delta_ratio_value"] = delta_ratio.detach()
             details["delta_ratio_pen"] = delta_pen.detach()
 
-        # (3) Prototype regularizers
-        if self.prototype_module is not None and details is not None and "prototype_assign" in details:
-            assign = details.get("prototype_assign_for_reg", details["prototype_assign"])  # (B,K)
-            K = assign.size(1)
-
-            if lambda_proto_div > 0.0:
-                P = F.normalize(self.prototype_module.prototypes, dim=-1, eps=1e-12)  # (K,D)
-                sim = P @ P.t()
-                off = sim - torch.eye(K, device=device, dtype=sim.dtype)
-                proto_div = (off.pow(2).sum() / (K * (K - 1) + 1e-12))
-                terms["proto_div"] = lambda_proto_div * proto_div
-
-            if lambda_proto_usage > 0.0:
-                q_mean = assign.mean(dim=0)
-                uniform = torch.full_like(q_mean, 1.0 / K)
-                proto_usage = F.mse_loss(q_mean, uniform)
-                terms["proto_usage"] = lambda_proto_usage * proto_usage
-
-        # (4) Personal graph regularizers
+        # (3) Personal graph regularizers
         if self.enable_module1 and self.use_personal_graph and details is not None:
             if (
                 "personal_matrices" in details
@@ -1676,8 +1570,6 @@ class CognitiveDiagnosisModel(nn.Module):
             + terms["graph_uniform"]
             + terms["mf_l2"]
             + terms["delta_ratio"]
-            + terms["proto_div"]
-            + terms["proto_usage"]
             + terms["personal_sparse"]
             + terms["alpha_var"]
             + terms["alpha_collapse"]
@@ -1689,22 +1581,17 @@ class CognitiveDiagnosisModel(nn.Module):
         self,
         relation_matrices: torch.Tensor,
         details: Optional[Dict[str, torch.Tensor]] = None,
-        lambda_proto_div: float = 0.0,
-        lambda_proto_usage: float = 0.0,
         base_loss: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         正则项汇总：
         (1) 全局概念图行熵（lambda_graph_entropy）—— 仅 module1 启用且 use_concept_graph=True 时有效
         (2) MF/IRT 参数 L2（mf_l2_lambda）—— 仅对应模块启用时才计入（避免不彻底消融）
-        (3) Prototype 正则（div / usage）—— 仅 prototype 存在时计入
-        (4) 个性化图稀疏 + alpha 惩罚 —— 仅 personal graph 存在时计入
+        (3) 个性化图稀疏 + alpha 惩罚 —— 仅 personal graph 存在时计入
         """
         terms = self.get_regularization_components(
             relation_matrices=relation_matrices,
             details=details,
-            lambda_proto_div=lambda_proto_div,
-            lambda_proto_usage=lambda_proto_usage,
             base_loss=base_loss,
         )
         return terms["total"]

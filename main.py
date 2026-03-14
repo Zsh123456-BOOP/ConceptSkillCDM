@@ -53,17 +53,6 @@ def parse_args():
     parser.add_argument("--num_gnn_layers", type=int, default=2)
     parser.add_argument("--dropout", type=float, default=0.1)
 
-    # ---- prototype----
-    parser.add_argument("--num_prototypes", type=int, default=3)
-    parser.add_argument("--proto_tau", type=float, default=1.0)
-    parser.add_argument("--proto_lambda", type=float, default=0.5)
-    parser.add_argument(
-        "--enable_soft_prototype",
-        action="store_true",
-        help="Enable Soft Prototype module (default is OFF to avoid negative transfer on junyi).",
-    )
-    parser.add_argument("--disable_soft_prototype", action="store_true")
-
     # ======================
     # Training
     # ======================
@@ -133,8 +122,6 @@ def parse_args():
         default=1.0,
         help="Initial temperature for graph relation learning softmax.",
     )
-    parser.add_argument("--lambda_proto_div", type=float, default=0.0)
-    parser.add_argument("--lambda_proto_usage", type=float, default=0.0)
     parser.add_argument("--lambda_sparse_personal", type=float, default=0.0)
     parser.add_argument("--lambda_alpha", type=float, default=0.0)
 
@@ -196,7 +183,6 @@ def parse_args():
     # ======================
     # Ablations
     # ======================
-    parser.add_argument("--ablate_soft_prototype", action="store_true")
     parser.add_argument("--ablate_skill_encoder", action="store_true")   #  MF 
     parser.add_argument("--ablate_concept_graph", action="store_true")   #  concept graph
 
@@ -208,7 +194,7 @@ def parse_args():
     parser.add_argument("--ablate_module2", action="store_true",
                         help="Fully disable Module 2 (IRT diagnosis head D; also removes IRT b/a params).")
     parser.add_argument("--ablate_module3", action="store_true",
-                        help="Fully disable Module 3 (Neural residual + prototype: B+C).")
+                        help="Fully disable Module 3 (Neural residual: B).")
 
     # ======================
     # New optional knobs
@@ -239,22 +225,12 @@ def parse_args():
                         help="Initial positive scale for module3 residual branches (after softplus).")
     parser.add_argument("--disable_q_aligned_residual", action="store_true",
                         help="Compatibility flag; q-aligned residual is enabled by default.")
-    parser.add_argument("--enable_prototype_prediction_path", action="store_true",
-                        help="Allow prototype branch to affect prediction path. Default keeps C as regularizer-only.")
-    parser.add_argument("--use_soft_prototype_main_path", action="store_true",
-                        help="If set together with --enable_prototype_prediction_path, inject prototype mix into knowledge_state.")
     parser.add_argument("--mf_warmup_epochs", type=int, default=0,
                         help="Linear warmup epochs for B residual contribution. 0 disables rescue warmup.")
     parser.add_argument("--lambda_delta_ratio", type=float, default=0.0,
                         help="Penalty weight for overly large residual delta relative to IRT logit.")
     parser.add_argument("--delta_ratio_target", type=float, default=0.15,
                         help="Target upper bound for mean(|delta|)/mean(|irt|) before penalty activates.")
-    parser.add_argument("--proto_conf_threshold", type=float, default=0.0,
-                        help="Only prototype confidence above this threshold contributes to C path.")
-    parser.add_argument("--proto_gate_scale", type=float, default=1.0,
-                        help="Extra multiplicative scale for prototype gate after confidence filtering.")
-    parser.add_argument("--proto_warmup_epochs", type=int, default=0,
-                        help="Linear warmup epochs for prototype gate. 0 disables rescue warmup.")
     parser.add_argument("--personal_max_alpha", type=float, default=0.35,
                         help="Upper bound for personal-graph mixing alpha.")
     parser.add_argument("--personal_delta_scale", type=float, default=1.0,
@@ -348,15 +324,6 @@ def main():
     #    
     # =========================================================
 
-    # (A) Prototype --enable_soft_prototype 
-    use_soft_proto = (
-        bool(getattr(args, "enable_soft_prototype", False))
-        and
-        (not getattr(args, "disable_soft_prototype", False))
-        and (not getattr(args, "ablate_soft_prototype", False))
-        and (getattr(args, "num_prototypes", 0) > 0)
-    )
-
     # (B) MF ablate_skill_encoder ==  MFno_skill
     use_mf_branch = not getattr(args, "ablate_skill_encoder", False)
 
@@ -378,33 +345,13 @@ def main():
         args.lambda_alpha = 0.0
 
     if not args.enable_module3:
-        # 3MF/Proto 
+        # 3MF
         use_mf_branch = False
-        use_soft_proto = False
-        args.num_prototypes = 0
-        args.lambda_proto_div = 0.0
-        args.lambda_proto_usage = 0.0
 
-    if not args.enable_module2:
-        # 2Prototype 
-        use_soft_proto = False
-        args.num_prototypes = 0
-        args.lambda_proto_div = 0.0
-        args.lambda_proto_usage = 0.0
-
-    args.use_soft_prototype = bool(use_soft_proto)
     args.use_mf_branch = bool(use_mf_branch)
     args.use_concept_graph = bool(use_concept_graph)
     args.use_personal_graph = bool(use_personal_graph)
     args.use_q_aligned_residual = not bool(getattr(args, "disable_q_aligned_residual", False))
-    args.enable_prototype_prediction_path = bool(
-        getattr(args, "enable_prototype_prediction_path", False) and args.use_soft_prototype
-    )
-    args.use_soft_prototype_main_path = bool(
-        getattr(args, "use_soft_prototype_main_path", False)
-        and args.enable_prototype_prediction_path
-        and args.use_soft_prototype
-    )
 
     # trainer/
     args.use_skill_encoder = args.use_mf_branch
@@ -496,12 +443,6 @@ def main():
                 use_concept_graph=args.use_concept_graph,
                 graph_topk=getattr(args, "graph_topk", None),
                 allow_self_loop=not getattr(args, "disable_self_loop", False),
-                num_prototypes=args.num_prototypes if args.use_soft_prototype else 0,
-                proto_tau=args.proto_tau,
-                proto_lambda=args.proto_lambda,
-                use_soft_prototype=args.use_soft_prototype,
-                use_soft_prototype_main_path=args.use_soft_prototype_main_path,
-                enable_prototype_prediction_path=getattr(args, "enable_prototype_prediction_path", False),
                 use_personal_graph=args.use_personal_graph,
                 personal_rank=getattr(args, "personal_rank", 4),
                 ablate_module1=getattr(args, "ablate_module1", False),
@@ -530,9 +471,6 @@ def main():
                 mf_warmup_epochs=getattr(args, "mf_warmup_epochs", 0),
                 lambda_delta_ratio=getattr(args, "lambda_delta_ratio", 0.0),
                 delta_ratio_target=getattr(args, "delta_ratio_target", 0.15),
-                proto_conf_threshold=getattr(args, "proto_conf_threshold", 0.0),
-                proto_gate_scale=getattr(args, "proto_gate_scale", 1.0),
-                proto_warmup_epochs=getattr(args, "proto_warmup_epochs", 0),
                 personal_max_alpha=getattr(args, "personal_max_alpha", 0.35),
                 personal_delta_scale=getattr(args, "personal_delta_scale", 1.0),
                 personal_warmup_epochs=getattr(args, "personal_warmup_epochs", 0),
@@ -573,13 +511,11 @@ def main():
             # 
             try:
                 from plot_component_analysis import (
-                    plot_prototype_analysis,
                     plot_global_graph,
                     plot_personal_graph_analysis,
                 )
                 
                 logger.info("Generating component analysis visualizations...")
-                plot_prototype_analysis(analysis_data, args.save_dir)
                 plot_global_graph(analysis_data, args.save_dir)
                 plot_personal_graph_analysis(analysis_data, args.save_dir)
                 logger.info(f"Visualizations saved to {args.save_dir}")

@@ -168,8 +168,6 @@ def _build_config_hash(args) -> str:
         "lambda_sparse",
         "lambda_sparse_personal",
         "lambda_alpha",
-        "lambda_proto_div",
-        "lambda_proto_usage",
         "exercise_l2_lambda",
         "fusion_gate_max",
         "fusion_gate_bias_init",
@@ -180,7 +178,6 @@ def _build_config_hash(args) -> str:
         "use_mf_branch",
         "use_concept_graph",
         "use_personal_graph",
-        "use_soft_prototype",
     ]
     payload = {}
     for k in keys:
@@ -230,7 +227,6 @@ def append_summary_csv(
     # 消融标记，方便后续筛选
     ablation_flags = []
     for flag in [
-        "ablate_soft_prototype",
         "ablate_skill_encoder",
         "ablate_concept_graph",
     ]:

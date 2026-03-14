@@ -13,7 +13,7 @@ run_ablation.py
   4) no_module3   : --ablate_module3
 
 可选：
-- 若你想跑子模块消融（A~E 对应的旧开关），显式传：
+- 若你想跑子模块消融（A/B/E 对应的旧开关），显式传：
   --ablation_set sub
 - 若想 model + sub 全部都跑：
   --ablation_set all
@@ -47,11 +47,8 @@ MODEL_ABLATIONS: List[Dict[str, Any]] = [
     {"name": "no_module3", "flags": {"ablate_module3": True}, "overrides": {}},
 ]
 
-# 这些是你说的 “A~E 子模块消融（旧开关）”，默认不跑
+# 这些是你说的 “A/B/E 子模块消融（旧开关）”，默认不跑
 SUBMODULE_ABLATIONS: List[Dict[str, Any]] = [
-    {"name": "no_soft_proto",
-     "flags": {"ablate_soft_prototype": True},
-     "overrides": {"num_prototypes": 0}},
     {"name": "no_skill",
      "flags": {"ablate_skill_encoder": True},
      "overrides": {}},

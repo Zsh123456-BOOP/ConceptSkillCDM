@@ -46,10 +46,9 @@ def _check_csv_migration_tool() -> None:
         df = pd.DataFrame(
             [
                 {
-                    "ablate_soft_prototype": False,
                     "ablate_skill_encoder": False,
                     "ablate_exercise_graph": True,
-                    "ablation_flags": "ablate_soft_prototype=False;ablate_skill_encoder=False;ablate_exercise_graph=True",
+                    "ablation_flags": "ablate_skill_encoder=False;ablate_exercise_graph=True",
                 }
             ]
         )

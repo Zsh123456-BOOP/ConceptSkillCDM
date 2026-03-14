@@ -46,17 +46,6 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "graph_tau_init": 0.55,
         "graph_topk": 12,
 
-        # Module3 prototype
-        "num_prototypes": 4,
-        "proto_tau": 1.0,
-        "proto_lambda": 0.12,
-        "lambda_proto_div": 5e-4,
-        "lambda_proto_usage": 5e-4,
-        "enable_soft_prototype": True,
-        "disable_soft_prototype": False,
-        "enable_prototype_prediction_path": False,
-        "use_soft_prototype_main_path": False,
-
         # Module3 residual / fusion
         "exercise_l2_lambda": 1e-5,
         "fusion_gate_max": 1.0,
@@ -74,7 +63,6 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
 
         # Legacy ablation compatibility
         "ablate_skill_encoder": False,
-        "ablate_soft_prototype": False,
 
         # Misc
         "model_variant": "gpd_base",
@@ -116,17 +104,6 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "graph_tau_init": 0.55,
         "graph_topk": 24,
 
-        # Module3 prototype
-        "num_prototypes": 4,
-        "proto_tau": 1.0,
-        "proto_lambda": 0.10,
-        "lambda_proto_div": 5e-4,
-        "lambda_proto_usage": 5e-4,
-        "enable_soft_prototype": True,
-        "disable_soft_prototype": False,
-        "enable_prototype_prediction_path": False,
-        "use_soft_prototype_main_path": False,
-
         # Module3 residual / fusion
         "exercise_l2_lambda": 1e-5,
         "fusion_gate_max": 1.0,
@@ -144,7 +121,6 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
 
         # Legacy ablation compatibility
         "ablate_skill_encoder": False,
-        "ablate_soft_prototype": False,
 
         # Misc
         "model_variant": "gpd_base",
@@ -152,4 +128,3 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
 }
 
 DEFAULT_SEEDS = [42]
-

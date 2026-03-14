@@ -1,12 +1,12 @@
 # src/module_activity.py
 """
-模块活跃度检测工具：判断三个子模块（Soft Prototype, Concept Graph, Skill/MF）是否真正被使用。
+模块活跃度检测工具：判断关键子模块（Concept Graph, Personal Graph, Skill/MF）是否真正被使用。
 
 用于：在 run_all_datasets.py 训练时输出检测报告，帮助调参确保模块生效。
 
 检测逻辑：
-1. Soft Prototype: 检测原型使用分布的熵 —— 熵越高表示所有原型都在被使用
-2. Concept Graph: 检测邻接矩阵行熵 —— 非均匀分布表示学到了有意义的结构
+1. Concept Graph: 检测邻接矩阵行熵 —— 非均匀分布表示学到了有意义的结构
+2. Personal Graph: 检测个性化 gate alpha —— 均值和方差都要足够
 3. Skill/MF: 检测 MF 残差贡献 —— 方差越大表示模块在起作用
 """
 
@@ -50,7 +50,6 @@ def compute_module_activity(
     results: Dict[str, Any] = {}
 
     # 收集的数据
-    proto_assigns: List[np.ndarray] = []
     gate_alphas: List[float] = []
     mf_logits: List[float] = []
     irt_logits: List[float] = []
@@ -77,15 +76,11 @@ def compute_module_activity(
                 return_logits=True,
             )
 
-            # 1) Prototype 分配
-            if details.get("prototype_assign") is not None:
-                proto_assigns.append(details["prototype_assign"].cpu().numpy())
-
-            # 2) Gate alpha（个性化图混合系数）
+            # 1) Gate alpha（个性化图混合系数）
             if details.get("alpha") is not None:
                 gate_alphas.extend(details["alpha"].squeeze().cpu().numpy().tolist())
 
-            # 3) MF/IRT logits（用于计算贡献）
+            # 2) MF/IRT logits（用于计算贡献）
             if details.get("mf_logit") is not None:
                 mf_logits.extend(details["mf_logit"].cpu().numpy().tolist())
             if details.get("irt_logit") is not None:
@@ -97,31 +92,7 @@ def compute_module_activity(
 
     # ==================== 计算活跃度指标 ====================
 
-    # 1) Soft Prototype 活跃度
-    if proto_assigns:
-        all_assigns = np.concatenate(proto_assigns, axis=0)  # (N, K)
-        # 计算平均分配分布
-        mean_assign = all_assigns.mean(axis=0)  # (K,)
-        # 计算使用熵（最大熵 = log(K)，表示均匀使用）
-        K = len(mean_assign)
-        max_entropy = np.log(K + 1e-12)
-        # 离散熵
-        usage_entropy = -np.sum(mean_assign * np.log(mean_assign + 1e-12))
-        usage_ratio = usage_entropy / max_entropy if max_entropy > 0 else 0.0
-
-        results["proto_enabled"] = True
-        results["proto_usage_entropy"] = float(usage_entropy)
-        results["proto_max_entropy"] = float(max_entropy)
-        results["proto_usage_ratio"] = float(usage_ratio)
-        results["proto_mean_assign"] = mean_assign.tolist()
-        # 判断：如果某个原型占比超过 80%，认为其他原型没用
-        results["proto_dominant"] = bool(mean_assign.max() > 0.8)
-        results["proto_active"] = usage_ratio > 0.5 and not results["proto_dominant"]
-    else:
-        results["proto_enabled"] = False
-        results["proto_active"] = False
-
-    # 2) Concept Graph 活跃度（通过全局邻接矩阵行熵判断）
+    # 1) Concept Graph 活跃度（通过全局邻接矩阵行熵判断）
     if base_model.structure_module.relation_learning is not None:
         with torch.no_grad():
             relation_matrices, _ = base_model.structure_module.relation_learning()  # (H, C, C)
@@ -148,7 +119,7 @@ def compute_module_activity(
         results["graph_enabled"] = False
         results["graph_active"] = False
 
-    # 3) Personal Graph 活跃度（通过 gate_alpha 判断）
+    # 2) Personal Graph 活跃度（通过 gate_alpha 判断）
     if gate_alphas:
         alpha_arr = np.array(gate_alphas)
         results["personal_graph_enabled"] = True
@@ -162,7 +133,7 @@ def compute_module_activity(
         results["personal_graph_enabled"] = False
         results["personal_graph_active"] = False
 
-    # 4) Skill/MF 活跃度
+    # 3) Skill/MF 活跃度
     if mf_logits and irt_logits:
         mf_arr = np.array(mf_logits)
         irt_arr = np.array(irt_logits)
@@ -218,13 +189,9 @@ def format_activity_brief(activity: Dict[str, Any]) -> str:
     """
     格式化为简短的一行报告（用于训练过程中输出）。
 
-    Example: "Proto[OK] Graph[OK] Personal[X] MF[OK]"
+    Example: "Graph[OK] Personal[X] MF[OK]"
     """
     parts = []
-
-    if activity.get("proto_enabled"):
-        status = "[OK]" if activity.get("proto_active") else "[X]"
-        parts.append(f"Proto{status}")
 
     if activity.get("graph_enabled"):
         status = "[OK]" if activity.get("graph_active") else "[X]"
@@ -261,36 +228,8 @@ def format_activity_report(
         "",
     ]
 
-    # 1. Soft Prototype
-    lines.append("1. Soft Prototype Module:")
-    if activity.get("proto_enabled"):
-        usage_ratio = activity.get("proto_usage_ratio", 0.0)
-        usage_pct = usage_ratio * 100
-        mean_assign = activity.get("proto_mean_assign", [])
-
-        if activity.get("proto_active"):
-            status = "ACTIVE"
-            advice = ""
-        elif activity.get("proto_dominant"):
-            status = "INACTIVE (one prototype dominates)"
-            advice = "   -> Consider: increase proto_tau or lambda_proto_usage"
-        else:
-            status = "INACTIVE (low usage entropy)"
-            advice = "   -> Consider: increase proto_lambda or lambda_proto_usage"
-
-        lines.append(f"   - Usage entropy: {activity.get('proto_usage_entropy', 0):.3f} / {activity.get('proto_max_entropy', 0):.3f}")
-        lines.append(f"   - Usage ratio: {usage_pct:.1f}%")
-        lines.append(f"   - Prototype distribution: {[f'{x:.2f}' for x in mean_assign]}")
-        lines.append(f"   - Status: {status}")
-        if advice:
-            lines.append(advice)
-    else:
-        lines.append("   - Status: DISABLED (num_prototypes=0 or use_soft_prototype=False)")
-
-    lines.append("")
-
-    # 2. Concept Graph
-    lines.append("2. Concept Graph Module:")
+    # 1. Concept Graph
+    lines.append("1. Concept Graph Module:")
     if activity.get("graph_enabled"):
         entropy_ratio = activity.get("graph_entropy_ratio", 0.0)
 
@@ -317,8 +256,8 @@ def format_activity_report(
 
     lines.append("")
 
-    # 3. Personal Graph
-    lines.append("3. Personal Graph Module:")
+    # 2. Personal Graph
+    lines.append("2. Personal Graph Module:")
     if activity.get("personal_graph_enabled"):
         gate_mean = activity.get("personal_gate_mean", 0.0)
         gate_std = activity.get("personal_gate_std", 0.0)
@@ -343,8 +282,8 @@ def format_activity_report(
 
     lines.append("")
 
-    # 4. Skill/MF
-    lines.append("4. Skill/MF Module:")
+    # 3. Skill/MF
+    lines.append("3. Skill/MF Module:")
     if activity.get("mf_enabled"):
         mf_abs = activity.get("mf_abs_mean", 0.0)
         mf_std = activity.get("mf_std", 0.0)
@@ -376,7 +315,6 @@ def format_activity_report(
     all_inactive = []
 
     for mod, key in [
-        ("Soft Prototype", "proto"),
         ("Concept Graph", "graph"),
         ("Personal Graph", "personal_graph"),
         ("Skill/MF", "mf"),

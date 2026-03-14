@@ -80,7 +80,6 @@ def _collect_runtime_ablation_facts(model: nn.Module) -> Dict[str, Any]:
         getattr(base_model, "skill_encoder", None) is not None
         and getattr(base_model, "mf_head", None) is not None
     )
-    has_soft_prototype = getattr(base_model, "prototype_module", None) is not None
 
     return {
         "enable_module1": bool(getattr(base_model, "enable_module1", False)),
@@ -88,7 +87,6 @@ def _collect_runtime_ablation_facts(model: nn.Module) -> Dict[str, Any]:
         "enable_module3": bool(getattr(base_model, "enable_module3", False)),
         "has_knowledge_encoder": bool(has_knowledge_encoder),
         "has_mf_branch": bool(has_mf_branch),
-        "has_soft_prototype": bool(has_soft_prototype),
     }
 
 
@@ -112,7 +110,7 @@ def _log_and_assert_ablation_consistency(
         "%s Ablation runtime check: "
         "args(ablate_module1=%s,ablate_module2=%s,ablate_module3=%s) | "
         "model(enable_module1=%s,enable_module2=%s,enable_module3=%s) | "
-        "physical(has_knowledge_encoder=%s,has_mf_branch=%s,has_soft_prototype=%s)",
+        "physical(has_knowledge_encoder=%s,has_mf_branch=%s)",
         context,
         ablate_module1,
         ablate_module2,
@@ -122,7 +120,6 @@ def _log_and_assert_ablation_consistency(
         facts["enable_module3"],
         facts["has_knowledge_encoder"],
         facts["has_mf_branch"],
-        facts["has_soft_prototype"],
     )
 
     if ablate_module1 and facts["enable_module1"]:
@@ -136,8 +133,6 @@ def _log_and_assert_ablation_consistency(
         raise RuntimeError("Ablation mismatch: ablate_module1=True but knowledge_encoder still exists.")
     if ablate_module3 and facts["has_mf_branch"]:
         raise RuntimeError("Ablation mismatch: ablate_module3=True but MF branch modules still exist.")
-    if ablate_module3 and facts["has_soft_prototype"]:
-        raise RuntimeError("Ablation mismatch: ablate_module3=True but prototype_module still exists.")
 
     return facts
 
@@ -249,25 +244,17 @@ def _strip_module_prefix(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch
 
 def _hard_ablation_effective_hparams(
     *,
-    use_soft_prototype: bool,
     use_concept_graph: bool,
     num_gnn_layers: int,
-    num_prototypes: int,
-) -> Tuple[int, int]:
+ ) -> int:
     """
     Hard-ablation safety:
       - If concept graph is disabled, force num_gnn_layers=0 to prevent "I-graph GNN" leakage.
-      - If soft prototype is disabled, force num_prototypes=0 to prevent prototype params from existing.
     """
     eff_gnn = int(num_gnn_layers)
     if not use_concept_graph:
         eff_gnn = 0
-
-    eff_proto = int(num_prototypes)
-    if not use_soft_prototype:
-        eff_proto = 0
-
-    return eff_gnn, eff_proto
+    return eff_gnn
 
 
 def _safe_mean_std(values: List[float]) -> Tuple[float, float]:
@@ -298,8 +285,6 @@ _REG_COMPONENT_KEYS: Tuple[str, ...] = (
     "graph_reg_scale",
     "mf_l2",
     "delta_ratio",
-    "proto_div",
-    "proto_usage",
     "personal_sparse",
     "alpha_var",
     "alpha_collapse",
@@ -327,8 +312,6 @@ def _collect_debug_forward_stats(
     delta_vals: List[float] = []
     alpha_vals: List[float] = []
     personal_entropy_vals: List[float] = []
-    proto_conf_vals: List[float] = []
-    proto_gate_vals: List[float] = []
 
     graph_row_entropy_mean = 0.0
     graph_entropy_ratio = 0.0
@@ -337,7 +320,6 @@ def _collect_debug_forward_stats(
     graph_to_identity_l2 = 0.0
     graph_ready = False
     mf_warmup_scale = 1.0
-    proto_warmup_scale = 1.0
     personal_warmup_scale = 1.0
 
     base_model = _get_base_model(model)
@@ -396,18 +378,8 @@ def _collect_debug_forward_stats(
                 pm = personal_matrices.detach().cpu().numpy()
                 personal_entropy_vals.append(_row_entropy_mean(pm))
 
-            proto_conf = details.get("prototype_conf_effective", details.get("prototype_conf"))
-            if proto_conf is not None:
-                proto_conf_vals.extend(proto_conf.detach().reshape(-1).cpu().numpy().tolist())
-
-            proto_gate = details.get("prototype_gate")
-            if proto_gate is not None:
-                proto_gate_vals.extend(proto_gate.detach().reshape(-1).cpu().numpy().tolist())
-
             if details.get("mf_warmup_scale") is not None:
                 mf_warmup_scale = float(details["mf_warmup_scale"].detach().reshape(-1)[0].item())
-            if details.get("proto_warmup_scale") is not None:
-                proto_warmup_scale = float(details["proto_warmup_scale"].detach().reshape(-1)[0].item())
             if details.get("personal_warmup_scale") is not None:
                 personal_warmup_scale = float(details["personal_warmup_scale"].detach().reshape(-1)[0].item())
 
@@ -437,8 +409,6 @@ def _collect_debug_forward_stats(
     delta_abs_mean, delta_std = _safe_abs_mean_std(delta_vals)
     alpha_mean, alpha_std = _safe_mean_std(alpha_vals)
     personal_row_entropy, _ = _safe_mean_std(personal_entropy_vals)
-    proto_conf_mean, _ = _safe_mean_std(proto_conf_vals)
-    proto_gate_mean, _ = _safe_mean_std(proto_gate_vals)
 
     return {
         "mf_abs_mean": mf_abs_mean,
@@ -461,10 +431,7 @@ def _collect_debug_forward_stats(
         "alpha_mean": alpha_mean,
         "alpha_std": alpha_std,
         "personal_row_entropy": personal_row_entropy,
-        "proto_conf_mean": proto_conf_mean,
-        "proto_gate_mean": proto_gate_mean,
         "mf_warmup_scale": mf_warmup_scale,
-        "proto_warmup_scale": proto_warmup_scale,
         "personal_warmup_scale": personal_warmup_scale,
     }
 
@@ -488,6 +455,9 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
     structure_module = getattr(base_model, "structure_module", None)
     relation_learning = getattr(structure_module, "relation_learning", None) if structure_module is not None else None
     personal_generator = getattr(structure_module, "personal_generator", None) if structure_module is not None else None
+    adaptive_gate = getattr(structure_module, "adaptive_gate", None) if structure_module is not None else None
+    personal_gate_embedding = getattr(structure_module, "personal_gate_embedding", None) if structure_module is not None else None
+    personal_generator_embedding = getattr(structure_module, "personal_generator_embedding", None) if structure_module is not None else None
 
     mf_u = getattr(getattr(mf_head, "u_proj", None), "weight", None)
     mf_v = getattr(getattr(mf_head, "v_proj", None), "weight", None)
@@ -513,6 +483,11 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
         relation_wk = float(np.mean(wk_norms)) if wk_norms else 0.0
     personal_u = getattr(getattr(personal_generator, "to_u", None), "weight", None)
     personal_v = getattr(getattr(personal_generator, "to_v", None), "weight", None)
+    personal_gate_student_proj = getattr(getattr(adaptive_gate, "student_proj", None), "weight", None)
+    personal_gate_context_proj = getattr(getattr(adaptive_gate, "context_proj", None), "weight", None)
+    personal_gate_out = getattr(getattr(adaptive_gate, "out", None), "weight", None)
+    personal_generator_student_proj = getattr(getattr(personal_generator, "student_proj", None), "weight", None)
+    personal_generator_context_proj = getattr(getattr(personal_generator, "context_proj", None), "weight", None)
 
     return {
         "mf_u_proj": _grad_norm_or_zero(mf_u),
@@ -526,6 +501,13 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
         "relation_wk": relation_wk if relation_wk is not None else 0.0,
         "personal_u": _grad_norm_or_zero(personal_u),
         "personal_v": _grad_norm_or_zero(personal_v),
+        "personal_gate_emb": _grad_norm_or_zero(getattr(personal_gate_embedding, "weight", None)),
+        "personal_gate_student_proj": _grad_norm_or_zero(personal_gate_student_proj),
+        "personal_gate_context_proj": _grad_norm_or_zero(personal_gate_context_proj),
+        "personal_gate_out": _grad_norm_or_zero(personal_gate_out),
+        "personal_generator_emb": _grad_norm_or_zero(getattr(personal_generator_embedding, "weight", None)),
+        "personal_generator_student_proj": _grad_norm_or_zero(personal_generator_student_proj),
+        "personal_generator_context_proj": _grad_norm_or_zero(personal_generator_context_proj),
     }
 
 
@@ -541,7 +523,6 @@ def _debug_assert_module3_wiring(model: nn.Module, *, ablate_module3: bool) -> N
     mf_head = getattr(base_model, "mf_head", None)
     skill_encoder = getattr(base_model, "skill_encoder", None)
     fusion = getattr(base_model, "fusion", None)
-    prototype_module = getattr(base_model, "prototype_module", None)
 
     if enable_module3 and use_mf_branch:
         if mf_head is None or skill_encoder is None or fusion is None:
@@ -551,7 +532,7 @@ def _debug_assert_module3_wiring(model: nn.Module, *, ablate_module3: bool) -> N
             )
 
     if ablate_module3:
-        if mf_head is not None or skill_encoder is not None or fusion is not None or prototype_module is not None:
+        if mf_head is not None or skill_encoder is not None or fusion is not None:
             raise RuntimeError(
                 "Debug wiring assert failed: ablate_module3=True, but module3 components still exist."
             )
@@ -566,8 +547,6 @@ def train_epoch(
     train_loader: DataLoader,
     optimizer: optim.Optimizer,
     device: torch.device,
-    lambda_proto_div: float,
-    lambda_proto_usage: float,
     logger,
 ) -> Dict[str, float]:
     model.train()
@@ -604,8 +583,6 @@ def train_epoch(
         reg_terms = _get_base_model(model).get_regularization_components(
             relation_matrices=details["relation_matrices"],
             details=details,
-            lambda_proto_div=lambda_proto_div,
-            lambda_proto_usage=lambda_proto_usage,
             base_loss=bce_loss,
         )
         reg_loss = reg_terms["total"]
@@ -654,8 +631,6 @@ def validate(
     model: CognitiveDiagnosisModel,
     val_loader: DataLoader,
     device: torch.device,
-    lambda_proto_div: float,
-    lambda_proto_usage: float,
     logger,
 ) -> Dict[str, float]:
     model.eval()
@@ -692,8 +667,6 @@ def validate(
             reg_terms = _get_base_model(model).get_regularization_components(
                 relation_matrices=details["relation_matrices"],
                 details=details,
-                lambda_proto_div=lambda_proto_div,
-                lambda_proto_usage=lambda_proto_usage,
                 base_loss=bce_loss,
             )
             reg_loss = reg_terms["total"]
@@ -749,14 +722,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     logger.info("%s Loading datasets...", run_tag)
     logger.info(
         "%s Regularization: graph_entropy(lambda_sparse)=%.6f, graph_diag=%.6f, graph_uniform=%.6f, "
-        "proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, alpha_penalty=%.6f, "
+        "personal_sparse=%.6f, alpha_penalty=%.6f, "
         "alpha_min=%.6f, delta_ratio=%.6f, mf_l2(exercise_l2_lambda)=%.6f",
         run_tag,
         args.lambda_sparse,
         getattr(args, "lambda_graph_diag", 0.10),
         getattr(args, "lambda_graph_uniform", 0.04),
-        args.lambda_proto_div,
-        args.lambda_proto_usage,
         args.lambda_sparse_personal,
         args.lambda_alpha,
         getattr(args, "lambda_alpha_min", 0.0),
@@ -775,17 +746,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         getattr(args, "graph_tau_init", 1.0),
     )
     logger.info(
-        "%s Rescue controls: mf_warmup_epochs=%d, delta_ratio_target=%.4f, proto_conf_threshold=%.3f, "
-        "proto_gate_scale=%.3f, proto_warmup_epochs=%d, enable_prototype_prediction_path=%s, "
+        "%s Rescue controls: mf_warmup_epochs=%d, delta_ratio_target=%.4f, "
         "personal_max_alpha=%.3f, personal_delta_scale=%.3f, personal_warmup_epochs=%d, "
         "personal_student_dim=%s, alpha_min_target=%.4f",
         run_tag,
         int(getattr(args, "mf_warmup_epochs", 0)),
         float(getattr(args, "delta_ratio_target", 0.15)),
-        float(getattr(args, "proto_conf_threshold", 0.0)),
-        float(getattr(args, "proto_gate_scale", 1.0)),
-        int(getattr(args, "proto_warmup_epochs", 0)),
-        bool(getattr(args, "enable_prototype_prediction_path", False)),
         float(getattr(args, "personal_max_alpha", 0.35)),
         float(getattr(args, "personal_delta_scale", 1.0)),
         int(getattr(args, "personal_warmup_epochs", 0)),
@@ -824,12 +790,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     logger.info("%s Creating model...", run_tag)
 
     # switches from main.py (already normalized there)
-    use_soft_prototype = getattr(args, "use_soft_prototype", True)
     use_mf_branch = getattr(args, "use_mf_branch", getattr(args, "use_skill_encoder", True))
     use_concept_graph = getattr(args, "use_concept_graph", True)
     use_q_aligned_residual = bool(getattr(args, "use_q_aligned_residual", True))
-    enable_prototype_prediction_path = bool(getattr(args, "enable_prototype_prediction_path", False))
-    use_soft_prototype_main_path = bool(getattr(args, "use_soft_prototype_main_path", False))
     ablate_module1 = bool(getattr(args, "ablate_module1", False))
     ablate_module2 = bool(getattr(args, "ablate_module2", False))
     ablate_module3 = bool(getattr(args, "ablate_module3", False))
@@ -840,20 +803,17 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     expected_enable_module3 = not ablate_module3
 
     # hard-ablation safety (prevents "half-ablation")
-    eff_gnn_layers, eff_num_prototypes = _hard_ablation_effective_hparams(
-        use_soft_prototype=use_soft_prototype,
+    eff_gnn_layers = _hard_ablation_effective_hparams(
         use_concept_graph=use_concept_graph,
         num_gnn_layers=getattr(args, "num_gnn_layers", 0),
-        num_prototypes=getattr(args, "num_prototypes", 0),
     )
 
     logger.info(
         "%s Ablation switches: "
         "ablate_module1=%s, ablate_module2=%s, ablate_module3=%s | "
         "enable_module1=%s, enable_module2=%s, enable_module3=%s | "
-        "use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s, use_q_aligned_residual=%s, "
-        "enable_prototype_prediction_path=%s, use_soft_prototype_main_path=%s | "
-        "effective(num_gnn_layers=%d, num_prototypes=%d)",
+        "use_mf_branch=%s, use_concept_graph=%s, use_q_aligned_residual=%s | "
+        "effective(num_gnn_layers=%d)",
         run_tag,
         ablate_module1,
         ablate_module2,
@@ -861,14 +821,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         expected_enable_module1,
         expected_enable_module2,
         expected_enable_module3,
-        use_soft_prototype,
         use_mf_branch,
         use_concept_graph,
         use_q_aligned_residual,
-        enable_prototype_prediction_path,
-        use_soft_prototype_main_path,
         eff_gnn_layers,
-        eff_num_prototypes,
     )
 
     model = CognitiveDiagnosisModel(
@@ -886,12 +842,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         use_concept_graph=use_concept_graph,
         graph_topk=getattr(args, "graph_topk", None),
         allow_self_loop=not getattr(args, "disable_self_loop", False),
-        num_prototypes=eff_num_prototypes,
-        proto_tau=args.proto_tau,
-        proto_lambda=args.proto_lambda,
-        use_soft_prototype=use_soft_prototype,
-        use_soft_prototype_main_path=getattr(args, "use_soft_prototype_main_path", False),
-        enable_prototype_prediction_path=enable_prototype_prediction_path,
         use_personal_graph=getattr(args, "use_personal_graph", False),
         ablate_module1=ablate_module1,
         ablate_module2=ablate_module2,
@@ -920,9 +870,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         mf_warmup_epochs=getattr(args, "mf_warmup_epochs", 0),
         lambda_delta_ratio=getattr(args, "lambda_delta_ratio", 0.0),
         delta_ratio_target=getattr(args, "delta_ratio_target", 0.15),
-        proto_conf_threshold=getattr(args, "proto_conf_threshold", 0.0),
-        proto_gate_scale=getattr(args, "proto_gate_scale", 1.0),
-        proto_warmup_epochs=getattr(args, "proto_warmup_epochs", 0),
         personal_max_alpha=getattr(args, "personal_max_alpha", 0.35),
         personal_delta_scale=getattr(args, "personal_delta_scale", 1.0),
         personal_warmup_epochs=getattr(args, "personal_warmup_epochs", 0),
@@ -995,8 +942,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             train_loader,
             optimizer,
             device,
-            args.lambda_proto_div,
-            args.lambda_proto_usage,
             logger,
         )
         grad_norms = _collect_debug_grad_norms(model) if debug_module3_diag else None
@@ -1005,8 +950,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             model,
             val_loader,
             device,
-            args.lambda_proto_div,
-            args.lambda_proto_usage,
             logger,
         )
 
@@ -1024,10 +967,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         logger.info(
             "%s [Reg Terms] Epoch [%03d] | "
             "Train: graph_entropy=%.6f, graph_diag=%.6f, graph_uniform=%.6f, graph_reg_scale=%.4f, "
-            "mf_l2=%.6f, delta_ratio=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, "
+            "mf_l2=%.6f, delta_ratio=%.6f, personal_sparse=%.6f, "
             "alpha_var=%.6f, alpha_collapse=%.6f, reg_bce_ratio=%.4f | "
             "Val: graph_entropy=%.6f, graph_diag=%.6f, graph_uniform=%.6f, graph_reg_scale=%.4f, "
-            "mf_l2=%.6f, delta_ratio=%.6f, proto_div=%.6f, proto_usage=%.6f, personal_sparse=%.6f, "
+            "mf_l2=%.6f, delta_ratio=%.6f, personal_sparse=%.6f, "
             "alpha_var=%.6f, alpha_collapse=%.6f, reg_bce_ratio=%.4f",
             run_tag,
             epoch,
@@ -1037,8 +980,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             train_metrics.get("reg_graph_reg_scale", 1.0),
             train_metrics.get("reg_mf_l2", 0.0),
             train_metrics.get("reg_delta_ratio", 0.0),
-            train_metrics.get("reg_proto_div", 0.0),
-            train_metrics.get("reg_proto_usage", 0.0),
             train_metrics.get("reg_personal_sparse", 0.0),
             train_metrics.get("reg_alpha_var", 0.0),
             train_metrics.get("reg_alpha_collapse", 0.0),
@@ -1049,8 +990,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             val_metrics.get("reg_graph_reg_scale", 1.0),
             val_metrics.get("reg_mf_l2", 0.0),
             val_metrics.get("reg_delta_ratio", 0.0),
-            val_metrics.get("reg_proto_div", 0.0),
-            val_metrics.get("reg_proto_usage", 0.0),
             val_metrics.get("reg_personal_sparse", 0.0),
             val_metrics.get("reg_alpha_var", 0.0),
             val_metrics.get("reg_alpha_collapse", 0.0),
@@ -1069,8 +1008,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "%s [Diag][M3] Epoch [%03d] | "
                 "residual_abs_mean=%.4f, residual_std=%.4f, mf_abs_mean=%.4f, mf_std=%.4f, gate_mean=%.4f, gate_std=%.4f, "
                 "irt_abs_mean=%.4f, irt_std=%.4f, delta_abs_mean=%.4f, delta_std=%.4f, "
-                "delta_over_irt=%.4f, proto_conf_mean=%.4f, proto_gate_mean=%.4f, "
-                "warmup(mf/proto/personal)=%.2f/%.2f/%.2f, "
+                "delta_over_irt=%.4f, warmup(mf/personal)=%.2f/%.2f, "
                 "graph_row_entropy=%.4f, graph_entropy_ratio=%.4f, "
                 "alpha_mean=%.4f, alpha_std=%.4f, personal_row_entropy=%.4f",
                 run_tag,
@@ -1086,10 +1024,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["delta_abs_mean"],
                 diag["delta_std"],
                 delta_over_irt,
-                diag["proto_conf_mean"],
-                diag["proto_gate_mean"],
                 diag["mf_warmup_scale"],
-                diag["proto_warmup_scale"],
                 diag["personal_warmup_scale"],
                 diag["graph_row_entropy_mean"],
                 diag["graph_entropy_ratio"],
@@ -1176,6 +1111,13 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 + grad_norms["relation_wk"]
                 + grad_norms["personal_u"]
                 + grad_norms["personal_v"]
+                + grad_norms["personal_gate_emb"]
+                + grad_norms["personal_gate_student_proj"]
+                + grad_norms["personal_gate_context_proj"]
+                + grad_norms["personal_gate_out"]
+                + grad_norms["personal_generator_emb"]
+                + grad_norms["personal_generator_student_proj"]
+                + grad_norms["personal_generator_context_proj"]
             )
             if graph_grad_total < 1e-8:
                 graph_low_grad_streak += 1
@@ -1184,7 +1126,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             if graph_low_grad_streak >= 2 and getattr(_get_base_model(model), "use_concept_graph", False):
                 logger.warning(
                     "%s [Diag Warning][Graph] graph-related grad norms are near zero for %d epoch(s): "
-                    "relation_emb=%.6e, relation_tau=%.6e, relation_wq=%.6e, relation_wk=%.6e, personal_u=%.6e, personal_v=%.6e",
+                    "relation_emb=%.6e, relation_tau=%.6e, relation_wq=%.6e, relation_wk=%.6e, "
+                    "personal_u=%.6e, personal_v=%.6e, personal_gate_emb=%.6e, personal_gate_student_proj=%.6e, "
+                    "personal_gate_context_proj=%.6e, personal_gate_out=%.6e, personal_generator_emb=%.6e, "
+                    "personal_generator_student_proj=%.6e, personal_generator_context_proj=%.6e",
                     run_tag,
                     graph_low_grad_streak,
                     grad_norms["relation_emb"],
@@ -1193,11 +1138,21 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                     grad_norms["relation_wk"],
                     grad_norms["personal_u"],
                     grad_norms["personal_v"],
+                    grad_norms["personal_gate_emb"],
+                    grad_norms["personal_gate_student_proj"],
+                    grad_norms["personal_gate_context_proj"],
+                    grad_norms["personal_gate_out"],
+                    grad_norms["personal_generator_emb"],
+                    grad_norms["personal_generator_student_proj"],
+                    grad_norms["personal_generator_context_proj"],
                 )
             logger.info(
                 "%s [Grad Norms] Epoch [%03d] | "
                 "mf_u_proj=%.6f, mf_v_proj=%.6f, fusion_gate=%.6f, q_gate_raw=%.6f, skill_latent=%.6f, "
-                "relation_emb=%.6e, relation_tau=%.6e, relation_wq=%.6e, relation_wk=%.6e, personal_u=%.6e, personal_v=%.6e",
+                "relation_emb=%.6e, relation_tau=%.6e, relation_wq=%.6e, relation_wk=%.6e, "
+                "personal_u=%.6e, personal_v=%.6e, personal_gate_emb=%.6e, personal_gate_student_proj=%.6e, "
+                "personal_gate_context_proj=%.6e, personal_gate_out=%.6e, personal_generator_emb=%.6e, "
+                "personal_generator_student_proj=%.6e, personal_generator_context_proj=%.6e",
                 run_tag,
                 epoch,
                 grad_norms["mf_u_proj"],
@@ -1211,6 +1166,13 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 grad_norms["relation_wk"],
                 grad_norms["personal_u"],
                 grad_norms["personal_v"],
+                grad_norms["personal_gate_emb"],
+                grad_norms["personal_gate_student_proj"],
+                grad_norms["personal_gate_context_proj"],
+                grad_norms["personal_gate_out"],
+                grad_norms["personal_generator_emb"],
+                grad_norms["personal_generator_student_proj"],
+                grad_norms["personal_generator_context_proj"],
             )
 
         scheduler.step(val_metrics["loss"])
@@ -1366,20 +1328,12 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     )
 
     # Build model from loaded args (fallback to current args)
-    use_soft_prototype = loaded_args.get("use_soft_prototype", getattr(args, "use_soft_prototype", True))
     use_mf_branch = loaded_args.get(
         "use_mf_branch",
         loaded_args.get("use_skill_encoder", getattr(args, "use_mf_branch", getattr(args, "use_skill_encoder", True))),
     )
     use_concept_graph = loaded_args.get("use_concept_graph", getattr(args, "use_concept_graph", True))
     use_q_aligned_residual = bool(loaded_args.get("use_q_aligned_residual", getattr(args, "use_q_aligned_residual", True)))
-    enable_prototype_prediction_path = bool(
-        loaded_args.get(
-            "enable_prototype_prediction_path",
-            getattr(args, "enable_prototype_prediction_path", False),
-        )
-    )
-    use_soft_prototype_main_path = bool(loaded_args.get("use_soft_prototype_main_path", getattr(args, "use_soft_prototype_main_path", False)))
     ablate_module1 = bool(loaded_args.get("ablate_module1", getattr(args, "ablate_module1", False)))
     ablate_module2 = bool(loaded_args.get("ablate_module2", getattr(args, "ablate_module2", False)))
     ablate_module3 = bool(loaded_args.get("ablate_module3", getattr(args, "ablate_module3", False)))
@@ -1388,34 +1342,27 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     expected_enable_module3 = not ablate_module3
 
     # hard-ablation safety at inference too
-    eff_gnn_layers, eff_num_prototypes = _hard_ablation_effective_hparams(
-        use_soft_prototype=use_soft_prototype,
+    eff_gnn_layers = _hard_ablation_effective_hparams(
         use_concept_graph=use_concept_graph,
         num_gnn_layers=int(loaded_args.get("num_gnn_layers", getattr(args, "num_gnn_layers", 0))),
-        num_prototypes=int(loaded_args.get("num_prototypes", getattr(args, "num_prototypes", 0))),
     )
 
     logger.info(
         "Inference switches: "
         "ablate_module1=%s, ablate_module2=%s, ablate_module3=%s | "
         "enable_module1=%s, enable_module2=%s, enable_module3=%s | "
-        "use_soft_prototype=%s, use_mf_branch=%s, use_concept_graph=%s, use_q_aligned_residual=%s, "
-        "enable_prototype_prediction_path=%s, use_soft_prototype_main_path=%s | "
-        "effective(num_gnn_layers=%d, num_prototypes=%d)",
+        "use_mf_branch=%s, use_concept_graph=%s, use_q_aligned_residual=%s | "
+        "effective(num_gnn_layers=%d)",
         ablate_module1,
         ablate_module2,
         ablate_module3,
         expected_enable_module1,
         expected_enable_module2,
         expected_enable_module3,
-        use_soft_prototype,
         use_mf_branch,
         use_concept_graph,
         use_q_aligned_residual,
-        enable_prototype_prediction_path,
-        use_soft_prototype_main_path,
         eff_gnn_layers,
-        eff_num_prototypes,
     )
 
     model = CognitiveDiagnosisModel(
@@ -1433,14 +1380,6 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         use_concept_graph=use_concept_graph,
         graph_topk=loaded_args.get("graph_topk", getattr(args, "graph_topk", None)),
         allow_self_loop=not loaded_args.get("disable_self_loop", getattr(args, "disable_self_loop", False)),
-        num_prototypes=eff_num_prototypes,
-        proto_tau=loaded_args.get("proto_tau", args.proto_tau),
-        proto_lambda=loaded_args.get("proto_lambda", args.proto_lambda),
-        use_soft_prototype=use_soft_prototype,
-        enable_prototype_prediction_path=enable_prototype_prediction_path,
-        use_soft_prototype_main_path=loaded_args.get(
-            "use_soft_prototype_main_path", getattr(args, "use_soft_prototype_main_path", False)
-        ),
         use_personal_graph=loaded_args.get("use_personal_graph", getattr(args, "use_personal_graph", False)),
         ablate_module1=ablate_module1,
         ablate_module2=ablate_module2,
@@ -1481,11 +1420,6 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         mf_warmup_epochs=loaded_args.get("mf_warmup_epochs", getattr(args, "mf_warmup_epochs", 0)),
         lambda_delta_ratio=loaded_args.get("lambda_delta_ratio", getattr(args, "lambda_delta_ratio", 0.0)),
         delta_ratio_target=loaded_args.get("delta_ratio_target", getattr(args, "delta_ratio_target", 0.15)),
-        proto_conf_threshold=loaded_args.get(
-            "proto_conf_threshold", getattr(args, "proto_conf_threshold", 0.0)
-        ),
-        proto_gate_scale=loaded_args.get("proto_gate_scale", getattr(args, "proto_gate_scale", 1.0)),
-        proto_warmup_epochs=loaded_args.get("proto_warmup_epochs", getattr(args, "proto_warmup_epochs", 0)),
         personal_max_alpha=loaded_args.get("personal_max_alpha", getattr(args, "personal_max_alpha", 0.35)),
         personal_delta_scale=loaded_args.get(
             "personal_delta_scale", getattr(args, "personal_delta_scale", 1.0)
@@ -1627,10 +1561,9 @@ def save_component_analysis_data(
 ) -> Dict[str, Any]:
     """
     保存组件可视化分析所需的数据：
-    1. Prototype 向量和相似度矩阵
-    2. 全局概念图 relation_matrices
-    3. Gate Alpha 分布（个性化图混合系数）
-    4. 个性化图采样
+    1. 全局概念图 relation_matrices
+    2. Gate Alpha 分布（个性化图混合系数）
+    3. 个性化图采样
     """
     model.eval()
     analysis_data = {}
@@ -1638,45 +1571,13 @@ def save_component_analysis_data(
     os.makedirs(save_dir, exist_ok=True)
     
     with torch.no_grad():
-        # ========== 1) Prototype 分析 ==========
-        if model.prototype_module is not None:
-            proto_vectors = model.prototype_module.prototypes.detach().cpu().numpy()
-            analysis_data["prototype_vectors"] = proto_vectors
-            
-            # 计算原型间相似度
-            P = F.normalize(model.prototype_module.prototypes, dim=-1, eps=1e-12)
-            proto_similarity = (P @ P.t()).detach().cpu().numpy()
-            analysis_data["prototype_similarity"] = proto_similarity
-            
-            # 收集原型分配分布
-            proto_assigns = []
-            sample_count = 0
-            for batch in train_loader:
-                if sample_count >= num_samples:
-                    break
-                student_ids, exercise_ids, concept_vector, _ = batch
-                student_ids = student_ids.to(device)
-                
-                # 获取学生表示
-                s_out = model.structure_module(student_ids, identity_relations=model.identity_relations)
-                student_repr = s_out["student_repr"]
-                
-                _, assign = model.prototype_module(student_repr)
-                proto_assigns.append(assign.detach().cpu().numpy())
-                sample_count += len(student_ids)
-            
-            if proto_assigns:
-                analysis_data["prototype_assign"] = np.concatenate(proto_assigns, axis=0)[:num_samples]
-            
-            logger.info(f"[Component Analysis] Prototype: {proto_vectors.shape}, similarity: {proto_similarity.shape}")
-        
-        # ========== 2) 全局概念图分析 ==========
+        # ========== 1) 全局概念图分析 ==========
         if model.structure_module.relation_learning is not None:
             relation_matrices, _ = model.structure_module.relation_learning()
             analysis_data["global_relation_matrices"] = relation_matrices.detach().cpu().numpy()
             logger.info(f"[Component Analysis] Global graph: {relation_matrices.shape}")
         
-        # ========== 3) 个性化图分析 ==========
+        # ========== 2) 个性化图分析 ==========
         if model.use_personal_graph and model.structure_module.personal_generator is not None:
             gate_alphas = []
             personal_graphs = []

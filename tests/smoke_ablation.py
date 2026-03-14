@@ -49,7 +49,6 @@ def run_case(name: str, **model_kwargs) -> None:
         num_relation_heads=2,
         num_gnn_layers=1,
         dropout=0.0,
-        num_prototypes=3,
         **model_kwargs,
     )
     model.eval()
@@ -77,15 +76,15 @@ def run_case(name: str, **model_kwargs) -> None:
     _print_shape("gate", details.get("gate"))
     _print_shape("student_latent", details.get("student_latent"))
     _print_shape("exercise_latent", details.get("exercise_latent"))
-    _print_shape("prototype_assign", details.get("prototype_assign"))
+    _print_shape("alpha", details.get("alpha"))
 
 
 def main() -> None:
     cases = [
-        ("full", dict(use_soft_prototype=True, use_mf_branch=True, use_concept_graph=True)),
-        ("no_soft_proto", dict(use_soft_prototype=False, use_mf_branch=True, use_concept_graph=True)),
-        ("no_skill", dict(use_soft_prototype=True, use_mf_branch=False, use_concept_graph=True)),
-        ("no_concept_graph", dict(use_soft_prototype=True, use_mf_branch=True, use_concept_graph=False)),
+        ("full", dict(use_mf_branch=True, use_concept_graph=True, use_personal_graph=True)),
+        ("no_skill", dict(use_mf_branch=False, use_concept_graph=True, use_personal_graph=True)),
+        ("no_concept_graph", dict(use_mf_branch=True, use_concept_graph=False, use_personal_graph=True)),
+        ("no_personal_graph", dict(use_mf_branch=True, use_concept_graph=True, use_personal_graph=False)),
     ]
 
     for name, kwargs in cases:

@@ -3,13 +3,12 @@
 """
 run_abce_ablation.py
 
-Fine-grained ablation runner for sub-modules A/B/C/E.
+Fine-grained ablation runner for sub-modules A/B/E.
 
 Component mapping:
 - A: global concept graph      -> --ablate_concept_graph
 - E: personal graph mixing     -> --use_personal_graph (off by dropping this flag)
 - B: MF/Q residual branch      -> --ablate_skill_encoder
-- C: soft prototype calibration-> --ablate_soft_prototype
 
 Outputs:
 - results/abce_ablation_diagnosis.csv
@@ -19,9 +18,8 @@ Outputs:
 Profiles:
 - best: baseline best config
 - b_rescue: conservative B rescue
-- c_rescue: confidence-thresholded C rescue
 - e_rescue: warmup + anti-collapse E rescue
-- all_rescue: combine B/C/E rescue knobs
+- all_rescue: combine B/E rescue knobs
 """
 
 from __future__ import annotations
@@ -54,7 +52,7 @@ SUMMARY_CSV = Path("results") / "abce_ablation_summary.csv"
 MEAN_SUMMARY_CSV = Path("results") / "abce_ablation_summary_mean.csv"
 NUM_RE = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
 ROW_START_RE = re.compile(
-    r'(?<![\r\n])(?=(assist_09|assist_17|junyi),\d+,(best|b_rescue|c_rescue|e_rescue|all_rescue|c_probe),(full|no_A|no_B|no_C|no_E|no_AE|no_BC),)'
+    r'(?<![\r\n])(?=(assist_09|assist_17|junyi),\d+,(best|b_rescue|e_rescue|all_rescue),(full|no_A|no_B|no_E|no_AE),)'
 )
 
 
@@ -89,11 +87,6 @@ BASE_SINGLE_ABLATIONS: Tuple[AblationSpec, ...] = (
         drop_keys=("use_personal_graph",),
     ),
     AblationSpec(name="no_B", flags={"ablate_skill_encoder": True}, overrides={}),
-    AblationSpec(
-        name="no_C",
-        flags={"ablate_soft_prototype": True},
-        overrides={"num_prototypes": 0, "lambda_proto_div": 0.0, "lambda_proto_usage": 0.0},
-    ),
 )
 
 BASE_SINGLE_PLUS_EXTRA: Tuple[AblationSpec, ...] = (
@@ -102,11 +95,6 @@ BASE_SINGLE_PLUS_EXTRA: Tuple[AblationSpec, ...] = (
         flags={"ablate_concept_graph": True},
         overrides={"num_gnn_layers": 0, "lambda_sparse_personal": 0.0, "lambda_alpha": 0.0},
         drop_keys=("use_personal_graph",),
-    ),
-    AblationSpec(
-        name="no_BC",
-        flags={"ablate_skill_encoder": True, "ablate_soft_prototype": True},
-        overrides={"num_prototypes": 0, "lambda_proto_div": 0.0, "lambda_proto_usage": 0.0},
     ),
 )
 
@@ -197,22 +185,6 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
 
     return out
 
-
-def c_effectively_active(cfg: Dict[str, Any]) -> bool:
-    if not bool(cfg.get("enable_soft_prototype", False)):
-        return False
-    if int(cfg.get("num_prototypes", 0)) <= 0:
-        return False
-
-    main_path_active = bool(cfg.get("use_soft_prototype_main_path", False)) and abs(
-        float(cfg.get("proto_lambda", 0.0))
-    ) > 1e-12
-    reg_active = abs(float(cfg.get("lambda_proto_div", 0.0))) > 1e-12 or abs(
-        float(cfg.get("lambda_proto_usage", 0.0))
-    ) > 1e-12
-    return bool(main_path_active or reg_active)
-
-
 def pick_base_ablations(component_set: str) -> List[AblationSpec]:
     if component_set == "single":
         return list(BASE_SINGLE_ABLATIONS)
@@ -292,10 +264,6 @@ def collect_result(job: JobSpec, exit_code: int) -> Dict[str, Any]:
         "use_concept_graph",
         "use_personal_graph",
         "use_mf_branch",
-        "use_soft_prototype",
-        "use_soft_prototype_main_path",
-        "num_prototypes",
-        "proto_lambda",
     ):
         row[f"effective_{key}"] = args_json.get(key)
 
@@ -327,10 +295,6 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "effective_use_concept_graph",
         "effective_use_personal_graph",
         "effective_use_mf_branch",
-        "effective_use_soft_prototype",
-        "effective_use_soft_prototype_main_path",
-        "effective_num_prototypes",
-        "effective_proto_lambda",
         "reg_bce_ratio",
         "graph_entropy_ratio",
         "alpha_std",
@@ -432,8 +396,6 @@ def diagnose_reason(
     delta_a: Optional[float],
     delta_b: Optional[float],
     delta_e: Optional[float],
-    delta_c: Optional[float],
-    c_active: bool,
 ) -> str:
     reasons: List[str] = []
     ger = try_float(full_row.get("graph_entropy_ratio"))
@@ -458,11 +420,6 @@ def diagnose_reason(
         reasons.append("B-delta-small")
     if delta_e is not None and abs(delta_e) < 0.002:
         reasons.append("E-delta-small")
-
-    if not c_active:
-        reasons.append("C-inactive-in-full")
-    elif delta_c is not None and abs(delta_c) < 0.002:
-        reasons.append("C-delta-small")
 
     return ";".join(reasons)
 
@@ -490,22 +447,15 @@ def write_summary(
         full_auc = try_float(full.get("test_auc"))
         no_a_auc = try_float(mp.get("no_A", {}).get("test_auc"))
         no_b_auc = try_float(mp.get("no_B", {}).get("test_auc"))
-        no_c_auc = try_float(mp.get("no_C", {}).get("test_auc"))
         no_e_auc = try_float(mp.get("no_E", {}).get("test_auc"))
 
         delta_a = (full_auc - no_a_auc) if (full_auc is not None and no_a_auc is not None) else None
         delta_b = (full_auc - no_b_auc) if (full_auc is not None and no_b_auc is not None) else None
-        delta_c = (full_auc - no_c_auc) if (full_auc is not None and no_c_auc is not None) else None
         delta_e = (full_auc - no_e_auc) if (full_auc is not None and no_e_auc is not None) else None
-
-        c_active = bool(full.get("effective_use_soft_prototype") in ("True", "true", True, 1, "1"))
-        if not c_active and profile == "best":
-            delta_c = None
 
         comp_state = {
             "A": classify_delta(delta_a, threshold),
             "B": classify_delta(delta_b, threshold),
-            "C": classify_delta(delta_c, threshold) if c_active or profile == "c_probe" else "inactive_in_full",
             "E": classify_delta(delta_e, threshold),
         }
         keep = [k for k, v in comp_state.items() if v == "useful"]
@@ -519,16 +469,13 @@ def write_summary(
             "full_auc": full_auc,
             "no_A_auc": no_a_auc,
             "no_B_auc": no_b_auc,
-            "no_C_auc": no_c_auc,
             "no_E_auc": no_e_auc,
             "delta_A_full_minus_noA": delta_a,
             "delta_B_full_minus_noB": delta_b,
-            "delta_C_full_minus_noC": delta_c,
             "delta_E_full_minus_noE": delta_e,
             "full_effective_use_concept_graph": full.get("effective_use_concept_graph"),
             "full_effective_use_personal_graph": full.get("effective_use_personal_graph"),
             "full_effective_use_mf_branch": full.get("effective_use_mf_branch"),
-            "full_effective_use_soft_prototype": full.get("effective_use_soft_prototype"),
             "full_graph_entropy_ratio": try_float(full.get("graph_entropy_ratio")),
             "full_alpha_std": try_float(full.get("alpha_std")),
             "full_gate_mean": try_float(full.get("gate_mean")),
@@ -539,12 +486,11 @@ def write_summary(
             "full_module_activity_epoch10": full.get("module_activity_epoch10", ""),
             "state_A": comp_state["A"],
             "state_B": comp_state["B"],
-            "state_C": comp_state["C"],
             "state_E": comp_state["E"],
             "suggest_keep": ",".join(keep),
             "suggest_drop": ",".join(drop),
             "suggest_tune": ",".join(tune),
-            "diagnosis_reason": diagnose_reason(full, delta_a, delta_b, delta_e, delta_c, c_active),
+            "diagnosis_reason": diagnose_reason(full, delta_a, delta_b, delta_e),
         }
         summary_rows.append(row)
 
@@ -555,16 +501,13 @@ def write_summary(
         "full_auc",
         "no_A_auc",
         "no_B_auc",
-        "no_C_auc",
         "no_E_auc",
         "delta_A_full_minus_noA",
         "delta_B_full_minus_noB",
-        "delta_C_full_minus_noC",
         "delta_E_full_minus_noE",
         "full_effective_use_concept_graph",
         "full_effective_use_personal_graph",
         "full_effective_use_mf_branch",
-        "full_effective_use_soft_prototype",
         "full_graph_entropy_ratio",
         "full_alpha_std",
         "full_gate_mean",
@@ -575,7 +518,6 @@ def write_summary(
         "full_module_activity_epoch10",
         "state_A",
         "state_B",
-        "state_C",
         "state_E",
         "suggest_keep",
         "suggest_drop",
@@ -598,7 +540,6 @@ def write_summary(
         n = len(grp)
         deltas_a = [try_float(x.get("delta_A_full_minus_noA")) for x in grp]
         deltas_b = [try_float(x.get("delta_B_full_minus_noB")) for x in grp]
-        deltas_c = [try_float(x.get("delta_C_full_minus_noC")) for x in grp]
         deltas_e = [try_float(x.get("delta_E_full_minus_noE")) for x in grp]
         full_aucs = [try_float(x.get("full_auc")) for x in grp]
 
@@ -616,15 +557,12 @@ def write_summary(
 
         mean_a = mean_valid(deltas_a)
         mean_b = mean_valid(deltas_b)
-        mean_c = mean_valid(deltas_c)
         mean_e = mean_valid(deltas_e)
         keep = []
         if mean_a is not None and mean_a > threshold:
             keep.append("A")
         if mean_b is not None and mean_b > threshold:
             keep.append("B")
-        if mean_c is not None and mean_c > threshold:
-            keep.append("C")
         if mean_e is not None and mean_e > threshold:
             keep.append("E")
 
@@ -635,16 +573,13 @@ def write_summary(
             "full_auc_mean": mean_valid(full_aucs),
             "delta_A_mean": mean_a,
             "delta_B_mean": mean_b,
-            "delta_C_mean": mean_c,
             "delta_E_mean": mean_e,
             "A_useful_seed_ratio": useful_ratio(deltas_a),
             "B_useful_seed_ratio": useful_ratio(deltas_b),
-            "C_useful_seed_ratio": useful_ratio(deltas_c),
             "E_useful_seed_ratio": useful_ratio(deltas_e),
             "suggest_keep_by_mean": ",".join(keep),
             "state_A_majority": _majority_value(grp, "state_A"),
             "state_B_majority": _majority_value(grp, "state_B"),
-            "state_C_majority": _majority_value(grp, "state_C"),
             "state_E_majority": _majority_value(grp, "state_E"),
         }
         mean_rows.append(row)
@@ -656,16 +591,13 @@ def write_summary(
         "full_auc_mean",
         "delta_A_mean",
         "delta_B_mean",
-        "delta_C_mean",
         "delta_E_mean",
         "A_useful_seed_ratio",
         "B_useful_seed_ratio",
-        "C_useful_seed_ratio",
         "E_useful_seed_ratio",
         "suggest_keep_by_mean",
         "state_A_majority",
         "state_B_majority",
-        "state_C_majority",
         "state_E_majority",
     ]
     with open(mean_path, "w", newline="", encoding="utf-8") as f:
@@ -678,14 +610,14 @@ def write_summary(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run A/B/C/E sub-module ablation with diagnosis summary.")
+    parser = argparse.ArgumentParser(description="Run A/B/E sub-module ablation with diagnosis summary.")
     parser.add_argument("--datasets", type=str, default="assist_09,junyi")
     parser.add_argument("--seeds", type=str, default=None, help="Comma-separated seeds. Default uses DEFAULT_SEEDS.")
     parser.add_argument(
         "--profiles",
         type=str,
         default=None,
-        help="Optional filter: best,b_rescue,c_rescue,e_rescue,all_rescue,c_probe",
+        help="Optional filter: best,b_rescue,e_rescue,all_rescue",
     )
     parser.add_argument("--gpus", type=str, default="0")
     parser.add_argument("--max_concurrent", type=int, default=1)
@@ -697,16 +629,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--analyze_only", action="store_true", help="Skip running and only summarize existing rows.")
     parser.add_argument("--generate_diagnosis", action="store_true", help="Enable post-training diagnosis artifacts.")
     parser.add_argument("--component_set", type=str, default="single", choices=["single", "single_plus"])
-    parser.add_argument("--ablations", type=str, default=None, help="Optional filter: full,no_A,no_B,no_C,no_E,...")
+    parser.add_argument("--ablations", type=str, default=None, help="Optional filter: full,no_A,no_B,no_E,no_AE")
     parser.add_argument("--delta_threshold", type=float, default=0.003, help="Threshold for useful/neutral/harmful labels.")
-
-    parser.add_argument("--auto_c_probe", dest="auto_c_probe", action="store_true")
-    parser.add_argument("--no_auto_c_probe", dest="auto_c_probe", action="store_false")
-    parser.set_defaults(auto_c_probe=True)
-    parser.add_argument("--c_probe_num_prototypes", type=int, default=4)
-    parser.add_argument("--c_probe_proto_lambda", type=float, default=0.2)
-    parser.add_argument("--c_probe_lambda_proto_div", type=float, default=0.0)
-    parser.add_argument("--c_probe_lambda_proto_usage", type=float, default=0.0)
 
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--early_stop_patience", type=int, default=None)
@@ -735,17 +659,6 @@ def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> 
             "fusion_gate_bias_init": -1.4,
             "residual_scale_init": 0.18,
         }
-    if profile == "c_rescue":
-        return {
-            "enable_soft_prototype": True,
-            "disable_soft_prototype": False,
-            "enable_prototype_prediction_path": False,
-            "use_soft_prototype_main_path": False,
-            "proto_lambda": 0.08,
-            "proto_conf_threshold": 0.35,
-            "proto_gate_scale": 0.70,
-            "proto_warmup_epochs": 4,
-        }
     if profile == "e_rescue":
         return {
             "use_personal_graph": True,
@@ -757,20 +670,9 @@ def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> 
         }
     if profile == "all_rescue":
         merged: Dict[str, Any] = {}
-        for rescue_name in ("b_rescue", "c_rescue", "e_rescue"):
+        for rescue_name in ("b_rescue", "e_rescue"):
             merged.update(_profile_overrides(rescue_name, dataset, args))
         return merged
-    if profile == "c_probe":
-        return {
-            "enable_soft_prototype": True,
-            "disable_soft_prototype": False,
-            "enable_prototype_prediction_path": False,
-            "use_soft_prototype_main_path": False,
-            "num_prototypes": int(args.c_probe_num_prototypes),
-            "proto_lambda": float(args.c_probe_proto_lambda),
-            "lambda_proto_div": float(args.c_probe_lambda_proto_div),
-            "lambda_proto_usage": float(args.c_probe_lambda_proto_usage),
-        }
     raise ValueError(f"Unknown profile '{profile}'.")
 
 
@@ -811,20 +713,12 @@ def make_jobs(args: argparse.Namespace, run_id: str) -> List[JobSpec]:
         if dataset not in BEST_CFG:
             raise ValueError(f"Dataset '{dataset}' not found in BEST_CFG.")
         base_cfg = dict(BEST_CFG[dataset])
-        is_c_active = c_effectively_active(base_cfg)
-        profiles = ["best", "b_rescue", "c_rescue", "e_rescue", "all_rescue"]
-        if args.auto_c_probe and not is_c_active:
-            profiles.append("c_probe")
+        profiles = ["best", "b_rescue", "e_rescue", "all_rescue"]
         profiles = _selected_profiles(profiles, args.profiles)
 
         for profile in profiles:
             profile_cfg = _profile_overrides(profile, dataset, args)
-            if profile == "c_probe":
-                profile_abls = [a for a in base_abls if a.name in {"full", "no_C"}]
-                if not profile_abls:
-                    continue
-            else:
-                profile_abls = list(base_abls)
+            profile_abls = list(base_abls)
 
             for ab in profile_abls:
                 for seed in seeds:
@@ -976,7 +870,7 @@ def main() -> None:
         print(
             f"[SUMMARY] dataset={r['dataset']} seed={r['seed']} profile={r['profile']} "
             f"dA={r['delta_A_full_minus_noA']} dB={r['delta_B_full_minus_noB']} "
-            f"dC={r['delta_C_full_minus_noC']} dE={r['delta_E_full_minus_noE']} "
+            f"dE={r['delta_E_full_minus_noE']} "
             f"keep={r['suggest_keep']} reason={r['diagnosis_reason']}"
         )
 

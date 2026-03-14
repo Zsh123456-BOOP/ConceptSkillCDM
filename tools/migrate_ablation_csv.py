@@ -22,7 +22,6 @@ def _normalize_ablation_flags(value: str) -> str:
         seen[key] = val
 
     ordered_keys = [
-        "ablate_soft_prototype",
         "ablate_skill_encoder",
         "ablate_concept_graph",
     ]
