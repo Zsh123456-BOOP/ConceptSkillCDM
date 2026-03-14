@@ -139,10 +139,13 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
         "reg_bce_ratio": None,
         "graph_entropy_ratio": None,
         "alpha_std": None,
+        "alpha_bias_std": None,
         "gate_mean": None,
         "delta_over_irt": None,
         "mf_abs_mean": None,
         "irt_abs_mean": None,
+        "personal_matrix_delta": None,
+        "personal_matrix_student_std": None,
         "warn_graph_uniform_count": 0,
         "warn_alpha_collapse_count": 0,
         "warn_module3_count": 0,
@@ -164,10 +167,13 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
                 for k in (
                     "graph_entropy_ratio",
                     "alpha_std",
+                    "alpha_bias_std",
                     "gate_mean",
                     "delta_over_irt",
                     "mf_abs_mean",
                     "irt_abs_mean",
+                    "personal_matrix_delta",
+                    "personal_matrix_student_std",
                 ):
                     v = extract_float(line, k)
                     if v is not None:
@@ -298,10 +304,13 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "reg_bce_ratio",
         "graph_entropy_ratio",
         "alpha_std",
+        "alpha_bias_std",
         "gate_mean",
         "delta_over_irt",
         "mf_abs_mean",
         "irt_abs_mean",
+        "personal_matrix_delta",
+        "personal_matrix_student_std",
         "warn_graph_uniform_count",
         "warn_alpha_collapse_count",
         "warn_module3_count",
@@ -400,19 +409,28 @@ def diagnose_reason(
     reasons: List[str] = []
     ger = try_float(full_row.get("graph_entropy_ratio"))
     alpha_std = try_float(full_row.get("alpha_std"))
+    alpha_bias_std = try_float(full_row.get("alpha_bias_std"))
     gate = try_float(full_row.get("gate_mean"))
     dor = try_float(full_row.get("delta_over_irt"))
+    personal_matrix_delta = try_float(full_row.get("personal_matrix_delta"))
+    personal_matrix_student_std = try_float(full_row.get("personal_matrix_student_std"))
 
     if ger is not None and ger > 0.98:
         reasons.append("graph-uniform-risk")
     if alpha_std is not None and alpha_std < 1e-6:
         reasons.append("personal-alpha-collapse")
+    if alpha_bias_std is not None and alpha_bias_std < 1e-6:
+        reasons.append("personal-bias-collapse")
     if gate is not None and gate < 0.5:
         reasons.append("mf-gate-low")
     if gate is not None and gate > 0.9:
         reasons.append("mf-gate-very-high")
     if dor is not None and dor < 0.05:
         reasons.append("residual-delta-low")
+    if personal_matrix_delta is not None and personal_matrix_delta < 0.01:
+        reasons.append("personal-matrix-delta-low")
+    if personal_matrix_student_std is not None and personal_matrix_student_std < 0.001:
+        reasons.append("personal-matrix-student-flat")
 
     if delta_a is not None and abs(delta_a) < 0.002:
         reasons.append("A-delta-small")
@@ -478,8 +496,11 @@ def write_summary(
             "full_effective_use_mf_branch": full.get("effective_use_mf_branch"),
             "full_graph_entropy_ratio": try_float(full.get("graph_entropy_ratio")),
             "full_alpha_std": try_float(full.get("alpha_std")),
+            "full_alpha_bias_std": try_float(full.get("alpha_bias_std")),
             "full_gate_mean": try_float(full.get("gate_mean")),
             "full_delta_over_irt": try_float(full.get("delta_over_irt")),
+            "full_personal_matrix_delta": try_float(full.get("personal_matrix_delta")),
+            "full_personal_matrix_student_std": try_float(full.get("personal_matrix_student_std")),
             "full_warn_graph_uniform_count": full.get("warn_graph_uniform_count"),
             "full_warn_alpha_collapse_count": full.get("warn_alpha_collapse_count"),
             "full_warn_module3_count": full.get("warn_module3_count"),
@@ -510,8 +531,11 @@ def write_summary(
         "full_effective_use_mf_branch",
         "full_graph_entropy_ratio",
         "full_alpha_std",
+        "full_alpha_bias_std",
         "full_gate_mean",
         "full_delta_over_irt",
+        "full_personal_matrix_delta",
+        "full_personal_matrix_student_std",
         "full_warn_graph_uniform_count",
         "full_warn_alpha_collapse_count",
         "full_warn_module3_count",
@@ -662,11 +686,11 @@ def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> 
     if profile == "e_rescue":
         return {
             "use_personal_graph": True,
-            "personal_max_alpha": 0.50,
-            "personal_delta_scale": 1.50,
-            "personal_warmup_epochs": 9,
-            "lambda_alpha_min": 0.05,
-            "alpha_min_target": 0.02,
+            "personal_max_alpha": 0.45,
+            "personal_delta_scale": 1.00,
+            "personal_warmup_epochs": 10,
+            "lambda_alpha_min": 0.08,
+            "alpha_min_target": 0.03,
         }
     if profile == "all_rescue":
         merged: Dict[str, Any] = {}

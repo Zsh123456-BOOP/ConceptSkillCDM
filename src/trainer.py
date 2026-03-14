@@ -311,7 +311,10 @@ def _collect_debug_forward_stats(
     irt_vals: List[float] = []
     delta_vals: List[float] = []
     alpha_vals: List[float] = []
+    alpha_bias_vals: List[float] = []
     personal_entropy_vals: List[float] = []
+    personal_matrix_delta_vals: List[float] = []
+    personal_matrix_student_std_vals: List[float] = []
 
     graph_row_entropy_mean = 0.0
     graph_entropy_ratio = 0.0
@@ -373,10 +376,30 @@ def _collect_debug_forward_stats(
             if alpha is not None:
                 alpha_vals.extend(alpha.detach().reshape(-1).cpu().numpy().tolist())
 
+            alpha_student_bias = details.get("alpha_student_bias")
+            if alpha_student_bias is not None:
+                alpha_bias_vals.extend(alpha_student_bias.detach().reshape(-1).cpu().numpy().tolist())
+
             personal_matrices = details.get("personal_matrices")
             if personal_matrices is not None:
                 pm = personal_matrices.detach().cpu().numpy()
                 personal_entropy_vals.append(_row_entropy_mean(pm))
+                pm_delta = details.get("personal_matrix_delta")
+                if pm_delta is not None:
+                    personal_matrix_delta_vals.extend(pm_delta.detach().reshape(-1).cpu().numpy().tolist())
+                relation_matrices = details.get("relation_matrices")
+                if relation_matrices is not None:
+                    rm = relation_matrices.detach()
+                    global_matrix = rm.mean(dim=0, keepdim=True)
+                    if pm_delta is None:
+                        delta_mean = (personal_matrices.detach() - global_matrix).abs().mean(dim=(-1, -2))
+                        personal_matrix_delta_vals.extend(delta_mean.cpu().numpy().tolist())
+                    student_std = details.get("personal_matrix_student_std")
+                    if student_std is not None:
+                        personal_matrix_student_std_vals.append(float(student_std.detach().item()))
+                    else:
+                        matrix_std = personal_matrices.detach().std(dim=0, unbiased=False).mean()
+                        personal_matrix_student_std_vals.append(float(matrix_std.item()))
 
             if details.get("mf_warmup_scale") is not None:
                 mf_warmup_scale = float(details["mf_warmup_scale"].detach().reshape(-1)[0].item())
@@ -408,7 +431,10 @@ def _collect_debug_forward_stats(
     irt_abs_mean, irt_std = _safe_abs_mean_std(irt_vals)
     delta_abs_mean, delta_std = _safe_abs_mean_std(delta_vals)
     alpha_mean, alpha_std = _safe_mean_std(alpha_vals)
+    alpha_bias_mean, alpha_bias_std = _safe_mean_std(alpha_bias_vals)
     personal_row_entropy, _ = _safe_mean_std(personal_entropy_vals)
+    personal_matrix_delta_mean, _ = _safe_mean_std(personal_matrix_delta_vals)
+    personal_matrix_student_std_mean, _ = _safe_mean_std(personal_matrix_student_std_vals)
 
     return {
         "mf_abs_mean": mf_abs_mean,
@@ -430,7 +456,11 @@ def _collect_debug_forward_stats(
         "graph_tau_std": tau_std,
         "alpha_mean": alpha_mean,
         "alpha_std": alpha_std,
+        "alpha_bias_mean": alpha_bias_mean,
+        "alpha_bias_std": alpha_bias_std,
         "personal_row_entropy": personal_row_entropy,
+        "personal_matrix_delta": personal_matrix_delta_mean,
+        "personal_matrix_student_std": personal_matrix_student_std_mean,
         "mf_warmup_scale": mf_warmup_scale,
         "personal_warmup_scale": personal_warmup_scale,
     }
@@ -458,6 +488,7 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
     adaptive_gate = getattr(structure_module, "adaptive_gate", None) if structure_module is not None else None
     personal_gate_embedding = getattr(structure_module, "personal_gate_embedding", None) if structure_module is not None else None
     personal_generator_embedding = getattr(structure_module, "personal_generator_embedding", None) if structure_module is not None else None
+    personal_alpha_bias = getattr(structure_module, "personal_alpha_bias", None) if structure_module is not None else None
 
     mf_u = getattr(getattr(mf_head, "u_proj", None), "weight", None)
     mf_v = getattr(getattr(mf_head, "v_proj", None), "weight", None)
@@ -481,13 +512,17 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
         ]
         relation_wq = float(np.mean(wq_norms)) if wq_norms else 0.0
         relation_wk = float(np.mean(wk_norms)) if wk_norms else 0.0
-    personal_u = getattr(getattr(personal_generator, "to_u", None), "weight", None)
-    personal_v = getattr(getattr(personal_generator, "to_v", None), "weight", None)
+    personal_u = getattr(personal_generator, "student_basis_u", None)
+    personal_v = getattr(personal_generator, "student_basis_v", None)
     personal_gate_student_proj = getattr(getattr(adaptive_gate, "student_proj", None), "weight", None)
     personal_gate_context_proj = getattr(getattr(adaptive_gate, "context_proj", None), "weight", None)
+    personal_gate_student_direct = getattr(getattr(adaptive_gate, "student_to_logit", None), "weight", None)
+    personal_gate_context_direct = getattr(getattr(adaptive_gate, "context_to_logit", None), "weight", None)
     personal_gate_out = getattr(getattr(adaptive_gate, "out", None), "weight", None)
-    personal_generator_student_proj = getattr(getattr(personal_generator, "student_proj", None), "weight", None)
     personal_generator_context_proj = getattr(getattr(personal_generator, "context_proj", None), "weight", None)
+    personal_generator_context_hidden = getattr(getattr(personal_generator, "hidden_proj", None), "weight", None)
+    personal_generator_context_to_u = getattr(getattr(personal_generator, "context_to_u", None), "weight", None)
+    personal_generator_context_to_v = getattr(getattr(personal_generator, "context_to_v", None), "weight", None)
 
     return {
         "mf_u_proj": _grad_norm_or_zero(mf_u),
@@ -501,13 +536,18 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
         "relation_wk": relation_wk if relation_wk is not None else 0.0,
         "personal_u": _grad_norm_or_zero(personal_u),
         "personal_v": _grad_norm_or_zero(personal_v),
+        "personal_alpha_bias": _grad_norm_or_zero(getattr(personal_alpha_bias, "weight", None)),
         "personal_gate_emb": _grad_norm_or_zero(getattr(personal_gate_embedding, "weight", None)),
         "personal_gate_student_proj": _grad_norm_or_zero(personal_gate_student_proj),
         "personal_gate_context_proj": _grad_norm_or_zero(personal_gate_context_proj),
+        "personal_gate_student_direct": _grad_norm_or_zero(personal_gate_student_direct),
+        "personal_gate_context_direct": _grad_norm_or_zero(personal_gate_context_direct),
         "personal_gate_out": _grad_norm_or_zero(personal_gate_out),
         "personal_generator_emb": _grad_norm_or_zero(getattr(personal_generator_embedding, "weight", None)),
-        "personal_generator_student_proj": _grad_norm_or_zero(personal_generator_student_proj),
         "personal_generator_context_proj": _grad_norm_or_zero(personal_generator_context_proj),
+        "personal_generator_context_hidden": _grad_norm_or_zero(personal_generator_context_hidden),
+        "personal_generator_context_to_u": _grad_norm_or_zero(personal_generator_context_to_u),
+        "personal_generator_context_to_v": _grad_norm_or_zero(personal_generator_context_to_v),
     }
 
 
@@ -1010,7 +1050,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "irt_abs_mean=%.4f, irt_std=%.4f, delta_abs_mean=%.4f, delta_std=%.4f, "
                 "delta_over_irt=%.4f, warmup(mf/personal)=%.2f/%.2f, "
                 "graph_row_entropy=%.4f, graph_entropy_ratio=%.4f, "
-                "alpha_mean=%.4f, alpha_std=%.4f, personal_row_entropy=%.4f",
+                "alpha_mean=%.4f, alpha_std=%.4f, alpha_bias_std=%.4f, "
+                "personal_row_entropy=%.4f, personal_matrix_delta=%.4f, personal_matrix_student_std=%.4f",
                 run_tag,
                 epoch,
                 diag["residual_abs_mean"],
@@ -1030,7 +1071,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["graph_entropy_ratio"],
                 diag["alpha_mean"],
                 diag["alpha_std"],
+                diag["alpha_bias_std"],
                 diag["personal_row_entropy"],
+                diag["personal_matrix_delta"],
+                diag["personal_matrix_student_std"],
             )
             logger.info(
                 "%s [Diag][Graph] Epoch [%03d] | "
@@ -1111,13 +1155,18 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 + grad_norms["relation_wk"]
                 + grad_norms["personal_u"]
                 + grad_norms["personal_v"]
+                + grad_norms["personal_alpha_bias"]
                 + grad_norms["personal_gate_emb"]
                 + grad_norms["personal_gate_student_proj"]
                 + grad_norms["personal_gate_context_proj"]
+                + grad_norms["personal_gate_student_direct"]
+                + grad_norms["personal_gate_context_direct"]
                 + grad_norms["personal_gate_out"]
                 + grad_norms["personal_generator_emb"]
-                + grad_norms["personal_generator_student_proj"]
                 + grad_norms["personal_generator_context_proj"]
+                + grad_norms["personal_generator_context_hidden"]
+                + grad_norms["personal_generator_context_to_u"]
+                + grad_norms["personal_generator_context_to_v"]
             )
             if graph_grad_total < 1e-8:
                 graph_low_grad_streak += 1
@@ -1127,9 +1176,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 logger.warning(
                     "%s [Diag Warning][Graph] graph-related grad norms are near zero for %d epoch(s): "
                     "relation_emb=%.6e, relation_tau=%.6e, relation_wq=%.6e, relation_wk=%.6e, "
-                    "personal_u=%.6e, personal_v=%.6e, personal_gate_emb=%.6e, personal_gate_student_proj=%.6e, "
-                    "personal_gate_context_proj=%.6e, personal_gate_out=%.6e, personal_generator_emb=%.6e, "
-                    "personal_generator_student_proj=%.6e, personal_generator_context_proj=%.6e",
+                    "personal_u=%.6e, personal_v=%.6e, personal_alpha_bias=%.6e, personal_gate_emb=%.6e, "
+                    "personal_gate_student_proj=%.6e, personal_gate_context_proj=%.6e, "
+                    "personal_gate_student_direct=%.6e, personal_gate_context_direct=%.6e, personal_gate_out=%.6e, "
+                    "personal_generator_emb=%.6e, personal_generator_context_proj=%.6e, "
+                    "personal_generator_context_hidden=%.6e, personal_generator_context_to_u=%.6e, "
+                    "personal_generator_context_to_v=%.6e",
                     run_tag,
                     graph_low_grad_streak,
                     grad_norms["relation_emb"],
@@ -1138,21 +1190,29 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                     grad_norms["relation_wk"],
                     grad_norms["personal_u"],
                     grad_norms["personal_v"],
+                    grad_norms["personal_alpha_bias"],
                     grad_norms["personal_gate_emb"],
                     grad_norms["personal_gate_student_proj"],
                     grad_norms["personal_gate_context_proj"],
+                    grad_norms["personal_gate_student_direct"],
+                    grad_norms["personal_gate_context_direct"],
                     grad_norms["personal_gate_out"],
                     grad_norms["personal_generator_emb"],
-                    grad_norms["personal_generator_student_proj"],
                     grad_norms["personal_generator_context_proj"],
+                    grad_norms["personal_generator_context_hidden"],
+                    grad_norms["personal_generator_context_to_u"],
+                    grad_norms["personal_generator_context_to_v"],
                 )
             logger.info(
                 "%s [Grad Norms] Epoch [%03d] | "
                 "mf_u_proj=%.6f, mf_v_proj=%.6f, fusion_gate=%.6f, q_gate_raw=%.6f, skill_latent=%.6f, "
                 "relation_emb=%.6e, relation_tau=%.6e, relation_wq=%.6e, relation_wk=%.6e, "
-                "personal_u=%.6e, personal_v=%.6e, personal_gate_emb=%.6e, personal_gate_student_proj=%.6e, "
-                "personal_gate_context_proj=%.6e, personal_gate_out=%.6e, personal_generator_emb=%.6e, "
-                "personal_generator_student_proj=%.6e, personal_generator_context_proj=%.6e",
+                "personal_u=%.6e, personal_v=%.6e, personal_alpha_bias=%.6e, personal_gate_emb=%.6e, "
+                "personal_gate_student_proj=%.6e, personal_gate_context_proj=%.6e, "
+                "personal_gate_student_direct=%.6e, personal_gate_context_direct=%.6e, personal_gate_out=%.6e, "
+                "personal_generator_emb=%.6e, personal_generator_context_proj=%.6e, "
+                "personal_generator_context_hidden=%.6e, personal_generator_context_to_u=%.6e, "
+                "personal_generator_context_to_v=%.6e",
                 run_tag,
                 epoch,
                 grad_norms["mf_u_proj"],
@@ -1166,13 +1226,18 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 grad_norms["relation_wk"],
                 grad_norms["personal_u"],
                 grad_norms["personal_v"],
+                grad_norms["personal_alpha_bias"],
                 grad_norms["personal_gate_emb"],
                 grad_norms["personal_gate_student_proj"],
                 grad_norms["personal_gate_context_proj"],
+                grad_norms["personal_gate_student_direct"],
+                grad_norms["personal_gate_context_direct"],
                 grad_norms["personal_gate_out"],
                 grad_norms["personal_generator_emb"],
-                grad_norms["personal_generator_student_proj"],
                 grad_norms["personal_generator_context_proj"],
+                grad_norms["personal_generator_context_hidden"],
+                grad_norms["personal_generator_context_to_u"],
+                grad_norms["personal_generator_context_to_v"],
             )
 
         scheduler.step(val_metrics["loss"])

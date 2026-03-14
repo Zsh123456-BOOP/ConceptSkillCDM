@@ -51,9 +51,12 @@ def compute_module_activity(
 
     # 收集的数据
     gate_alphas: List[float] = []
+    alpha_biases: List[float] = []
     mf_logits: List[float] = []
     irt_logits: List[float] = []
     fusion_gates: List[float] = []
+    personal_matrix_deltas: List[float] = []
+    personal_matrix_student_stds: List[float] = []
 
     sample_count = 0
 
@@ -79,6 +82,17 @@ def compute_module_activity(
             # 1) Gate alpha（个性化图混合系数）
             if details.get("alpha") is not None:
                 gate_alphas.extend(details["alpha"].squeeze().cpu().numpy().tolist())
+            if details.get("alpha_student_bias") is not None:
+                alpha_biases.extend(details["alpha_student_bias"].squeeze().cpu().numpy().tolist())
+
+            personal_matrices = details.get("personal_matrices")
+            relation_matrices = details.get("relation_matrices")
+            if personal_matrices is not None and relation_matrices is not None:
+                pm = personal_matrices.detach()
+                gm = relation_matrices.detach().mean(dim=0, keepdim=True)
+                delta = (pm - gm).abs().mean(dim=(-1, -2))
+                personal_matrix_deltas.extend(delta.cpu().numpy().tolist())
+                personal_matrix_student_stds.append(float(pm.std(dim=0, unbiased=False).mean().item()))
 
             # 2) MF/IRT logits（用于计算贡献）
             if details.get("mf_logit") is not None:
@@ -125,10 +139,21 @@ def compute_module_activity(
         results["personal_graph_enabled"] = True
         results["personal_gate_mean"] = float(alpha_arr.mean())
         results["personal_gate_std"] = float(alpha_arr.std())
-        # 判断：如果 alpha 全接近 0，说明没用个性化图
-        results["personal_graph_trivial"] = alpha_arr.mean() < 0.05
-        # 放宽阈值：std > 0.01 就认为有个性化（不同学生有不同的 alpha）
-        results["personal_graph_active"] = alpha_arr.mean() > 0.1 and alpha_arr.std() > 0.01
+        bias_std = float(np.array(alpha_biases).std()) if alpha_biases else 0.0
+        matrix_delta = float(np.mean(personal_matrix_deltas)) if personal_matrix_deltas else 0.0
+        matrix_student_std = float(np.mean(personal_matrix_student_stds)) if personal_matrix_student_stds else 0.0
+        results["personal_alpha_bias_std"] = bias_std
+        results["personal_matrix_delta"] = matrix_delta
+        results["personal_matrix_student_std"] = matrix_student_std
+        # 判断：alpha 或 personal graph 几乎不偏离全局图时，都视为 trivial
+        results["personal_graph_trivial"] = alpha_arr.mean() < 0.05 or matrix_delta < 0.005
+        # 只有 alpha 和 personal graph 本身都表现出差异时，才视为真正活跃
+        results["personal_graph_active"] = (
+            alpha_arr.mean() > 0.1
+            and alpha_arr.std() > 0.01
+            and matrix_delta > 0.01
+            and (bias_std > 0.01 or matrix_student_std > 0.001)
+        )
     else:
         results["personal_graph_enabled"] = False
         results["personal_graph_active"] = False
@@ -261,19 +286,25 @@ def format_activity_report(
     if activity.get("personal_graph_enabled"):
         gate_mean = activity.get("personal_gate_mean", 0.0)
         gate_std = activity.get("personal_gate_std", 0.0)
+        alpha_bias_std = activity.get("personal_alpha_bias_std", 0.0)
+        matrix_delta = activity.get("personal_matrix_delta", 0.0)
+        matrix_student_std = activity.get("personal_matrix_student_std", 0.0)
 
         if activity.get("personal_graph_active"):
             status = "ACTIVE (using personalization)"
             advice = ""
         elif activity.get("personal_graph_trivial"):
-            status = "INACTIVE (gate alpha ~= 0, not using personal graph)"
-            advice = "   -> Consider: increase lambda_alpha or lambda_sparse_personal"
+            status = "INACTIVE (alpha or personal graph barely deviates from global)"
+            advice = "   -> Consider: strengthen direct student-specific path or personal graph signal"
         else:
-            status = "MARGINAL (low alpha values)"
+            status = "MARGINAL (some gate movement, but personalization is weak)"
             advice = ""
 
         lines.append(f"   - Gate alpha mean: {gate_mean:.3f}")
         lines.append(f"   - Gate alpha std: {gate_std:.3f}")
+        lines.append(f"   - Alpha bias std: {alpha_bias_std:.3f}")
+        lines.append(f"   - Personal/global delta: {matrix_delta:.4f}")
+        lines.append(f"   - Inter-student matrix std: {matrix_student_std:.4f}")
         lines.append(f"   - Status: {status}")
         if activity.get("personal_graph_trivial"):
             lines.append(advice)
