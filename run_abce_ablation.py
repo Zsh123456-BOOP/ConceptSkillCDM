@@ -3,12 +3,14 @@
 """
 run_abce_ablation.py
 
-Fine-grained ablation runner for sub-modules A/B/E.
+Historical name kept for compatibility, but the current runner supports
+fine-grained ABDE ablation:
 
 Component mapping:
 - A: global concept graph      -> --ablate_concept_graph
-- E: personal graph mixing     -> --use_personal_graph (off by dropping this flag)
 - B: MF/Q residual branch      -> --ablate_skill_encoder
+- D: 2PL-IRT diagnosis head    -> --ablate_module2
+- E: personal graph mixing     -> --use_personal_graph (off by dropping this flag)
 
 Outputs:
 - results/abce_ablation_diagnosis.csv
@@ -87,6 +89,7 @@ BASE_SINGLE_ABLATIONS: Tuple[AblationSpec, ...] = (
         drop_keys=("use_personal_graph",),
     ),
     AblationSpec(name="no_B", flags={"ablate_skill_encoder": True}, overrides={}),
+    AblationSpec(name="no_D", flags={"ablate_module2": True}, overrides={}),
 )
 
 BASE_SINGLE_PLUS_EXTRA: Tuple[AblationSpec, ...] = (
@@ -404,6 +407,7 @@ def diagnose_reason(
     full_row: Dict[str, Any],
     delta_a: Optional[float],
     delta_b: Optional[float],
+    delta_d: Optional[float],
     delta_e: Optional[float],
 ) -> str:
     reasons: List[str] = []
@@ -436,6 +440,8 @@ def diagnose_reason(
         reasons.append("A-delta-small")
     if delta_b is not None and abs(delta_b) < 0.002:
         reasons.append("B-delta-small")
+    if delta_d is not None and abs(delta_d) < 0.002:
+        reasons.append("D-delta-small")
     if delta_e is not None and abs(delta_e) < 0.002:
         reasons.append("E-delta-small")
 
@@ -465,15 +471,18 @@ def write_summary(
         full_auc = try_float(full.get("test_auc"))
         no_a_auc = try_float(mp.get("no_A", {}).get("test_auc"))
         no_b_auc = try_float(mp.get("no_B", {}).get("test_auc"))
+        no_d_auc = try_float(mp.get("no_D", {}).get("test_auc"))
         no_e_auc = try_float(mp.get("no_E", {}).get("test_auc"))
 
         delta_a = (full_auc - no_a_auc) if (full_auc is not None and no_a_auc is not None) else None
         delta_b = (full_auc - no_b_auc) if (full_auc is not None and no_b_auc is not None) else None
+        delta_d = (full_auc - no_d_auc) if (full_auc is not None and no_d_auc is not None) else None
         delta_e = (full_auc - no_e_auc) if (full_auc is not None and no_e_auc is not None) else None
 
         comp_state = {
             "A": classify_delta(delta_a, threshold),
             "B": classify_delta(delta_b, threshold),
+            "D": classify_delta(delta_d, threshold),
             "E": classify_delta(delta_e, threshold),
         }
         keep = [k for k, v in comp_state.items() if v == "useful"]
@@ -487,9 +496,11 @@ def write_summary(
             "full_auc": full_auc,
             "no_A_auc": no_a_auc,
             "no_B_auc": no_b_auc,
+            "no_D_auc": no_d_auc,
             "no_E_auc": no_e_auc,
             "delta_A_full_minus_noA": delta_a,
             "delta_B_full_minus_noB": delta_b,
+            "delta_D_full_minus_noD": delta_d,
             "delta_E_full_minus_noE": delta_e,
             "full_effective_use_concept_graph": full.get("effective_use_concept_graph"),
             "full_effective_use_personal_graph": full.get("effective_use_personal_graph"),
@@ -507,11 +518,12 @@ def write_summary(
             "full_module_activity_epoch10": full.get("module_activity_epoch10", ""),
             "state_A": comp_state["A"],
             "state_B": comp_state["B"],
+            "state_D": comp_state["D"],
             "state_E": comp_state["E"],
             "suggest_keep": ",".join(keep),
             "suggest_drop": ",".join(drop),
             "suggest_tune": ",".join(tune),
-            "diagnosis_reason": diagnose_reason(full, delta_a, delta_b, delta_e),
+            "diagnosis_reason": diagnose_reason(full, delta_a, delta_b, delta_d, delta_e),
         }
         summary_rows.append(row)
 
@@ -522,9 +534,11 @@ def write_summary(
         "full_auc",
         "no_A_auc",
         "no_B_auc",
+        "no_D_auc",
         "no_E_auc",
         "delta_A_full_minus_noA",
         "delta_B_full_minus_noB",
+        "delta_D_full_minus_noD",
         "delta_E_full_minus_noE",
         "full_effective_use_concept_graph",
         "full_effective_use_personal_graph",
@@ -542,6 +556,7 @@ def write_summary(
         "full_module_activity_epoch10",
         "state_A",
         "state_B",
+        "state_D",
         "state_E",
         "suggest_keep",
         "suggest_drop",
@@ -564,6 +579,7 @@ def write_summary(
         n = len(grp)
         deltas_a = [try_float(x.get("delta_A_full_minus_noA")) for x in grp]
         deltas_b = [try_float(x.get("delta_B_full_minus_noB")) for x in grp]
+        deltas_d = [try_float(x.get("delta_D_full_minus_noD")) for x in grp]
         deltas_e = [try_float(x.get("delta_E_full_minus_noE")) for x in grp]
         full_aucs = [try_float(x.get("full_auc")) for x in grp]
 
@@ -581,12 +597,15 @@ def write_summary(
 
         mean_a = mean_valid(deltas_a)
         mean_b = mean_valid(deltas_b)
+        mean_d = mean_valid(deltas_d)
         mean_e = mean_valid(deltas_e)
         keep = []
         if mean_a is not None and mean_a > threshold:
             keep.append("A")
         if mean_b is not None and mean_b > threshold:
             keep.append("B")
+        if mean_d is not None and mean_d > threshold:
+            keep.append("D")
         if mean_e is not None and mean_e > threshold:
             keep.append("E")
 
@@ -597,13 +616,16 @@ def write_summary(
             "full_auc_mean": mean_valid(full_aucs),
             "delta_A_mean": mean_a,
             "delta_B_mean": mean_b,
+            "delta_D_mean": mean_d,
             "delta_E_mean": mean_e,
             "A_useful_seed_ratio": useful_ratio(deltas_a),
             "B_useful_seed_ratio": useful_ratio(deltas_b),
+            "D_useful_seed_ratio": useful_ratio(deltas_d),
             "E_useful_seed_ratio": useful_ratio(deltas_e),
             "suggest_keep_by_mean": ",".join(keep),
             "state_A_majority": _majority_value(grp, "state_A"),
             "state_B_majority": _majority_value(grp, "state_B"),
+            "state_D_majority": _majority_value(grp, "state_D"),
             "state_E_majority": _majority_value(grp, "state_E"),
         }
         mean_rows.append(row)
@@ -615,13 +637,16 @@ def write_summary(
         "full_auc_mean",
         "delta_A_mean",
         "delta_B_mean",
+        "delta_D_mean",
         "delta_E_mean",
         "A_useful_seed_ratio",
         "B_useful_seed_ratio",
+        "D_useful_seed_ratio",
         "E_useful_seed_ratio",
         "suggest_keep_by_mean",
         "state_A_majority",
         "state_B_majority",
+        "state_D_majority",
         "state_E_majority",
     ]
     with open(mean_path, "w", newline="", encoding="utf-8") as f:
@@ -634,7 +659,7 @@ def write_summary(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run A/B/E sub-module ablation with diagnosis summary.")
+    parser = argparse.ArgumentParser(description="Run A/B/D/E sub-module ablation with diagnosis summary.")
     parser.add_argument("--datasets", type=str, default="assist_09,junyi")
     parser.add_argument("--seeds", type=str, default=None, help="Comma-separated seeds. Default uses DEFAULT_SEEDS.")
     parser.add_argument(
@@ -653,7 +678,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--analyze_only", action="store_true", help="Skip running and only summarize existing rows.")
     parser.add_argument("--generate_diagnosis", action="store_true", help="Enable post-training diagnosis artifacts.")
     parser.add_argument("--component_set", type=str, default="single", choices=["single", "single_plus"])
-    parser.add_argument("--ablations", type=str, default=None, help="Optional filter: full,no_A,no_B,no_E,no_AE")
+    parser.add_argument("--ablations", type=str, default=None, help="Optional filter: full,no_A,no_B,no_D,no_E,no_AE")
     parser.add_argument("--delta_threshold", type=float, default=0.003, help="Threshold for useful/neutral/harmful labels.")
 
     parser.add_argument("--epochs", type=int, default=None)
@@ -894,6 +919,7 @@ def main() -> None:
         print(
             f"[SUMMARY] dataset={r['dataset']} seed={r['seed']} profile={r['profile']} "
             f"dA={r['delta_A_full_minus_noA']} dB={r['delta_B_full_minus_noB']} "
+            f"dD={r['delta_D_full_minus_noD']} "
             f"dE={r['delta_E_full_minus_noE']} "
             f"keep={r['suggest_keep']} reason={r['diagnosis_reason']}"
         )

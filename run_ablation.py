@@ -43,7 +43,7 @@ from gpu_utils import (
 MODEL_ABLATIONS: List[Dict[str, Any]] = [
     {"name": "full", "flags": {}, "overrides": {}},
     {"name": "no_module1", "flags": {"ablate_module1": True}, "overrides": {}},
-    # {"name": "no_module2", "flags": {"ablate_module2": True}, "overrides": {}},
+    {"name": "no_module2", "flags": {"ablate_module2": True}, "overrides": {}},
     {"name": "no_module3", "flags": {"ablate_module3": True}, "overrides": {}},
 ]
 
@@ -59,6 +59,21 @@ SUBMODULE_ABLATIONS: List[Dict[str, Any]] = [
      "flags": {"use_personal_graph": False},  # 注意：这里不是 ablate_*, 而是直接控制 toggle
      "overrides": {}},
 ]
+
+ABLATION_NAME_ALIASES: Dict[str, str] = {
+    "no_A": "no_concept_graph",
+    "no_B": "no_skill",
+    "no_D": "no_module2",
+    "no_E": "no_personal_graph",
+    # legacy spellings stay supported
+    "no_skill": "no_skill",
+    "no_concept_graph": "no_concept_graph",
+    "no_personal_graph": "no_personal_graph",
+    "no_module1": "no_module1",
+    "no_module2": "no_module2",
+    "no_module3": "no_module3",
+    "full": "full",
+}
 
 
 def _append_arg(cmd: List[str], k: str, v: Any) -> None:
@@ -82,6 +97,20 @@ def _get_ablation_pool(ablation_set: str) -> List[Dict[str, Any]]:
     if ablation_set == "all":
         return list(MODEL_ABLATIONS) + list(SUBMODULE_ABLATIONS)
     raise ValueError(f"Unknown ablation_set='{ablation_set}'. Choose from: model, sub, all")
+
+
+def resolve_ablation_names(names: List[str], ablation_set: str) -> List[str]:
+    pool_names = {a["name"] for a in _get_ablation_pool(ablation_set)}
+    resolved: List[str] = []
+    for name in names:
+        canonical = ABLATION_NAME_ALIASES.get(name, name)
+        if canonical not in pool_names:
+            raise ValueError(
+                f"Unknown ablation '{name}' (resolved='{canonical}') for pool '{ablation_set}'. "
+                f"Available={sorted(pool_names)}"
+            )
+        resolved.append(canonical)
+    return resolved
 
 
 def launch_experiment(
@@ -181,7 +210,8 @@ def main():
 
     # 可选：在 ablation_set 的基础上再筛选
     parser.add_argument("--ablations", type=str, default=None,
-                        help="Comma-separated ablation names to run (filter within the selected pool).")
+                        help="Comma-separated ablation names to run (filter within the selected pool). "
+                             "Supports aliases: no_A/no_B/no_D/no_E.")
 
     parser.add_argument("--dry_run", action="store_true", help="Print commands only, do not run.")
     parser.add_argument("--poll_interval", type=int, default=10, help="Seconds between polling processes.")
@@ -211,7 +241,7 @@ def main():
     if args.ablations is None:
         ablations = list(ablation_pool)
     else:
-        selected = set(_parse_csv_list(args.ablations))
+        selected = set(resolve_ablation_names(_parse_csv_list(args.ablations), args.ablation_set))
         ablations = [a for a in ablation_pool if a["name"] in selected]
         pool_names = set(a["name"] for a in ablation_pool)
         missing = selected - pool_names
