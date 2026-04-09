@@ -21,3 +21,4 @@ venv/
 
 # 忽略 checkpoints 文件夹下的所有内容（如果你不希望任何 checkpoints 被提交）
 checkpoints/
+.claude/
