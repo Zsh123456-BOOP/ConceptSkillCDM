@@ -10,11 +10,15 @@ fi
 
 DATASETS="${DATASETS:-assist_09,junyi}"
 SEEDS="${SEEDS:-42}"
-PROFILES="${PROFILES:-best}"
-ABLATIONS="${ABLATIONS:-full,no_A,no_B,no_D,no_E}"
-COMPONENT_SET="${COMPONENT_SET:-single}"
-GPUS="${GPUS:-0,1,2}"
-MAX_CONCURRENT="${MAX_CONCURRENT:-3}"
+PROFILES="${PROFILES:-ae_dominant}"
+ABLATIONS="${ABLATIONS:-full,no_A,no_B,no_D,no_E,B_q_only,B_no_q}"
+COMPONENT_SET="${COMPONENT_SET:-single_plus}"
+MAX_GPUS="${MAX_GPUS:-2}"
+AUTO_GPUS="${AUTO_GPUS:-1}"
+GPU_MEM_USED_MAX_MB="${GPU_MEM_USED_MAX_MB:-256}"
+GPU_UTIL_MAX="${GPU_UTIL_MAX:-5}"
+GPUS="${GPUS:-}"
+MAX_CONCURRENT="${MAX_CONCURRENT:-}"
 MAX_PER_GPU="${MAX_PER_GPU:-1}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 DRY_RUN="${DRY_RUN:-0}"
@@ -25,6 +29,42 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   if command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
   fi
+fi
+
+if [[ -z "$GPUS" && "$AUTO_GPUS" == "1" ]]; then
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    echo "[SKIP] nvidia-smi not found and GPUS was not provided."
+    exit 0
+  fi
+  mapfile -t FREE_GPUS < <(
+    nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader,nounits |
+      awk -F',' -v mem_max="$GPU_MEM_USED_MAX_MB" -v util_max="$GPU_UTIL_MAX" -v max_gpus="$MAX_GPUS" '
+        {
+          idx=$1; mem=$2; util=$3;
+          gsub(/ /, "", idx); gsub(/ /, "", mem); gsub(/ /, "", util);
+          if (mem <= mem_max && util <= util_max && count < max_gpus) {
+            out[count]=idx; count++;
+          }
+        }
+        END {
+          for (i=0; i<count; i++) {
+            printf "%s%s", (i == 0 ? "" : ","), out[i];
+          }
+          if (count > 0) printf "\n";
+        }
+      '
+  )
+  GPUS="${FREE_GPUS[0]:-}"
+fi
+
+if [[ -z "$GPUS" ]]; then
+  echo "[SKIP] no idle GPUs found. Thresholds: memory.used<=${GPU_MEM_USED_MAX_MB}MiB, util<=${GPU_UTIL_MAX}%."
+  exit 0
+fi
+
+if [[ -z "$MAX_CONCURRENT" ]]; then
+  IFS=',' read -r -a GPU_ARR <<< "$GPUS"
+  MAX_CONCURRENT="${#GPU_ARR[@]}"
 fi
 
 echo "[INFO] repo=$ROOT_DIR"

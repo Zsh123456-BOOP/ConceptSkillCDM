@@ -51,9 +51,11 @@ python -V
 
 - 清空 `logs/*`、`results/*`、`checkpoints/*`
 - 运行两个数据集：`assist_09,junyi`
-- 跑 `full,no_A,no_B,no_D,no_E`
-- 使用 3 张卡：`0,1,2`
-- 并发 3 个任务，每卡 1 个任务
+- 跑 `full,no_A,no_B,no_D,no_E,B_q_only,B_no_q`
+- 默认使用 `ae_dominant` profile
+- 自动扫描空闲 GPU，最多使用 2 张；如果没有空闲卡，直接跳过不运行
+- 默认空闲阈值：`memory.used <= 256MiB` 且 `utilization.gpu <= 5%`
+- 每张卡最多 1 个任务
 - 生成诊断输出
 
 服务器执行：
@@ -70,6 +72,12 @@ chmod +x tools/run_abde_full.sh
 
 ```bash
 ABLATIONS=full,no_A,no_E ./tools/run_abde_full.sh
+```
+
+手动指定 GPU：
+
+```bash
+GPUS=1,3 ./tools/run_abde_full.sh
 ```
 
 跑 3 个 seed：

@@ -204,6 +204,10 @@ def parse_args():
 
     parser.add_argument("--disable_q_conditioning", action="store_true",
                         help="Disable Q-conditioning in MF branch (not recommended).")
+    parser.add_argument("--disable_b_id_adapter", action="store_true",
+                        help="Disable B's student/item ID adapter path; leaves Q-aware residual path.")
+    parser.add_argument("--disable_b_bias", action="store_true",
+                        help="Disable B's residual bias path; useful for B_q_only ablation.")
 
     parser.add_argument("--disable_self_loop", action="store_true",
                         help="Disable self-loop in learned concept graph.")
@@ -231,6 +235,10 @@ def parse_args():
                         help="Penalty weight for overly large residual delta relative to IRT logit.")
     parser.add_argument("--delta_ratio_target", type=float, default=0.15,
                         help="Target upper bound for mean(|delta|)/mean(|irt|) before penalty activates.")
+    parser.add_argument("--lambda_b_id_budget", type=float, default=0.0,
+                        help="Penalty weight when B id-adapter share exceeds target.")
+    parser.add_argument("--b_id_budget_target", type=float, default=0.25,
+                        help="Target upper bound for B id-adapter share before penalty activates.")
     parser.add_argument("--personal_max_alpha", type=float, default=0.35,
                         help="Upper bound for personal-graph mixing alpha.")
     parser.add_argument("--personal_delta_scale", type=float, default=1.0,
@@ -466,9 +474,13 @@ def main():
                 lambda_sparse_personal=getattr(args, "lambda_sparse_personal", 0.0),
                 lambda_alpha=getattr(args, "lambda_alpha", 0.0),
                 mf_l2_lambda=getattr(args, "exercise_l2_lambda", 5e-5),
-                gnn_residual_weight=getattr(args, "gnn_residual_weight", 0.5),
-                use_q_conditioning=not getattr(args, "disable_q_conditioning", False),
-                mf_warmup_epochs=getattr(args, "mf_warmup_epochs", 0),
+        gnn_residual_weight=getattr(args, "gnn_residual_weight", 0.5),
+        use_q_conditioning=not getattr(args, "disable_q_conditioning", False),
+        use_b_id_adapter=not getattr(args, "disable_b_id_adapter", False),
+        use_b_bias=not getattr(args, "disable_b_bias", False),
+        lambda_b_id_budget=getattr(args, "lambda_b_id_budget", 0.0),
+        b_id_budget_target=getattr(args, "b_id_budget_target", 0.25),
+        mf_warmup_epochs=getattr(args, "mf_warmup_epochs", 0),
                 lambda_delta_ratio=getattr(args, "lambda_delta_ratio", 0.0),
                 delta_ratio_target=getattr(args, "delta_ratio_target", 0.15),
                 personal_max_alpha=getattr(args, "personal_max_alpha", 0.35),

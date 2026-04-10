@@ -54,7 +54,7 @@ SUMMARY_CSV = Path("results") / "abce_ablation_summary.csv"
 MEAN_SUMMARY_CSV = Path("results") / "abce_ablation_summary_mean.csv"
 NUM_RE = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
 ROW_START_RE = re.compile(
-    r'(?<![\r\n])(?=(assist_09|assist_17|junyi),\d+,(best|b_rescue|e_rescue|all_rescue),(full|no_A|no_B|no_E|no_AE),)'
+    r'(?<![\r\n])(?=(assist_09|assist_17|junyi),\d+,(best|ae_dominant|b_rescue|e_rescue|all_rescue),(full|no_A|no_B|no_D|no_E|no_AE|B_q_only|B_no_q),)'
 )
 
 
@@ -99,6 +99,8 @@ BASE_SINGLE_PLUS_EXTRA: Tuple[AblationSpec, ...] = (
         overrides={"num_gnn_layers": 0, "lambda_sparse_personal": 0.0, "lambda_alpha": 0.0},
         drop_keys=("use_personal_graph",),
     ),
+    AblationSpec(name="B_q_only", flags={"disable_b_id_adapter": True, "disable_b_bias": True}, overrides={}),
+    AblationSpec(name="B_no_q", flags={"disable_q_conditioning": True}, overrides={}),
 )
 
 
@@ -147,6 +149,16 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
         "delta_over_irt": None,
         "mf_abs_mean": None,
         "irt_abs_mean": None,
+        "q_interaction_abs_mean": None,
+        "id_adapter_abs_mean": None,
+        "bias_abs_mean": None,
+        "B_q_share": None,
+        "B_id_share": None,
+        "B_bias_share": None,
+        "student_q_norm": None,
+        "student_id_adapter_norm": None,
+        "item_q_norm": None,
+        "item_id_adapter_norm": None,
         "personal_matrix_delta": None,
         "personal_matrix_student_std": None,
         "warn_graph_uniform_count": 0,
@@ -175,6 +187,16 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
                     "delta_over_irt",
                     "mf_abs_mean",
                     "irt_abs_mean",
+                    "q_interaction_abs_mean",
+                    "id_adapter_abs_mean",
+                    "bias_abs_mean",
+                    "B_q_share",
+                    "B_id_share",
+                    "B_bias_share",
+                    "student_q_norm",
+                    "student_id_adapter_norm",
+                    "item_q_norm",
+                    "item_id_adapter_norm",
                     "personal_matrix_delta",
                     "personal_matrix_student_std",
                 ):
@@ -416,6 +438,8 @@ def diagnose_reason(
     alpha_bias_std = try_float(full_row.get("alpha_bias_std"))
     gate = try_float(full_row.get("gate_mean"))
     dor = try_float(full_row.get("delta_over_irt"))
+    b_q_share = try_float(full_row.get("B_q_share"))
+    b_id_share = try_float(full_row.get("B_id_share"))
     personal_matrix_delta = try_float(full_row.get("personal_matrix_delta"))
     personal_matrix_student_std = try_float(full_row.get("personal_matrix_student_std"))
 
@@ -431,6 +455,10 @@ def diagnose_reason(
         reasons.append("mf-gate-very-high")
     if dor is not None and dor < 0.05:
         reasons.append("residual-delta-low")
+    if b_q_share is not None and b_q_share < 0.45:
+        reasons.append("B-q-share-low")
+    if b_id_share is not None and b_id_share > 0.35:
+        reasons.append("B-id-share-high")
     if personal_matrix_delta is not None and personal_matrix_delta < 0.01:
         reasons.append("personal-matrix-delta-low")
     if personal_matrix_student_std is not None and personal_matrix_student_std < 0.001:
@@ -510,6 +538,12 @@ def write_summary(
             "full_alpha_bias_std": try_float(full.get("alpha_bias_std")),
             "full_gate_mean": try_float(full.get("gate_mean")),
             "full_delta_over_irt": try_float(full.get("delta_over_irt")),
+            "full_B_q_share": try_float(full.get("B_q_share")),
+            "full_B_id_share": try_float(full.get("B_id_share")),
+            "full_B_bias_share": try_float(full.get("B_bias_share")),
+            "full_q_interaction_abs_mean": try_float(full.get("q_interaction_abs_mean")),
+            "full_id_adapter_abs_mean": try_float(full.get("id_adapter_abs_mean")),
+            "full_bias_abs_mean": try_float(full.get("bias_abs_mean")),
             "full_personal_matrix_delta": try_float(full.get("personal_matrix_delta")),
             "full_personal_matrix_student_std": try_float(full.get("personal_matrix_student_std")),
             "full_warn_graph_uniform_count": full.get("warn_graph_uniform_count"),
@@ -548,6 +582,12 @@ def write_summary(
         "full_alpha_bias_std",
         "full_gate_mean",
         "full_delta_over_irt",
+        "full_B_q_share",
+        "full_B_id_share",
+        "full_B_bias_share",
+        "full_q_interaction_abs_mean",
+        "full_id_adapter_abs_mean",
+        "full_bias_abs_mean",
         "full_personal_matrix_delta",
         "full_personal_matrix_student_std",
         "full_warn_graph_uniform_count",
@@ -666,7 +706,7 @@ def parse_args() -> argparse.Namespace:
         "--profiles",
         type=str,
         default=None,
-        help="Optional filter: best,b_rescue,e_rescue,all_rescue",
+        help="Optional filter: best,ae_dominant,b_rescue,e_rescue,all_rescue",
     )
     parser.add_argument("--gpus", type=str, default="0")
     parser.add_argument("--max_concurrent", type=int, default=1)
@@ -678,7 +718,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--analyze_only", action="store_true", help="Skip running and only summarize existing rows.")
     parser.add_argument("--generate_diagnosis", action="store_true", help="Enable post-training diagnosis artifacts.")
     parser.add_argument("--component_set", type=str, default="single", choices=["single", "single_plus"])
-    parser.add_argument("--ablations", type=str, default=None, help="Optional filter: full,no_A,no_B,no_D,no_E,no_AE")
+    parser.add_argument("--ablations", type=str, default=None, help="Optional filter: full,no_A,no_B,no_D,no_E,no_AE,B_q_only,B_no_q")
     parser.add_argument("--delta_threshold", type=float, default=0.003, help="Threshold for useful/neutral/harmful labels.")
 
     parser.add_argument("--epochs", type=int, default=None)
@@ -690,6 +730,32 @@ def parse_args() -> argparse.Namespace:
 def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> Dict[str, Any]:
     if profile == "best":
         return {}
+    if profile == "ae_dominant":
+        if dataset == "assist_09":
+            return {
+                "fusion_gate_max": 0.35,
+                "fusion_gate_bias_init": -2.2,
+                "residual_scale_init": 0.08,
+                "mf_warmup_epochs": 5,
+                "lambda_delta_ratio": 0.08,
+                "delta_ratio_target": 0.12,
+                "lambda_b_id_budget": 0.06,
+                "b_id_budget_target": 0.20,
+                "lambda_alpha_min": 0.05,
+                "alpha_min_target": 0.02,
+            }
+        return {
+            "fusion_gate_max": 0.25,
+            "fusion_gate_bias_init": -2.4,
+            "residual_scale_init": 0.06,
+            "mf_warmup_epochs": 6,
+            "lambda_delta_ratio": 0.08,
+            "delta_ratio_target": 0.08,
+            "lambda_b_id_budget": 0.06,
+            "b_id_budget_target": 0.18,
+            "lambda_alpha_min": 0.05,
+            "alpha_min_target": 0.02,
+        }
     if profile == "b_rescue":
         if dataset == "assist_09":
             return {
@@ -762,7 +828,7 @@ def make_jobs(args: argparse.Namespace, run_id: str) -> List[JobSpec]:
         if dataset not in BEST_CFG:
             raise ValueError(f"Dataset '{dataset}' not found in BEST_CFG.")
         base_cfg = dict(BEST_CFG[dataset])
-        profiles = ["best", "b_rescue", "e_rescue", "all_rescue"]
+        profiles = ["best", "ae_dominant", "b_rescue", "e_rescue", "all_rescue"]
         profiles = _selected_profiles(profiles, args.profiles)
 
         for profile in profiles:

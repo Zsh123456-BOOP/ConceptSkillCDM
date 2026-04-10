@@ -42,6 +42,10 @@ DATASET_DEFAULTS = {
         "diag_batches": 1,
         "graph_topk": 12,
         "disable_q_conditioning": False,
+        "disable_b_id_adapter": False,
+        "disable_b_bias": False,
+        "lambda_b_id_budget": 0.0,
+        "b_id_budget_target": 0.25,
         "disable_self_loop": False,
         "personal_rank": 4,
         "gnn_residual_weight": 0.5,
@@ -69,6 +73,10 @@ DATASET_DEFAULTS = {
         "residual_clip_t": 2.0,
         "residual_scale_init": 0.25,
         "disable_q_aligned_residual": False,
+        "disable_b_id_adapter": False,
+        "disable_b_bias": False,
+        "lambda_b_id_budget": 0.0,
+        "b_id_budget_target": 0.25,
         "debug_module3_diag": True,
         "diag_batches": 1,
         "graph_topk": 24,
@@ -96,6 +104,10 @@ DATASET_DEFAULTS = {
         "residual_clip_t": 2.0,
         "residual_scale_init": 0.1,
         "disable_q_aligned_residual": False,
+        "disable_b_id_adapter": False,
+        "disable_b_bias": False,
+        "lambda_b_id_budget": 0.0,
+        "b_id_budget_target": 0.25,
         "debug_module3_diag": True,
         "diag_batches": 1,
     },
@@ -154,4 +166,3 @@ def apply_dataset_defaults(args, parser=None):
             if not hasattr(args, key) or getattr(args, key) is None:
                 setattr(args, key, value)
     return args
-

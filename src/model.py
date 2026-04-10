@@ -341,7 +341,8 @@ class ExerciseDifficultyEncoder(nn.Module):
     """
     Shared item encoder:
     - IRT 2PL params (b, a) controlled by use_irt
-    - Module3 item branch: exercise_latent + Q-conditioned concept_latent
+    - Module3 item branch: Q-conditioned item_q_repr as the main path
+      plus a small item_id_adapter as the auxiliary path
     """
 
     def __init__(
@@ -354,6 +355,8 @@ class ExerciseDifficultyEncoder(nn.Module):
         use_mf_branch: bool = True,
         use_q_conditioning: bool = True,
         use_irt: bool = True,
+        use_id_adapter: bool = True,
+        use_bias: bool = True,
     ):
         super().__init__()
         self.num_exercises = int(num_exercises)
@@ -363,18 +366,20 @@ class ExerciseDifficultyEncoder(nn.Module):
         self.use_mf_branch = bool(use_mf_branch)
         self.use_q_conditioning = bool(use_q_conditioning and use_mf_branch)
         self.use_irt = bool(use_irt)
+        self.use_id_adapter = bool(use_id_adapter and use_mf_branch)
+        self.use_bias = bool(use_bias and use_mf_branch)
 
         self.register_buffer("q_matrix", q_matrix)
 
         if self.use_mf_branch:
-            self.exercise_latent = nn.Embedding(num_exercises, exercise_dim)
-            self.exercise_bias = nn.Embedding(num_exercises, 1)
             self.concept_latent = nn.Embedding(num_concepts, exercise_dim)
+            self.item_id_adapter = nn.Embedding(num_exercises, exercise_dim) if self.use_id_adapter else None
+            self.exercise_bias = nn.Embedding(num_exercises, 1) if self.use_bias else None
             self.q_gate_raw = nn.Parameter(torch.zeros(1))
         else:
-            self.exercise_latent = None
-            self.exercise_bias = None
             self.concept_latent = None
+            self.item_id_adapter = None
+            self.exercise_bias = None
             self.q_gate_raw = None
 
         if self.use_irt:
@@ -389,9 +394,11 @@ class ExerciseDifficultyEncoder(nn.Module):
 
     def _initialize_weights(self) -> None:
         if self.use_mf_branch:
-            nn.init.xavier_normal_(self.exercise_latent.weight)
-            nn.init.zeros_(self.exercise_bias.weight)
             nn.init.xavier_normal_(self.concept_latent.weight)
+            if self.item_id_adapter is not None:
+                nn.init.xavier_normal_(self.item_id_adapter.weight, gain=0.25)
+            if self.exercise_bias is not None:
+                nn.init.zeros_(self.exercise_bias.weight)
 
         if self.use_irt:
             nn.init.zeros_(self.b.weight)
@@ -435,10 +442,10 @@ class ExerciseDifficultyEncoder(nn.Module):
         self,
         exercise_ids: torch.Tensor,
         concept_mask: Optional[torch.Tensor] = None,
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], torch.Tensor, torch.Tensor]:
+    ) -> Tuple[Optional[Dict[str, torch.Tensor]], Optional[torch.Tensor], torch.Tensor, torch.Tensor]:
         """
         Returns:
-            item_latent:   (B, De) or None
+            item_components: dict or None
             exercise_bias: (B,) or None
             b:             (B,)
             a:             (B,)
@@ -447,8 +454,11 @@ class ExerciseDifficultyEncoder(nn.Module):
         B = exercise_ids.size(0)
 
         if self.use_mf_branch:
-            e_latent = self.exercise_latent(exercise_ids)
-            e_bias = self.exercise_bias(exercise_ids).squeeze(-1)
+            e_bias = (
+                self.exercise_bias(exercise_ids).squeeze(-1)
+                if self.exercise_bias is not None
+                else torch.zeros(B, device=device)
+            )
             if concept_mask is None:
                 concept_mask = self.q_matrix[exercise_ids]
             q = concept_mask.float()
@@ -458,13 +468,23 @@ class ExerciseDifficultyEncoder(nn.Module):
 
             if self.use_q_conditioning and self.q_gate_raw is not None:
                 q_gate = torch.sigmoid(self.q_gate_raw)
-                item_latent = e_latent + q_gate * q_latent
+                item_q_repr = q_gate * q_latent
             else:
-                item_latent = e_latent
+                q_gate = q_latent.new_tensor(0.0)
+                item_q_repr = torch.zeros_like(q_latent)
 
-            item_latent = self.dropout(item_latent)
+            if self.item_id_adapter is not None:
+                item_id_adapter = self.dropout(self.item_id_adapter(exercise_ids))
+            else:
+                item_id_adapter = torch.zeros_like(item_q_repr)
+
+            item_components = {
+                "item_q_repr": self.dropout(item_q_repr),
+                "item_id_adapter": item_id_adapter,
+                "item_q_gate": q_gate.reshape(1).detach(),
+            }
         else:
-            item_latent = None
+            item_components = None
             e_bias = None
 
         if self.use_irt:
@@ -474,7 +494,7 @@ class ExerciseDifficultyEncoder(nn.Module):
             b = torch.zeros(B, device=device)
             a = torch.ones(B, device=device)
 
-        return item_latent, e_bias, b, a
+        return item_components, e_bias, b, a
 
 
 # ======================================================
@@ -524,63 +544,148 @@ class CognitiveDiagnosisHead(nn.Module):
 
 
 # ======================================================
-# 模块 3（B）：MF 残差头 - MFResidualHead
+# 模块 3（B）：Q-aware residual adapter
 # ======================================================
 
-class QAlignedResidualHead(nn.Module):
-    """Low-capacity Q-aligned residual head for Module3."""
+class QAwareStudentResidualEncoder(nn.Module):
+    """Build B's student residual representation from A/E knowledge_state + Q mask."""
 
     def __init__(
         self,
-        student_latent_dim: int,
-        concept_latent_dim: int,
+        num_students: int,
+        knowledge_dim: int,
+        out_dim: int,
+        dropout: float = 0.1,
+        use_id_adapter: bool = True,
+        use_bias: bool = True,
+    ):
+        super().__init__()
+        self.use_id_adapter = bool(use_id_adapter)
+        self.use_bias = bool(use_bias)
+        self.q_proj = nn.Linear(knowledge_dim, out_dim, bias=False)
+        self.student_id_adapter = nn.Embedding(num_students, out_dim) if self.use_id_adapter else None
+        self.student_bias = nn.Embedding(num_students, 1) if self.use_bias else None
+        self.dropout = nn.Dropout(min(0.2, float(dropout)))
+
+        nn.init.xavier_normal_(self.q_proj.weight)
+        if self.student_id_adapter is not None:
+            nn.init.xavier_normal_(self.student_id_adapter.weight, gain=0.25)
+        if self.student_bias is not None:
+            nn.init.zeros_(self.student_bias.weight)
+
+    def forward(
+        self,
+        student_ids: torch.Tensor,
+        knowledge_state: torch.Tensor,
+        concept_mask: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        q = concept_mask.float()
+        q_norm = q / (q.sum(dim=1, keepdim=True) + 1e-12)
+        student_q_state = torch.bmm(q_norm.unsqueeze(1), knowledge_state).squeeze(1)
+        student_q_repr = self.dropout(self.q_proj(student_q_state))
+
+        if self.student_id_adapter is not None:
+            student_id_adapter = self.dropout(self.student_id_adapter(student_ids))
+        else:
+            student_id_adapter = torch.zeros_like(student_q_repr)
+
+        if self.student_bias is not None:
+            student_bias = self.student_bias(student_ids).squeeze(-1)
+        else:
+            student_bias = torch.zeros(student_ids.size(0), device=student_ids.device, dtype=student_q_repr.dtype)
+
+        return {
+            "student_q_repr": student_q_repr,
+            "student_id_adapter": student_id_adapter,
+            "student_bias": student_bias,
+            "student_q_norm": student_q_repr.norm(dim=-1).detach(),
+            "student_id_adapter_norm": student_id_adapter.norm(dim=-1).detach(),
+        }
+
+
+class QAwareResidualAdapterHead(nn.Module):
+    """Residual adapter whose main contribution must pass through Q-aware representations."""
+
+    def __init__(
+        self,
+        q_dim: int,
+        adapter_dim: int,
         residual_dim: int = 32,
         dropout: float = 0.1,
         residual_clip_t: float = 2.0,
         residual_scale_init: float = 0.1,
+        use_q_path: bool = True,
+        use_id_adapter: bool = True,
+        use_bias: bool = True,
     ):
         super().__init__()
-        self.u_proj = nn.Linear(student_latent_dim, residual_dim, bias=False)
-        self.v_proj = nn.Linear(concept_latent_dim, residual_dim, bias=False)
-        nn.init.xavier_normal_(self.u_proj.weight)
-        nn.init.xavier_normal_(self.v_proj.weight)
+        self.use_q_path = bool(use_q_path)
+        self.use_id_adapter = bool(use_id_adapter)
+        self.use_bias = bool(use_bias)
+
+        self.q_student_proj = nn.Linear(q_dim, residual_dim, bias=False)
+        self.q_item_proj = nn.Linear(q_dim, residual_dim, bias=False)
+        self.id_student_proj = nn.Linear(adapter_dim, residual_dim, bias=False)
+        self.id_item_proj = nn.Linear(adapter_dim, residual_dim, bias=False)
+        nn.init.xavier_normal_(self.q_student_proj.weight)
+        nn.init.xavier_normal_(self.q_item_proj.weight)
+        nn.init.xavier_normal_(self.id_student_proj.weight, gain=0.35)
+        nn.init.xavier_normal_(self.id_item_proj.weight, gain=0.35)
 
         init_scale = max(1e-4, float(residual_scale_init))
         raw_init = math.log(math.expm1(init_scale))
-        self.mf_scale_raw = nn.Parameter(torch.tensor(raw_init))
-        self.bias_scale_raw = nn.Parameter(torch.tensor(raw_init))
-        self.mf_bias = nn.Parameter(torch.zeros(1))
+        self.q_scale_raw = nn.Parameter(torch.tensor(raw_init))
+        self.id_scale_raw = nn.Parameter(torch.tensor(raw_init * 0.5))
+        self.bias_scale_raw = nn.Parameter(torch.tensor(raw_init * 0.5))
+        self.residual_bias = nn.Parameter(torch.zeros(1))
         self.residual_clip_t = float(residual_clip_t)
         self.dropout = nn.Dropout(min(0.2, float(dropout)))
 
+    @staticmethod
+    def _cosine_interaction(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+        left_raw = left
+        right_raw = right
+        left = F.normalize(left_raw, dim=-1, eps=1e-12)
+        right = F.normalize(right_raw, dim=-1, eps=1e-12)
+        cosine_term = (left * right).sum(dim=-1)
+        magnitude_term = torch.tanh((left_raw * right_raw).mean(dim=-1))
+        return 0.7 * cosine_term + 0.3 * magnitude_term
+
     def forward(
         self,
-        student_latent: torch.Tensor,
+        student_q_repr: torch.Tensor,
+        item_q_repr: torch.Tensor,
+        student_id_adapter: torch.Tensor,
+        item_id_adapter: torch.Tensor,
         student_bias: torch.Tensor,
-        item_latent: torch.Tensor,
         exercise_bias: torch.Tensor,
-        q_gate: Optional[torch.Tensor] = None,
         return_details: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
 
-        u_raw = self.u_proj(student_latent)
-        v_raw = self.v_proj(item_latent)
-        u = F.normalize(u_raw, dim=-1, eps=1e-12)
-        v = F.normalize(v_raw, dim=-1, eps=1e-12)
-
-        interaction_scale = F.softplus(self.mf_scale_raw) + 1e-6
+        q_scale = F.softplus(self.q_scale_raw) + 1e-6
+        id_scale = F.softplus(self.id_scale_raw) + 1e-6
         bias_scale = F.softplus(self.bias_scale_raw) + 1e-6
 
-        if q_gate is None:
-            q_gate_value = interaction_scale.new_tensor(1.0)
+        if self.use_q_path:
+            q_student = self.q_student_proj(student_q_repr)
+            q_item = self.q_item_proj(item_q_repr)
+            q_interaction_logit = q_scale * self._cosine_interaction(q_student, q_item)
         else:
-            q_gate_value = q_gate.to(dtype=interaction_scale.dtype, device=interaction_scale.device)
+            q_interaction_logit = torch.zeros(student_q_repr.size(0), device=student_q_repr.device, dtype=student_q_repr.dtype)
 
-        cosine_term = (u * v).sum(dim=-1)
-        magnitude_term = torch.tanh((u_raw * v_raw).mean(dim=-1))
-        interaction_residual = interaction_scale * q_gate_value * (0.7 * cosine_term + 0.3 * magnitude_term)
-        bias_residual = bias_scale * (student_bias + exercise_bias)
-        residual = interaction_residual + bias_residual + self.mf_bias
+        if self.use_id_adapter:
+            id_student = self.id_student_proj(student_id_adapter)
+            id_item = self.id_item_proj(item_id_adapter)
+            id_adapter_logit = id_scale * self._cosine_interaction(id_student, id_item)
+        else:
+            id_adapter_logit = torch.zeros_like(q_interaction_logit)
+
+        if self.use_bias:
+            bias_logit = bias_scale * (student_bias + exercise_bias) + self.residual_bias
+        else:
+            bias_logit = torch.zeros_like(q_interaction_logit)
+
+        residual = q_interaction_logit + id_adapter_logit + bias_logit
 
         if self.residual_clip_t > 0:
             t = self.residual_clip_t
@@ -591,16 +696,33 @@ class QAlignedResidualHead(nn.Module):
         if not return_details:
             return residual
 
+        residual_abs = residual.detach().abs().mean() + 1e-8
+        residual_abs_for_reg = residual.abs().mean() + 1e-8
         details = {
             "mf_logit": residual.detach(),
             "residual_logit": residual.detach(),
-            "interaction_residual": interaction_residual.detach(),
-            "bias_residual": bias_residual.detach(),
-            "mf_scale": interaction_scale.detach(),
+            "q_interaction_logit": q_interaction_logit.detach(),
+            "id_adapter_logit": id_adapter_logit.detach(),
+            "bias_logit": bias_logit.detach(),
+            "interaction_residual": q_interaction_logit.detach(),
+            "bias_residual": bias_logit.detach(),
+            "mf_scale": q_scale.detach(),
+            "q_scale": q_scale.detach(),
+            "id_scale": id_scale.detach(),
             "bias_scale": bias_scale.detach(),
-            "q_gate": q_gate_value.detach(),
+            "b_q_share": q_interaction_logit.detach().abs().mean() / residual_abs,
+            "b_id_share": id_adapter_logit.detach().abs().mean() / residual_abs,
+            "b_bias_share": bias_logit.detach().abs().mean() / residual_abs,
+            "b_id_share_for_reg": id_adapter_logit.abs().mean() / residual_abs_for_reg,
+            "student_q_norm": student_q_repr.detach().norm(dim=-1),
+            "student_id_adapter_norm": student_id_adapter.detach().norm(dim=-1),
+            "item_q_norm": item_q_repr.detach().norm(dim=-1),
+            "item_id_adapter_norm": item_id_adapter.detach().norm(dim=-1),
         }
         return residual, details
+
+
+QAlignedResidualHead = QAwareResidualAdapterHead
 
 
 class ConservativeFusionGate(nn.Module):
@@ -1078,6 +1200,10 @@ class CognitiveDiagnosisModel(nn.Module):
         mf_l2_lambda: float = 5e-5,          # mapped from args.exercise_l2_lambda
         gnn_residual_weight: float = 0.5,
         use_q_conditioning: bool = True,
+        use_b_id_adapter: bool = True,
+        use_b_bias: bool = True,
+        lambda_b_id_budget: float = 0.0,
+        b_id_budget_target: float = 0.25,
         # ===== Rescue knobs (default off for baseline compatibility) =====
         mf_warmup_epochs: int = 0,
         lambda_delta_ratio: float = 0.0,
@@ -1152,6 +1278,10 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_student_dim = int(knowledge_dim if personal_student_dim is None else personal_student_dim)
         self.lambda_alpha_min = max(0.0, float(lambda_alpha_min))
         self.alpha_min_target = max(0.0, float(alpha_min_target))
+        self.use_b_id_adapter = bool(use_b_id_adapter)
+        self.use_b_bias = bool(use_b_bias)
+        self.lambda_b_id_budget = max(0.0, float(lambda_b_id_budget))
+        self.b_id_budget_target = max(0.0, float(b_id_budget_target))
 
         # 固定 Q 矩阵
         self.register_buffer("q_matrix", q_matrix)
@@ -1210,20 +1340,32 @@ class CognitiveDiagnosisModel(nn.Module):
             use_mf_branch=self.use_mf_branch,
             use_q_conditioning=use_q_conditioning,
             use_irt=self.enable_module2,  # 关键：模块2完全消融 => 不创建 IRT 参数
+            use_id_adapter=self.use_b_id_adapter,
+            use_bias=self.use_b_bias,
         )
 
         # ------------------------------
         # Module 3：神经增强（B）
         # ------------------------------
         if self.enable_module3 and self.use_mf_branch:
-            self.skill_encoder = StudentLatentEncoder(num_students, latent_dim=skill_dim)
-            self.mf_head = QAlignedResidualHead(
-                student_latent_dim=skill_dim,
-                concept_latent_dim=exercise_dim,
+            self.skill_encoder = QAwareStudentResidualEncoder(
+                num_students=num_students,
+                knowledge_dim=knowledge_dim,
+                out_dim=exercise_dim,
+                dropout=dropout,
+                use_id_adapter=self.use_b_id_adapter,
+                use_bias=self.use_b_bias,
+            )
+            self.mf_head = QAwareResidualAdapterHead(
+                q_dim=exercise_dim,
+                adapter_dim=exercise_dim,
                 residual_dim=min(64, skill_dim, exercise_dim),
                 dropout=dropout,
                 residual_clip_t=self.residual_clip_t,
                 residual_scale_init=self.residual_scale_init,
+                use_q_path=use_q_conditioning,
+                use_id_adapter=self.use_b_id_adapter,
+                use_bias=self.use_b_bias,
             )
         else:
             self.skill_encoder = None
@@ -1294,8 +1436,8 @@ class CognitiveDiagnosisModel(nn.Module):
         gate_alpha = s_out["alpha"]
         personal_matrices = s_out["personal_matrices"]
 
-        # ========== 2) 共享：题目参数（b,a）与 module3 item-latent ==========
-        item_latent, exercise_bias, b, a = self.exercise_encoder(exercise_ids, concept_mask=q_vector)
+        # ========== 2) 共享：题目参数（b,a）与 module3 item components ==========
+        item_components, exercise_bias, b, a = self.exercise_encoder(exercise_ids, concept_mask=q_vector)
 
         # ========== 3) Module 2：IRT head（可完全消融） ==========
         if self.enable_module2:
@@ -1326,24 +1468,32 @@ class CognitiveDiagnosisModel(nn.Module):
             if self.skill_encoder is None or self.mf_head is None:
                 raise RuntimeError("enable_module3 & use_mf_branch=True but MF modules are None. Check init wiring.")
 
-            student_latent, student_bias = self.skill_encoder(student_ids)
+            student_components = self.skill_encoder(
+                student_ids=student_ids,
+                knowledge_state=knowledge_state,
+                concept_mask=q_vector,
+            )
 
-            if item_latent is None or exercise_bias is None:
-                raise RuntimeError("Module3 is enabled but item_latent/exercise_bias is None. Check exercise_encoder wiring.")
+            if item_components is None or exercise_bias is None:
+                raise RuntimeError("Module3 is enabled but item components are None. Check exercise_encoder wiring.")
 
             if return_details:
                 mf_logit, mf_details = self.mf_head(
-                    student_latent=student_latent,
-                    student_bias=student_bias,
-                    item_latent=item_latent,
+                    student_q_repr=student_components["student_q_repr"],
+                    item_q_repr=item_components["item_q_repr"],
+                    student_id_adapter=student_components["student_id_adapter"],
+                    item_id_adapter=item_components["item_id_adapter"],
+                    student_bias=student_components["student_bias"],
                     exercise_bias=exercise_bias,
                     return_details=True,
                 )
             else:
                 mf_logit = self.mf_head(
-                    student_latent=student_latent,
-                    student_bias=student_bias,
-                    item_latent=item_latent,
+                    student_q_repr=student_components["student_q_repr"],
+                    item_q_repr=item_components["item_q_repr"],
+                    student_id_adapter=student_components["student_id_adapter"],
+                    item_id_adapter=item_components["item_id_adapter"],
+                    student_bias=student_components["student_bias"],
                     exercise_bias=exercise_bias,
                     return_details=False,
                 )
@@ -1356,8 +1506,13 @@ class CognitiveDiagnosisModel(nn.Module):
                 mf_details["mf_logit"] = mf_logit.detach()
                 mf_details["residual_logit"] = mf_logit.detach()
                 mf_details["mf_warmup_scale"] = mf_logit.new_tensor(mf_warmup_scale).detach()
+                mf_details["student_q_norm"] = student_components["student_q_norm"]
+                mf_details["student_id_adapter_norm"] = student_components["student_id_adapter_norm"]
+                mf_details["item_q_norm"] = item_components["item_q_repr"].detach().norm(dim=-1)
+                mf_details["item_id_adapter_norm"] = item_components["item_id_adapter"].detach().norm(dim=-1)
+                mf_details["item_q_gate"] = item_components["item_q_gate"]
         else:
-            student_latent, student_bias = None, None
+            student_components = None
             mf_logit = torch.zeros_like(irt_logit)
             mf_details = None
 
@@ -1497,6 +1652,7 @@ class CognitiveDiagnosisModel(nn.Module):
             "graph_reg_scale": torch.tensor(1.0, device=device),
             "mf_l2": torch.tensor(0.0, device=device),
             "delta_ratio": torch.tensor(0.0, device=device),
+            "b_id_budget": torch.tensor(0.0, device=device),
             "personal_sparse": torch.tensor(0.0, device=device),
             "alpha_var": torch.tensor(0.0, device=device),  # signed term (negative when maximizing variance)
             "alpha_collapse": torch.tensor(0.0, device=device),
@@ -1597,9 +1753,17 @@ class CognitiveDiagnosisModel(nn.Module):
 
             if self.enable_module3 and self.use_mf_branch:
                 if self.skill_encoder is not None:
-                    reg_terms.append(self.skill_encoder.latent_emb.weight.pow(2).mean())
-                if self.exercise_encoder.use_mf_branch and self.exercise_encoder.exercise_latent is not None:
-                    reg_terms.append(self.exercise_encoder.exercise_latent.weight.pow(2).mean())
+                    student_adapter = getattr(self.skill_encoder, "student_id_adapter", None)
+                    student_bias = getattr(self.skill_encoder, "student_bias", None)
+                    if student_adapter is not None:
+                        reg_terms.append(student_adapter.weight.pow(2).mean())
+                    if student_bias is not None:
+                        reg_terms.append(student_bias.weight.pow(2).mean())
+                    q_proj = getattr(self.skill_encoder, "q_proj", None)
+                    if q_proj is not None:
+                        reg_terms.append(q_proj.weight.pow(2).mean())
+                if self.exercise_encoder.use_mf_branch and self.exercise_encoder.item_id_adapter is not None:
+                    reg_terms.append(self.exercise_encoder.item_id_adapter.weight.pow(2).mean())
                 if self.exercise_encoder.use_mf_branch and self.exercise_encoder.concept_latent is not None:
                     reg_terms.append(self.exercise_encoder.concept_latent.weight.pow(2).mean())
                 if self.exercise_encoder.use_mf_branch and self.exercise_encoder.exercise_bias is not None:
@@ -1609,6 +1773,21 @@ class CognitiveDiagnosisModel(nn.Module):
 
             if len(reg_terms) > 0:
                 terms["mf_l2"] = self.mf_l2_lambda * sum(reg_terms)
+
+        if (
+            self.enable_module3
+            and self.use_mf_branch
+            and self.lambda_b_id_budget > 0
+            and details is not None
+            and (details.get("b_id_share_for_reg") is not None or details.get("b_id_share") is not None)
+        ):
+            id_share = details.get("b_id_share_for_reg", details.get("b_id_share"))
+            if not torch.is_tensor(id_share):
+                id_share = torch.tensor(float(id_share), device=device)
+            id_target = torch.tensor(self.b_id_budget_target, device=device, dtype=id_share.dtype)
+            id_pen = F.relu(id_share - id_target)
+            terms["b_id_budget"] = self.lambda_b_id_budget * id_pen
+            details["b_id_budget_pen"] = id_pen.detach()
 
         if (
             self.enable_module2
@@ -1669,6 +1848,7 @@ class CognitiveDiagnosisModel(nn.Module):
             + terms["graph_uniform"]
             + terms["mf_l2"]
             + terms["delta_ratio"]
+            + terms["b_id_budget"]
             + terms["personal_sparse"]
             + terms["alpha_var"]
             + terms["alpha_collapse"]
