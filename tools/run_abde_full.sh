@@ -36,25 +36,10 @@ if [[ -z "$GPUS" && "$AUTO_GPUS" == "1" ]]; then
     echo "[SKIP] nvidia-smi not found and GPUS was not provided."
     exit 0
   fi
-  mapfile -t FREE_GPUS < <(
-    nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader,nounits |
-      awk -F',' -v mem_max="$GPU_MEM_USED_MAX_MB" -v util_max="$GPU_UTIL_MAX" -v max_gpus="$MAX_GPUS" '
-        {
-          idx=$1; mem=$2; util=$3;
-          gsub(/ /, "", idx); gsub(/ /, "", mem); gsub(/ /, "", util);
-          if (mem <= mem_max && util <= util_max && count < max_gpus) {
-            out[count]=idx; count++;
-          }
-        }
-        END {
-          for (i=0; i<count; i++) {
-            printf "%s%s", (i == 0 ? "" : ","), out[i];
-          }
-          if (count > 0) printf "\n";
-        }
-      '
-  )
-  GPUS="${FREE_GPUS[0]:-}"
+  GPUS="$("$PYTHON_BIN" tools/select_idle_gpus.py \
+    --max-gpus "$MAX_GPUS" \
+    --mem-max-mb "$GPU_MEM_USED_MAX_MB" \
+    --util-max "$GPU_UTIL_MAX")"
 fi
 
 if [[ -z "$GPUS" ]]; then
