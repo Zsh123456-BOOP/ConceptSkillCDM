@@ -316,6 +316,9 @@ def _collect_debug_forward_stats(
     personal_entropy_vals: List[float] = []
     personal_matrix_delta_vals: List[float] = []
     personal_matrix_student_std_vals: List[float] = []
+    personal_delta_pre_softmax_norm_vals: List[float] = []
+    personal_delta_student_std_vals: List[float] = []
+    alpha_head_std_vals: List[float] = []
     q_interaction_vals: List[float] = []
     id_adapter_vals: List[float] = []
     bias_logit_vals: List[float] = []
@@ -425,6 +428,14 @@ def _collect_debug_forward_stats(
                     else:
                         matrix_std = personal_matrices.detach().std(dim=0, unbiased=False).mean()
                         personal_matrix_student_std_vals.append(float(matrix_std.item()))
+                for detail_key, target in (
+                    ("personal_delta_pre_softmax_norm", personal_delta_pre_softmax_norm_vals),
+                    ("personal_delta_student_std", personal_delta_student_std_vals),
+                    ("alpha_head_std", alpha_head_std_vals),
+                ):
+                    val = details.get(detail_key)
+                    if val is not None:
+                        target.extend(val.detach().reshape(-1).cpu().numpy().tolist())
 
             if details.get("mf_warmup_scale") is not None:
                 mf_warmup_scale = float(details["mf_warmup_scale"].detach().reshape(-1)[0].item())
@@ -460,6 +471,9 @@ def _collect_debug_forward_stats(
     personal_row_entropy, _ = _safe_mean_std(personal_entropy_vals)
     personal_matrix_delta_mean, _ = _safe_mean_std(personal_matrix_delta_vals)
     personal_matrix_student_std_mean, _ = _safe_mean_std(personal_matrix_student_std_vals)
+    personal_delta_pre_softmax_norm_mean, _ = _safe_mean_std(personal_delta_pre_softmax_norm_vals)
+    personal_delta_student_std_mean, _ = _safe_mean_std(personal_delta_student_std_vals)
+    alpha_head_std_mean, _ = _safe_mean_std(alpha_head_std_vals)
     q_interaction_abs_mean, _ = _safe_abs_mean_std(q_interaction_vals)
     id_adapter_abs_mean, _ = _safe_abs_mean_std(id_adapter_vals)
     bias_abs_mean, _ = _safe_abs_mean_std(bias_logit_vals)
@@ -496,6 +510,9 @@ def _collect_debug_forward_stats(
         "personal_row_entropy": personal_row_entropy,
         "personal_matrix_delta": personal_matrix_delta_mean,
         "personal_matrix_student_std": personal_matrix_student_std_mean,
+        "personal_delta_pre_softmax_norm": personal_delta_pre_softmax_norm_mean,
+        "personal_delta_student_std": personal_delta_student_std_mean,
+        "alpha_head_std": alpha_head_std_mean,
         "q_interaction_abs_mean": q_interaction_abs_mean,
         "id_adapter_abs_mean": id_adapter_abs_mean,
         "bias_abs_mean": bias_abs_mean,
@@ -609,21 +626,33 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
 def _debug_assert_module3_wiring(model: nn.Module, *, ablate_module3: bool) -> None:
     """
     Debug 模式下的 module3 断言：
-    - enable_module3 & use_mf_branch 时，mf_head/skill_encoder/fusion 必须存在
+    - enable_module3 & use_mf_branch 时，mf_head/skill_encoder 必须存在
+    - 若 module2 也开启，则 fusion 必须存在；若 module2 被消融，则 fusion 必须不存在
     - ablate_module3=True 时，module3 组件必须不存在
     """
     base_model = _get_base_model(model)
     enable_module3 = bool(getattr(base_model, "enable_module3", False))
+    enable_module2 = bool(getattr(base_model, "enable_module2", False))
     use_mf_branch = bool(getattr(base_model, "use_mf_branch", False))
     mf_head = getattr(base_model, "mf_head", None)
     skill_encoder = getattr(base_model, "skill_encoder", None)
     fusion = getattr(base_model, "fusion", None)
 
     if enable_module3 and use_mf_branch:
-        if mf_head is None or skill_encoder is None or fusion is None:
+        if mf_head is None or skill_encoder is None:
             raise RuntimeError(
                 "Debug wiring assert failed: enable_module3=True & use_mf_branch=True, "
-                "but mf_head/skill_encoder/fusion is missing."
+                "but mf_head/skill_encoder is missing."
+            )
+        if enable_module2 and fusion is None:
+            raise RuntimeError(
+                "Debug wiring assert failed: enable_module3=True & enable_module2=True, "
+                "but fusion is missing."
+            )
+        if not enable_module2 and fusion is not None:
+            raise RuntimeError(
+                "Debug wiring assert failed: enable_module2=False, "
+                "but fusion should not exist in pure residual mode."
             )
 
     if ablate_module3:
@@ -961,6 +990,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         use_q_conditioning=not getattr(args, "disable_q_conditioning", False),
         use_b_id_adapter=not getattr(args, "disable_b_id_adapter", False),
         use_b_bias=not getattr(args, "disable_b_bias", False),
+        graph_identity_residual=getattr(args, "graph_identity_residual", 0.0),
         lambda_b_id_budget=getattr(args, "lambda_b_id_budget", 0.0),
         b_id_budget_target=getattr(args, "b_id_budget_target", 0.25),
         mf_warmup_epochs=getattr(args, "mf_warmup_epochs", 0),
@@ -1110,7 +1140,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "delta_over_irt=%.4f, warmup(mf/personal)=%.2f/%.2f, "
                 "graph_row_entropy=%.4f, graph_entropy_ratio=%.4f, "
                 "alpha_mean=%.4f, alpha_std=%.4f, alpha_bias_std=%.4f, "
-                "personal_row_entropy=%.4f, personal_matrix_delta=%.4f, personal_matrix_student_std=%.4f",
+                "personal_row_entropy=%.4f, personal_matrix_delta=%.4f, personal_matrix_student_std=%.4f, "
+                "personal_delta_pre_softmax_norm=%.4f, personal_delta_student_std=%.4f, alpha_head_std=%.4f",
                 run_tag,
                 epoch,
                 diag["residual_abs_mean"],
@@ -1144,6 +1175,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["personal_row_entropy"],
                 diag["personal_matrix_delta"],
                 diag["personal_matrix_student_std"],
+                diag["personal_delta_pre_softmax_norm"],
+                diag["personal_delta_student_std"],
+                diag["alpha_head_std"],
             )
             logger.info(
                 "%s [Diag][Graph] Epoch [%03d] | "
@@ -1219,6 +1253,22 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                         alpha_zero_streak,
                         diag["alpha_std"],
                         diag["personal_row_entropy"],
+                    )
+                if diag.get("personal_delta_student_std", 0.0) < 1e-6:
+                    logger.warning(
+                        "%s [Diag Warning][E] personal_delta_student_std is near zero: "
+                        "personal_delta_student_std=%.6f, personal_delta_pre_softmax_norm=%.6f",
+                        run_tag,
+                        diag.get("personal_delta_student_std", 0.0),
+                        diag.get("personal_delta_pre_softmax_norm", 0.0),
+                    )
+                if diag.get("alpha_head_std", 0.0) < 1e-6:
+                    logger.warning(
+                        "%s [Diag Warning][E] alpha_head_std is near zero: "
+                        "alpha_head_std=%.6f, alpha_std=%.6f",
+                        run_tag,
+                        diag.get("alpha_head_std", 0.0),
+                        diag.get("alpha_std", 0.0),
                     )
             if diag["graph_entropy_ratio"] > 0.98:
                 graph_uniform_streak += 1
@@ -1577,6 +1627,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         use_q_conditioning=not loaded_args.get("disable_q_conditioning", getattr(args, "disable_q_conditioning", False)),
         use_b_id_adapter=not loaded_args.get("disable_b_id_adapter", getattr(args, "disable_b_id_adapter", False)),
         use_b_bias=not loaded_args.get("disable_b_bias", getattr(args, "disable_b_bias", False)),
+        graph_identity_residual=loaded_args.get(
+            "graph_identity_residual", getattr(args, "graph_identity_residual", 0.0)
+        ),
         lambda_b_id_budget=loaded_args.get("lambda_b_id_budget", getattr(args, "lambda_b_id_budget", 0.0)),
         b_id_budget_target=loaded_args.get("b_id_budget_target", getattr(args, "b_id_budget_target", 0.25)),
         mf_warmup_epochs=loaded_args.get("mf_warmup_epochs", getattr(args, "mf_warmup_epochs", 0)),
@@ -1725,6 +1778,7 @@ def save_component_analysis_data(
     2. Gate Alpha 分布（个性化图混合系数）
     3. 个性化图采样
     """
+    base_model = _get_base_model(model)
     model.eval()
     analysis_data = {}
     
@@ -1732,13 +1786,13 @@ def save_component_analysis_data(
     
     with torch.no_grad():
         # ========== 1) 全局概念图分析 ==========
-        if model.structure_module.relation_learning is not None:
-            relation_matrices, _ = model.structure_module.relation_learning()
+        if base_model.structure_module.relation_learning is not None:
+            relation_matrices, _ = base_model.structure_module.relation_learning()
             analysis_data["global_relation_matrices"] = relation_matrices.detach().cpu().numpy()
             logger.info(f"[Component Analysis] Global graph: {relation_matrices.shape}")
         
         # ========== 2) 个性化图分析 ==========
-        if model.use_personal_graph and model.structure_module.personal_generator is not None:
+        if base_model.use_personal_graph and base_model.structure_module.personal_generator is not None:
             gate_alphas = []
             personal_graphs = []
             sample_count = 0
@@ -1746,10 +1800,13 @@ def save_component_analysis_data(
             for batch in train_loader:
                 if sample_count >= num_samples:
                     break
-                student_ids, _, _, _ = batch
+                student_ids, _, _ = batch
                 student_ids = student_ids.to(device)
                 
-                s_out = model.structure_module(student_ids, identity_relations=model.identity_relations)
+                s_out = base_model.structure_module(
+                    student_ids,
+                    identity_relations=base_model.identity_relations,
+                )
                 
                 if s_out["alpha"] is not None:
                     gate_alphas.append(s_out["alpha"].squeeze().detach().cpu().numpy())

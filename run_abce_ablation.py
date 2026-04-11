@@ -161,6 +161,9 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
         "item_id_adapter_norm": None,
         "personal_matrix_delta": None,
         "personal_matrix_student_std": None,
+        "personal_delta_pre_softmax_norm": None,
+        "personal_delta_student_std": None,
+        "alpha_head_std": None,
         "warn_graph_uniform_count": 0,
         "warn_alpha_collapse_count": 0,
         "warn_module3_count": 0,
@@ -199,6 +202,9 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
                     "item_id_adapter_norm",
                     "personal_matrix_delta",
                     "personal_matrix_student_std",
+                    "personal_delta_pre_softmax_norm",
+                    "personal_delta_student_std",
+                    "alpha_head_std",
                 ):
                     v = extract_float(line, k)
                     if v is not None:
@@ -270,7 +276,7 @@ def collect_result(job: JobSpec, exit_code: int) -> Dict[str, Any]:
         "profile": job.profile,
         "ablation": job.ablation.name,
         "model_variant": job.model_variant,
-        "status": "ok" if exit_code == 0 else "failed",
+        "status": "failed",
         "exit_code": int(exit_code),
         "save_dir": str(job.save_dir),
         "log_dir": str(job.log_dir),
@@ -301,6 +307,11 @@ def collect_result(job: JobSpec, exit_code: int) -> Dict[str, Any]:
     log_file = latest_train_log(job.log_dir)
     row["log_file"] = str(log_file) if log_file else ""
     row.update(parse_log_metrics(log_file))
+
+    if exit_code == 0:
+        row["status"] = "ok"
+    elif row.get("test_auc") is not None:
+        row["status"] = "metrics_ok"
 
     row["params_json"] = json.dumps(job.params, ensure_ascii=False, sort_keys=True)
     row["flags_json"] = json.dumps(job.ablation.flags, ensure_ascii=False, sort_keys=True)
@@ -334,8 +345,21 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "delta_over_irt",
         "mf_abs_mean",
         "irt_abs_mean",
+        "q_interaction_abs_mean",
+        "id_adapter_abs_mean",
+        "bias_abs_mean",
+        "B_q_share",
+        "B_id_share",
+        "B_bias_share",
+        "student_q_norm",
+        "student_id_adapter_norm",
+        "item_q_norm",
+        "item_id_adapter_norm",
         "personal_matrix_delta",
         "personal_matrix_student_std",
+        "personal_delta_pre_softmax_norm",
+        "personal_delta_student_std",
+        "alpha_head_std",
         "warn_graph_uniform_count",
         "warn_alpha_collapse_count",
         "warn_module3_count",
@@ -442,6 +466,9 @@ def diagnose_reason(
     b_id_share = try_float(full_row.get("B_id_share"))
     personal_matrix_delta = try_float(full_row.get("personal_matrix_delta"))
     personal_matrix_student_std = try_float(full_row.get("personal_matrix_student_std"))
+    personal_delta_pre_softmax_norm = try_float(full_row.get("personal_delta_pre_softmax_norm"))
+    personal_delta_student_std = try_float(full_row.get("personal_delta_student_std"))
+    alpha_head_std = try_float(full_row.get("alpha_head_std"))
 
     if ger is not None and ger > 0.98:
         reasons.append("graph-uniform-risk")
@@ -463,6 +490,12 @@ def diagnose_reason(
         reasons.append("personal-matrix-delta-low")
     if personal_matrix_student_std is not None and personal_matrix_student_std < 0.001:
         reasons.append("personal-matrix-student-flat")
+    if personal_delta_pre_softmax_norm is not None and personal_delta_pre_softmax_norm < 0.01:
+        reasons.append("personal-delta-norm-low")
+    if personal_delta_student_std is not None and personal_delta_student_std < 0.001:
+        reasons.append("personal-delta-student-flat")
+    if alpha_head_std is not None and alpha_head_std < 0.001:
+        reasons.append("alpha-head-collapse")
 
     if delta_a is not None and abs(delta_a) < 0.002:
         reasons.append("A-delta-small")
@@ -484,7 +517,7 @@ def write_summary(
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     grouped: Dict[Tuple[str, str, str], Dict[str, Dict[str, Any]]] = {}
     for r in rows:
-        if str(r.get("status", "")).lower() != "ok":
+        if str(r.get("status", "")).lower() not in {"ok", "metrics_ok"}:
             continue
         key = (str(r.get("dataset", "")), str(r.get("seed", "")), str(r.get("profile", "")))
         grouped.setdefault(key, {})
@@ -546,6 +579,9 @@ def write_summary(
             "full_bias_abs_mean": try_float(full.get("bias_abs_mean")),
             "full_personal_matrix_delta": try_float(full.get("personal_matrix_delta")),
             "full_personal_matrix_student_std": try_float(full.get("personal_matrix_student_std")),
+            "full_personal_delta_pre_softmax_norm": try_float(full.get("personal_delta_pre_softmax_norm")),
+            "full_personal_delta_student_std": try_float(full.get("personal_delta_student_std")),
+            "full_alpha_head_std": try_float(full.get("alpha_head_std")),
             "full_warn_graph_uniform_count": full.get("warn_graph_uniform_count"),
             "full_warn_alpha_collapse_count": full.get("warn_alpha_collapse_count"),
             "full_warn_module3_count": full.get("warn_module3_count"),
@@ -590,6 +626,9 @@ def write_summary(
         "full_bias_abs_mean",
         "full_personal_matrix_delta",
         "full_personal_matrix_student_std",
+        "full_personal_delta_pre_softmax_norm",
+        "full_personal_delta_student_std",
+        "full_alpha_head_std",
         "full_warn_graph_uniform_count",
         "full_warn_alpha_collapse_count",
         "full_warn_module3_count",
@@ -736,11 +775,15 @@ def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> 
                 "fusion_gate_max": 0.35,
                 "fusion_gate_bias_init": -2.2,
                 "residual_scale_init": 0.08,
+                "graph_identity_residual": 0.25,
                 "mf_warmup_epochs": 5,
                 "lambda_delta_ratio": 0.08,
                 "delta_ratio_target": 0.12,
                 "lambda_b_id_budget": 0.06,
                 "b_id_budget_target": 0.20,
+                "personal_warmup_epochs": 8,
+                "personal_max_alpha": 0.45,
+                "personal_delta_scale": 1.10,
                 "lambda_alpha_min": 0.05,
                 "alpha_min_target": 0.02,
             }
@@ -748,11 +791,15 @@ def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> 
             "fusion_gate_max": 0.25,
             "fusion_gate_bias_init": -2.4,
             "residual_scale_init": 0.06,
+            "graph_identity_residual": 0.10,
             "mf_warmup_epochs": 6,
             "lambda_delta_ratio": 0.08,
             "delta_ratio_target": 0.08,
             "lambda_b_id_budget": 0.06,
             "b_id_budget_target": 0.18,
+            "personal_warmup_epochs": 6,
+            "personal_max_alpha": 0.40,
+            "personal_delta_scale": 1.05,
             "lambda_alpha_min": 0.05,
             "alpha_min_target": 0.02,
         }

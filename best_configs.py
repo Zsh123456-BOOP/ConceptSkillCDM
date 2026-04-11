@@ -44,6 +44,7 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "graph_reg_cap_ratio": 6.0,
         "graph_dropout": 0.0,
         "graph_tau_init": 0.55,
+        "graph_identity_residual": 0.20,
         "graph_topk": 12,
 
         # Module3 residual / fusion
@@ -106,6 +107,7 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "graph_reg_cap_ratio": 6.0,
         "graph_dropout": 0.0,
         "graph_tau_init": 0.55,
+        "graph_identity_residual": 0.10,
         "graph_topk": 24,
 
         # Module3 residual / fusion

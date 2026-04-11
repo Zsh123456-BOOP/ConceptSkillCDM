@@ -67,6 +67,7 @@ class MultiHeadRelationLearning(nn.Module):
         tau_init: float = 1.0,
         topk: Optional[int] = None,
         allow_self_loop: bool = True,
+        identity_residual: float = 0.0,
     ):
         super().__init__()
         self.num_concepts = int(num_concepts)
@@ -74,6 +75,7 @@ class MultiHeadRelationLearning(nn.Module):
         self.num_heads = int(num_heads)
         self.topk = topk
         self.allow_self_loop = bool(allow_self_loop)
+        self.identity_residual = float(max(0.0, min(1.0, identity_residual))) if self.allow_self_loop else 0.0
         rel_rank = max(4, min(16, concept_dim // 4 if concept_dim >= 4 else 4))
         self.relation_rank = int(rel_rank)
 
@@ -158,6 +160,11 @@ class MultiHeadRelationLearning(nn.Module):
                     A[idx, idx] = 1.0
                     row_sum = A.sum(dim=-1, keepdim=True)
 
+            if self.identity_residual > 0:
+                eye_f = torch.eye(C, device=A.device, dtype=A.dtype)
+                A = (1.0 - self.identity_residual) * A + self.identity_residual * eye_f
+                row_sum = A.sum(dim=-1, keepdim=True)
+
             A = A / (row_sum + 1e-12)
             rels.append(A)
 
@@ -213,9 +220,17 @@ class ConceptGraphConv(nn.Module):
             if isinstance(relation_matrices, dict):
                 # 优化路径：个性化图混合，逐 head 计算避免 4D 张量
                 global_A = relation_matrices["global_matrices"][h]  # (C, C)
-                personal_A = relation_matrices["personal_matrices"]  # (B, C, C)
-                gate = relation_matrices["gate_alpha"].view(-1, 1, 1)  # (B, 1, 1)
-                
+                personal_all = relation_matrices["personal_matrices"]
+                gate_all = relation_matrices["gate_alpha"]
+                if personal_all.dim() == 4:
+                    personal_A = personal_all[:, h, :, :]  # (B, C, C)
+                else:
+                    personal_A = personal_all  # (B, C, C)
+                if gate_all.dim() == 2:
+                    gate = gate_all[:, h].view(-1, 1, 1)  # (B, 1, 1)
+                else:
+                    gate = gate_all.view(-1, 1, 1)  # (B, 1, 1)
+                 
                 global_A = global_A.to(dtype=Wh.dtype)
                 personal_A = personal_A.to(dtype=Wh.dtype)
                 
@@ -776,7 +791,7 @@ class ConservativeFusionGate(nn.Module):
 # ======================================================
 
 class AdaptiveGate(nn.Module):
-    """个性化图混合系数 alpha（B,1,1,1）。
+    """个性化图混合系数 alpha（B,H,1,1）。
 
     设计原则：
     - 保留一条显式 student bias -> alpha 的短路径，避免个体信号被上下文支路淹没；
@@ -788,18 +803,20 @@ class AdaptiveGate(nn.Module):
         self,
         student_dim: int,
         context_dim: int,
+        num_heads: int,
         max_alpha: float = 0.35,
         hidden_dim: Optional[int] = None,
     ):
         super().__init__()
+        self.num_heads = int(num_heads)
         hid = max(1, max(student_dim, context_dim) // 2 if hidden_dim is None else int(hidden_dim))
         self.context_norm = nn.LayerNorm(context_dim)
         self.student_proj = nn.Linear(student_dim, hid, bias=False)
         self.context_proj = nn.Linear(context_dim, hid)
         self.hidden_proj = nn.Linear(hid, hid)
-        self.student_to_logit = nn.Linear(student_dim, 1, bias=False)
-        self.context_to_logit = nn.Linear(context_dim, 1)
-        self.out = nn.Linear(hid, 1)
+        self.student_to_logit = nn.Linear(student_dim, self.num_heads, bias=False)
+        self.context_to_logit = nn.Linear(context_dim, self.num_heads)
+        self.out = nn.Linear(hid, self.num_heads)
         self.max_alpha = float(max_alpha)
 
         nn.init.xavier_normal_(self.student_proj.weight)
@@ -831,34 +848,36 @@ class AdaptiveGate(nn.Module):
             + self.out(hidden)
         )
         alpha = self.max_alpha * torch.sigmoid(alpha_logit)
-        return alpha.view(-1, 1, 1, 1), alpha_logit.view(-1, 1, 1, 1)
+        return alpha.unsqueeze(-1).unsqueeze(-1), alpha_logit.unsqueeze(-1).unsqueeze(-1)
 
 
 class PersonalRelationGenerator(nn.Module):
-    """显式 student code + context residual 生成个性化邻接 logits（B,C,C）。"""
+    """显式 student code + context residual 生成 per-head 个性化邻接 logits（B,H,C,C）。"""
 
     def __init__(
         self,
         student_dim: int,
         context_dim: int,
         num_concepts: int,
+        num_heads: int,
         rank: int = 4,
         hidden_dim: Optional[int] = None,
     ):
         super().__init__()
         self.context_norm = nn.LayerNorm(context_dim)
         self.num_concepts = int(num_concepts)
+        self.num_heads = int(num_heads)
         self.rank = int(rank)
         hidden = max(1, max(student_dim, context_dim) // 2 if hidden_dim is None else int(hidden_dim))
 
         self.context_proj = nn.Linear(context_dim, hidden)
         self.hidden_proj = nn.Linear(hidden, hidden)
-        self.base_u = nn.Parameter(torch.randn(num_concepts, rank) * 0.02)
-        self.base_v = nn.Parameter(torch.randn(num_concepts, rank) * 0.02)
-        self.student_basis_u = nn.Parameter(torch.randn(num_concepts, rank, student_dim) * 0.02)
-        self.student_basis_v = nn.Parameter(torch.randn(num_concepts, rank, student_dim) * 0.02)
-        self.context_to_u = nn.Linear(hidden, num_concepts * rank, bias=False)
-        self.context_to_v = nn.Linear(hidden, num_concepts * rank, bias=False)
+        self.base_u = nn.Parameter(torch.randn(self.num_heads, num_concepts, rank) * 0.02)
+        self.base_v = nn.Parameter(torch.randn(self.num_heads, num_concepts, rank) * 0.02)
+        self.student_basis_u = nn.Parameter(torch.randn(self.num_heads, num_concepts, rank, student_dim) * 0.02)
+        self.student_basis_v = nn.Parameter(torch.randn(self.num_heads, num_concepts, rank, student_dim) * 0.02)
+        self.context_to_u = nn.Linear(hidden, self.num_heads * num_concepts * rank, bias=False)
+        self.context_to_v = nn.Linear(hidden, self.num_heads * num_concepts * rank, bias=False)
         self.student_scale = nn.Parameter(torch.tensor(0.5))
         self.context_scale = nn.Parameter(torch.tensor(0.1))
 
@@ -879,13 +898,13 @@ class PersonalRelationGenerator(nn.Module):
         hidden = F.silu(hidden)
         hidden = F.silu(self.hidden_proj(hidden))
         B = hidden.size(0)
-        student_u = torch.einsum("bd,crd->bcr", student_code, self.student_basis_u)
-        student_v = torch.einsum("bd,crd->bcr", student_code, self.student_basis_v)
-        context_u = self.context_to_u(hidden).view(B, self.num_concepts, self.rank)
-        context_v = self.context_to_v(hidden).view(B, self.num_concepts, self.rank)
+        student_u = torch.einsum("bd,hcrd->bhcr", student_code, self.student_basis_u)
+        student_v = torch.einsum("bd,hcrd->bhcr", student_code, self.student_basis_v)
+        context_u = self.context_to_u(hidden).view(B, self.num_heads, self.num_concepts, self.rank)
+        context_v = self.context_to_v(hidden).view(B, self.num_heads, self.num_concepts, self.rank)
         u = self.base_u.unsqueeze(0) + self.student_scale * student_u + self.context_scale * torch.tanh(context_u)
         v = self.base_v.unsqueeze(0) + self.student_scale * student_v + self.context_scale * torch.tanh(context_v)
-        scores = torch.bmm(u, v.transpose(1, 2)) / math.sqrt(self.rank)
+        scores = torch.einsum("bhcr,bhkr->bhck", u, v) / math.sqrt(self.rank)
         scores = scores - scores.mean(dim=-1, keepdim=True)
         return scores
 
@@ -924,6 +943,7 @@ class ConceptStructureModeling(nn.Module):
         use_concept_graph: bool,
         graph_topk: Optional[int],
         allow_self_loop: bool,
+        graph_identity_residual: float,
         # personal graph
         use_personal_graph: bool,
         personal_rank: int,
@@ -974,6 +994,7 @@ class ConceptStructureModeling(nn.Module):
                 tau_init=float(graph_tau_init),
                 topk=graph_topk,
                 allow_self_loop=allow_self_loop,
+                identity_residual=graph_identity_residual,
             )
         else:
             self.relation_learning = None
@@ -993,7 +1014,7 @@ class ConceptStructureModeling(nn.Module):
         if self.use_personal_graph:
             self.personal_gate_embedding = nn.Embedding(num_students, self.personal_student_dim)
             self.personal_generator_embedding = nn.Embedding(num_students, self.personal_student_dim)
-            self.personal_alpha_bias = nn.Embedding(num_students, 1)
+            self.personal_alpha_bias = nn.Embedding(num_students, num_relation_heads)
             nn.init.normal_(self.personal_gate_embedding.weight, mean=0.0, std=0.05)
             nn.init.normal_(self.personal_generator_embedding.weight, mean=0.0, std=0.05)
             nn.init.zeros_(self.personal_alpha_bias.weight)
@@ -1002,6 +1023,7 @@ class ConceptStructureModeling(nn.Module):
             self.adaptive_gate = AdaptiveGate(
                 self.personal_student_dim,
                 context_dim,
+                num_heads=num_relation_heads,
                 max_alpha=self.personal_max_alpha,
                 hidden_dim=personal_hidden_dim,
             )
@@ -1009,6 +1031,7 @@ class ConceptStructureModeling(nn.Module):
                 self.personal_student_dim,
                 context_dim,
                 num_concepts,
+                num_relation_heads,
                 personal_rank,
                 hidden_dim=personal_hidden_dim,
             )
@@ -1071,6 +1094,9 @@ class ConceptStructureModeling(nn.Module):
         personal_matrices = None
         personal_matrix_delta = None
         personal_matrix_student_std = None
+        personal_delta_pre_softmax_norm = None
+        personal_delta_student_std = None
+        alpha_head_std = None
         relation_used = relation_matrices
 
         if self.use_personal_graph and self.adaptive_gate is not None and self.personal_generator is not None:
@@ -1093,23 +1119,26 @@ class ConceptStructureModeling(nn.Module):
             )
             personal_warmup_scale = self._get_personal_warmup_scale()
             gate_alpha_effective = gate_alpha * personal_warmup_scale
-            personal_delta = self.personal_generator(generator_student_repr, context_repr)  # (B,C,C)
-            global_prior = relation_matrices.mean(dim=0).clamp(min=1e-8).log().unsqueeze(0)
-            personal_logits = global_prior + gate_alpha_effective.squeeze(-1) * (
+            personal_delta = self.personal_generator(generator_student_repr, context_repr)  # (B,H,C,C)
+            global_prior = relation_matrices.clamp(min=1e-8).log().unsqueeze(0)  # (1,H,C,C)
+            personal_logits = global_prior + gate_alpha_effective * (
                 self.personal_delta_scale * personal_delta
             )
-            personal_matrices = F.softmax(personal_logits, dim=-1)            # (B,C,C)
-            global_matrix = relation_matrices.mean(dim=0, keepdim=True)
-            personal_matrix_delta = (personal_matrices - global_matrix).abs().mean(dim=(-1, -2))
+            personal_matrices = F.softmax(personal_logits, dim=-1)            # (B,H,C,C)
+            global_matrix = relation_matrices.unsqueeze(0)
+            personal_matrix_delta = (personal_matrices - global_matrix).abs().mean(dim=(-1, -2, -3))
             personal_matrix_student_std = personal_matrices.std(dim=0, unbiased=False).mean()
+            personal_delta_pre_softmax_norm = personal_delta.pow(2).mean().sqrt()
+            personal_delta_student_std = personal_delta.std(dim=0, unbiased=False).mean()
+            alpha_head_std = gate_alpha_effective.squeeze(-1).squeeze(-1).std(dim=1, unbiased=False).mean()
 
             # 优化：不展开为 (B,H,C,C)，而是保存 gate_alpha 和 personal_matrices
             # 让 GNN 层在需要时逐 head 混合，减少显存占用
             # relation_used 改为字典传递必要信息
             relation_used = {
                 "global_matrices": relation_matrices,        # (H,C,C)
-                "personal_matrices": personal_matrices,      # (B,C,C)
-                "gate_alpha": gate_alpha_effective.squeeze(-1).squeeze(-1).squeeze(-1),  # (B,)
+                "personal_matrices": personal_matrices,      # (B,H,C,C)
+                "gate_alpha": gate_alpha_effective.squeeze(-1).squeeze(-1),  # (B,H)
             }
 
             knowledge_state = self.knowledge_encoder(student_ids, relation_used)
@@ -1127,6 +1156,9 @@ class ConceptStructureModeling(nn.Module):
             "personal_matrices": personal_matrices,
             "personal_matrix_delta": personal_matrix_delta,
             "personal_matrix_student_std": personal_matrix_student_std,
+            "personal_delta_pre_softmax_norm": personal_delta_pre_softmax_norm,
+            "personal_delta_student_std": personal_delta_student_std,
+            "alpha_head_std": alpha_head_std,
             "personal_warmup_scale": torch.tensor(
                 self._get_personal_warmup_scale(), device=device, dtype=dtype
             ),
@@ -1172,6 +1204,7 @@ class CognitiveDiagnosisModel(nn.Module):
         use_concept_graph: bool = True,
         graph_topk: Optional[int] = None,
         allow_self_loop: bool = True,
+        graph_identity_residual: float = 0.0,
         use_personal_graph: bool = False,
         personal_rank: int = 4,
         # ===== 模块级“完全消融”开关 =====
@@ -1265,6 +1298,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_reg_cap_ratio = max(0.0, float(graph_reg_cap_ratio))
         self.graph_dropout = graph_dropout
         self.graph_tau_init = float(graph_tau_init)
+        self.graph_identity_residual = max(0.0, min(1.0, float(graph_identity_residual)))
         self._current_epoch = 1
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
@@ -1306,6 +1340,7 @@ class CognitiveDiagnosisModel(nn.Module):
             use_concept_graph=self.use_concept_graph,
             graph_topk=graph_topk,
             allow_self_loop=allow_self_loop,
+            graph_identity_residual=self.graph_identity_residual,
             use_personal_graph=self.use_personal_graph,
             personal_rank=personal_rank,
             personal_max_alpha=self.personal_max_alpha,
@@ -1630,6 +1665,15 @@ class CognitiveDiagnosisModel(nn.Module):
             if s_out.get("personal_matrix_student_std") is not None:
                 details["personal_matrix_student_std"] = s_out["personal_matrix_student_std"]
                 details["personal_matrix_student_std_detached"] = s_out["personal_matrix_student_std"].detach()
+            if s_out.get("personal_delta_pre_softmax_norm") is not None:
+                details["personal_delta_pre_softmax_norm"] = s_out["personal_delta_pre_softmax_norm"]
+                details["personal_delta_pre_softmax_norm_detached"] = s_out["personal_delta_pre_softmax_norm"].detach()
+            if s_out.get("personal_delta_student_std") is not None:
+                details["personal_delta_student_std"] = s_out["personal_delta_student_std"]
+                details["personal_delta_student_std_detached"] = s_out["personal_delta_student_std"].detach()
+            if s_out.get("alpha_head_std") is not None:
+                details["alpha_head_std"] = s_out["alpha_head_std"]
+                details["alpha_head_std_detached"] = s_out["alpha_head_std"].detach()
             details["personal_warmup_scale"] = s_out["personal_warmup_scale"].detach()
 
         return out_main, details
@@ -1838,6 +1882,16 @@ class CognitiveDiagnosisModel(nn.Module):
                     alpha_bias_std = alpha_bias_flat.std(unbiased=False)
                     alpha_pen = alpha_pen + 0.5 * F.relu(alpha_target - alpha_bias_std)
                     details["alpha_bias_std_runtime"] = alpha_bias_std.detach()
+                if details.get("personal_delta_pre_softmax_norm") is not None:
+                    delta_norm = details["personal_delta_pre_softmax_norm"]
+                    delta_target = alpha_target
+                    alpha_pen = alpha_pen + 0.5 * F.relu(delta_target - delta_norm)
+                    details["personal_delta_pre_softmax_norm_runtime"] = delta_norm.detach()
+                if details.get("personal_delta_student_std") is not None:
+                    delta_student_std = details["personal_delta_student_std"]
+                    delta_student_target = 0.5 * alpha_target
+                    alpha_pen = alpha_pen + 0.5 * F.relu(delta_student_target - delta_student_std)
+                    details["personal_delta_student_std_runtime"] = delta_student_std.detach()
                 terms["alpha_collapse"] = self.lambda_alpha_min * alpha_pen
                 details["alpha_std_runtime"] = alpha_std.detach()
                 details["alpha_collapse_pen"] = alpha_pen.detach()
@@ -1897,8 +1951,13 @@ class CognitiveDiagnosisModel(nn.Module):
                 mastery = torch.zeros(self.num_concepts, device=device)
 
             if self.enable_module3 and self.use_mf_branch and self.skill_encoder is not None:
-                latent, _ = self.skill_encoder(sid)
-                latent = latent.squeeze(0)
+                concept_mask = torch.ones((1, self.num_concepts), device=device, dtype=ks.dtype)
+                student_components = self.skill_encoder(
+                    student_ids=sid,
+                    knowledge_state=s_out["knowledge_state"],
+                    concept_mask=concept_mask,
+                )
+                latent = student_components["student_q_repr"].squeeze(0)
             else:
                 latent = torch.zeros(self.skill_dim, device=device)
 

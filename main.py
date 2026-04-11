@@ -122,6 +122,12 @@ def parse_args():
         default=1.0,
         help="Initial temperature for graph relation learning softmax.",
     )
+    parser.add_argument(
+        "--graph_identity_residual",
+        type=float,
+        default=0.0,
+        help="Blend ratio of identity residual into each learned global graph head.",
+    )
     parser.add_argument("--lambda_sparse_personal", type=float, default=0.0)
     parser.add_argument("--lambda_alpha", type=float, default=0.0)
 
@@ -461,8 +467,11 @@ def main():
                 fusion_gate_bias_init=getattr(args, "fusion_gate_bias_init", -1.1),
                 residual_clip_t=getattr(args, "residual_clip_t", 2.0),
                 residual_scale_init=getattr(args, "residual_scale_init", 0.1),
-                graph_dropout=None if float(getattr(args, "graph_dropout", -1.0)) < 0 else float(getattr(args, "graph_dropout", -1.0)),
+                graph_dropout=None
+                if float(getattr(args, "graph_dropout", -1.0)) < 0
+                else float(getattr(args, "graph_dropout", -1.0)),
                 graph_tau_init=getattr(args, "graph_tau_init", 1.0),
+                graph_identity_residual=getattr(args, "graph_identity_residual", 0.0),
                 lambda_graph_entropy=getattr(args, "lambda_sparse", 0.01),
                 graph_entropy_min=getattr(args, "graph_entropy_min", 0.15),
                 graph_entropy_max=getattr(args, "graph_entropy_max", 0.85),
@@ -474,13 +483,13 @@ def main():
                 lambda_sparse_personal=getattr(args, "lambda_sparse_personal", 0.0),
                 lambda_alpha=getattr(args, "lambda_alpha", 0.0),
                 mf_l2_lambda=getattr(args, "exercise_l2_lambda", 5e-5),
-        gnn_residual_weight=getattr(args, "gnn_residual_weight", 0.5),
-        use_q_conditioning=not getattr(args, "disable_q_conditioning", False),
-        use_b_id_adapter=not getattr(args, "disable_b_id_adapter", False),
-        use_b_bias=not getattr(args, "disable_b_bias", False),
-        lambda_b_id_budget=getattr(args, "lambda_b_id_budget", 0.0),
-        b_id_budget_target=getattr(args, "b_id_budget_target", 0.25),
-        mf_warmup_epochs=getattr(args, "mf_warmup_epochs", 0),
+                gnn_residual_weight=getattr(args, "gnn_residual_weight", 0.5),
+                use_q_conditioning=not getattr(args, "disable_q_conditioning", False),
+                use_b_id_adapter=not getattr(args, "disable_b_id_adapter", False),
+                use_b_bias=not getattr(args, "disable_b_bias", False),
+                lambda_b_id_budget=getattr(args, "lambda_b_id_budget", 0.0),
+                b_id_budget_target=getattr(args, "b_id_budget_target", 0.25),
+                mf_warmup_epochs=getattr(args, "mf_warmup_epochs", 0),
                 lambda_delta_ratio=getattr(args, "lambda_delta_ratio", 0.0),
                 delta_ratio_target=getattr(args, "delta_ratio_target", 0.15),
                 personal_max_alpha=getattr(args, "personal_max_alpha", 0.35),
