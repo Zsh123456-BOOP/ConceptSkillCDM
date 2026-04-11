@@ -1,0 +1,119 @@
+2026-04-11 07:54:51,535 - INFO - Arguments:
+2026-04-11 07:54:51,535 - INFO -   ablate_concept_graph: True
+2026-04-11 07:54:51,535 - INFO -   ablate_module1: False
+2026-04-11 07:54:51,535 - INFO -   ablate_module2: False
+2026-04-11 07:54:51,535 - INFO -   ablate_module3: False
+2026-04-11 07:54:51,535 - INFO -   ablate_skill_encoder: False
+2026-04-11 07:54:51,535 - INFO -   allow_self_loop: True
+2026-04-11 07:54:51,536 - INFO -   alpha_min_target: 0.02
+2026-04-11 07:54:51,536 - INFO -   b_id_budget_target: 0.18
+2026-04-11 07:54:51,536 - INFO -   batch_size: 256
+2026-04-11 07:54:51,536 - INFO -   data_dir: ./data/junyi
+2026-04-11 07:54:51,536 - INFO -   dataset_name: junyi
+2026-04-11 07:54:51,536 - INFO -   debug_module3_diag: True
+2026-04-11 07:54:51,536 - INFO -   delta_ratio_target: 0.08
+2026-04-11 07:54:51,536 - INFO -   diag_batches: 1
+2026-04-11 07:54:51,536 - INFO -   disable_b_bias: False
+2026-04-11 07:54:51,536 - INFO -   disable_b_id_adapter: False
+2026-04-11 07:54:51,536 - INFO -   disable_q_aligned_residual: False
+2026-04-11 07:54:51,536 - INFO -   disable_q_conditioning: False
+2026-04-11 07:54:51,536 - INFO -   disable_self_loop: False
+2026-04-11 07:54:51,536 - INFO -   dropout: 0.4
+2026-04-11 07:54:51,536 - INFO -   early_stop_patience: 3
+2026-04-11 07:54:51,536 - INFO -   enable_module1: True
+2026-04-11 07:54:51,536 - INFO -   enable_module2: True
+2026-04-11 07:54:51,536 - INFO -   enable_module3: True
+2026-04-11 07:54:51,536 - INFO -   epochs: 100
+2026-04-11 07:54:51,536 - INFO -   exercise_dim: 128
+2026-04-11 07:54:51,536 - INFO -   exercise_l2_lambda: 1e-05
+2026-04-11 07:54:51,536 - INFO -   fusion_gate_bias_init: -2.4
+2026-04-11 07:54:51,537 - INFO -   fusion_gate_max: 0.25
+2026-04-11 07:54:51,537 - INFO -   generate_diagnosis: False
+2026-04-11 07:54:51,537 - INFO -   gnn_residual_weight: 0.5
+2026-04-11 07:54:51,537 - INFO -   gpu_candidates: None
+2026-04-11 07:54:51,537 - INFO -   gpu_ids: None
+2026-04-11 07:54:51,537 - INFO -   gpu_memory_threshold: 2000
+2026-04-11 07:54:51,537 - INFO -   gpus: None
+2026-04-11 07:54:51,537 - INFO -   graph_dropout: 0.0
+2026-04-11 07:54:51,537 - INFO -   graph_entropy_max: 0.7
+2026-04-11 07:54:51,537 - INFO -   graph_entropy_min: 0.15
+2026-04-11 07:54:51,537 - INFO -   graph_identity_residual: 0.1
+2026-04-11 07:54:51,537 - INFO -   graph_reg_cap_ratio: 6.0
+2026-04-11 07:54:51,537 - INFO -   graph_reg_warmup_epochs: 0
+2026-04-11 07:54:51,537 - INFO -   graph_tau_init: 0.55
+2026-04-11 07:54:51,537 - INFO -   graph_topk: 24
+2026-04-11 07:54:51,537 - INFO -   graph_uniform_margin: 0.12
+2026-04-11 07:54:51,537 - INFO -   knowledge_dim: 128
+2026-04-11 07:54:51,537 - INFO -   lambda_alpha: 0.05
+2026-04-11 07:54:51,537 - INFO -   lambda_alpha_min: 0.05
+2026-04-11 07:54:51,537 - INFO -   lambda_b_id_budget: 0.06
+2026-04-11 07:54:51,537 - INFO -   lambda_delta_ratio: 0.08
+2026-04-11 07:54:51,537 - INFO -   lambda_graph_diag: 0.12
+2026-04-11 07:54:51,538 - INFO -   lambda_graph_uniform: 0.06
+2026-04-11 07:54:51,538 - INFO -   lambda_sparse: 0.6
+2026-04-11 07:54:51,538 - INFO -   lambda_sparse_personal: 0.002
+2026-04-11 07:54:51,538 - INFO -   learning_rate: 0.003
+2026-04-11 07:54:51,538 - INFO -   log_dir: logs/abce_diag/20260411_master_best_ae/junyi/seed42/ae_dominant_no_A
+2026-04-11 07:54:51,538 - INFO -   mf_warmup_epochs: 6
+2026-04-11 07:54:51,538 - INFO -   min_exer_interactions: 0
+2026-04-11 07:54:51,538 - INFO -   min_poison_count: 0
+2026-04-11 07:54:51,538 - INFO -   min_stu_interactions: 15
+2026-04-11 07:54:51,538 - INFO -   model_variant: junyi_abce_ae_dominant_no_A
+2026-04-11 07:54:51,538 - INFO -   multi_gpu: False
+2026-04-11 07:54:51,538 - INFO -   no_cuda: False
+2026-04-11 07:54:51,538 - INFO -   num_gnn_layers: 0
+2026-04-11 07:54:51,538 - INFO -   num_gpus: 1
+2026-04-11 07:54:51,538 - INFO -   num_relation_heads: 2
+2026-04-11 07:54:51,538 - INFO -   num_workers: 4
+2026-04-11 07:54:51,538 - INFO -   patience: 1
+2026-04-11 07:54:51,538 - INFO -   personal_delta_scale: 1.05
+2026-04-11 07:54:51,538 - INFO -   personal_max_alpha: 0.4
+2026-04-11 07:54:51,538 - INFO -   personal_rank: 4
+2026-04-11 07:54:51,538 - INFO -   personal_student_dim: None
+2026-04-11 07:54:51,538 - INFO -   personal_warmup_epochs: 6
+2026-04-11 07:54:51,539 - INFO -   residual_clip_t: 2.0
+2026-04-11 07:54:51,539 - INFO -   residual_scale_init: 0.06
+2026-04-11 07:54:51,539 - INFO -   save_dir: checkpoints/abce_diag/20260411_master_best_ae/junyi/seed42/ae_dominant_no_A
+2026-04-11 07:54:51,539 - INFO -   save_interval: 10
+2026-04-11 07:54:51,539 - INFO -   seed: 42
+2026-04-11 07:54:51,539 - INFO -   skill_dim: 64
+2026-04-11 07:54:51,539 - INFO -   use_concept_graph: False
+2026-04-11 07:54:51,539 - INFO -   use_exercise_graph: False
+2026-04-11 07:54:51,539 - INFO -   use_mf_branch: True
+2026-04-11 07:54:51,539 - INFO -   use_personal_graph: True
+2026-04-11 07:54:51,539 - INFO -   use_q_aligned_residual: True
+2026-04-11 07:54:51,539 - INFO -   use_q_conditioning: True
+2026-04-11 07:54:51,539 - INFO -   use_skill_encoder: True
+2026-04-11 07:54:51,539 - INFO -   weight_decay: 0.001
+2026-04-11 07:54:51,631 - INFO - Using device: cuda:0
+2026-04-11 07:54:51,631 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Loading datasets...
+2026-04-11 07:54:51,631 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Regularization: graph_entropy(lambda_sparse)=0.600000, graph_diag=0.120000, graph_uniform=0.060000, personal_sparse=0.002000, alpha_penalty=0.050000, alpha_min=0.050000, delta_ratio=0.080000, mf_l2(exercise_l2_lambda)=0.000010
+2026-04-11 07:54:51,631 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Graph controls: entropy_band=[0.15, 0.70], uniform_margin=0.12, warmup_epochs=0, cap_ratio=6.00, graph_dropout=0.000, graph_tau_init=0.550
+2026-04-11 07:54:51,631 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Rescue controls: mf_warmup_epochs=6, delta_ratio_target=0.0800, personal_max_alpha=0.400, personal_delta_scale=1.050, personal_warmup_epochs=6, personal_student_dim=None, alpha_min_target=0.0200
+2026-04-11 07:54:51,742 - INFO - [junyi] [数据清洗] 学生交互次数 < 15 次的学生：共移除 0 个学生（仅统计用户数）
+2026-04-11 07:54:51,759 - INFO - [junyi] [数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 0 条记录。
+2026-04-11 07:54:51,760 - INFO - [junyi] [数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。
+2026-04-11 07:54:51,760 - INFO - [junyi] [数据清洗] 跳过毒题清洗（min_poison_count <= 0）。
+2026-04-11 07:54:51,760 - INFO - [junyi] 正在构建ID映射...
+2026-04-11 07:54:52,053 - INFO - [junyi] 正在构建Q矩阵...
+2026-04-11 07:55:03,135 - INFO - [junyi] [统计] 开始统计清洗后每道题的概念数量分布...
+2026-04-11 07:55:03,139 - INFO - [junyi] [Train] 概念数统计：题目数=702, 平均概念数=1.0000, min=1, max=1, 1概念=702 (100.00%), ≥2概念=0 (0.00%)
+2026-04-11 07:55:03,139 - INFO - [junyi] [Train] 概念数直方图（概念数: 题目数量）: {1: 702}
+2026-04-11 07:55:03,140 - INFO - [junyi] [Valid] 概念数统计：题目数=623, 平均概念数=1.0000, min=1, max=1, 1概念=623 (100.00%), ≥2概念=0 (0.00%)
+2026-04-11 07:55:03,140 - INFO - [junyi] [Valid] 概念数直方图（概念数: 题目数量）: {1: 623}
+2026-04-11 07:55:03,141 - INFO - [junyi] [Test] 概念数统计：题目数=673, 平均概念数=1.0000, min=1, max=1, 1概念=673 (100.00%), ≥2概念=0 (0.00%)
+2026-04-11 07:55:03,141 - INFO - [junyi] [Test] 概念数直方图（概念数: 题目数量）: {1: 673}
+2026-04-11 07:55:03,141 - INFO - [junyi] [统计] 概念数量统计完成。
+2026-04-11 07:55:03,141 - INFO - [junyi] 正在加载数据集...
+2026-04-11 07:55:03,242 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Train samples: 262473, Val samples: 24299
+2026-04-11 07:55:03,242 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Number of students: 10000
+2026-04-11 07:55:03,242 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Number of exercises: 706
+2026-04-11 07:55:03,242 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Number of concepts: 706
+2026-04-11 07:55:03,242 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Creating model...
+2026-04-11 07:55:03,242 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Ablation switches: ablate_module1=False, ablate_module2=False, ablate_module3=False | enable_module1=True, enable_module2=True, enable_module3=True | use_mf_branch=True, use_concept_graph=False, use_q_aligned_residual=True | effective(num_gnn_layers=0)
+2026-04-11 07:55:03,536 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Ablation runtime check: args(ablate_module1=False,ablate_module2=False,ablate_module3=False) | model(enable_module1=True,enable_module2=True,enable_module3=True) | physical(has_knowledge_encoder=True,has_mf_branch=True)
+2026-04-11 07:55:03,537 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Debug diagnostics enabled: diag_batches=1
+2026-04-11 07:55:03,554 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] [Module3 Init] fusion_gate_bias=-2.4000, fusion_gate_max=0.2500, implied_gate=0.0208, q_gate=0.5000, mf_scale=0.0000, bias_scale=0.2221, graph_tau_mean=0.0000, graph_tau_std=0.0000, graph_dropout=0.000
+2026-04-11 07:55:03,554 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Total parameters: 8,526,377
+2026-04-11 07:55:03,554 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Trainable parameters: 8,526,377
+2026-04-11 07:55:04,408 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Starting training...
