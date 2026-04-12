@@ -1,0 +1,225 @@
+2026-04-12 07:36:15,762 - INFO - Arguments:
+2026-04-12 07:36:15,762 - INFO -   ablate_concept_graph: True
+2026-04-12 07:36:15,762 - INFO -   ablate_module1: False
+2026-04-12 07:36:15,762 - INFO -   allow_self_loop: True
+2026-04-12 07:36:15,762 - INFO -   alpha_min_target: 0.0
+2026-04-12 07:36:15,762 - INFO -   batch_size: 256
+2026-04-12 07:36:15,762 - INFO -   data_dir: ./data/junyi
+2026-04-12 07:36:15,762 - INFO -   dataset_name: junyi
+2026-04-12 07:36:15,762 - INFO -   debug_graph_diag: True
+2026-04-12 07:36:15,762 - INFO -   diag_batches: 1
+2026-04-12 07:36:15,762 - INFO -   disable_self_loop: False
+2026-04-12 07:36:15,762 - INFO -   dropout: 0.4
+2026-04-12 07:36:15,762 - INFO -   early_stop_patience: 3
+2026-04-12 07:36:15,763 - INFO -   enable_module1: True
+2026-04-12 07:36:15,763 - INFO -   epochs: 100
+2026-04-12 07:36:15,763 - INFO -   generate_diagnosis: False
+2026-04-12 07:36:15,763 - INFO -   gnn_residual_weight: 0.5
+2026-04-12 07:36:15,763 - INFO -   gpu_candidates: None
+2026-04-12 07:36:15,763 - INFO -   gpu_ids: None
+2026-04-12 07:36:15,763 - INFO -   gpu_memory_threshold: 2000
+2026-04-12 07:36:15,763 - INFO -   gpus: None
+2026-04-12 07:36:15,763 - INFO -   graph_dropout: 0.0
+2026-04-12 07:36:15,763 - INFO -   graph_entropy_max: 0.7
+2026-04-12 07:36:15,763 - INFO -   graph_entropy_min: 0.15
+2026-04-12 07:36:15,763 - INFO -   graph_identity_residual: 0.1
+2026-04-12 07:36:15,763 - INFO -   graph_reg_cap_ratio: 6.0
+2026-04-12 07:36:15,763 - INFO -   graph_reg_warmup_epochs: 0
+2026-04-12 07:36:15,763 - INFO -   graph_tau_init: 0.55
+2026-04-12 07:36:15,763 - INFO -   graph_topk: 24
+2026-04-12 07:36:15,763 - INFO -   graph_uniform_margin: 0.12
+2026-04-12 07:36:15,763 - INFO -   knowledge_dim: 128
+2026-04-12 07:36:15,763 - INFO -   lambda_alpha: 0.05
+2026-04-12 07:36:15,763 - INFO -   lambda_alpha_min: 0.0
+2026-04-12 07:36:15,763 - INFO -   lambda_graph_diag: 0.12
+2026-04-12 07:36:15,763 - INFO -   lambda_graph_uniform: 0.06
+2026-04-12 07:36:15,763 - INFO -   lambda_sparse: 0.6
+2026-04-12 07:36:15,763 - INFO -   lambda_sparse_personal: 0.002
+2026-04-12 07:36:15,763 - INFO -   learning_rate: 0.003
+2026-04-12 07:36:15,763 - INFO -   log_dir: logs/abce_diag/ae_fix_20260412_fdafa52/junyi/seed42/best_no_A
+2026-04-12 07:36:15,763 - INFO -   min_exer_interactions: 0
+2026-04-12 07:36:15,763 - INFO -   min_poison_count: 0
+2026-04-12 07:36:15,763 - INFO -   min_stu_interactions: 15
+2026-04-12 07:36:15,763 - INFO -   model_variant: junyi_abce_best_no_A
+2026-04-12 07:36:15,763 - INFO -   multi_gpu: False
+2026-04-12 07:36:15,764 - INFO -   no_cuda: False
+2026-04-12 07:36:15,764 - INFO -   num_gnn_layers: 0
+2026-04-12 07:36:15,764 - INFO -   num_gpus: 1
+2026-04-12 07:36:15,764 - INFO -   num_relation_heads: 2
+2026-04-12 07:36:15,764 - INFO -   num_workers: 4
+2026-04-12 07:36:15,764 - INFO -   patience: 1
+2026-04-12 07:36:15,764 - INFO -   personal_delta_scale: 1.0
+2026-04-12 07:36:15,764 - INFO -   personal_max_alpha: 0.35
+2026-04-12 07:36:15,764 - INFO -   personal_rank: 4
+2026-04-12 07:36:15,764 - INFO -   personal_student_dim: None
+2026-04-12 07:36:15,764 - INFO -   personal_warmup_epochs: 0
+2026-04-12 07:36:15,764 - INFO -   prediction_l2_lambda: 1e-05
+2026-04-12 07:36:15,764 - INFO -   save_dir: checkpoints/abce_diag/ae_fix_20260412_fdafa52/junyi/seed42/best_no_A
+2026-04-12 07:36:15,764 - INFO -   save_interval: 10
+2026-04-12 07:36:15,764 - INFO -   seed: 42
+2026-04-12 07:36:15,764 - INFO -   use_concept_graph: False
+2026-04-12 07:36:15,764 - INFO -   use_exercise_graph: False
+2026-04-12 07:36:15,764 - INFO -   use_personal_graph: True
+2026-04-12 07:36:15,764 - INFO -   weight_decay: 0.001
+2026-04-12 07:36:15,863 - INFO - Using device: cuda:0 (physical gpu 2)
+2026-04-12 07:36:15,864 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Loading datasets...
+2026-04-12 07:36:15,864 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Regularization: graph_entropy(lambda_sparse)=0.600000, graph_diag=0.120000, graph_uniform=0.060000, personal_sparse=0.002000, alpha_penalty=0.050000, alpha_min=0.000000, prediction_l2=0.000010
+2026-04-12 07:36:15,864 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Graph controls: entropy_band=[0.15, 0.70], uniform_margin=0.12, warmup_epochs=0, cap_ratio=6.00, graph_dropout=0.000, graph_tau_init=0.550
+2026-04-12 07:36:15,864 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Personal controls: personal_max_alpha=0.350, personal_delta_scale=1.000, personal_warmup_epochs=0, personal_student_dim=None, alpha_min_target=0.0000
+2026-04-12 07:36:15,994 - INFO - [junyi] [数据清洗] 学生交互次数 < 15 次的学生：共移除 0 个学生（仅统计用户数）
+2026-04-12 07:36:16,011 - INFO - [junyi] [数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 0 条记录。
+2026-04-12 07:36:16,011 - INFO - [junyi] [数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。
+2026-04-12 07:36:16,011 - INFO - [junyi] [数据清洗] 跳过毒题清洗（min_poison_count <= 0）。
+2026-04-12 07:36:16,011 - INFO - [junyi] 正在构建ID映射...
+2026-04-12 07:36:16,269 - INFO - [junyi] 正在构建Q矩阵...
+2026-04-12 07:36:27,893 - INFO - [junyi] [统计] 开始统计清洗后每道题的概念数量分布...
+2026-04-12 07:36:27,901 - INFO - [junyi] [Train] 概念数统计：题目数=702, 平均概念数=1.0000, min=1, max=1, 1概念=702 (100.00%), ≥2概念=0 (0.00%)
+2026-04-12 07:36:27,901 - INFO - [junyi] [Train] 概念数直方图（概念数: 题目数量）: {1: 702}
+2026-04-12 07:36:27,902 - INFO - [junyi] [Valid] 概念数统计：题目数=623, 平均概念数=1.0000, min=1, max=1, 1概念=623 (100.00%), ≥2概念=0 (0.00%)
+2026-04-12 07:36:27,902 - INFO - [junyi] [Valid] 概念数直方图（概念数: 题目数量）: {1: 623}
+2026-04-12 07:36:27,904 - INFO - [junyi] [Test] 概念数统计：题目数=673, 平均概念数=1.0000, min=1, max=1, 1概念=673 (100.00%), ≥2概念=0 (0.00%)
+2026-04-12 07:36:27,904 - INFO - [junyi] [Test] 概念数直方图（概念数: 题目数量）: {1: 673}
+2026-04-12 07:36:27,904 - INFO - [junyi] [统计] 概念数量统计完成。
+2026-04-12 07:36:27,904 - INFO - [junyi] 正在加载数据集...
+2026-04-12 07:36:28,081 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Train samples: 262473, Val samples: 24299
+2026-04-12 07:36:28,082 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Number of students: 10000
+2026-04-12 07:36:28,082 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Number of exercises: 706
+2026-04-12 07:36:28,082 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Number of concepts: 706
+2026-04-12 07:36:28,082 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Creating model...
+2026-04-12 07:36:28,082 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Ablation switches: ablate_module1=False | enable_module1=True | use_concept_graph=False | effective(num_gnn_layers=0)
+2026-04-12 07:36:28,338 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Ablation runtime check: args(ablate_module1=False) | model(enable_module1=True) | physical(has_knowledge_encoder=True)
+2026-04-12 07:36:28,338 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Debug diagnostics enabled: diag_batches=1
+2026-04-12 07:36:28,338 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Graph Init] graph_tau_mean=0.0000, graph_tau_std=0.0000, graph_dropout=0.000, use_personal_graph=True
+2026-04-12 07:36:28,339 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Total parameters: 7,005,772
+2026-04-12 07:36:28,339 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Trainable parameters: 7,005,772
+2026-04-12 07:36:30,066 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Starting training...
+2026-04-12 07:37:59,784 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Epoch [001/100] | Train: Loss=0.5464, BCE=0.5468, Reg=-0.0004, AUC=0.7714, ACC=0.7202, RMSE=0.4295 | Val: Loss=0.5252, BCE=0.5252, Reg=0.0000, AUC=0.7832, ACC=0.7418, RMSE=0.4189
+2026-04-12 07:37:59,784 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Reg Terms] Epoch [001] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000384, alpha_collapse=0.000000, reg_bce_ratio=-0.0007 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000
+2026-04-12 07:38:02,766 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][AE] Epoch [001] | irt_abs_mean=1.0339, irt_std=0.8204, personal_warmup_scale=1.00, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.1750, alpha_std=0.0007, alpha_bias_std=0.0000, personal_row_entropy=0.0001, personal_matrix_delta=0.0000, personal_matrix_student_std=0.0000, personal_delta_pre_softmax_norm=0.0000, personal_delta_student_std=0.0000, alpha_head_std=0.0007
+2026-04-12 07:38:02,766 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][Graph] Epoch [001] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.037609, to_identity_l2=0.000000, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-12 07:38:02,767 - WARNING - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag Warning][E] personal_delta_student_std is near zero: personal_delta_student_std=0.000000, personal_delta_pre_softmax_norm=0.000000
+2026-04-12 07:38:02,767 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Grad Norms] Epoch [001] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=0.000000e+00, personal_v=0.000000e+00, personal_alpha_bias=5.509260e-07, personal_gate_emb=0.000000e+00, personal_gate_student_proj=0.000000e+00, personal_gate_context_proj=0.000000e+00, personal_gate_student_direct=0.000000e+00, personal_gate_context_direct=1.056320e-08, personal_gate_out=0.000000e+00, personal_generator_emb=0.000000e+00, personal_generator_context_proj=0.000000e+00, personal_generator_context_hidden=0.000000e+00, personal_generator_context_to_u=0.000000e+00, personal_generator_context_to_v=0.000000e+00
+2026-04-12 07:38:02,993 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] -> New best AUC=0.7832 at epoch 1
+2026-04-12 07:39:32,432 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Epoch [002/100] | Train: Loss=0.5259, BCE=0.5259, Reg=0.0000, AUC=0.7870, ACC=0.7404, RMSE=0.4193 | Val: Loss=0.5175, BCE=0.5175, Reg=0.0000, AUC=0.7886, ACC=0.7492, RMSE=0.4150
+2026-04-12 07:39:32,432 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Reg Terms] Epoch [002] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000
+2026-04-12 07:39:34,395 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][AE] Epoch [002] | irt_abs_mean=1.1186, irt_std=0.8737, personal_warmup_scale=1.00, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.1750, alpha_std=0.0000, alpha_bias_std=0.0000, personal_row_entropy=0.0001, personal_matrix_delta=0.0000, personal_matrix_student_std=0.0000, personal_delta_pre_softmax_norm=0.0000, personal_delta_student_std=0.0000, alpha_head_std=0.0000
+2026-04-12 07:39:34,396 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][Graph] Epoch [002] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.037609, to_identity_l2=0.000000, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-12 07:39:34,396 - WARNING - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag Warning][E] personal_delta_student_std is near zero: personal_delta_student_std=0.000000, personal_delta_pre_softmax_norm=0.000000
+2026-04-12 07:39:34,396 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Grad Norms] Epoch [002] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=0.000000e+00, personal_v=0.000000e+00, personal_alpha_bias=8.682223e-08, personal_gate_emb=6.250973e-13, personal_gate_student_proj=0.000000e+00, personal_gate_context_proj=0.000000e+00, personal_gate_student_direct=7.079088e-13, personal_gate_context_direct=2.250451e-19, personal_gate_out=1.086526e-11, personal_generator_emb=0.000000e+00, personal_generator_context_proj=0.000000e+00, personal_generator_context_hidden=0.000000e+00, personal_generator_context_to_u=0.000000e+00, personal_generator_context_to_v=0.000000e+00
+2026-04-12 07:39:35,007 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] -> New best AUC=0.7886 at epoch 2
+2026-04-12 07:41:04,121 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Epoch [003/100] | Train: Loss=0.5203, BCE=0.5203, Reg=0.0000, AUC=0.7911, ACC=0.7448, RMSE=0.4165 | Val: Loss=0.5122, BCE=0.5122, Reg=0.0000, AUC=0.7917, ACC=0.7525, RMSE=0.4122
+2026-04-12 07:41:04,121 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Reg Terms] Epoch [003] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000
+2026-04-12 07:41:06,958 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][AE] Epoch [003] | irt_abs_mean=1.1880, irt_std=0.8927, personal_warmup_scale=1.00, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.1750, alpha_std=0.0000, alpha_bias_std=0.0001, personal_row_entropy=0.0001, personal_matrix_delta=0.0000, personal_matrix_student_std=0.0000, personal_delta_pre_softmax_norm=0.0000, personal_delta_student_std=0.0000, alpha_head_std=0.0000
+2026-04-12 07:41:06,958 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][Graph] Epoch [003] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.037609, to_identity_l2=0.000000, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-12 07:41:06,958 - WARNING - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag Warning][E] personal_delta_student_std is near zero: personal_delta_student_std=0.000000, personal_delta_pre_softmax_norm=0.000000
+2026-04-12 07:41:06,958 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Grad Norms] Epoch [003] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=0.000000e+00, personal_v=0.000000e+00, personal_alpha_bias=2.369269e-07, personal_gate_emb=1.091825e-12, personal_gate_student_proj=0.000000e+00, personal_gate_context_proj=0.000000e+00, personal_gate_student_direct=6.930036e-13, personal_gate_context_direct=1.639798e-14, personal_gate_out=4.546834e-14, personal_generator_emb=0.000000e+00, personal_generator_context_proj=0.000000e+00, personal_generator_context_hidden=0.000000e+00, personal_generator_context_to_u=0.000000e+00, personal_generator_context_to_v=0.000000e+00
+2026-04-12 07:41:07,579 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] -> New best AUC=0.7917 at epoch 3
+2026-04-12 07:42:36,771 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Epoch [004/100] | Train: Loss=0.5179, BCE=0.5179, Reg=0.0000, AUC=0.7930, ACC=0.7478, RMSE=0.4151 | Val: Loss=0.5089, BCE=0.5089, Reg=0.0000, AUC=0.7959, ACC=0.7540, RMSE=0.4108
+2026-04-12 07:42:36,771 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Reg Terms] Epoch [004] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000
+2026-04-12 07:42:38,927 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][AE] Epoch [004] | irt_abs_mean=1.2293, irt_std=0.9062, personal_warmup_scale=1.00, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.1750, alpha_std=0.0000, alpha_bias_std=0.0001, personal_row_entropy=0.0001, personal_matrix_delta=0.0000, personal_matrix_student_std=0.0000, personal_delta_pre_softmax_norm=0.0000, personal_delta_student_std=0.0000, alpha_head_std=0.0000
+2026-04-12 07:42:38,928 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][Graph] Epoch [004] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.037609, to_identity_l2=0.000000, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-12 07:42:38,928 - WARNING - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag Warning][E] personal_delta_student_std is near zero: personal_delta_student_std=0.000000, personal_delta_pre_softmax_norm=0.000000
+2026-04-12 07:42:38,928 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Grad Norms] Epoch [004] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=0.000000e+00, personal_v=0.000000e+00, personal_alpha_bias=2.426389e-07, personal_gate_emb=1.972353e-12, personal_gate_student_proj=1.991048e-21, personal_gate_context_proj=0.000000e+00, personal_gate_student_direct=8.784065e-13, personal_gate_context_direct=4.771701e-15, personal_gate_out=3.919408e-14, personal_generator_emb=0.000000e+00, personal_generator_context_proj=0.000000e+00, personal_generator_context_hidden=0.000000e+00, personal_generator_context_to_u=0.000000e+00, personal_generator_context_to_v=0.000000e+00
+2026-04-12 07:42:39,609 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] -> New best AUC=0.7959 at epoch 4
+2026-04-12 07:44:08,859 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Epoch [005/100] | Train: Loss=0.5166, BCE=0.5166, Reg=0.0000, AUC=0.7941, ACC=0.7484, RMSE=0.4145 | Val: Loss=0.5094, BCE=0.5094, Reg=0.0000, AUC=0.7947, ACC=0.7538, RMSE=0.4108
+2026-04-12 07:44:08,860 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Reg Terms] Epoch [005] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000
+2026-04-12 07:44:10,897 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][AE] Epoch [005] | irt_abs_mean=1.2603, irt_std=0.9162, personal_warmup_scale=1.00, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.1750, alpha_std=0.0000, alpha_bias_std=0.0001, personal_row_entropy=0.0001, personal_matrix_delta=0.0000, personal_matrix_student_std=0.0000, personal_delta_pre_softmax_norm=0.0000, personal_delta_student_std=0.0000, alpha_head_std=0.0000
+2026-04-12 07:44:10,898 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][Graph] Epoch [005] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.037609, to_identity_l2=0.000000, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-12 07:44:10,898 - WARNING - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag Warning][E] personal_delta_student_std is near zero: personal_delta_student_std=0.000000, personal_delta_pre_softmax_norm=0.000000
+2026-04-12 07:44:10,898 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Grad Norms] Epoch [005] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=0.000000e+00, personal_v=0.000000e+00, personal_alpha_bias=2.866500e-07, personal_gate_emb=1.351582e-12, personal_gate_student_proj=3.326989e-21, personal_gate_context_proj=5.867700e-21, personal_gate_student_direct=1.924395e-12, personal_gate_context_direct=4.366007e-12, personal_gate_out=1.679893e-12, personal_generator_emb=0.000000e+00, personal_generator_context_proj=0.000000e+00, personal_generator_context_hidden=0.000000e+00, personal_generator_context_to_u=0.000000e+00, personal_generator_context_to_v=0.000000e+00
+2026-04-12 07:44:10,898 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.7959 @ 4)
+2026-04-12 07:45:39,922 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Epoch [006/100] | Train: Loss=0.5161, BCE=0.5161, Reg=0.0000, AUC=0.7944, ACC=0.7492, RMSE=0.4142 | Val: Loss=0.5087, BCE=0.5087, Reg=0.0000, AUC=0.7955, ACC=0.7564, RMSE=0.4107
+2026-04-12 07:45:39,922 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Reg Terms] Epoch [006] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000
+2026-04-12 07:45:42,363 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][AE] Epoch [006] | irt_abs_mean=1.2754, irt_std=0.8928, personal_warmup_scale=1.00, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.1750, alpha_std=0.0000, alpha_bias_std=0.0001, personal_row_entropy=0.0001, personal_matrix_delta=0.0000, personal_matrix_student_std=0.0000, personal_delta_pre_softmax_norm=0.0000, personal_delta_student_std=0.0000, alpha_head_std=0.0000
+2026-04-12 07:45:42,363 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][Graph] Epoch [006] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.037609, to_identity_l2=0.000000, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-12 07:45:42,363 - WARNING - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag Warning][E] personal_delta_student_std is near zero: personal_delta_student_std=0.000000, personal_delta_pre_softmax_norm=0.000000
+2026-04-12 07:45:42,363 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Grad Norms] Epoch [006] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=0.000000e+00, personal_v=0.000000e+00, personal_alpha_bias=2.504360e-07, personal_gate_emb=2.327242e-12, personal_gate_student_proj=2.868897e-20, personal_gate_context_proj=4.584286e-20, personal_gate_student_direct=1.865791e-12, personal_gate_context_direct=3.489104e-12, personal_gate_out=7.157714e-13, personal_generator_emb=0.000000e+00, personal_generator_context_proj=0.000000e+00, personal_generator_context_hidden=0.000000e+00, personal_generator_context_to_u=0.000000e+00, personal_generator_context_to_v=0.000000e+00
+2026-04-12 07:45:42,363 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] -> No improvement 2 epoch(s) (best AUC=0.7959 @ 4)
+2026-04-12 07:47:11,773 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Epoch [007/100] | Train: Loss=0.5156, BCE=0.5156, Reg=0.0000, AUC=0.7950, ACC=0.7494, RMSE=0.4140 | Val: Loss=0.5086, BCE=0.5086, Reg=0.0000, AUC=0.7964, ACC=0.7574, RMSE=0.4103
+2026-04-12 07:47:11,773 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Reg Terms] Epoch [007] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000
+2026-04-12 07:47:14,150 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][AE] Epoch [007] | irt_abs_mean=1.1473, irt_std=0.8405, personal_warmup_scale=1.00, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.1750, alpha_std=0.0000, alpha_bias_std=0.0001, personal_row_entropy=0.0001, personal_matrix_delta=0.0000, personal_matrix_student_std=0.0000, personal_delta_pre_softmax_norm=0.0000, personal_delta_student_std=0.0000, alpha_head_std=0.0000
+2026-04-12 07:47:14,151 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][Graph] Epoch [007] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.037609, to_identity_l2=0.000000, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-12 07:47:14,151 - WARNING - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag Warning][E] personal_delta_student_std is near zero: personal_delta_student_std=0.000000, personal_delta_pre_softmax_norm=0.000000
+2026-04-12 07:47:14,151 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Grad Norms] Epoch [007] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=0.000000e+00, personal_v=0.000000e+00, personal_alpha_bias=3.181937e-07, personal_gate_emb=1.701196e-12, personal_gate_student_proj=1.328531e-19, personal_gate_context_proj=4.126991e-20, personal_gate_student_direct=2.748191e-12, personal_gate_context_direct=8.464499e-13, personal_gate_out=3.072238e-13, personal_generator_emb=0.000000e+00, personal_generator_context_proj=0.000000e+00, personal_generator_context_hidden=0.000000e+00, personal_generator_context_to_u=0.000000e+00, personal_generator_context_to_v=0.000000e+00
+2026-04-12 07:47:14,900 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] -> New best AUC=0.7964 at epoch 7
+2026-04-12 07:48:44,553 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Epoch [008/100] | Train: Loss=0.5153, BCE=0.5153, Reg=0.0000, AUC=0.7955, ACC=0.7498, RMSE=0.4138 | Val: Loss=0.5090, BCE=0.5090, Reg=0.0000, AUC=0.7949, ACC=0.7572, RMSE=0.4107
+2026-04-12 07:48:44,553 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Reg Terms] Epoch [008] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000
+2026-04-12 07:48:46,860 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][AE] Epoch [008] | irt_abs_mean=1.2782, irt_std=0.9334, personal_warmup_scale=1.00, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.1750, alpha_std=0.0000, alpha_bias_std=0.0001, personal_row_entropy=0.0001, personal_matrix_delta=0.0000, personal_matrix_student_std=0.0000, personal_delta_pre_softmax_norm=0.0000, personal_delta_student_std=0.0000, alpha_head_std=0.0000
+2026-04-12 07:48:46,861 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][Graph] Epoch [008] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.037609, to_identity_l2=0.000000, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-12 07:48:46,861 - WARNING - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag Warning][E] personal_delta_student_std is near zero: personal_delta_student_std=0.000000, personal_delta_pre_softmax_norm=0.000000
+2026-04-12 07:48:46,861 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Grad Norms] Epoch [008] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=0.000000e+00, personal_v=0.000000e+00, personal_alpha_bias=3.434836e-07, personal_gate_emb=2.301790e-12, personal_gate_student_proj=3.173685e-19, personal_gate_context_proj=3.650086e-20, personal_gate_student_direct=3.822604e-12, personal_gate_context_direct=4.337107e-13, personal_gate_out=1.097554e-13, personal_generator_emb=0.000000e+00, personal_generator_context_proj=0.000000e+00, personal_generator_context_hidden=0.000000e+00, personal_generator_context_to_u=0.000000e+00, personal_generator_context_to_v=0.000000e+00
+2026-04-12 07:48:46,861 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.7964 @ 7)
+2026-04-12 07:50:16,157 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Epoch [009/100] | Train: Loss=0.5152, BCE=0.5152, Reg=0.0000, AUC=0.7956, ACC=0.7496, RMSE=0.4137 | Val: Loss=0.5083, BCE=0.5083, Reg=0.0000, AUC=0.7965, ACC=0.7552, RMSE=0.4103
+2026-04-12 07:50:16,157 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Reg Terms] Epoch [009] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000
+2026-04-12 07:50:18,313 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][AE] Epoch [009] | irt_abs_mean=1.2102, irt_std=0.8933, personal_warmup_scale=1.00, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.1750, alpha_std=0.0000, alpha_bias_std=0.0001, personal_row_entropy=0.0001, personal_matrix_delta=0.0000, personal_matrix_student_std=0.0000, personal_delta_pre_softmax_norm=0.0000, personal_delta_student_std=0.0000, alpha_head_std=0.0000
+2026-04-12 07:50:18,314 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][Graph] Epoch [009] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.037609, to_identity_l2=0.000000, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-12 07:50:18,314 - WARNING - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag Warning][E] personal_delta_student_std is near zero: personal_delta_student_std=0.000000, personal_delta_pre_softmax_norm=0.000000
+2026-04-12 07:50:18,314 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Grad Norms] Epoch [009] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=0.000000e+00, personal_v=0.000000e+00, personal_alpha_bias=3.286032e-07, personal_gate_emb=2.516672e-12, personal_gate_student_proj=4.080479e-19, personal_gate_context_proj=1.782833e-19, personal_gate_student_direct=5.447692e-12, personal_gate_context_direct=2.444190e-12, personal_gate_out=7.412716e-13, personal_generator_emb=0.000000e+00, personal_generator_context_proj=0.000000e+00, personal_generator_context_hidden=0.000000e+00, personal_generator_context_to_u=0.000000e+00, personal_generator_context_to_v=0.000000e+00
+2026-04-12 07:50:18,897 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] -> New best AUC=0.7965 at epoch 9
+2026-04-12 07:51:47,889 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Epoch [010/100] | Train: Loss=0.5153, BCE=0.5153, Reg=0.0000, AUC=0.7953, ACC=0.7504, RMSE=0.4138 | Val: Loss=0.5073, BCE=0.5073, Reg=0.0000, AUC=0.7964, ACC=0.7577, RMSE=0.4099
+2026-04-12 07:51:47,889 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Reg Terms] Epoch [010] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000
+2026-04-12 07:51:50,531 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][AE] Epoch [010] | irt_abs_mean=1.2655, irt_std=0.8866, personal_warmup_scale=1.00, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.1750, alpha_std=0.0000, alpha_bias_std=0.0001, personal_row_entropy=0.0001, personal_matrix_delta=0.0000, personal_matrix_student_std=0.0000, personal_delta_pre_softmax_norm=0.0000, personal_delta_student_std=0.0000, alpha_head_std=0.0000
+2026-04-12 07:51:50,531 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][Graph] Epoch [010] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.037609, to_identity_l2=0.000000, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-12 07:51:50,531 - WARNING - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag Warning][E] personal_delta_student_std is near zero: personal_delta_student_std=0.000000, personal_delta_pre_softmax_norm=0.000000
+2026-04-12 07:51:50,531 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Grad Norms] Epoch [010] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=0.000000e+00, personal_v=0.000000e+00, personal_alpha_bias=2.637183e-07, personal_gate_emb=2.454252e-12, personal_gate_student_proj=5.248009e-19, personal_gate_context_proj=6.567350e-19, personal_gate_student_direct=3.091115e-12, personal_gate_context_direct=4.101484e-12, personal_gate_out=6.864066e-13, personal_generator_emb=0.000000e+00, personal_generator_context_proj=0.000000e+00, personal_generator_context_hidden=0.000000e+00, personal_generator_context_to_u=0.000000e+00, personal_generator_context_to_v=0.000000e+00
+2026-04-12 07:51:50,532 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] -> No improvement 1 epoch(s) (best AUC=0.7965 @ 9)
+2026-04-12 07:51:50,670 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Checkpoint saved: checkpoints/abce_diag/ae_fix_20260412_fdafa52/junyi/seed42/best_no_A/checkpoint_epoch_10.pth
+2026-04-12 07:51:50,949 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Module Activity] Epoch 10: Personal[X]
+2026-04-12 07:53:20,209 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Epoch [011/100] | Train: Loss=0.5151, BCE=0.5151, Reg=0.0000, AUC=0.7955, ACC=0.7500, RMSE=0.4138 | Val: Loss=0.5075, BCE=0.5075, Reg=0.0000, AUC=0.7961, ACC=0.7594, RMSE=0.4097
+2026-04-12 07:53:20,209 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Reg Terms] Epoch [011] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000
+2026-04-12 07:53:22,194 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][AE] Epoch [011] | irt_abs_mean=1.2435, irt_std=0.8957, personal_warmup_scale=1.00, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.1750, alpha_std=0.0000, alpha_bias_std=0.0001, personal_row_entropy=0.0001, personal_matrix_delta=0.0000, personal_matrix_student_std=0.0000, personal_delta_pre_softmax_norm=0.0000, personal_delta_student_std=0.0000, alpha_head_std=0.0000
+2026-04-12 07:53:22,195 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][Graph] Epoch [011] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.037609, to_identity_l2=0.000000, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-12 07:53:22,195 - WARNING - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag Warning][E] personal_delta_student_std is near zero: personal_delta_student_std=0.000000, personal_delta_pre_softmax_norm=0.000000
+2026-04-12 07:53:22,195 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Grad Norms] Epoch [011] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=0.000000e+00, personal_v=0.000000e+00, personal_alpha_bias=2.860789e-07, personal_gate_emb=4.936420e-12, personal_gate_student_proj=6.317642e-19, personal_gate_context_proj=5.051856e-18, personal_gate_student_direct=4.268948e-12, personal_gate_context_direct=3.287094e-11, personal_gate_out=1.029128e-11, personal_generator_emb=0.000000e+00, personal_generator_context_proj=0.000000e+00, personal_generator_context_hidden=0.000000e+00, personal_generator_context_to_u=0.000000e+00, personal_generator_context_to_v=0.000000e+00
+2026-04-12 07:53:22,195 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] -> No improvement 2 epoch(s) (best AUC=0.7965 @ 9)
+2026-04-12 07:54:50,563 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Epoch [012/100] | Train: Loss=0.5151, BCE=0.5151, Reg=0.0000, AUC=0.7955, ACC=0.7499, RMSE=0.4137 | Val: Loss=0.5095, BCE=0.5095, Reg=0.0000, AUC=0.7944, ACC=0.7525, RMSE=0.4111
+2026-04-12 07:54:50,563 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Reg Terms] Epoch [012] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000000, alpha_var=-0.000000, alpha_collapse=0.000000, reg_bce_ratio=0.0000
+2026-04-12 07:54:52,219 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][AE] Epoch [012] | irt_abs_mean=1.2027, irt_std=0.8696, personal_warmup_scale=1.00, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.1750, alpha_std=0.0000, alpha_bias_std=0.0001, personal_row_entropy=0.0001, personal_matrix_delta=0.0000, personal_matrix_student_std=0.0000, personal_delta_pre_softmax_norm=0.0000, personal_delta_student_std=0.0000, alpha_head_std=0.0000
+2026-04-12 07:54:52,219 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag][Graph] Epoch [012] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.037609, to_identity_l2=0.000000, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-12 07:54:52,219 - WARNING - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Diag Warning][E] personal_delta_student_std is near zero: personal_delta_student_std=0.000000, personal_delta_pre_softmax_norm=0.000000
+2026-04-12 07:54:52,219 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] [Grad Norms] Epoch [012] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=0.000000e+00, personal_v=0.000000e+00, personal_alpha_bias=3.112164e-07, personal_gate_emb=3.596670e-12, personal_gate_student_proj=4.454507e-19, personal_gate_context_proj=1.091520e-18, personal_gate_student_direct=3.497252e-12, personal_gate_context_direct=9.273962e-12, personal_gate_out=3.089539e-12, personal_generator_emb=0.000000e+00, personal_generator_context_proj=0.000000e+00, personal_generator_context_hidden=0.000000e+00, personal_generator_context_to_u=0.000000e+00, personal_generator_context_to_v=0.000000e+00
+2026-04-12 07:54:52,219 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] -> No improvement 3 epoch(s) (best AUC=0.7965 @ 9)
+2026-04-12 07:54:52,219 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Early stopping at epoch 12 (best AUC=0.7965 @ 9)
+2026-04-12 07:54:52,225 - INFO - Epoch-wise metrics saved to checkpoints/abce_diag/ae_fix_20260412_fdafa52/junyi/seed42/best_no_A/metrics_history.csv
+2026-04-12 07:54:52,226 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Training completed! Best Val AUC=0.7965 @ epoch 9
+2026-04-12 07:54:52,447 - INFO - 
+============================================================
+         MODULE ACTIVITY REPORT
+============================================================
+Dataset: junyi | Seed: 42 | Epoch: 12
+
+1. Concept Graph Module (A):
+   - Status: DISABLED (use_concept_graph=False or no_A)
+
+2. Personal Graph Module (E):
+   - Alpha mean: 0.175
+   - Alpha std: 0.000
+   - Alpha bias std: 0.000
+   - Personal/global delta: 0.0000
+   - Inter-student matrix std: 0.0000
+   - Status: INACTIVE (personal graph barely deviates from global graph)
+   -> Consider: strengthen personal delta or alpha anti-collapse regularization
+
+------------------------------------------------------------
+SUMMARY:
+   Inactive modules: Personal Graph (E)
+============================================================
+2026-04-12 07:54:52,447 - INFO - [junyi|junyi_abce_best_no_A|lr=0.003|drop=0.40] Module activity saved to checkpoints/abce_diag/ae_fix_20260412_fdafa52/junyi/seed42/best_no_A/module_activity.json
+2026-04-12 07:54:52,498 - INFO - Using device: cuda:0 (physical gpu 2)
+2026-04-12 07:54:52,498 - INFO - Loading model from checkpoints/abce_diag/ae_fix_20260412_fdafa52/junyi/seed42/best_no_A/best_model.pth...
+2026-04-12 07:54:52,642 - INFO - Inference switches: ablate_module1=False | enable_module1=True | use_concept_graph=False | effective(num_gnn_layers=0)
+2026-04-12 07:54:52,752 - INFO - [Inference] Ablation runtime check: args(ablate_module1=False) | model(enable_module1=True) | physical(has_knowledge_encoder=True)
+2026-04-12 07:54:52,753 - INFO - [Inference] [Graph Init] graph_tau_mean=0.0000, graph_tau_std=0.0000, graph_dropout=0.000, use_personal_graph=True
+2026-04-12 07:54:52,754 - INFO - Model loaded from epoch 9. Start testing...
+2026-04-12 07:54:58,515 - INFO - [Test] 200/262 batches done, samples=51200
+2026-04-12 07:55:00,310 - INFO - 
+==================================================
+2026-04-12 07:55:00,310 - INFO - Test Results:
+2026-04-12 07:55:00,310 - INFO - AUC: 0.8029
+2026-04-12 07:55:00,310 - INFO - ACC: 0.7476
+2026-04-12 07:55:00,310 - INFO - RMSE: 0.4149
+2026-04-12 07:55:00,310 - INFO - ==================================================
+2026-04-12 07:55:00,326 - INFO - Summary appended to /home/zsh/ConceptSkillCDM/results/experiment_results.csv
+2026-04-12 07:55:00,329 - INFO - Run completed.
+2026-04-12 07:55:00,330 - INFO - Best validation AUC: 0.7965 at epoch 9
+2026-04-12 07:55:00,330 - INFO - Test metrics - AUC: 0.8029, ACC: 0.7476, RMSE: 0.4149
