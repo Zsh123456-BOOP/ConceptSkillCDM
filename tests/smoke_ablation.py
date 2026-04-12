@@ -44,8 +44,6 @@ def run_case(name: str, **model_kwargs) -> None:
         num_concepts=num_concepts,
         q_matrix=q_matrix,
         knowledge_dim=16,
-        skill_dim=8,
-        exercise_dim=8,
         num_relation_heads=2,
         num_gnn_layers=1,
         dropout=0.0,
@@ -72,19 +70,19 @@ def run_case(name: str, **model_kwargs) -> None:
     _print_shape("student_repr", details.get("student_repr"))
     _print_shape("q_vector", details.get("q_vector"))
     _print_shape("irt_logit", details.get("irt_logit"))
-    _print_shape("mf_logit", details.get("mf_logit"))
-    _print_shape("gate", details.get("gate"))
-    _print_shape("student_latent", details.get("student_latent"))
-    _print_shape("exercise_latent", details.get("exercise_latent"))
+    _print_shape("theta_c", details.get("theta_c"))
     _print_shape("alpha", details.get("alpha"))
+
+    for removed_key in ("mf_logit", "residual_logit", "gate", "student_latent", "exercise_latent"):
+        if removed_key in details:
+            raise AssertionError(f"{removed_key} should not exist after deleting module B.")
 
 
 def main() -> None:
     cases = [
-        ("full", dict(use_mf_branch=True, use_concept_graph=True, use_personal_graph=True)),
-        ("no_skill", dict(use_mf_branch=False, use_concept_graph=True, use_personal_graph=True)),
-        ("no_concept_graph", dict(use_mf_branch=True, use_concept_graph=False, use_personal_graph=True)),
-        ("no_personal_graph", dict(use_mf_branch=True, use_concept_graph=True, use_personal_graph=False)),
+        ("full", dict(use_concept_graph=True, use_personal_graph=True)),
+        ("no_A", dict(use_concept_graph=False, use_personal_graph=True)),
+        ("no_E", dict(use_concept_graph=True, use_personal_graph=False)),
     ]
 
     for name, kwargs in cases:

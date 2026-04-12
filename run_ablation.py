@@ -6,11 +6,9 @@ run_ablation.py
 批量消融脚本（基于 run_all_dataset.py 的 BEST_CFG）。
 
 默认（重要）：
-- 只跑“model-level”消融（不跑 A~E 子模块消融）
+- 只跑“model-level”消融
   1) full
   2) no_module1   : --ablate_module1
-  3) no_module2   : --ablate_module2
-  4) no_module3   : --ablate_module3
 
 可选：
 - 若你想跑子模块消融（A/B/E 对应的旧开关），显式传：
@@ -19,7 +17,7 @@ run_ablation.py
   --ablation_set all
 
 注意：
-- 禁止同时 ablate_module2 与 ablate_module3（无预测路径）；main.py 会报错。
+- B 已删除，D 固定启用，因此不再支持 no_B / no_D / no_module2 / no_module3。
 """
 
 import argparse
@@ -43,15 +41,10 @@ from gpu_utils import (
 MODEL_ABLATIONS: List[Dict[str, Any]] = [
     {"name": "full", "flags": {}, "overrides": {}},
     {"name": "no_module1", "flags": {"ablate_module1": True}, "overrides": {}},
-    {"name": "no_module2", "flags": {"ablate_module2": True}, "overrides": {}},
-    {"name": "no_module3", "flags": {"ablate_module3": True}, "overrides": {}},
 ]
 
-# 这些是你说的 “A/B/E 子模块消融（旧开关）”，默认不跑
+# 这些是 A/E 子模块消融，默认不跑
 SUBMODULE_ABLATIONS: List[Dict[str, Any]] = [
-    {"name": "no_skill",
-     "flags": {"ablate_skill_encoder": True},
-     "overrides": {}},
     {"name": "no_concept_graph",
      "flags": {"ablate_concept_graph": True},
      "overrides": {"num_gnn_layers": 0}},
@@ -62,16 +55,10 @@ SUBMODULE_ABLATIONS: List[Dict[str, Any]] = [
 
 ABLATION_NAME_ALIASES: Dict[str, str] = {
     "no_A": "no_concept_graph",
-    "no_B": "no_skill",
-    "no_D": "no_module2",
     "no_E": "no_personal_graph",
-    # legacy spellings stay supported
-    "no_skill": "no_skill",
     "no_concept_graph": "no_concept_graph",
     "no_personal_graph": "no_personal_graph",
     "no_module1": "no_module1",
-    "no_module2": "no_module2",
-    "no_module3": "no_module3",
     "full": "full",
 }
 
@@ -167,7 +154,7 @@ def launch_experiment(
             
         _append_arg(cmd, k, v)
 
-    # 3. 应用 flags (单纯的 toggle，如 --ablate_module3, --use_personal_graph)
+    # 3. 应用 flags (单纯的 toggle，如 --ablate_module1, --use_personal_graph)
     for k, v in ablation.get("flags", {}).items():
         # 对于 ablate_*, 只有 True 才添加；
         # 对于普通 boolean 参数 (如 use_personal_graph)，True -> --use_personal_graph, False -> 不添加
@@ -211,7 +198,7 @@ def main():
     # 可选：在 ablation_set 的基础上再筛选
     parser.add_argument("--ablations", type=str, default=None,
                         help="Comma-separated ablation names to run (filter within the selected pool). "
-                             "Supports aliases: no_A/no_B/no_D/no_E.")
+                             "Supports aliases: no_A/no_E.")
 
     parser.add_argument("--dry_run", action="store_true", help="Print commands only, do not run.")
     parser.add_argument("--poll_interval", type=int, default=10, help="Seconds between polling processes.")

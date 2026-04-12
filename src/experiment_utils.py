@@ -160,22 +160,15 @@ def _build_config_hash(args) -> str:
         "seed",
         "model_variant",
         "ablate_module1",
-        "ablate_module2",
-        "ablate_module3",
         "learning_rate",
         "dropout",
         "batch_size",
         "lambda_sparse",
         "lambda_sparse_personal",
         "lambda_alpha",
-        "exercise_l2_lambda",
-        "fusion_gate_max",
-        "fusion_gate_bias_init",
-        "residual_clip_t",
-        "residual_scale_init",
+        "prediction_l2_lambda",
         "graph_reg_warmup_epochs",
         "graph_reg_cap_ratio",
-        "use_mf_branch",
         "use_concept_graph",
         "use_personal_graph",
     ]
@@ -227,8 +220,8 @@ def append_summary_csv(
     # 消融标记，方便后续筛选
     ablation_flags = []
     for flag in [
-        "ablate_skill_encoder",
         "ablate_concept_graph",
+        "ablate_module1",
     ]:
         if hasattr(args, flag):
             ablation_flags.append(f"{flag}={getattr(args, flag)}")
@@ -244,15 +237,12 @@ def append_summary_csv(
     row["model_epoch"] = int(model_epoch)
 
     # 运行时事实：防止“CSV 标记消融，但模型实际未生效”
-    for idx in [1, 2, 3]:
-        key = f"enable_module{idx}"
-        out_key = f"final_enable_module{idx}"
-        if final_model_facts is not None and key in final_model_facts:
-            row[out_key] = bool(final_model_facts[key])
-        elif hasattr(args, key):
-            row[out_key] = bool(getattr(args, key))
-    if final_model_facts is not None and "has_mf_branch" in final_model_facts:
-        row["final_has_mf_branch"] = bool(final_model_facts["has_mf_branch"])
+    key = "enable_module1"
+    out_key = "final_enable_module1"
+    if final_model_facts is not None and key in final_model_facts:
+        row[out_key] = bool(final_model_facts[key])
+    elif hasattr(args, key):
+        row[out_key] = bool(getattr(args, key))
 
     # === 3. 把 args 里的超参数摊平成后面的列 ===
     skip_keys = {
@@ -322,9 +312,6 @@ def append_summary_csv(
         "best_val_auc",
         "model_epoch",
         "final_enable_module1",
-        "final_enable_module2",
-        "final_enable_module3",
-        "final_has_mf_branch",
     ]
     front_cols = [c for c in front_cols if c in df.columns]
     other_cols = [c for c in df.columns if c not in front_cols]

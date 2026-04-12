@@ -47,8 +47,6 @@ def parse_args():
     # Model (/)
     # ======================
     parser.add_argument("--knowledge_dim", type=int, default=128)
-    parser.add_argument("--skill_dim", type=int, default=64)
-    parser.add_argument("--exercise_dim", type=int, default=128)
     parser.add_argument("--num_relation_heads", type=int, default=4)
     parser.add_argument("--num_gnn_layers", type=int, default=2)
     parser.add_argument("--dropout", type=float, default=0.1)
@@ -168,12 +166,11 @@ def parse_args():
         help="Minimum free memory (MiB) preferred by auto GPU selection.",
     )
 
-    # exercise_l2_lambda ->  mf_l2_lambda
     parser.add_argument(
-        "--exercise_l2_lambda",
+        "--prediction_l2_lambda",
         type=float,
         default=5e-5,
-        help="L2 regularization weight (mapped to mf_l2_lambda in the new model).",
+        help="L2 regularization weight for the fixed IRT prediction head.",
     )
 
     # save
@@ -189,7 +186,6 @@ def parse_args():
     # ======================
     # Ablations
     # ======================
-    parser.add_argument("--ablate_skill_encoder", action="store_true")   #  MF 
     parser.add_argument("--ablate_concept_graph", action="store_true")   #  concept graph
 
     # ======================
@@ -197,23 +193,12 @@ def parse_args():
     # ======================
     parser.add_argument("--ablate_module1", action="store_true",
                         help="Fully disable Module 1 (Concept Structure Modeling: A+E+knowledge_encoder).")
-    parser.add_argument("--ablate_module2", action="store_true",
-                        help="Fully disable Module 2 (IRT diagnosis head D; also removes IRT b/a params).")
-    parser.add_argument("--ablate_module3", action="store_true",
-                        help="Fully disable Module 3 (Neural residual: B).")
 
     # ======================
     # New optional knobs
     # ======================
     parser.add_argument("--graph_topk", type=int, default=None,
                         help="Hard top-k neighbors per concept row (None=disable).")
-
-    parser.add_argument("--disable_q_conditioning", action="store_true",
-                        help="Disable Q-conditioning in MF branch (not recommended).")
-    parser.add_argument("--disable_b_id_adapter", action="store_true",
-                        help="Disable B's student/item ID adapter path; leaves Q-aware residual path.")
-    parser.add_argument("--disable_b_bias", action="store_true",
-                        help="Disable B's residual bias path; useful for B_q_only ablation.")
 
     parser.add_argument("--disable_self_loop", action="store_true",
                         help="Disable self-loop in learned concept graph.")
@@ -224,27 +209,6 @@ def parse_args():
     parser.add_argument("--gnn_residual_weight", type=float, default=0.5,
                         help="Residual weight in GNN update.")
 
-    # Module3 conservative fusion / residual knobs
-    parser.add_argument("--fusion_gate_max", type=float, default=1.0,
-                        help="Maximum residual gate amplitude in conservative fusion.")
-    parser.add_argument("--fusion_gate_bias_init", type=float, default=-1.1,
-                        help="Initial bias for conservative fusion gate (negative => small initial gate).")
-    parser.add_argument("--residual_clip_t", type=float, default=2.0,
-                        help="T for residual clipping: residual = T * tanh(residual / T).")
-    parser.add_argument("--residual_scale_init", type=float, default=0.1,
-                        help="Initial positive scale for module3 residual branches (after softplus).")
-    parser.add_argument("--disable_q_aligned_residual", action="store_true",
-                        help="Compatibility flag; q-aligned residual is enabled by default.")
-    parser.add_argument("--mf_warmup_epochs", type=int, default=0,
-                        help="Linear warmup epochs for B residual contribution. 0 disables rescue warmup.")
-    parser.add_argument("--lambda_delta_ratio", type=float, default=0.0,
-                        help="Penalty weight for overly large residual delta relative to IRT logit.")
-    parser.add_argument("--delta_ratio_target", type=float, default=0.15,
-                        help="Target upper bound for mean(|delta|)/mean(|irt|) before penalty activates.")
-    parser.add_argument("--lambda_b_id_budget", type=float, default=0.0,
-                        help="Penalty weight when B id-adapter share exceeds target.")
-    parser.add_argument("--b_id_budget_target", type=float, default=0.25,
-                        help="Target upper bound for B id-adapter share before penalty activates.")
     parser.add_argument("--personal_max_alpha", type=float, default=0.35,
                         help="Upper bound for personal-graph mixing alpha.")
     parser.add_argument("--personal_delta_scale", type=float, default=1.0,
@@ -266,9 +230,9 @@ def parse_args():
 
     # 
     parser.add_argument(
-        "--debug_module3_diag",
+        "--debug_graph_diag",
         action="store_true",
-        help="Enable per-epoch module diagnostics for module1/module3 and gradient norms.",
+        help="Enable per-epoch A/E diagnostics and graph-related gradient norms.",
     )
     parser.add_argument(
         "--diag_batches",
@@ -313,12 +277,6 @@ def main():
         else:
             args.multi_gpu = False
 
-    # =========================================================
-    # 0)  sanity check
-    # =========================================================
-    if getattr(args, "ablate_module2", False) and getattr(args, "ablate_module3", False):
-        raise SystemExit("error: invalid ablation: both --ablate_module2 and --ablate_module3 are set (no prediction path).")
-
     #  bool 
     args.generate_diagnosis = _normalize_bool(args.generate_diagnosis, default=True)
 
@@ -326,49 +284,28 @@ def main():
     # 1)  enable/disable
     # =========================================================
     args.enable_module1 = not bool(getattr(args, "ablate_module1", False))
-    args.enable_module2 = not bool(getattr(args, "ablate_module2", False))
-    args.enable_module3 = not bool(getattr(args, "ablate_module3", False))
-
-    # module2 diagnosis 
-    if not args.enable_module2:
-        args.generate_diagnosis = False
 
     # =========================================================
     # 2)  ablate_*  use_*
     #    
     # =========================================================
-
-    # (B) MF ablate_skill_encoder ==  MFno_skill
-    use_mf_branch = not getattr(args, "ablate_skill_encoder", False)
-
-    # (C) ablate_concept_graph ==  concept graphno_concept_graph
+    # (A) ablate_concept_graph == concept graph no_concept_graph
     use_concept_graph = not getattr(args, "ablate_concept_graph", False)
 
-    # (D) personal graph
+    # (E) personal graph
     use_personal_graph = bool(getattr(args, "use_personal_graph", False))
 
     # ----------  ----------
     if not args.enable_module1:
-        # 1A/E/knowledge_encoder 
         use_concept_graph = False
         use_personal_graph = False
-        #  trainer 
         args.num_gnn_layers = 0
         args.lambda_sparse = 0.0
         args.lambda_sparse_personal = 0.0
         args.lambda_alpha = 0.0
 
-    if not args.enable_module3:
-        # 3MF
-        use_mf_branch = False
-
-    args.use_mf_branch = bool(use_mf_branch)
     args.use_concept_graph = bool(use_concept_graph)
     args.use_personal_graph = bool(use_personal_graph)
-    args.use_q_aligned_residual = not bool(getattr(args, "disable_q_aligned_residual", False))
-
-    # trainer/
-    args.use_skill_encoder = args.use_mf_branch
     args.use_exercise_graph = args.use_concept_graph
 
     # =========================================================
@@ -376,9 +313,6 @@ def main():
     # =========================================================
     # disable_self_loop -> allow_self_loop allow_self_loop
     args.allow_self_loop = not getattr(args, "disable_self_loop", False)
-
-    # disable_q_conditioning -> use_q_conditioning use_q_conditioning
-    args.use_q_conditioning = not getattr(args, "disable_q_conditioning", False)
 
     # =========================================================
     # 4) 
@@ -448,25 +382,15 @@ def main():
                 num_concepts=info_dict["num_concepts"],
                 q_matrix=info_dict["q_matrix"],
                 knowledge_dim=args.knowledge_dim,
-                skill_dim=args.skill_dim,
-                exercise_dim=args.exercise_dim,
                 num_relation_heads=args.num_relation_heads,
                 num_gnn_layers=args.num_gnn_layers if args.use_concept_graph else 0,
                 dropout=args.dropout,
-                use_mf_branch=args.use_mf_branch,
                 use_concept_graph=args.use_concept_graph,
                 graph_topk=getattr(args, "graph_topk", None),
                 allow_self_loop=not getattr(args, "disable_self_loop", False),
                 use_personal_graph=args.use_personal_graph,
                 personal_rank=getattr(args, "personal_rank", 4),
                 ablate_module1=getattr(args, "ablate_module1", False),
-                ablate_module2=getattr(args, "ablate_module2", False),
-                ablate_module3=getattr(args, "ablate_module3", False),
-                use_q_aligned_residual=getattr(args, "use_q_aligned_residual", True),
-                fusion_gate_max=getattr(args, "fusion_gate_max", 1.0),
-                fusion_gate_bias_init=getattr(args, "fusion_gate_bias_init", -1.1),
-                residual_clip_t=getattr(args, "residual_clip_t", 2.0),
-                residual_scale_init=getattr(args, "residual_scale_init", 0.1),
                 graph_dropout=None
                 if float(getattr(args, "graph_dropout", -1.0)) < 0
                 else float(getattr(args, "graph_dropout", -1.0)),
@@ -482,16 +406,8 @@ def main():
                 graph_reg_cap_ratio=getattr(args, "graph_reg_cap_ratio", 6.0),
                 lambda_sparse_personal=getattr(args, "lambda_sparse_personal", 0.0),
                 lambda_alpha=getattr(args, "lambda_alpha", 0.0),
-                mf_l2_lambda=getattr(args, "exercise_l2_lambda", 5e-5),
+                prediction_l2_lambda=getattr(args, "prediction_l2_lambda", 5e-5),
                 gnn_residual_weight=getattr(args, "gnn_residual_weight", 0.5),
-                use_q_conditioning=not getattr(args, "disable_q_conditioning", False),
-                use_b_id_adapter=not getattr(args, "disable_b_id_adapter", False),
-                use_b_bias=not getattr(args, "disable_b_bias", False),
-                lambda_b_id_budget=getattr(args, "lambda_b_id_budget", 0.0),
-                b_id_budget_target=getattr(args, "b_id_budget_target", 0.25),
-                mf_warmup_epochs=getattr(args, "mf_warmup_epochs", 0),
-                lambda_delta_ratio=getattr(args, "lambda_delta_ratio", 0.0),
-                delta_ratio_target=getattr(args, "delta_ratio_target", 0.15),
                 personal_max_alpha=getattr(args, "personal_max_alpha", 0.35),
                 personal_delta_scale=getattr(args, "personal_delta_scale", 1.0),
                 personal_warmup_epochs=getattr(args, "personal_warmup_epochs", 0),

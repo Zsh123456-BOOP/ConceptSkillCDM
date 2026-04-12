@@ -1,10 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""
-best_configs.py
- BEST  run_all_datasets.py / run_ablation.py / run_module3_grid.py 
-"""
+"""Best configs for AE-focused training/ablation."""
 
 from typing import Any, Dict
 
@@ -25,8 +22,6 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
 
         # Model base
         "knowledge_dim": 64,
-        "exercise_dim": 64,
-        "skill_dim": 128,
         "num_gnn_layers": 1,
         "num_relation_heads": 2,
 
@@ -47,27 +42,15 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "graph_identity_residual": 0.20,
         "graph_topk": 12,
 
-        # Module3 residual / fusion
-        "exercise_l2_lambda": 1e-5,
-        "fusion_gate_max": 1.0,
-        "fusion_gate_bias_init": -0.9,
-        "residual_clip_t": 2.0,
-        "residual_scale_init": 0.25,
-        "lambda_delta_ratio": 0.08,
-        "delta_ratio_target": 0.12,
-        "lambda_b_id_budget": 0.06,
-        "b_id_budget_target": 0.20,
-        "disable_q_aligned_residual": False,
-        "debug_module3_diag": True,
+        # Fixed prediction head
+        "prediction_l2_lambda": 1e-5,
+        "debug_graph_diag": True,
         "diag_batches": 1,
 
         # Data filtering
         "min_stu_interactions": 15,
         "min_exer_interactions": 0,
         "min_poison_count": 0,
-
-        # Legacy ablation compatibility
-        "ablate_skill_encoder": False,
 
         # Misc
         "model_variant": "gpd_base",
@@ -88,8 +71,6 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
 
         # Model base
         "knowledge_dim": 128,
-        "exercise_dim": 128,
-        "skill_dim": 64,
         "num_gnn_layers": 2,
         "num_relation_heads": 2,
 
@@ -110,27 +91,15 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "graph_identity_residual": 0.10,
         "graph_topk": 24,
 
-        # Module3 residual / fusion
-        "exercise_l2_lambda": 1e-5,
-        "fusion_gate_max": 1.0,
-        "fusion_gate_bias_init": -0.6,
-        "residual_clip_t": 2.0,
-        "residual_scale_init": 0.25,
-        "lambda_delta_ratio": 0.08,
-        "delta_ratio_target": 0.08,
-        "lambda_b_id_budget": 0.06,
-        "b_id_budget_target": 0.18,
-        "disable_q_aligned_residual": False,
-        "debug_module3_diag": True,
+        # Fixed prediction head
+        "prediction_l2_lambda": 1e-5,
+        "debug_graph_diag": True,
         "diag_batches": 1,
 
         # Data filtering
         "min_stu_interactions": 15,
         "min_exer_interactions": 0,
         "min_poison_count": 0,
-
-        # Legacy ablation compatibility
-        "ablate_skill_encoder": False,
 
         # Misc
         "model_variant": "gpd_base",
