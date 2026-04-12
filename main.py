@@ -383,7 +383,7 @@ def main():
                 q_matrix=info_dict["q_matrix"],
                 knowledge_dim=args.knowledge_dim,
                 num_relation_heads=args.num_relation_heads,
-                num_gnn_layers=args.num_gnn_layers if args.use_concept_graph else 0,
+                num_gnn_layers=args.num_gnn_layers,
                 dropout=args.dropout,
                 use_concept_graph=args.use_concept_graph,
                 graph_topk=getattr(args, "graph_topk", None),

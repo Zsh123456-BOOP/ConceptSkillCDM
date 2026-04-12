@@ -193,13 +193,15 @@ def _hard_ablation_effective_hparams(
     num_gnn_layers: int,
  ) -> int:
     """
-    Hard-ablation safety:
-      - If concept graph is disabled, force num_gnn_layers=0 to prevent "I-graph GNN" leakage.
+    Effective GNN depth for runtime construction.
+
+    Note:
+      - `no_A` / `use_concept_graph=False` 只应关闭全局图学习 A；
+      - knowledge_encoder 与 E 仍然需要保留既定的 GNN 深度，通过 identity/global prior 继续传播；
+      - 只有 `ablate_module1=True` 时，调用方才会在更高层把整条模块1物理关闭并把层数置 0。
     """
-    eff_gnn = int(num_gnn_layers)
-    if not use_concept_graph:
-        eff_gnn = 0
-    return eff_gnn
+    _ = bool(use_concept_graph)
+    return max(0, int(num_gnn_layers))
 
 
 def _safe_mean_std(values: List[float]) -> Tuple[float, float]:
@@ -436,6 +438,10 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
     personal_generator_context_hidden = getattr(getattr(personal_generator, "hidden_proj", None), "weight", None)
     personal_generator_context_to_u = getattr(getattr(personal_generator, "context_to_u", None), "weight", None)
     personal_generator_context_to_v = getattr(getattr(personal_generator, "context_to_v", None), "weight", None)
+    personal_generator_student_row = getattr(getattr(personal_generator, "student_row_proj", None), "weight", None)
+    personal_generator_student_col = getattr(getattr(personal_generator, "student_col_proj", None), "weight", None)
+    personal_generator_low_rank_scale = getattr(personal_generator, "low_rank_scale", None)
+    personal_generator_direct_scale = getattr(personal_generator, "direct_scale", None)
 
     return {
         "relation_emb": _grad_norm_or_zero(relation_emb),
@@ -456,6 +462,10 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
         "personal_generator_context_hidden": _grad_norm_or_zero(personal_generator_context_hidden),
         "personal_generator_context_to_u": _grad_norm_or_zero(personal_generator_context_to_u),
         "personal_generator_context_to_v": _grad_norm_or_zero(personal_generator_context_to_v),
+        "personal_generator_student_row": _grad_norm_or_zero(personal_generator_student_row),
+        "personal_generator_student_col": _grad_norm_or_zero(personal_generator_student_col),
+        "personal_generator_low_rank_scale": _grad_norm_or_zero(personal_generator_low_rank_scale),
+        "personal_generator_direct_scale": _grad_norm_or_zero(personal_generator_direct_scale),
     }
 
 
@@ -986,6 +996,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 + grad_norms["personal_generator_context_hidden"]
                 + grad_norms["personal_generator_context_to_u"]
                 + grad_norms["personal_generator_context_to_v"]
+                + grad_norms["personal_generator_student_row"]
+                + grad_norms["personal_generator_student_col"]
+                + grad_norms["personal_generator_low_rank_scale"]
+                + grad_norms["personal_generator_direct_scale"]
             )
             if graph_grad_total < 1e-8:
                 graph_low_grad_streak += 1
@@ -1000,7 +1014,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                     "personal_gate_student_direct=%.6e, personal_gate_context_direct=%.6e, personal_gate_out=%.6e, "
                     "personal_generator_emb=%.6e, personal_generator_context_proj=%.6e, "
                     "personal_generator_context_hidden=%.6e, personal_generator_context_to_u=%.6e, "
-                    "personal_generator_context_to_v=%.6e",
+                    "personal_generator_context_to_v=%.6e, personal_generator_student_row=%.6e, "
+                    "personal_generator_student_col=%.6e, personal_generator_low_rank_scale=%.6e, "
+                    "personal_generator_direct_scale=%.6e",
                     run_tag,
                     graph_low_grad_streak,
                     grad_norms["relation_emb"],
@@ -1021,6 +1037,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                     grad_norms["personal_generator_context_hidden"],
                     grad_norms["personal_generator_context_to_u"],
                     grad_norms["personal_generator_context_to_v"],
+                    grad_norms["personal_generator_student_row"],
+                    grad_norms["personal_generator_student_col"],
+                    grad_norms["personal_generator_low_rank_scale"],
+                    grad_norms["personal_generator_direct_scale"],
                 )
             logger.info(
                 "%s [Grad Norms] Epoch [%03d] | "
@@ -1030,7 +1050,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "personal_gate_student_direct=%.6e, personal_gate_context_direct=%.6e, personal_gate_out=%.6e, "
                 "personal_generator_emb=%.6e, personal_generator_context_proj=%.6e, "
                 "personal_generator_context_hidden=%.6e, personal_generator_context_to_u=%.6e, "
-                "personal_generator_context_to_v=%.6e",
+                "personal_generator_context_to_v=%.6e, personal_generator_student_row=%.6e, "
+                "personal_generator_student_col=%.6e, personal_generator_low_rank_scale=%.6e, "
+                "personal_generator_direct_scale=%.6e",
                 run_tag,
                 epoch,
                 grad_norms["relation_emb"],
@@ -1051,6 +1073,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 grad_norms["personal_generator_context_hidden"],
                 grad_norms["personal_generator_context_to_u"],
                 grad_norms["personal_generator_context_to_v"],
+                grad_norms["personal_generator_student_row"],
+                grad_norms["personal_generator_student_col"],
+                grad_norms["personal_generator_low_rank_scale"],
+                grad_norms["personal_generator_direct_scale"],
             )
 
         scheduler.step(val_metrics["loss"])

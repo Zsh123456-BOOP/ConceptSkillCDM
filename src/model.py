@@ -391,6 +391,7 @@ class PersonalRelationGenerator(nn.Module):
         hidden_dim: Optional[int] = None,
     ):
         super().__init__()
+        self.student_norm = nn.LayerNorm(student_dim)
         self.context_norm = nn.LayerNorm(context_dim)
         self.num_concepts = int(num_concepts)
         self.num_heads = int(num_heads)
@@ -405,8 +406,12 @@ class PersonalRelationGenerator(nn.Module):
         self.student_basis_v = nn.Parameter(torch.randn(self.num_heads, num_concepts, rank, student_dim) * 0.02)
         self.context_to_u = nn.Linear(hidden, self.num_heads * num_concepts * rank, bias=False)
         self.context_to_v = nn.Linear(hidden, self.num_heads * num_concepts * rank, bias=False)
-        self.student_scale = nn.Parameter(torch.tensor(0.5))
-        self.context_scale = nn.Parameter(torch.tensor(0.1))
+        self.student_row_proj = nn.Linear(student_dim, self.num_heads * num_concepts, bias=False)
+        self.student_col_proj = nn.Linear(student_dim, self.num_heads * num_concepts, bias=False)
+        self.student_scale = nn.Parameter(torch.tensor(1.25))
+        self.context_scale = nn.Parameter(torch.tensor(0.25))
+        self.low_rank_scale = nn.Parameter(torch.tensor(2.0))
+        self.direct_scale = nn.Parameter(torch.tensor(0.50))
 
         nn.init.xavier_normal_(self.context_proj.weight)
         nn.init.zeros_(self.context_proj.bias)
@@ -414,13 +419,15 @@ class PersonalRelationGenerator(nn.Module):
         nn.init.zeros_(self.hidden_proj.bias)
         nn.init.xavier_normal_(self.context_to_u.weight)
         nn.init.xavier_normal_(self.context_to_v.weight)
+        nn.init.xavier_normal_(self.student_row_proj.weight, gain=0.8)
+        nn.init.xavier_normal_(self.student_col_proj.weight, gain=0.8)
         nn.init.xavier_normal_(self.base_u)
         nn.init.xavier_normal_(self.base_v)
         nn.init.xavier_normal_(self.student_basis_u)
         nn.init.xavier_normal_(self.student_basis_v)
 
     def forward(self, student_embedding: torch.Tensor, context_repr: torch.Tensor) -> torch.Tensor:
-        student_code = torch.tanh(student_embedding)
+        student_code = torch.tanh(1.5 * self.student_norm(student_embedding))
         hidden = self.context_proj(self.context_norm(context_repr))
         hidden = F.silu(hidden)
         hidden = F.silu(self.hidden_proj(hidden))
@@ -431,7 +438,11 @@ class PersonalRelationGenerator(nn.Module):
         context_v = self.context_to_v(hidden).view(B, self.num_heads, self.num_concepts, self.rank)
         u = self.base_u.unsqueeze(0) + self.student_scale * student_u + self.context_scale * torch.tanh(context_u)
         v = self.base_v.unsqueeze(0) + self.student_scale * student_v + self.context_scale * torch.tanh(context_v)
-        scores = torch.einsum("bhcr,bhkr->bhck", u, v) / math.sqrt(self.rank)
+        low_rank_scores = torch.einsum("bhcr,bhkr->bhck", u, v) / math.sqrt(self.rank)
+        row_bias = torch.tanh(self.student_row_proj(student_code)).view(B, self.num_heads, self.num_concepts, 1)
+        col_bias = torch.tanh(self.student_col_proj(student_code)).view(B, self.num_heads, 1, self.num_concepts)
+        direct_scores = row_bias + col_bias
+        scores = self.low_rank_scale * low_rank_scores + self.direct_scale * direct_scores
         scores = scores - scores.mean(dim=-1, keepdim=True)
         return scores
 
