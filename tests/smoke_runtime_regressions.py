@@ -49,6 +49,9 @@ def _build_model(*, ablate_module1: bool = False, use_personal_graph: bool = Tru
 
 def _check_per_head_personal_graph() -> None:
     model = _build_model(ablate_module1=False, use_personal_graph=True)
+    with torch.no_grad():
+        model.structure_module.personal_alpha_bias.weight.fill_(5.0)
+    model.structure_module.personal_delta_scale = 10.0
     student_ids = torch.tensor([0, 1], dtype=torch.long)
     exercise_ids = torch.tensor([0, 2], dtype=torch.long)
 
@@ -68,6 +71,20 @@ def _check_per_head_personal_graph() -> None:
     _assert(
         tuple(personal.shape) == (2, 2, 3, 3),
         f"Expected personal_matrices shape (2,2,3,3), got {tuple(personal.shape)}.",
+    )
+    relation_used = details.get("relation_used")
+    _assert(relation_used is not None, "Expected relation_used details when personal graph is enabled.")
+    _assert(
+        tuple(relation_used.shape) == (2, 2, 3, 3),
+        f"Expected relation_used shape (2,2,3,3), got {tuple(relation_used.shape)}.",
+    )
+    global_rel = details["relation_matrices"].unsqueeze(0)
+    used_delta = (relation_used - global_rel).abs().max().item()
+    personal_delta = (personal - global_rel).abs().max().item()
+    _assert(personal_delta > 1e-5, "Personal matrices should differ from global graph in this smoke case.")
+    _assert(
+        abs(used_delta - personal_delta) < 1e-6,
+        "relation_used should match the actual personalized adjacency rather than a second blended graph.",
     )
     for key in ("personal_delta_pre_softmax_norm", "personal_delta_student_std", "alpha_head_std"):
         _assert(key in details, f"Expected detail key: {key}.")

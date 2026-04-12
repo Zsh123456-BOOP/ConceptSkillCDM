@@ -659,21 +659,17 @@ class ConceptStructureModeling(nn.Module):
             personal_delta_student_std = personal_delta.std(dim=0, unbiased=False).mean()
             alpha_head_std = gate_alpha_effective.squeeze(-1).squeeze(-1).std(dim=1, unbiased=False).mean()
 
-            # 优化：不展开为 (B,H,C,C)，而是保存 gate_alpha 和 personal_matrices
-            # 让 GNN 层在需要时逐 head 混合，减少显存占用
-            # relation_used 改为字典传递必要信息
-            relation_used = {
-                "global_matrices": relation_matrices,        # (H,C,C)
-                "personal_matrices": personal_matrices,      # (B,H,C,C)
-                "gate_alpha": gate_alpha_effective.squeeze(-1).squeeze(-1),  # (B,H)
-            }
-
+            # personal_matrices 已经是最终 row-stochastic 个性化邻接，
+            # 其中全局 prior 与 alpha * delta 的混合已经体现在 softmax logits 中。
+            # 这里必须直接把它作为第二遍编码所使用的 relation_used，
+            # 否则在图卷积里再次按 alpha 与 global 混合，会把 E 的有效扰动压成近似 alpha^2。
+            relation_used = personal_matrices
             knowledge_state = self.knowledge_encoder(student_ids, relation_used)
             student_repr = knowledge_state.mean(dim=1)
 
         return {
             "relation_matrices": relation_matrices,
-            "relation_used": relation_used if isinstance(relation_used, torch.Tensor) else relation_matrices,
+            "relation_used": relation_used,
             "knowledge_state": knowledge_state,
             "student_repr": student_repr,
             "alpha": gate_alpha,
