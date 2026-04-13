@@ -658,7 +658,13 @@ class ConceptStructureModeling(nn.Module):
             personal_warmup_scale = self._get_personal_warmup_scale()
             gate_alpha_effective = gate_alpha * personal_warmup_scale
             personal_delta = self.personal_generator(generator_student_repr, context_repr)  # (B,H,C,C)
-            global_prior = relation_matrices.clamp(min=1e-8).log().unsqueeze(0)  # (1,H,C,C)
+            if self.use_concept_graph and self.relation_learning is not None:
+                global_prior = relation_matrices.clamp(min=1e-8).log().unsqueeze(0)  # (1,H,C,C)
+            else:
+                # no_A 时不能继续使用 identity 的 log prior，
+                # 否则 off-diagonal 会被 -inf 级别的先验压死，E 实际上无法生成 personalized graph。
+                # 这里改为中性 prior，让 E 在没有 A 的条件下独立生成 row-stochastic 邻接。
+                global_prior = torch.zeros_like(relation_matrices).unsqueeze(0)  # (1,H,C,C)
             personal_logits = global_prior + gate_alpha_effective * (
                 self.personal_delta_scale * personal_delta
             )

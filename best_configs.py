@@ -28,7 +28,7 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         # Module1
         "lambda_sparse": 0.8,
         "lambda_sparse_personal": 0.0005,
-        "lambda_alpha": 0.08,
+        "lambda_alpha": 0.0,
         "lambda_alpha_min": 0.08,
         "alpha_min_target": 0.05,
         "use_personal_graph": True,
