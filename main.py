@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 from gpu_utils import configure_main_process_gpus, parse_gpu_ids
-from src.config import apply_dataset_defaults
+from src.config import apply_dataset_defaults, collect_explicit_arg_dests
 from src.experiment_utils import setup_logging
 from src.trainer import train_one_experiment, run_inference, save_component_analysis_data
 
@@ -251,8 +251,10 @@ def main():
     if any(arg.startswith("--ablate_exercise_graph") for arg in sys.argv):
         raise SystemExit("error: --ablate_exercise_graph is removed. Use --ablate_concept_graph instead.")
 
-    args = parser.parse_args()
-    args = apply_dataset_defaults(args, parser)
+    raw_argv = sys.argv[1:]
+    args = parser.parse_args(raw_argv)
+    explicit_dests = collect_explicit_arg_dests(raw_argv, parser)
+    args = apply_dataset_defaults(args, parser, explicit_dests=explicit_dests)
 
     # =========================================================
     # -1) main  launcher 

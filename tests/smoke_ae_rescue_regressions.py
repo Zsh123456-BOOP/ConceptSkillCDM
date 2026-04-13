@@ -57,6 +57,48 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
     )
 
 
+def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
+    from main import parse_args as build_parser
+    from src.config import apply_dataset_defaults, collect_explicit_arg_dests
+
+    argv = [
+        "--dataset_name",
+        "assist_09",
+        "--lambda_alpha",
+        "0.0",
+        "--lambda_sparse_personal",
+        "0.0",
+        "--graph_identity_residual",
+        "0.0",
+        "--use_personal_graph",
+    ]
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    explicit_dests = collect_explicit_arg_dests(argv, parser)
+    args = apply_dataset_defaults(args, parser, explicit_dests=explicit_dests)
+
+    _assert(
+        float(args.lambda_alpha) == 0.0,
+        "显式传入的 --lambda_alpha 0.0 不应再被数据集默认值覆盖。",
+    )
+    _assert(
+        float(args.lambda_sparse_personal) == 0.0,
+        "显式传入的 --lambda_sparse_personal 0.0 不应再被数据集默认值覆盖。",
+    )
+    _assert(
+        float(args.graph_identity_residual) == 0.0,
+        "显式传入的 --graph_identity_residual 0.0 不应再被数据集默认值覆盖。",
+    )
+    _assert(
+        bool(args.use_personal_graph) is True,
+        "显式传入的 --use_personal_graph 不应被数据集默认值回写成 False。",
+    )
+    _assert(
+        float(args.lambda_sparse) == 0.3,
+        "未显式覆盖的字段仍应继续继承数据集默认值，避免把默认机制整体打坏。",
+    )
+
+
 def _check_no_a_personal_graph_is_not_identity_locked() -> None:
     from src.model import CognitiveDiagnosisModel
 
@@ -113,6 +155,7 @@ def _check_no_a_personal_graph_is_not_identity_locked() -> None:
 def main() -> None:
     _check_no_a_keeps_gnn_layers()
     _check_best_configs_enable_e_rescue_knobs()
+    _check_dataset_defaults_respect_explicit_zero_overrides()
     _check_no_a_personal_graph_is_not_identity_locked()
     print("OK: AE rescue regression smoke checks passed.")
 

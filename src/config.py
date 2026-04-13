@@ -114,7 +114,39 @@ GRID_SEARCH_SPACE = {
 }
 
 
-def apply_dataset_defaults(args, parser=None):
+def collect_explicit_arg_dests(argv, parser=None):
+    """
+    Collect argparse dest names that were explicitly provided on CLI.
+
+    This is needed because a user may intentionally pass a value that equals
+    the argparse default, for example `--lambda_alpha 0.0`. In that case we
+    must still treat the field as explicitly overridden and avoid replacing it
+    with dataset defaults.
+    """
+    if parser is None:
+        return set()
+
+    option_to_dest = {}
+    for action in getattr(parser, "_actions", []):
+        for opt in getattr(action, "option_strings", []):
+            option_to_dest[opt] = action.dest
+
+    explicit = set()
+    for token in argv or []:
+        if not isinstance(token, str):
+            continue
+        if token == "--":
+            break
+        if not token.startswith("-"):
+            continue
+        opt = token.split("=", 1)[0]
+        dest = option_to_dest.get(opt)
+        if dest:
+            explicit.add(dest)
+    return explicit
+
+
+def apply_dataset_defaults(args, parser=None, explicit_dests=None):
     """
     Apply dataset defaults only when user did not manually override.
 
@@ -127,8 +159,11 @@ def apply_dataset_defaults(args, parser=None):
     if dataset_name is None or dataset_name not in DATASET_DEFAULTS:
         return args
 
+    explicit_dests = set(explicit_dests or ())
     defaults = DATASET_DEFAULTS[dataset_name]
     for key, value in defaults.items():
+        if key in explicit_dests:
+            continue
         if parser is not None and parser.get_default(key) is not None:
             if getattr(args, key, None) == parser.get_default(key):
                 setattr(args, key, value)
