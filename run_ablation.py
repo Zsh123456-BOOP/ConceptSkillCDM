@@ -47,7 +47,7 @@ MODEL_ABLATIONS: List[Dict[str, Any]] = [
 SUBMODULE_ABLATIONS: List[Dict[str, Any]] = [
     {"name": "no_concept_graph",
      "flags": {"ablate_concept_graph": True},
-     "overrides": {"num_gnn_layers": 0}},
+     "overrides": {}},
     {"name": "no_personal_graph",
      "flags": {"use_personal_graph": False},  # 注意：这里不是 ablate_*, 而是直接控制 toggle
      "overrides": {}},

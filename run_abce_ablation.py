@@ -66,7 +66,7 @@ class JobSpec:
 
 BASE_SINGLE_ABLATIONS: Tuple[AblationSpec, ...] = (
     AblationSpec(name="full", flags={}, overrides={}),
-    AblationSpec(name="no_A", flags={"ablate_concept_graph": True}, overrides={"num_gnn_layers": 0}),
+    AblationSpec(name="no_A", flags={"ablate_concept_graph": True}, overrides={}),
     AblationSpec(
         name="no_E",
         flags={},

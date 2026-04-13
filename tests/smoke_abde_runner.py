@@ -31,6 +31,12 @@ def _check_run_abce_supports_ae_only() -> None:
 
     jobs = runner.make_jobs(args, run_id="smoke_ae_only")
     _assert(len(jobs) == 3, f"expected exactly three AE-only jobs, got {len(jobs)}")
+    jobs_by_name = {job.ablation.name: job for job in jobs}
+    no_a_job = jobs_by_name["no_A"]
+    _assert(
+        int(no_a_job.params.get("num_gnn_layers", -1)) > 0,
+        "no_A 任务不应把 num_gnn_layers 覆盖为 0；否则会把 E 和 knowledge_encoder 一起误伤。",
+    )
 
     banned_tokens = {
         "--ablate_module2",
@@ -54,6 +60,11 @@ def _check_run_ablation_rejects_removed_aliases() -> None:
     resolved = run_ablation.resolve_ablation_names(["no_A", "no_E"], ablation_set="all")
     _assert("no_concept_graph" in resolved, "no_A alias should map to no_concept_graph.")
     _assert("no_personal_graph" in resolved, "no_E alias should map to no_personal_graph.")
+    no_a_spec = next(spec for spec in run_ablation.SUBMODULE_ABLATIONS if spec["name"] == "no_concept_graph")
+    _assert(
+        int(no_a_spec.get("overrides", {}).get("num_gnn_layers", 1)) > 0,
+        "run_ablation.py 中的 no_A/no_concept_graph 也不应把 num_gnn_layers 覆盖为 0。",
+    )
 
     for removed in ("no_B", "no_D"):
         try:
