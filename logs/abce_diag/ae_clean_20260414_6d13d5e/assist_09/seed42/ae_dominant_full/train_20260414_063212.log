@@ -1,0 +1,222 @@
+2026-04-14 06:32:12,447 - INFO - Arguments:
+2026-04-14 06:32:12,447 - INFO -   ablate_concept_graph: False
+2026-04-14 06:32:12,447 - INFO -   ablate_module1: False
+2026-04-14 06:32:12,447 - INFO -   allow_self_loop: True
+2026-04-14 06:32:12,447 - INFO -   alpha_min_target: 0.05
+2026-04-14 06:32:12,447 - INFO -   batch_size: 128
+2026-04-14 06:32:12,447 - INFO -   data_dir: ./data/assist_09
+2026-04-14 06:32:12,447 - INFO -   dataset_name: assist_09
+2026-04-14 06:32:12,447 - INFO -   debug_graph_diag: True
+2026-04-14 06:32:12,447 - INFO -   diag_batches: 1
+2026-04-14 06:32:12,447 - INFO -   disable_self_loop: False
+2026-04-14 06:32:12,448 - INFO -   dropout: 0.2
+2026-04-14 06:32:12,448 - INFO -   early_stop_patience: 3
+2026-04-14 06:32:12,448 - INFO -   enable_module1: True
+2026-04-14 06:32:12,448 - INFO -   epochs: 100
+2026-04-14 06:32:12,448 - INFO -   generate_diagnosis: True
+2026-04-14 06:32:12,448 - INFO -   gnn_residual_weight: 0.5
+2026-04-14 06:32:12,448 - INFO -   gpu_candidates: None
+2026-04-14 06:32:12,448 - INFO -   gpu_ids: None
+2026-04-14 06:32:12,448 - INFO -   gpu_memory_threshold: 2000
+2026-04-14 06:32:12,448 - INFO -   gpus: None
+2026-04-14 06:32:12,448 - INFO -   graph_dropout: 0.0
+2026-04-14 06:32:12,448 - INFO -   graph_entropy_max: 0.75
+2026-04-14 06:32:12,448 - INFO -   graph_entropy_min: 0.25
+2026-04-14 06:32:12,448 - INFO -   graph_identity_residual: 0.05
+2026-04-14 06:32:12,448 - INFO -   graph_reg_cap_ratio: 6.0
+2026-04-14 06:32:12,448 - INFO -   graph_reg_warmup_epochs: 4
+2026-04-14 06:32:12,448 - INFO -   graph_tau_init: 0.55
+2026-04-14 06:32:12,448 - INFO -   graph_topk: 12
+2026-04-14 06:32:12,448 - INFO -   graph_uniform_margin: 0.1
+2026-04-14 06:32:12,448 - INFO -   knowledge_dim: 64
+2026-04-14 06:32:12,448 - INFO -   lambda_alpha: 0.0
+2026-04-14 06:32:12,448 - INFO -   lambda_alpha_min: 0.1
+2026-04-14 06:32:12,448 - INFO -   lambda_graph_diag: 0.1
+2026-04-14 06:32:12,448 - INFO -   lambda_graph_uniform: 0.04
+2026-04-14 06:32:12,448 - INFO -   lambda_sparse: 0.8
+2026-04-14 06:32:12,448 - INFO -   lambda_sparse_personal: 0.0005
+2026-04-14 06:32:12,448 - INFO -   learning_rate: 0.0003
+2026-04-14 06:32:12,448 - INFO -   log_dir: logs/abce_diag/ae_clean_20260414_6d13d5e/assist_09/seed42/ae_dominant_full
+2026-04-14 06:32:12,448 - INFO -   min_exer_interactions: 0
+2026-04-14 06:32:12,448 - INFO -   min_poison_count: 0
+2026-04-14 06:32:12,448 - INFO -   min_stu_interactions: 15
+2026-04-14 06:32:12,449 - INFO -   model_variant: assist_09_abce_ae_dominant_full
+2026-04-14 06:32:12,449 - INFO -   multi_gpu: False
+2026-04-14 06:32:12,449 - INFO -   no_cuda: False
+2026-04-14 06:32:12,449 - INFO -   num_gnn_layers: 1
+2026-04-14 06:32:12,449 - INFO -   num_gpus: 1
+2026-04-14 06:32:12,449 - INFO -   num_relation_heads: 2
+2026-04-14 06:32:12,449 - INFO -   num_workers: 4
+2026-04-14 06:32:12,449 - INFO -   patience: 5
+2026-04-14 06:32:12,449 - INFO -   personal_alpha_bias_scale: 0.08
+2026-04-14 06:32:12,449 - INFO -   personal_delta_scale: 7.0
+2026-04-14 06:32:12,449 - INFO -   personal_direct_bias_scale: 0.08
+2026-04-14 06:32:12,449 - INFO -   personal_disable_direct_bias: False
+2026-04-14 06:32:12,449 - INFO -   personal_disable_student_global_context: True
+2026-04-14 06:32:12,449 - INFO -   personal_max_alpha: 0.45
+2026-04-14 06:32:12,449 - INFO -   personal_rank: 8
+2026-04-14 06:32:12,449 - INFO -   personal_reg_warmup_epochs: 6
+2026-04-14 06:32:12,449 - INFO -   personal_student_dim: 32
+2026-04-14 06:32:12,449 - INFO -   personal_warmup_epochs: 6
+2026-04-14 06:32:12,449 - INFO -   prediction_l2_lambda: 1e-05
+2026-04-14 06:32:12,449 - INFO -   save_dir: checkpoints/abce_diag/ae_clean_20260414_6d13d5e/assist_09/seed42/ae_dominant_full
+2026-04-14 06:32:12,449 - INFO -   save_interval: 10
+2026-04-14 06:32:12,449 - INFO -   seed: 42
+2026-04-14 06:32:12,449 - INFO -   share_concept_embeddings: False
+2026-04-14 06:32:12,449 - INFO -   use_concept_graph: True
+2026-04-14 06:32:12,449 - INFO -   use_exercise_graph: True
+2026-04-14 06:32:12,449 - INFO -   use_personal_graph: True
+2026-04-14 06:32:12,449 - INFO -   weight_decay: 1e-05
+2026-04-14 06:32:12,531 - INFO - Using device: cuda:0 (physical gpu 2)
+2026-04-14 06:32:12,531 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Loading datasets...
+2026-04-14 06:32:12,531 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Regularization: graph_entropy(lambda_sparse)=0.800000, graph_diag=0.100000, graph_uniform=0.040000, personal_sparse=0.000500, alpha_penalty=0.000000, alpha_min=0.100000, prediction_l2=0.000010
+2026-04-14 06:32:12,531 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Graph controls: entropy_band=[0.25, 0.75], uniform_margin=0.10, warmup_epochs=4, cap_ratio=6.00, graph_dropout=0.000, graph_tau_init=0.550
+2026-04-14 06:32:12,531 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Personal controls: personal_max_alpha=0.450, personal_delta_scale=7.000, personal_warmup_epochs=6, personal_student_dim=32, alpha_min_target=0.0500
+2026-04-14 06:32:12,629 - INFO - [assist_09] [数据清洗] 学生交互次数 < 15 次的学生：共移除 313 个学生（仅统计用户数）
+2026-04-14 06:32:12,643 - INFO - [assist_09] [数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 5118 条记录。
+2026-04-14 06:32:12,643 - INFO - [assist_09] [数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。
+2026-04-14 06:32:12,643 - INFO - [assist_09] [数据清洗] 跳过毒题清洗（min_poison_count <= 0）。
+2026-04-14 06:32:12,643 - INFO - [assist_09] 正在构建ID映射...
+2026-04-14 06:32:12,896 - INFO - [assist_09] 正在构建Q矩阵...
+2026-04-14 06:32:20,083 - INFO - [assist_09] [数据清洗] Valid train-seen 过滤：before=20072, after=19875, dropped=197, coverage=99.02%
+2026-04-14 06:32:20,089 - INFO - [assist_09] [数据清洗] Test train-seen 过滤：before=51610, after=51090, dropped=520, coverage=98.99%
+2026-04-14 06:32:20,090 - INFO - [assist_09] [统计] 开始统计清洗后每道题的概念数量分布...
+2026-04-14 06:32:20,096 - INFO - [assist_09] [Train] 概念数统计：题目数=17057, 平均概念数=1.1995, min=1, max=4, 1概念=14129 (82.83%), ≥2概念=2928 (17.17%)
+2026-04-14 06:32:20,096 - INFO - [assist_09] [Train] 概念数直方图（概念数: 题目数量）: {1: 14129, 2: 2533, 3: 315, 4: 80}
+2026-04-14 06:32:20,099 - INFO - [assist_09] [Valid] 概念数统计：题目数=9034, 平均概念数=1.1996, min=1, max=4, 1概念=7500 (83.02%), ≥2概念=1534 (16.98%)
+2026-04-14 06:32:20,099 - INFO - [assist_09] [Valid] 概念数直方图（概念数: 题目数量）: {1: 7500, 2: 1314, 3: 171, 4: 49}
+2026-04-14 06:32:20,103 - INFO - [assist_09] [Test] 概念数统计：题目数=12825, 平均概念数=1.1994, min=1, max=4, 1概念=10661 (83.13%), ≥2概念=2164 (16.87%)
+2026-04-14 06:32:20,103 - INFO - [assist_09] [Test] 概念数直方图（概念数: 题目数量）: {1: 10661, 2: 1836, 3: 263, 4: 65}
+2026-04-14 06:32:20,103 - INFO - [assist_09] [统计] 概念数量统计完成。
+2026-04-14 06:32:20,103 - INFO - [assist_09] 正在加载数据集...
+2026-04-14 06:32:20,175 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Train samples: 190623, Val samples: 19875
+2026-04-14 06:32:20,176 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Number of students: 2180
+2026-04-14 06:32:20,176 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Number of exercises: 17057
+2026-04-14 06:32:20,176 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Number of concepts: 123
+2026-04-14 06:32:20,176 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Creating model...
+2026-04-14 06:32:20,176 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Ablation switches: ablate_module1=False | enable_module1=True | use_concept_graph=True | effective(num_gnn_layers=1)
+2026-04-14 06:32:20,303 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Ablation runtime check: args(ablate_module1=False) | expect(use_concept_graph=True,use_personal_graph=True) | model(enable_module1=True,use_concept_graph=True,use_personal_graph=True) | physical(has_knowledge_encoder=True,has_relation_learning=True,has_adaptive_gate=True,has_personal_generator=True)
+2026-04-14 06:32:20,303 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Debug diagnostics enabled: diag_batches=1
+2026-04-14 06:32:20,326 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Graph Init] graph_tau_mean=1.0055, graph_tau_std=0.0000, graph_dropout=0.000, use_personal_graph=True
+2026-04-14 06:32:20,326 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Total parameters: 795,516
+2026-04-14 06:32:20,326 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Trainable parameters: 795,516
+2026-04-14 06:32:21,293 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Starting training...
+2026-04-14 06:32:55,980 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Epoch [001/100] | Train: Loss=0.5954, BCE=0.5894, Reg=0.0060, AUC=0.6878, ACC=0.6924, RMSE=0.4490 | Val: Loss=0.5717, BCE=0.5661, Reg=0.0056, AUC=0.7294, ACC=0.7100, RMSE=0.4378
+2026-04-14 06:32:55,981 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [001] | Train: graph_entropy=0.000000, graph_diag=0.004459, graph_uniform=0.000737, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000170, alpha_var=0.000000, alpha_collapse=0.000657, reg_bce_ratio=0.0102 | Val: graph_entropy=0.000000, graph_diag=0.003970, graph_uniform=0.000743, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000168, alpha_var=0.000000, alpha_collapse=0.000678, reg_bce_ratio=0.0098
+2026-04-14 06:32:56,183 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][AE] Epoch [001] | irt_abs_mean=1.2642, irt_std=0.6289, personal_warmup_scale=0.17, graph_row_entropy=2.4548, graph_entropy_ratio=0.5101, alpha_mean=0.0435, alpha_std=0.0350, alpha_bias_std=0.0035, personal_row_entropy=1.9900, personal_matrix_delta=0.0047, personal_matrix_student_std=0.0014, personal_delta_pre_softmax_norm=1.8913, personal_delta_student_std=0.1613, alpha_head_std=0.0313
+2026-04-14 06:32:56,183 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][Graph] Epoch [001] | entropy_ratio=0.5101, diag_mass=0.1588, to_uniform_l2=0.025728, to_identity_l2=0.079221, tau_mean=0.8567, tau_std=0.0066, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-14 06:32:56,183 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [001] | relation_emb=1.051908e-04, relation_tau=7.891389e-06, relation_wq=1.972201e-05, relation_wk=2.308511e-05, personal_u=6.170097e-02, personal_v=4.136941e-02, personal_alpha_bias=1.180443e-04, personal_gate_emb=8.856996e-05, personal_gate_student_proj=8.526467e-04, personal_gate_context_proj=3.173857e-03, personal_gate_student_direct=1.085383e-03, personal_gate_context_direct=7.957023e-03, personal_gate_out=3.201381e-03, personal_generator_emb=7.570370e-04, personal_generator_context_proj=9.127910e-03, personal_generator_context_hidden=5.841508e-03, personal_generator_context_to_u=2.015467e-02, personal_generator_context_to_v=1.279227e-02, personal_generator_student_row=1.149846e-10, personal_generator_student_col=7.601190e-04, personal_generator_low_rank_scale=6.821316e-03, personal_generator_direct_scale=3.128348e-05
+2026-04-14 06:32:56,405 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] -> New best AUC=0.7294 at epoch 1
+2026-04-14 06:33:31,846 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Epoch [002/100] | Train: Loss=0.5620, BCE=0.5537, Reg=0.0083, AUC=0.7413, ACC=0.7187, RMSE=0.4319 | Val: Loss=0.5667, BCE=0.5616, Reg=0.0052, AUC=0.7352, ACC=0.7143, RMSE=0.4357
+2026-04-14 06:33:31,846 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [002] | Train: graph_entropy=0.000000, graph_diag=0.005742, graph_uniform=0.001502, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000320, alpha_var=0.000000, alpha_collapse=0.000697, reg_bce_ratio=0.0149 | Val: graph_entropy=0.000000, graph_diag=0.002500, graph_uniform=0.001524, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000342, alpha_var=0.000000, alpha_collapse=0.000799, reg_bce_ratio=0.0092
+2026-04-14 06:33:32,038 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][AE] Epoch [002] | irt_abs_mean=1.4977, irt_std=0.6582, personal_warmup_scale=0.33, graph_row_entropy=2.5592, graph_entropy_ratio=0.5318, alpha_mean=0.0840, alpha_std=0.0683, alpha_bias_std=0.0061, personal_row_entropy=1.9922, personal_matrix_delta=0.0050, personal_matrix_student_std=0.0019, personal_delta_pre_softmax_norm=0.9858, personal_delta_student_std=0.1405, alpha_head_std=0.0618
+2026-04-14 06:33:32,039 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][Graph] Epoch [002] | entropy_ratio=0.5318, diag_mass=0.0500, to_uniform_l2=0.023784, to_identity_l2=0.089156, tau_mean=0.7250, tau_std=0.0176, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-14 06:33:32,039 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [002] | relation_emb=2.359272e-09, relation_tau=7.058766e-06, relation_wq=5.049492e-09, relation_wk=4.757878e-09, personal_u=5.933755e-02, personal_v=3.625096e-02, personal_alpha_bias=1.848293e-04, personal_gate_emb=1.756168e-04, personal_gate_student_proj=5.047540e-04, personal_gate_context_proj=2.506106e-03, personal_gate_student_direct=2.106897e-03, personal_gate_context_direct=7.888724e-03, personal_gate_out=2.218897e-03, personal_generator_emb=3.545926e-03, personal_generator_context_proj=7.796928e-03, personal_generator_context_hidden=5.015084e-03, personal_generator_context_to_u=2.048094e-02, personal_generator_context_to_v=1.460540e-02, personal_generator_student_row=7.089315e-11, personal_generator_student_col=1.296714e-03, personal_generator_low_rank_scale=5.508482e-03, personal_generator_direct_scale=1.161768e-05
+2026-04-14 06:33:32,316 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] -> New best AUC=0.7352 at epoch 2
+2026-04-14 06:34:09,714 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Epoch [003/100] | Train: Loss=0.5481, BCE=0.5406, Reg=0.0075, AUC=0.7568, ACC=0.7272, RMSE=0.4259 | Val: Loss=0.5642, BCE=0.5566, Reg=0.0077, AUC=0.7404, ACC=0.7162, RMSE=0.4336
+2026-04-14 06:34:09,714 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [003] | Train: graph_entropy=0.000000, graph_diag=0.003754, graph_uniform=0.002286, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000503, alpha_var=0.000000, alpha_collapse=0.000946, reg_bce_ratio=0.0139 | Val: graph_entropy=0.000000, graph_diag=0.003750, graph_uniform=0.002286, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000539, alpha_var=0.000000, alpha_collapse=0.001086, reg_bce_ratio=0.0138
+2026-04-14 06:34:09,902 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][AE] Epoch [003] | irt_abs_mean=1.4060, irt_std=0.6929, personal_warmup_scale=0.50, graph_row_entropy=2.5592, graph_entropy_ratio=0.5318, alpha_mean=0.1204, alpha_std=0.0966, alpha_bias_std=0.0085, personal_row_entropy=2.1756, personal_matrix_delta=0.0040, personal_matrix_student_std=0.0027, personal_delta_pre_softmax_norm=0.5160, personal_delta_student_std=0.1634, alpha_head_std=0.0866
+2026-04-14 06:34:09,902 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][Graph] Epoch [003] | entropy_ratio=0.5318, diag_mass=0.0500, to_uniform_l2=0.023784, to_identity_l2=0.089156, tau_mean=0.7068, tau_std=0.0050, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-14 06:34:09,903 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [003] | relation_emb=2.412577e-17, relation_tau=8.785119e-07, relation_wq=5.978055e-13, relation_wk=1.906557e-14, personal_u=1.171651e-01, personal_v=6.116024e-02, personal_alpha_bias=2.739955e-04, personal_gate_emb=4.612832e-04, personal_gate_student_proj=2.292687e-03, personal_gate_context_proj=5.281729e-03, personal_gate_student_direct=9.168768e-03, personal_gate_context_direct=2.104159e-02, personal_gate_out=4.292687e-03, personal_generator_emb=1.436284e-02, personal_generator_context_proj=9.738913e-03, personal_generator_context_hidden=8.866861e-03, personal_generator_context_to_u=4.223035e-02, personal_generator_context_to_v=2.475738e-02, personal_generator_student_row=2.015657e-10, personal_generator_student_col=2.193144e-03, personal_generator_low_rank_scale=1.254915e-02, personal_generator_direct_scale=2.926959e-06
+2026-04-14 06:34:10,223 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] -> New best AUC=0.7404 at epoch 3
+2026-04-14 06:34:44,258 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Epoch [004/100] | Train: Loss=0.5397, BCE=0.5299, Reg=0.0099, AUC=0.7700, ACC=0.7338, RMSE=0.4210 | Val: Loss=0.5659, BCE=0.5558, Reg=0.0101, AUC=0.7417, ACC=0.7193, RMSE=0.4332
+2026-04-14 06:34:44,258 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [004] | Train: graph_entropy=0.000000, graph_diag=0.005000, graph_uniform=0.003049, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000685, alpha_var=0.000000, alpha_collapse=0.001148, reg_bce_ratio=0.0187 | Val: graph_entropy=0.000000, graph_diag=0.005000, graph_uniform=0.003049, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000699, alpha_var=0.000000, alpha_collapse=0.001401, reg_bce_ratio=0.0183
+2026-04-14 06:34:44,448 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][AE] Epoch [004] | irt_abs_mean=1.4061, irt_std=0.7800, personal_warmup_scale=0.67, graph_row_entropy=2.5592, graph_entropy_ratio=0.5318, alpha_mean=0.1956, alpha_std=0.1100, alpha_bias_std=0.0106, personal_row_entropy=2.2041, personal_matrix_delta=0.0042, personal_matrix_student_std=0.0032, personal_delta_pre_softmax_norm=0.4494, personal_delta_student_std=0.1932, alpha_head_std=0.0908
+2026-04-14 06:34:44,449 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][Graph] Epoch [004] | entropy_ratio=0.5318, diag_mass=0.0500, to_uniform_l2=0.023784, to_identity_l2=0.089156, tau_mean=0.6957, tau_std=0.0001, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-14 06:34:44,449 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [004] | relation_emb=0.000000e+00, relation_tau=2.669689e-08, relation_wq=1.047481e-21, relation_wk=0.000000e+00, personal_u=2.002421e-01, personal_v=6.820600e-02, personal_alpha_bias=3.444245e-04, personal_gate_emb=6.790608e-04, personal_gate_student_proj=4.290910e-04, personal_gate_context_proj=2.315211e-03, personal_gate_student_direct=1.580910e-03, personal_gate_context_direct=1.500031e-02, personal_gate_out=1.572673e-03, personal_generator_emb=1.444619e-02, personal_generator_context_proj=1.666866e-02, personal_generator_context_hidden=1.108777e-02, personal_generator_context_to_u=5.325233e-02, personal_generator_context_to_v=1.734434e-02, personal_generator_student_row=3.663865e-10, personal_generator_student_col=2.920615e-03, personal_generator_low_rank_scale=2.104714e-03, personal_generator_direct_scale=9.557795e-05
+2026-04-14 06:34:44,762 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] -> New best AUC=0.7417 at epoch 4
+2026-04-14 06:35:19,331 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Epoch [005/100] | Train: Loss=0.5308, BCE=0.5206, Reg=0.0102, AUC=0.7806, ACC=0.7389, RMSE=0.4170 | Val: Loss=0.5668, BCE=0.5562, Reg=0.0106, AUC=0.7441, ACC=0.7199, RMSE=0.4331
+2026-04-14 06:35:19,332 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [005] | Train: graph_entropy=0.000000, graph_diag=0.005000, graph_uniform=0.003049, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000840, alpha_var=0.000000, alpha_collapse=0.001315, reg_bce_ratio=0.0196 | Val: graph_entropy=0.000000, graph_diag=0.005000, graph_uniform=0.003049, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000837, alpha_var=0.000000, alpha_collapse=0.001678, reg_bce_ratio=0.0190
+2026-04-14 06:35:19,516 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][AE] Epoch [005] | irt_abs_mean=1.5298, irt_std=0.8034, personal_warmup_scale=0.83, graph_row_entropy=2.5592, graph_entropy_ratio=0.5318, alpha_mean=0.2615, alpha_std=0.1277, alpha_bias_std=0.0126, personal_row_entropy=2.1286, personal_matrix_delta=0.0049, personal_matrix_student_std=0.0039, personal_delta_pre_softmax_norm=0.5158, personal_delta_student_std=0.2346, alpha_head_std=0.1042
+2026-04-14 06:35:19,516 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][Graph] Epoch [005] | entropy_ratio=0.5318, diag_mass=0.0500, to_uniform_l2=0.023784, to_identity_l2=0.089156, tau_mean=0.6934, tau_std=0.0001, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-14 06:35:19,516 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [005] | relation_emb=0.000000e+00, relation_tau=4.609014e-08, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=9.906335e-02, personal_v=4.590598e-02, personal_alpha_bias=3.984667e-04, personal_gate_emb=3.814732e-04, personal_gate_student_proj=3.803629e-04, personal_gate_context_proj=1.628084e-03, personal_gate_student_direct=2.104463e-03, personal_gate_context_direct=7.899957e-03, personal_gate_out=7.468549e-04, personal_generator_emb=8.350771e-03, personal_generator_context_proj=7.136618e-03, personal_generator_context_hidden=4.337108e-03, personal_generator_context_to_u=2.388123e-02, personal_generator_context_to_v=1.060025e-02, personal_generator_student_row=1.751309e-10, personal_generator_student_col=1.806544e-03, personal_generator_low_rank_scale=4.546402e-03, personal_generator_direct_scale=5.137573e-05
+2026-04-14 06:35:19,838 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] -> New best AUC=0.7441 at epoch 5
+2026-04-14 06:35:54,709 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Epoch [006/100] | Train: Loss=0.5232, BCE=0.5127, Reg=0.0105, AUC=0.7888, ACC=0.7425, RMSE=0.4135 | Val: Loss=0.5652, BCE=0.5543, Reg=0.0109, AUC=0.7443, ACC=0.7197, RMSE=0.4324
+2026-04-14 06:35:54,709 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [006] | Train: graph_entropy=0.000000, graph_diag=0.005000, graph_uniform=0.003049, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000955, alpha_var=0.000000, alpha_collapse=0.001450, reg_bce_ratio=0.0204 | Val: graph_entropy=0.000000, graph_diag=0.005000, graph_uniform=0.003049, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000987, alpha_var=0.000000, alpha_collapse=0.001890, reg_bce_ratio=0.0197
+2026-04-14 06:35:54,887 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][AE] Epoch [006] | irt_abs_mean=1.4427, irt_std=0.7989, personal_warmup_scale=1.00, graph_row_entropy=2.5592, graph_entropy_ratio=0.5318, alpha_mean=0.3095, alpha_std=0.1572, alpha_bias_std=0.0144, personal_row_entropy=2.1370, personal_matrix_delta=0.0049, personal_matrix_student_std=0.0044, personal_delta_pre_softmax_norm=0.4274, personal_delta_student_std=0.2273, alpha_head_std=0.1282
+2026-04-14 06:35:54,887 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][Graph] Epoch [006] | entropy_ratio=0.5318, diag_mass=0.0500, to_uniform_l2=0.023784, to_identity_l2=0.089156, tau_mean=0.6933, tau_std=0.0001, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-14 06:35:54,887 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [006] | relation_emb=0.000000e+00, relation_tau=2.585274e-08, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=1.733735e-01, personal_v=6.731153e-02, personal_alpha_bias=3.957419e-04, personal_gate_emb=4.017357e-04, personal_gate_student_proj=8.092498e-04, personal_gate_context_proj=1.353469e-03, personal_gate_student_direct=4.261074e-03, personal_gate_context_direct=5.865816e-03, personal_gate_out=9.713939e-04, personal_generator_emb=1.610131e-02, personal_generator_context_proj=1.792629e-02, personal_generator_context_hidden=1.049755e-02, personal_generator_context_to_u=4.727426e-02, personal_generator_context_to_v=1.365378e-02, personal_generator_student_row=2.281731e-10, personal_generator_student_col=2.997073e-03, personal_generator_low_rank_scale=3.097270e-04, personal_generator_direct_scale=2.779089e-05
+2026-04-14 06:35:55,186 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] -> New best AUC=0.7443 at epoch 6
+2026-04-14 06:36:30,062 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Epoch [007/100] | Train: Loss=0.5151, BCE=0.5047, Reg=0.0104, AUC=0.7976, ACC=0.7470, RMSE=0.4098 | Val: Loss=0.5646, BCE=0.5538, Reg=0.0109, AUC=0.7474, ACC=0.7224, RMSE=0.4319
+2026-04-14 06:36:30,062 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [007] | Train: graph_entropy=0.000000, graph_diag=0.005000, graph_uniform=0.003049, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000941, alpha_var=0.000000, alpha_collapse=0.001363, reg_bce_ratio=0.0205 | Val: graph_entropy=0.000000, graph_diag=0.005000, graph_uniform=0.003049, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000961, alpha_var=0.000000, alpha_collapse=0.001859, reg_bce_ratio=0.0196
+2026-04-14 06:36:30,254 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][AE] Epoch [007] | irt_abs_mean=1.5626, irt_std=0.7931, personal_warmup_scale=1.00, graph_row_entropy=2.5592, graph_entropy_ratio=0.5318, alpha_mean=0.3202, alpha_std=0.1316, alpha_bias_std=0.0152, personal_row_entropy=2.0532, personal_matrix_delta=0.0056, personal_matrix_student_std=0.0046, personal_delta_pre_softmax_norm=0.5115, personal_delta_student_std=0.2637, alpha_head_std=0.1131
+2026-04-14 06:36:30,254 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][Graph] Epoch [007] | entropy_ratio=0.5318, diag_mass=0.0500, to_uniform_l2=0.023784, to_identity_l2=0.089156, tau_mean=0.6931, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-14 06:36:30,254 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [007] | relation_emb=0.000000e+00, relation_tau=7.905843e-08, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=2.184447e-01, personal_v=9.394509e-02, personal_alpha_bias=4.308939e-04, personal_gate_emb=7.804075e-04, personal_gate_student_proj=6.517493e-04, personal_gate_context_proj=2.463917e-03, personal_gate_student_direct=2.364813e-03, personal_gate_context_direct=1.224743e-02, personal_gate_out=1.685558e-03, personal_generator_emb=3.368570e-02, personal_generator_context_proj=1.700986e-02, personal_generator_context_hidden=1.429711e-02, personal_generator_context_to_u=5.698909e-02, personal_generator_context_to_v=2.076555e-02, personal_generator_student_row=2.956378e-10, personal_generator_student_col=3.457633e-03, personal_generator_low_rank_scale=6.020143e-03, personal_generator_direct_scale=4.192494e-05
+2026-04-14 06:36:30,594 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] -> New best AUC=0.7474 at epoch 7
+2026-04-14 06:37:05,242 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Epoch [008/100] | Train: Loss=0.5092, BCE=0.4989, Reg=0.0103, AUC=0.8033, ACC=0.7509, RMSE=0.4073 | Val: Loss=0.5664, BCE=0.5555, Reg=0.0108, AUC=0.7461, ACC=0.7220, RMSE=0.4326
+2026-04-14 06:37:05,243 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [008] | Train: graph_entropy=0.000000, graph_diag=0.005000, graph_uniform=0.003049, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000902, alpha_var=0.000000, alpha_collapse=0.001318, reg_bce_ratio=0.0206 | Val: graph_entropy=0.000000, graph_diag=0.005000, graph_uniform=0.003049, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000861, alpha_var=0.000000, alpha_collapse=0.001907, reg_bce_ratio=0.0195
+2026-04-14 06:37:05,424 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][AE] Epoch [008] | irt_abs_mean=1.5713, irt_std=0.8726, personal_warmup_scale=1.00, graph_row_entropy=2.5592, graph_entropy_ratio=0.5318, alpha_mean=0.3653, alpha_std=0.0833, alpha_bias_std=0.0157, personal_row_entropy=1.7857, personal_matrix_delta=0.0074, personal_matrix_student_std=0.0054, personal_delta_pre_softmax_norm=0.6103, personal_delta_student_std=0.3067, alpha_head_std=0.0695
+2026-04-14 06:37:05,425 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][Graph] Epoch [008] | entropy_ratio=0.5318, diag_mass=0.0500, to_uniform_l2=0.023784, to_identity_l2=0.089156, tau_mean=0.6932, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-14 06:37:05,425 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [008] | relation_emb=0.000000e+00, relation_tau=2.257328e-08, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=2.565261e-01, personal_v=8.888739e-02, personal_alpha_bias=3.930356e-04, personal_gate_emb=4.948502e-04, personal_gate_student_proj=1.195853e-03, personal_gate_context_proj=9.600522e-04, personal_gate_student_direct=9.511465e-03, personal_gate_context_direct=7.716610e-03, personal_gate_out=7.756511e-04, personal_generator_emb=2.660765e-02, personal_generator_context_proj=1.243871e-02, personal_generator_context_hidden=1.012597e-02, personal_generator_context_to_u=5.368106e-02, personal_generator_context_to_v=1.518755e-02, personal_generator_student_row=2.857023e-10, personal_generator_student_col=2.937578e-03, personal_generator_low_rank_scale=9.725980e-03, personal_generator_direct_scale=1.417372e-05
+2026-04-14 06:37:05,425 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] -> No improvement 1 epoch(s) (best AUC=0.7474 @ 7)
+2026-04-14 06:37:44,764 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Epoch [009/100] | Train: Loss=0.5032, BCE=0.4930, Reg=0.0102, AUC=0.8090, ACC=0.7526, RMSE=0.4048 | Val: Loss=0.5704, BCE=0.5595, Reg=0.0109, AUC=0.7452, ACC=0.7208, RMSE=0.4339
+2026-04-14 06:37:44,764 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [009] | Train: graph_entropy=0.000000, graph_diag=0.005000, graph_uniform=0.003049, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000890, alpha_var=0.000000, alpha_collapse=0.001293, reg_bce_ratio=0.0208 | Val: graph_entropy=0.000000, graph_diag=0.005000, graph_uniform=0.003049, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000860, alpha_var=0.000000, alpha_collapse=0.001963, reg_bce_ratio=0.0194
+2026-04-14 06:37:44,955 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][AE] Epoch [009] | irt_abs_mean=1.6719, irt_std=0.9218, personal_warmup_scale=1.00, graph_row_entropy=2.5592, graph_entropy_ratio=0.5318, alpha_mean=0.3824, alpha_std=0.0761, alpha_bias_std=0.0161, personal_row_entropy=1.8106, personal_matrix_delta=0.0074, personal_matrix_student_std=0.0058, personal_delta_pre_softmax_norm=0.6157, personal_delta_student_std=0.3245, alpha_head_std=0.0579
+2026-04-14 06:37:44,956 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][Graph] Epoch [009] | entropy_ratio=0.5318, diag_mass=0.0500, to_uniform_l2=0.023784, to_identity_l2=0.089156, tau_mean=0.6932, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-14 06:37:44,956 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [009] | relation_emb=0.000000e+00, relation_tau=1.783703e-08, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=2.127483e-01, personal_v=8.134493e-02, personal_alpha_bias=4.001310e-04, personal_gate_emb=3.813880e-04, personal_gate_student_proj=4.608381e-04, personal_gate_context_proj=1.045481e-03, personal_gate_student_direct=1.689370e-03, personal_gate_context_direct=4.402789e-03, personal_gate_out=9.360745e-04, personal_generator_emb=2.402300e-02, personal_generator_context_proj=9.016422e-03, personal_generator_context_hidden=5.758819e-03, personal_generator_context_to_u=3.127671e-02, personal_generator_context_to_v=1.112281e-02, personal_generator_student_row=2.412400e-10, personal_generator_student_col=2.579613e-03, personal_generator_low_rank_scale=9.798768e-04, personal_generator_direct_scale=5.684755e-05
+2026-04-14 06:37:44,956 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] -> No improvement 2 epoch(s) (best AUC=0.7474 @ 7)
+2026-04-14 06:38:21,393 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Epoch [010/100] | Train: Loss=0.4927, BCE=0.4826, Reg=0.0102, AUC=0.8193, ACC=0.7585, RMSE=0.3999 | Val: Loss=0.5701, BCE=0.5592, Reg=0.0109, AUC=0.7439, ACC=0.7215, RMSE=0.4338
+2026-04-14 06:38:21,393 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Reg Terms] Epoch [010] | Train: graph_entropy=0.000000, graph_diag=0.005000, graph_uniform=0.003049, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000841, alpha_var=0.000000, alpha_collapse=0.001282, reg_bce_ratio=0.0211 | Val: graph_entropy=0.000000, graph_diag=0.005000, graph_uniform=0.003049, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000860, alpha_var=0.000000, alpha_collapse=0.001976, reg_bce_ratio=0.0195
+2026-04-14 06:38:21,580 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][AE] Epoch [010] | irt_abs_mean=1.6409, irt_std=0.9066, personal_warmup_scale=1.00, graph_row_entropy=2.5592, graph_entropy_ratio=0.5318, alpha_mean=0.3977, alpha_std=0.0574, alpha_bias_std=0.0162, personal_row_entropy=1.7839, personal_matrix_delta=0.0075, personal_matrix_student_std=0.0058, personal_delta_pre_softmax_norm=0.5932, personal_delta_student_std=0.3254, alpha_head_std=0.0449
+2026-04-14 06:38:21,580 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Diag][Graph] Epoch [010] | entropy_ratio=0.5318, diag_mass=0.0500, to_uniform_l2=0.023784, to_identity_l2=0.089156, tau_mean=0.6932, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-04-14 06:38:21,580 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] [Grad Norms] Epoch [010] | relation_emb=0.000000e+00, relation_tau=3.163422e-08, relation_wq=0.000000e+00, relation_wk=0.000000e+00, personal_u=4.063454e-01, personal_v=1.408622e-01, personal_alpha_bias=3.789662e-04, personal_gate_emb=1.013296e-03, personal_gate_student_proj=3.600999e-03, personal_gate_context_proj=4.280434e-03, personal_gate_student_direct=1.395879e-02, personal_gate_context_direct=1.643967e-02, personal_gate_out=1.663917e-03, personal_generator_emb=4.088310e-02, personal_generator_context_proj=1.818780e-02, personal_generator_context_hidden=8.973203e-03, personal_generator_context_to_u=6.208436e-02, personal_generator_context_to_v=2.276194e-02, personal_generator_student_row=3.315052e-10, personal_generator_student_col=4.531695e-03, personal_generator_low_rank_scale=1.591139e-03, personal_generator_direct_scale=5.083180e-05
+2026-04-14 06:38:21,580 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] -> No improvement 3 epoch(s) (best AUC=0.7474 @ 7)
+2026-04-14 06:38:21,580 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Early stopping at epoch 10 (best AUC=0.7474 @ 7)
+2026-04-14 06:38:21,585 - INFO - Epoch-wise metrics saved to checkpoints/abce_diag/ae_clean_20260414_6d13d5e/assist_09/seed42/ae_dominant_full/metrics_history.csv
+2026-04-14 06:38:21,585 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Training completed! Best Val AUC=0.7474 @ epoch 7
+2026-04-14 06:38:21,756 - INFO - 
+============================================================
+         MODULE ACTIVITY REPORT
+============================================================
+Dataset: assist_09 | Seed: 42 | Epoch: 10
+
+1. Concept Graph Module (A):
+   - Mean row entropy: 2.559 / 4.812
+   - Entropy ratio: 53.2%
+   - Status: ACTIVE (learning meaningful structure)
+
+2. Personal Graph Module (E):
+   - Alpha mean: 0.371
+   - Alpha std: 0.106
+   - Alpha bias std: 0.022
+   - Personal/global delta: 0.0103
+   - Inter-student matrix std: 0.0056
+   - Status: ACTIVE (student-specific personalization is visible)
+
+------------------------------------------------------------
+SUMMARY:
+   Active modules: Concept Graph (A), Personal Graph (E)
+   All enabled graph modules are functioning properly.
+============================================================
+2026-04-14 06:38:21,757 - INFO - [assist_09|assist_09_abce_ae_dominant_full|lr=0.0003|drop=0.20] Module activity saved to checkpoints/abce_diag/ae_clean_20260414_6d13d5e/assist_09/seed42/ae_dominant_full/module_activity.json
+2026-04-14 06:38:21,805 - INFO - Using device: cuda:0 (physical gpu 2)
+2026-04-14 06:38:21,805 - INFO - Loading model from checkpoints/abce_diag/ae_clean_20260414_6d13d5e/assist_09/seed42/ae_dominant_full/best_model.pth...
+2026-04-14 06:38:21,923 - INFO - [Inference Filter] before=52549, after=51090, dropped=1459, coverage=97.22% (train-only seen student/item support)
+2026-04-14 06:38:21,938 - INFO - Inference switches: ablate_module1=False | enable_module1=True | use_concept_graph=True | effective(num_gnn_layers=1)
+2026-04-14 06:38:21,953 - INFO - [Inference] Ablation runtime check: args(ablate_module1=False) | expect(use_concept_graph=True,use_personal_graph=True) | model(enable_module1=True,use_concept_graph=True,use_personal_graph=True) | physical(has_knowledge_encoder=True,has_relation_learning=True,has_adaptive_gate=True,has_personal_generator=True)
+2026-04-14 06:38:21,953 - INFO - [Inference] [Graph Init] graph_tau_mean=1.0055, graph_tau_std=0.0000, graph_dropout=0.000, use_personal_graph=True
+2026-04-14 06:38:21,955 - INFO - Model loaded from epoch 7. Start testing...
+2026-04-14 06:38:23,209 - INFO - [Test] 200/400 batches done, samples=25600
+2026-04-14 06:38:24,311 - INFO - [Test] 400/400 batches done, samples=51090
+2026-04-14 06:38:24,375 - INFO - 
+==================================================
+2026-04-14 06:38:24,375 - INFO - Test Results:
+2026-04-14 06:38:24,375 - INFO - AUC: 0.7472
+2026-04-14 06:38:24,375 - INFO - ACC: 0.7259
+2026-04-14 06:38:24,375 - INFO - RMSE: 0.4300
+2026-04-14 06:38:24,375 - INFO - ==================================================
+2026-04-14 06:38:24,392 - INFO - Summary appended to /home/zsh/ConceptSkillCDM/results/experiment_results.csv
+2026-04-14 06:38:24,392 - INFO - 
+Generating student diagnosis reports...
+2026-04-14 06:38:24,417 - INFO - Student diagnosis reports saved to checkpoints/abce_diag/ae_clean_20260414_6d13d5e/assist_09/seed42/ae_dominant_full/student_diagnosis.json
+2026-04-14 06:38:24,422 - INFO - Run completed.
+2026-04-14 06:38:24,422 - INFO - Best validation AUC: 0.7474 at epoch 7
+2026-04-14 06:38:24,422 - INFO - Test metrics - AUC: 0.7472, ACC: 0.7259, RMSE: 0.4300
+2026-04-14 06:38:24,517 - WARNING - Failed to save component analysis data: Error(s) in loading state_dict for CognitiveDiagnosisModel:
+	size mismatch for structure_module.adaptive_gate.context_norm.weight: copying a param with shape torch.Size([128]) from checkpoint, the shape in current model is torch.Size([192]).
+	size mismatch for structure_module.adaptive_gate.context_norm.bias: copying a param with shape torch.Size([128]) from checkpoint, the shape in current model is torch.Size([192]).
+	size mismatch for structure_module.adaptive_gate.context_proj.weight: copying a param with shape torch.Size([64, 128]) from checkpoint, the shape in current model is torch.Size([64, 192]).
+	size mismatch for structure_module.adaptive_gate.context_to_logit.weight: copying a param with shape torch.Size([2, 128]) from checkpoint, the shape in current model is torch.Size([2, 192]).
+	size mismatch for structure_module.personal_generator.context_norm.weight: copying a param with shape torch.Size([128]) from checkpoint, the shape in current model is torch.Size([192]).
+	size mismatch for structure_module.personal_generator.context_norm.bias: copying a param with shape torch.Size([128]) from checkpoint, the shape in current model is torch.Size([192]).
+	size mismatch for structure_module.personal_generator.context_proj.weight: copying a param with shape torch.Size([64, 128]) from checkpoint, the shape in current model is torch.Size([64, 192]).
