@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import sys
+import traceback
 
 import numpy as np
 import torch
@@ -30,6 +31,7 @@ def _normalize_bool(value, default=False):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Cognitive Diagnosis Model Training and Testing")
+    bool_action = argparse.BooleanOptionalAction
 
     # ======================
     # Data
@@ -142,7 +144,7 @@ def parse_args():
     parser.add_argument("--generate_diagnosis", default=True)
 
     # personal graph/
-    parser.add_argument("--use_personal_graph", action="store_true")
+    parser.add_argument("--use_personal_graph", action=bool_action, default=None)
     parser.add_argument("--model_variant", type=str, default="full")
 
     #  GPU  trainer/launcher 
@@ -227,11 +229,11 @@ def parse_args():
                         help="Max magnitude scale for bounded student-specific alpha bias.")
     parser.add_argument("--personal_direct_bias_scale", type=float, default=0.5,
                         help="Upper bound for PersonalRelationGenerator direct row/col bias contribution.")
-    parser.add_argument("--personal_disable_direct_bias", action="store_true",
+    parser.add_argument("--personal_disable_direct_bias", action=bool_action, default=None,
                         help="Disable direct row/col bias in the personal graph generator.")
-    parser.add_argument("--personal_disable_student_global_context", action="store_true",
+    parser.add_argument("--personal_disable_student_global_context", action=bool_action, default=None,
                         help="Use state-primary personal context without raw student_global direct concatenation.")
-    parser.add_argument("--share_concept_embeddings", action="store_true",
+    parser.add_argument("--share_concept_embeddings", action=bool_action, default=None,
                         help="Share concept embeddings between relation learning and knowledge encoder.")
 
     #  GPU 
@@ -359,12 +361,43 @@ def main():
     # =========================================================
     # 6)  + 
     # =========================================================
-    best_val_auc, best_epoch = train_one_experiment(args, logger)
-    metrics, _ = run_inference(args, logger)
+    failure_path = os.path.join(args.save_dir, "failure_reason.json")
+
+    def _write_failure(reason: str, exc: Exception | None = None, extra: dict | None = None) -> None:
+        payload = {
+            "reason": reason,
+            "error_type": type(exc).__name__ if exc is not None else None,
+            "message": str(exc) if exc is not None else None,
+        }
+        if extra:
+            payload.update(extra)
+        with open(failure_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=4, ensure_ascii=False)
+
+    try:
+        best_val_auc, best_epoch = train_one_experiment(args, logger)
+        metrics, _ = run_inference(args, logger)
+    except Exception as exc:
+        extra = {}
+        if hasattr(exc, "to_failure_dict"):
+            extra = getattr(exc, "to_failure_dict")()
+        extra["traceback"] = traceback.format_exc()
+        _write_failure(
+            reason=extra.get("reason", "runtime_exception"),
+            exc=exc,
+            extra=extra,
+        )
+        logger.error("Run failed with exception: %s", exc)
+        logger.error("%s", extra["traceback"])
+        raise SystemExit(1) from exc
 
     if not metrics:
         logger.error("Inference failed; check logs.")
-        return
+        _write_failure(reason="inference_failed")
+        raise SystemExit(1)
+
+    if os.path.exists(failure_path):
+        os.remove(failure_path)
 
     logger.info("Run completed.")
     logger.info(f"Best validation AUC: {best_val_auc:.4f} at epoch {best_epoch}")
@@ -387,6 +420,7 @@ def main():
             model_path = os.path.join(args.save_dir, "best_model.pth")
             checkpoint = torch.load(model_path, map_location=device, weights_only=False)
             info_dict = checkpoint["info_dict"]
+            loaded_args = checkpoint.get("args", {})
             
             # 
             from src.model import CognitiveDiagnosisModel
@@ -395,39 +429,84 @@ def main():
                 num_exercises=info_dict["num_exercises"],
                 num_concepts=info_dict["num_concepts"],
                 q_matrix=info_dict["q_matrix"],
-                knowledge_dim=args.knowledge_dim,
-                num_relation_heads=args.num_relation_heads,
-                num_gnn_layers=args.num_gnn_layers,
-                dropout=args.dropout,
-                use_concept_graph=args.use_concept_graph,
-                graph_topk=getattr(args, "graph_topk", None),
-                allow_self_loop=not getattr(args, "disable_self_loop", False),
-                use_personal_graph=args.use_personal_graph,
-                personal_rank=getattr(args, "personal_rank", 4),
-                ablate_module1=getattr(args, "ablate_module1", False),
+                knowledge_dim=loaded_args.get("knowledge_dim", args.knowledge_dim),
+                num_relation_heads=loaded_args.get("num_relation_heads", args.num_relation_heads),
+                num_gnn_layers=loaded_args.get("num_gnn_layers", args.num_gnn_layers),
+                dropout=loaded_args.get("dropout", args.dropout),
+                use_concept_graph=loaded_args.get("use_concept_graph", args.use_concept_graph),
+                graph_topk=loaded_args.get("graph_topk", getattr(args, "graph_topk", None)),
+                allow_self_loop=not loaded_args.get("disable_self_loop", getattr(args, "disable_self_loop", False)),
+                use_personal_graph=loaded_args.get("use_personal_graph", args.use_personal_graph),
+                personal_rank=loaded_args.get("personal_rank", getattr(args, "personal_rank", 4)),
+                ablate_module1=loaded_args.get("ablate_module1", getattr(args, "ablate_module1", False)),
                 graph_dropout=None
-                if float(getattr(args, "graph_dropout", -1.0)) < 0
-                else float(getattr(args, "graph_dropout", -1.0)),
-                graph_tau_init=getattr(args, "graph_tau_init", 1.0),
-                graph_identity_residual=getattr(args, "graph_identity_residual", 0.0),
-                lambda_graph_entropy=getattr(args, "lambda_sparse", 0.01),
-                graph_entropy_min=getattr(args, "graph_entropy_min", 0.15),
-                graph_entropy_max=getattr(args, "graph_entropy_max", 0.85),
-                lambda_graph_diag=getattr(args, "lambda_graph_diag", 0.10),
-                lambda_graph_uniform=getattr(args, "lambda_graph_uniform", 0.04),
-                graph_uniform_margin=getattr(args, "graph_uniform_margin", 0.10),
-                graph_reg_warmup_epochs=getattr(args, "graph_reg_warmup_epochs", 1),
-                graph_reg_cap_ratio=getattr(args, "graph_reg_cap_ratio", 6.0),
-                lambda_sparse_personal=getattr(args, "lambda_sparse_personal", 0.0),
-                lambda_alpha=getattr(args, "lambda_alpha", 0.0),
-                prediction_l2_lambda=getattr(args, "prediction_l2_lambda", 5e-5),
-                gnn_residual_weight=getattr(args, "gnn_residual_weight", 0.5),
-                personal_max_alpha=getattr(args, "personal_max_alpha", 0.35),
-                personal_delta_scale=getattr(args, "personal_delta_scale", 1.0),
-                personal_warmup_epochs=getattr(args, "personal_warmup_epochs", 0),
-                personal_student_dim=getattr(args, "personal_student_dim", args.knowledge_dim),
-                lambda_alpha_min=getattr(args, "lambda_alpha_min", 0.0),
-                alpha_min_target=getattr(args, "alpha_min_target", 0.0),
+                if float(loaded_args.get("graph_dropout", getattr(args, "graph_dropout", -1.0))) < 0
+                else float(loaded_args.get("graph_dropout", getattr(args, "graph_dropout", -1.0))),
+                graph_tau_init=loaded_args.get("graph_tau_init", getattr(args, "graph_tau_init", 1.0)),
+                graph_identity_residual=loaded_args.get(
+                    "graph_identity_residual", getattr(args, "graph_identity_residual", 0.0)
+                ),
+                lambda_graph_entropy=loaded_args.get("lambda_sparse", getattr(args, "lambda_sparse", 0.01)),
+                graph_entropy_min=loaded_args.get("graph_entropy_min", getattr(args, "graph_entropy_min", 0.15)),
+                graph_entropy_max=loaded_args.get("graph_entropy_max", getattr(args, "graph_entropy_max", 0.85)),
+                lambda_graph_diag=loaded_args.get("lambda_graph_diag", getattr(args, "lambda_graph_diag", 0.10)),
+                lambda_graph_uniform=loaded_args.get(
+                    "lambda_graph_uniform", getattr(args, "lambda_graph_uniform", 0.04)
+                ),
+                graph_uniform_margin=loaded_args.get(
+                    "graph_uniform_margin", getattr(args, "graph_uniform_margin", 0.10)
+                ),
+                graph_reg_warmup_epochs=loaded_args.get(
+                    "graph_reg_warmup_epochs", getattr(args, "graph_reg_warmup_epochs", 1)
+                ),
+                graph_reg_cap_ratio=loaded_args.get(
+                    "graph_reg_cap_ratio", getattr(args, "graph_reg_cap_ratio", 6.0)
+                ),
+                lambda_sparse_personal=loaded_args.get(
+                    "lambda_sparse_personal", getattr(args, "lambda_sparse_personal", 0.0)
+                ),
+                lambda_alpha=loaded_args.get("lambda_alpha", getattr(args, "lambda_alpha", 0.0)),
+                prediction_l2_lambda=loaded_args.get(
+                    "prediction_l2_lambda", getattr(args, "prediction_l2_lambda", 5e-5)
+                ),
+                gnn_residual_weight=loaded_args.get(
+                    "gnn_residual_weight", getattr(args, "gnn_residual_weight", 0.5)
+                ),
+                personal_max_alpha=loaded_args.get(
+                    "personal_max_alpha", getattr(args, "personal_max_alpha", 0.35)
+                ),
+                personal_delta_scale=loaded_args.get(
+                    "personal_delta_scale", getattr(args, "personal_delta_scale", 1.0)
+                ),
+                personal_warmup_epochs=loaded_args.get(
+                    "personal_warmup_epochs", getattr(args, "personal_warmup_epochs", 0)
+                ),
+                personal_reg_warmup_epochs=loaded_args.get(
+                    "personal_reg_warmup_epochs", getattr(args, "personal_reg_warmup_epochs", None)
+                ),
+                personal_student_dim=loaded_args.get(
+                    "personal_student_dim", getattr(args, "personal_student_dim", args.knowledge_dim)
+                ),
+                lambda_alpha_min=loaded_args.get(
+                    "lambda_alpha_min", getattr(args, "lambda_alpha_min", 0.0)
+                ),
+                alpha_min_target=loaded_args.get("alpha_min_target", getattr(args, "alpha_min_target", 0.0)),
+                personal_alpha_bias_scale=loaded_args.get(
+                    "personal_alpha_bias_scale", getattr(args, "personal_alpha_bias_scale", 0.0)
+                ),
+                personal_direct_bias_scale=loaded_args.get(
+                    "personal_direct_bias_scale", getattr(args, "personal_direct_bias_scale", 0.0)
+                ),
+                personal_disable_direct_bias=loaded_args.get(
+                    "personal_disable_direct_bias", getattr(args, "personal_disable_direct_bias", False)
+                ),
+                personal_disable_student_global_context=loaded_args.get(
+                    "personal_disable_student_global_context",
+                    getattr(args, "personal_disable_student_global_context", False),
+                ),
+                share_concept_embeddings=loaded_args.get(
+                    "share_concept_embeddings", getattr(args, "share_concept_embeddings", False)
+                ),
             ).to(device)
             model.load_state_dict(checkpoint["model_state_dict"])
             model.set_epoch(int(checkpoint.get("epoch", getattr(args, "epochs", 1))))

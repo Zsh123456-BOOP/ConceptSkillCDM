@@ -2,6 +2,7 @@
 import math
 import json
 import os
+import traceback
 import warnings
 from typing import Tuple, Dict, Any, Optional, Union, List
 
@@ -35,6 +36,50 @@ from src.module_activity import (
 # =========================
 # If True: fail fast when checkpoint/model keys mismatch (recommended for ablations)
 STRICT_CHECKPOINT_LOADING = True
+MONITOR_NAME = "val_auc"
+MONITOR_MODE = "max"
+STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
+    "share_concept_embeddings",
+    "personal_disable_direct_bias",
+    "personal_direct_bias_scale",
+    "personal_alpha_bias_scale",
+    "personal_reg_warmup_epochs",
+    "personal_disable_student_global_context",
+    "use_personal_graph",
+    "use_concept_graph",
+    "graph_identity_residual",
+    "personal_delta_scale",
+    "personal_warmup_epochs",
+    "lambda_alpha_min",
+    "alpha_min_target",
+)
+
+
+class NonFiniteTrainingError(RuntimeError):
+    def __init__(
+        self,
+        *,
+        reason: str,
+        stage: str,
+        epoch: int,
+        batch_idx: int,
+        payload: Dict[str, Any],
+    ) -> None:
+        self.reason = reason
+        self.stage = stage
+        self.epoch = int(epoch)
+        self.batch_idx = int(batch_idx)
+        self.payload = payload
+        super().__init__(f"{reason} at {stage} epoch={epoch} batch={batch_idx}")
+
+    def to_failure_dict(self) -> Dict[str, Any]:
+        return {
+            "reason": self.reason,
+            "stage": self.stage,
+            "epoch": self.epoch,
+            "batch_idx": self.batch_idx,
+            "payload": self.payload,
+        }
 
 # ======================================================
 # Helpers
@@ -59,6 +104,240 @@ def _resolve_optional_graph_dropout(value: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return None if val < 0 else val
+
+
+def _default_monitor_config() -> Dict[str, str]:
+    return {
+        "scheduler_monitor": MONITOR_NAME,
+        "scheduler_mode": MONITOR_MODE,
+        "best_monitor": MONITOR_NAME,
+        "best_mode": MONITOR_MODE,
+        "early_stop_monitor": MONITOR_NAME,
+        "early_stop_mode": MONITOR_MODE,
+    }
+
+
+def _collect_structural_switches(source: Any) -> Dict[str, Any]:
+    return {key: getattr(source, key, None) if not isinstance(source, dict) else source.get(key) for key in STRUCTURAL_SWITCH_KEYS}
+
+
+def _to_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, torch.Tensor):
+        if value.numel() == 0:
+            return None
+        return float(value.detach().reshape(-1)[0].item())
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_int(value: Any) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, torch.Tensor):
+        if value.numel() == 0:
+            return 0
+        return int(value.detach().reshape(-1)[0].item())
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _tensor_stats(name: str, tensor: Optional[torch.Tensor]) -> Dict[str, Any]:
+    if tensor is None:
+        return {"name": name, "present": False}
+    det = tensor.detach()
+    safe = torch.nan_to_num(det, nan=0.0, posinf=0.0, neginf=0.0)
+    return {
+        "name": name,
+        "present": True,
+        "shape": list(det.shape),
+        "nonfinite_count": int((~torch.isfinite(det)).sum().item()),
+        "mean": float(safe.mean().item()),
+        "std": float(safe.std(unbiased=False).item()) if det.numel() > 1 else 0.0,
+        "absmax": float(safe.abs().max().item()) if det.numel() > 0 else 0.0,
+    }
+
+
+def _first_nonfinite_reason(
+    details: Dict[str, Any],
+    logits: torch.Tensor,
+    bce_loss: torch.Tensor,
+    reg_terms: Dict[str, torch.Tensor],
+    loss: torch.Tensor,
+) -> Optional[str]:
+    tensor_checks = (
+        ("nonfinite_alpha", details.get("alpha_effective", details.get("alpha"))),
+        ("nonfinite_alpha_logit", details.get("alpha_logit")),
+        ("nonfinite_knowledge_state", details.get("knowledge_state")),
+        ("nonfinite_logits", logits),
+        ("nonfinite_bce_loss", bce_loss),
+        ("nonfinite_reg_loss", reg_terms.get("total")),
+        ("nonfinite_loss", loss),
+    )
+    for reason, tensor in tensor_checks:
+        if tensor is not None and not torch.isfinite(tensor).all():
+            return reason
+
+    scalar_count_checks = (
+        ("nonfinite_personal_delta", _to_int(details.get("personal_delta_nonfinite_count"))),
+        ("nonfinite_personal_logits", _to_int(details.get("personal_logits_nonfinite_count"))),
+        ("nonfinite_personal_matrices", _to_int(details.get("personal_matrix_nonfinite_count"))),
+    )
+    for reason, count in scalar_count_checks:
+        if count > 0:
+            return reason
+    return None
+
+
+def _build_nonfinite_payload(
+    *,
+    stage: str,
+    epoch: int,
+    batch_idx: int,
+    details: Dict[str, Any],
+    logits: torch.Tensor,
+    bce_loss: torch.Tensor,
+    reg_terms: Dict[str, torch.Tensor],
+    loss: torch.Tensor,
+    reason: str,
+) -> Dict[str, Any]:
+    loss_terms = {
+        "bce_loss": _to_float(bce_loss),
+        "reg_loss": _to_float(reg_terms.get("total")),
+        "loss": _to_float(loss),
+    }
+    for key in _REG_COMPONENT_KEYS:
+        loss_terms[key] = _to_float(reg_terms.get(key))
+
+    return {
+        "reason": reason,
+        "stage": stage,
+        "epoch": int(epoch),
+        "batch_idx": int(batch_idx),
+        "alpha": _tensor_stats("alpha", details.get("alpha_effective", details.get("alpha"))),
+        "alpha_logit": _tensor_stats("alpha_logit", details.get("alpha_logit")),
+        "knowledge_state": _tensor_stats("knowledge_state", details.get("knowledge_state")),
+        "logits": _tensor_stats("logits", logits),
+        "loss_terms": loss_terms,
+        "ae_diagnostics": {
+            "alpha_state_path_absmean": _to_float(details.get("alpha_state_path_absmean")),
+            "alpha_id_path_absmean": _to_float(details.get("alpha_id_path_absmean")),
+            "alpha_bias_path_absmean": _to_float(details.get("alpha_bias_path_absmean")),
+            "alpha_id_adapter_scale": _to_float(details.get("alpha_id_adapter_scale")),
+            "personal_delta_nonfinite_count": _to_int(details.get("personal_delta_nonfinite_count")),
+            "personal_delta_absmax": _to_float(details.get("personal_delta_absmax")),
+            "personal_delta_pre_softmax_norm": _to_float(details.get("personal_delta_pre_softmax_norm")),
+            "personal_delta_student_std": _to_float(details.get("personal_delta_student_std")),
+            "personal_logits_nonfinite_count": _to_int(details.get("personal_logits_nonfinite_count")),
+            "personal_logits_absmax": _to_float(details.get("personal_logits_absmax")),
+            "personal_matrix_nonfinite_count": _to_int(details.get("personal_matrix_nonfinite_count")),
+            "personal_matrix_delta": _to_float(details.get("personal_matrix_delta")),
+            "personal_matrix_student_std": _to_float(details.get("personal_matrix_student_std")),
+            "personal_bad_row_count": _to_int(details.get("personal_bad_row_count")),
+            "personal_fallback_row_count": _to_int(details.get("personal_fallback_row_count")),
+            "personal_state_mix": _to_float(details.get("personal_state_mix")),
+            "personal_student_mix": _to_float(details.get("personal_student_mix")),
+            "personal_student_adapter_scale": _to_float(details.get("personal_student_adapter_scale")),
+            "personal_context_adapter_scale": _to_float(details.get("personal_context_adapter_scale")),
+            "relation_identity_delta": _to_float(details.get("relation_identity_delta")),
+            "knowledge_state_graph_delta": _to_float(details.get("knowledge_state_graph_delta")),
+            "knowledge_state_personal_delta": _to_float(details.get("knowledge_state_personal_delta")),
+        },
+    }
+
+
+def _raise_if_nonfinite(
+    *,
+    stage: str,
+    epoch: int,
+    batch_idx: int,
+    details: Dict[str, Any],
+    logits: torch.Tensor,
+    bce_loss: torch.Tensor,
+    reg_terms: Dict[str, torch.Tensor],
+    loss: torch.Tensor,
+) -> None:
+    reason = _first_nonfinite_reason(details, logits, bce_loss, reg_terms, loss)
+    if reason is None:
+        return
+    raise NonFiniteTrainingError(
+        reason=reason,
+        stage=stage,
+        epoch=epoch,
+        batch_idx=batch_idx,
+        payload=_build_nonfinite_payload(
+            stage=stage,
+            epoch=epoch,
+            batch_idx=batch_idx,
+            details=details,
+            logits=logits,
+            bce_loss=bce_loss,
+            reg_terms=reg_terms,
+            loss=loss,
+            reason=reason,
+        ),
+    )
+
+
+def _dedupe_params(params: List[torch.nn.Parameter]) -> List[torch.nn.Parameter]:
+    out: List[torch.nn.Parameter] = []
+    seen: set[int] = set()
+    for param in params:
+        if param is None or not isinstance(param, torch.nn.Parameter):
+            continue
+        pid = id(param)
+        if pid in seen:
+            continue
+        seen.add(pid)
+        out.append(param)
+    return out
+
+
+def _clip_grad_group(params: List[torch.nn.Parameter], max_norm: float) -> float:
+    params = [p for p in _dedupe_params(params) if p.requires_grad and p.grad is not None]
+    if not params:
+        return 0.0
+    norm = torch.nn.utils.clip_grad_norm_(params, max_norm=max_norm)
+    return float(norm.item() if isinstance(norm, torch.Tensor) else norm)
+
+
+def _clip_stability_sensitive_grads(model: nn.Module) -> Dict[str, float]:
+    base_model = _get_base_model(model)
+    structure_module = getattr(base_model, "structure_module", None)
+    relation_learning = getattr(structure_module, "relation_learning", None) if structure_module is not None else None
+    personal_modules = [
+        getattr(structure_module, "adaptive_gate", None),
+        getattr(structure_module, "personal_generator", None),
+        getattr(structure_module, "personal_gate_embedding", None),
+        getattr(structure_module, "personal_generator_embedding", None),
+        getattr(structure_module, "personal_alpha_bias", None),
+        getattr(structure_module, "personal_gate_from_state", None),
+        getattr(structure_module, "personal_generator_from_state", None),
+    ]
+
+    graph_params = list(relation_learning.parameters()) if relation_learning is not None else []
+    personal_params: List[torch.nn.Parameter] = []
+    for module in personal_modules:
+        if module is None:
+            continue
+        personal_params.extend(list(module.parameters()))
+
+    graph_ids = {id(p) for p in _dedupe_params(graph_params)}
+    personal_ids = {id(p) for p in _dedupe_params(personal_params)}
+    other_params = [
+        p for p in base_model.parameters() if id(p) not in graph_ids and id(p) not in personal_ids
+    ]
+
+    return {
+        "graph_clip_norm": _clip_grad_group(graph_params, max_norm=1.5),
+        "personal_clip_norm": _clip_grad_group(personal_params, max_norm=1.0),
+        "other_clip_norm": _clip_grad_group(other_params, max_norm=5.0),
+    }
 
 
 def _get_base_model(model: nn.Module) -> CognitiveDiagnosisModel:
@@ -88,6 +367,7 @@ def _collect_runtime_ablation_facts(model: nn.Module) -> Dict[str, Any]:
         "has_relation_learning": bool(relation_learning is not None),
         "has_adaptive_gate": bool(adaptive_gate is not None),
         "has_personal_generator": bool(personal_generator is not None),
+        **_collect_structural_switches(base_model),
     }
 
 
@@ -311,6 +591,17 @@ def _collect_debug_forward_stats(
     personal_delta_pre_softmax_norm_vals: List[float] = []
     personal_delta_student_std_vals: List[float] = []
     alpha_head_std_vals: List[float] = []
+    alpha_state_path_vals: List[float] = []
+    alpha_id_path_vals: List[float] = []
+    alpha_bias_path_vals: List[float] = []
+    relation_identity_delta_vals: List[float] = []
+    knowledge_state_graph_delta_vals: List[float] = []
+    knowledge_state_personal_delta_vals: List[float] = []
+    personal_bad_row_vals: List[float] = []
+    personal_fallback_row_vals: List[float] = []
+    personal_student_mix_vals: List[float] = []
+    personal_student_adapter_vals: List[float] = []
+    personal_logits_absmax_vals: List[float] = []
 
     graph_row_entropy_mean = 0.0
     graph_entropy_ratio = 0.0
@@ -323,6 +614,7 @@ def _collect_debug_forward_stats(
     base_model = _get_base_model(model)
     tau_mean = 0.0
     tau_std = 0.0
+    share_concept_embeddings = float(getattr(base_model, "share_concept_embeddings", False))
     relation_learning = getattr(getattr(base_model, "structure_module", None), "relation_learning", None)
     if relation_learning is not None and getattr(relation_learning, "tau_raw", None) is not None:
         tau = F.softplus(relation_learning.tau_raw.detach()) + 1e-6
@@ -381,6 +673,17 @@ def _collect_debug_forward_stats(
                     ("personal_delta_pre_softmax_norm", personal_delta_pre_softmax_norm_vals),
                     ("personal_delta_student_std", personal_delta_student_std_vals),
                     ("alpha_head_std", alpha_head_std_vals),
+                    ("alpha_state_path_absmean", alpha_state_path_vals),
+                    ("alpha_id_path_absmean", alpha_id_path_vals),
+                    ("alpha_bias_path_absmean", alpha_bias_path_vals),
+                    ("relation_identity_delta", relation_identity_delta_vals),
+                    ("knowledge_state_graph_delta", knowledge_state_graph_delta_vals),
+                    ("knowledge_state_personal_delta", knowledge_state_personal_delta_vals),
+                    ("personal_bad_row_count", personal_bad_row_vals),
+                    ("personal_fallback_row_count", personal_fallback_row_vals),
+                    ("personal_student_mix", personal_student_mix_vals),
+                    ("personal_student_adapter_scale", personal_student_adapter_vals),
+                    ("personal_logits_absmax", personal_logits_absmax_vals),
                 ):
                     val = details.get(detail_key)
                     if val is not None:
@@ -417,6 +720,17 @@ def _collect_debug_forward_stats(
     personal_delta_pre_softmax_norm_mean, _ = _safe_mean_std(personal_delta_pre_softmax_norm_vals)
     personal_delta_student_std_mean, _ = _safe_mean_std(personal_delta_student_std_vals)
     alpha_head_std_mean, _ = _safe_mean_std(alpha_head_std_vals)
+    alpha_state_path_mean, _ = _safe_mean_std(alpha_state_path_vals)
+    alpha_id_path_mean, _ = _safe_mean_std(alpha_id_path_vals)
+    alpha_bias_path_mean, _ = _safe_mean_std(alpha_bias_path_vals)
+    relation_identity_delta_mean, _ = _safe_mean_std(relation_identity_delta_vals)
+    knowledge_state_graph_delta_mean, _ = _safe_mean_std(knowledge_state_graph_delta_vals)
+    knowledge_state_personal_delta_mean, _ = _safe_mean_std(knowledge_state_personal_delta_vals)
+    personal_bad_row_mean, _ = _safe_mean_std(personal_bad_row_vals)
+    personal_fallback_row_mean, _ = _safe_mean_std(personal_fallback_row_vals)
+    personal_student_mix_mean, _ = _safe_mean_std(personal_student_mix_vals)
+    personal_student_adapter_mean, _ = _safe_mean_std(personal_student_adapter_vals)
+    personal_logits_absmax_mean, _ = _safe_mean_std(personal_logits_absmax_vals)
 
     return {
         "irt_abs_mean": irt_abs_mean,
@@ -437,7 +751,19 @@ def _collect_debug_forward_stats(
         "personal_delta_pre_softmax_norm": personal_delta_pre_softmax_norm_mean,
         "personal_delta_student_std": personal_delta_student_std_mean,
         "alpha_head_std": alpha_head_std_mean,
+        "alpha_state_path_absmean": alpha_state_path_mean,
+        "alpha_id_path_absmean": alpha_id_path_mean,
+        "alpha_bias_path_absmean": alpha_bias_path_mean,
+        "relation_identity_delta": relation_identity_delta_mean,
+        "knowledge_state_graph_delta": knowledge_state_graph_delta_mean,
+        "knowledge_state_personal_delta": knowledge_state_personal_delta_mean,
+        "personal_bad_row_count": personal_bad_row_mean,
+        "personal_fallback_row_count": personal_fallback_row_mean,
+        "personal_student_mix": personal_student_mix_mean,
+        "personal_student_adapter_scale": personal_student_adapter_mean,
+        "personal_logits_absmax": personal_logits_absmax_mean,
         "personal_warmup_scale": personal_warmup_scale,
+        "share_concept_embeddings": share_concept_embeddings,
     }
 
 
@@ -480,9 +806,10 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
         relation_wk = float(np.mean(wk_norms)) if wk_norms else 0.0
     personal_u = getattr(personal_generator, "student_basis_u", None)
     personal_v = getattr(personal_generator, "student_basis_v", None)
-    personal_gate_student_proj = getattr(getattr(adaptive_gate, "student_proj", None), "weight", None)
+    personal_gate_state_proj = getattr(getattr(adaptive_gate, "state_proj", None), "weight", None)
     personal_gate_context_proj = getattr(getattr(adaptive_gate, "context_proj", None), "weight", None)
-    personal_gate_student_direct = getattr(getattr(adaptive_gate, "student_to_logit", None), "weight", None)
+    personal_gate_state_direct = getattr(getattr(adaptive_gate, "state_to_logit", None), "weight", None)
+    personal_gate_id_direct = getattr(getattr(adaptive_gate, "id_to_logit", None), "weight", None)
     personal_gate_context_direct = getattr(getattr(adaptive_gate, "context_to_logit", None), "weight", None)
     personal_gate_out = getattr(getattr(adaptive_gate, "out", None), "weight", None)
     personal_generator_context_proj = getattr(getattr(personal_generator, "context_proj", None), "weight", None)
@@ -491,7 +818,8 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
     personal_generator_context_to_v = getattr(getattr(personal_generator, "context_to_v", None), "weight", None)
     personal_generator_student_row = getattr(getattr(personal_generator, "student_row_proj", None), "weight", None)
     personal_generator_student_col = getattr(getattr(personal_generator, "student_col_proj", None), "weight", None)
-    personal_generator_low_rank_scale = getattr(personal_generator, "low_rank_scale", None)
+    personal_generator_student_adapter = getattr(personal_generator, "student_adapter_logit", None)
+    personal_generator_context_adapter = getattr(personal_generator, "context_adapter_logit", None)
     personal_generator_direct_scale = getattr(personal_generator, "direct_scale", None)
 
     return {
@@ -503,9 +831,10 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
         "personal_v": _grad_norm_or_zero(personal_v),
         "personal_alpha_bias": _grad_norm_or_zero(getattr(personal_alpha_bias, "weight", None)),
         "personal_gate_emb": _grad_norm_or_zero(getattr(personal_gate_embedding, "weight", None)),
-        "personal_gate_student_proj": _grad_norm_or_zero(personal_gate_student_proj),
+        "personal_gate_state_proj": _grad_norm_or_zero(personal_gate_state_proj),
         "personal_gate_context_proj": _grad_norm_or_zero(personal_gate_context_proj),
-        "personal_gate_student_direct": _grad_norm_or_zero(personal_gate_student_direct),
+        "personal_gate_state_direct": _grad_norm_or_zero(personal_gate_state_direct),
+        "personal_gate_id_direct": _grad_norm_or_zero(personal_gate_id_direct),
         "personal_gate_context_direct": _grad_norm_or_zero(personal_gate_context_direct),
         "personal_gate_out": _grad_norm_or_zero(personal_gate_out),
         "personal_generator_emb": _grad_norm_or_zero(getattr(personal_generator_embedding, "weight", None)),
@@ -515,7 +844,8 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
         "personal_generator_context_to_v": _grad_norm_or_zero(personal_generator_context_to_v),
         "personal_generator_student_row": _grad_norm_or_zero(personal_generator_student_row),
         "personal_generator_student_col": _grad_norm_or_zero(personal_generator_student_col),
-        "personal_generator_low_rank_scale": _grad_norm_or_zero(personal_generator_low_rank_scale),
+        "personal_generator_student_adapter": _grad_norm_or_zero(personal_generator_student_adapter),
+        "personal_generator_context_adapter": _grad_norm_or_zero(personal_generator_context_adapter),
         "personal_generator_direct_scale": _grad_norm_or_zero(personal_generator_direct_scale),
     }
 
@@ -530,6 +860,7 @@ def train_epoch(
     optimizer: optim.Optimizer,
     device: torch.device,
     logger,
+    epoch: int,
 ) -> Dict[str, float]:
     model.train()
 
@@ -567,10 +898,20 @@ def train_epoch(
         )
         reg_loss = reg_terms["total"]
         loss = bce_loss + reg_loss
+        _raise_if_nonfinite(
+            stage="train",
+            epoch=epoch,
+            batch_idx=batch_idx,
+            details=details,
+            logits=logits,
+            bce_loss=bce_loss,
+            reg_terms=reg_terms,
+            loss=loss,
+        )
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+        _clip_stability_sensitive_grads(model)
         optimizer.step()
 
         total_loss += float(loss.item())
@@ -612,6 +953,7 @@ def validate(
     val_loader: DataLoader,
     device: torch.device,
     logger,
+    epoch: int,
 ) -> Dict[str, float]:
     model.eval()
 
@@ -649,6 +991,16 @@ def validate(
             )
             reg_loss = reg_terms["total"]
             loss = bce_loss + reg_loss
+            _raise_if_nonfinite(
+                stage="val",
+                epoch=epoch,
+                batch_idx=batch_idx,
+                details=details,
+                logits=logits,
+                bce_loss=bce_loss,
+                reg_terms=reg_terms,
+                loss=loss,
+            )
 
             total_loss += float(loss.item())
             total_bce += float(bce_loss.item())
@@ -871,19 +1223,37 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
 
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
-        mode="min",
+        mode=MONITOR_MODE,
         factor=0.5,
         patience=args.patience,
+    )
+    monitor_config = _default_monitor_config()
+    logger.info(
+        "%s Monitor config: scheduler=%s(%s), best_checkpoint=%s(%s), early_stop=%s(%s)",
+        run_tag,
+        monitor_config["scheduler_monitor"],
+        monitor_config["scheduler_mode"],
+        monitor_config["best_monitor"],
+        monitor_config["best_mode"],
+        monitor_config["early_stop_monitor"],
+        monitor_config["early_stop_mode"],
     )
 
     best_val_auc = 0.0
     best_epoch = 0
     patience_counter = 0
 
-    history: Dict[str, Any] = {"train": [], "val": [], "best_epoch": 0, "best_val_auc": 0.0}
+    history: Dict[str, Any] = {
+        "train": [],
+        "val": [],
+        "best_epoch": 0,
+        "best_val_auc": 0.0,
+        "monitor": monitor_config,
+    }
     alpha_zero_streak = 0
     graph_uniform_streak = 0
     graph_low_grad_streak = 0
+    last_diag: Dict[str, Any] = {}
 
     logger.info("%s Starting training...", run_tag)
 
@@ -895,6 +1265,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             optimizer,
             device,
             logger,
+            epoch,
         )
         grad_norms = _collect_debug_grad_norms(model) if debug_graph_diag else None
 
@@ -903,6 +1274,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             val_loader,
             device,
             logger,
+            epoch,
         )
 
         logger.info(
@@ -958,8 +1330,11 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "irt_abs_mean=%.4f, irt_std=%.4f, personal_warmup_scale=%.2f, "
                 "graph_row_entropy=%.4f, graph_entropy_ratio=%.4f, "
                 "alpha_mean=%.4f, alpha_std=%.4f, alpha_bias_std=%.4f, "
+                "alpha_state_path=%.4f, alpha_id_path=%.4f, alpha_bias_path=%.4f, "
                 "personal_row_entropy=%.4f, personal_matrix_delta=%.4f, personal_matrix_student_std=%.4f, "
-                "personal_delta_pre_softmax_norm=%.4f, personal_delta_student_std=%.4f, alpha_head_std=%.4f",
+                "personal_delta_pre_softmax_norm=%.4f, personal_delta_student_std=%.4f, alpha_head_std=%.4f, "
+                "personal_student_mix=%.4f, personal_student_adapter=%.4f, "
+                "personal_bad_rows=%.2f, personal_fallback_rows=%.2f, personal_logits_absmax=%.4f",
                 run_tag,
                 epoch,
                 diag["irt_abs_mean"],
@@ -970,16 +1345,26 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["alpha_mean"],
                 diag["alpha_std"],
                 diag["alpha_bias_std"],
+                diag["alpha_state_path_absmean"],
+                diag["alpha_id_path_absmean"],
+                diag["alpha_bias_path_absmean"],
                 diag["personal_row_entropy"],
                 diag["personal_matrix_delta"],
                 diag["personal_matrix_student_std"],
                 diag["personal_delta_pre_softmax_norm"],
                 diag["personal_delta_student_std"],
                 diag["alpha_head_std"],
+                diag["personal_student_mix"],
+                diag["personal_student_adapter_scale"],
+                diag["personal_bad_row_count"],
+                diag["personal_fallback_row_count"],
+                diag["personal_logits_absmax"],
             )
             logger.info(
-                "%s [Diag][Graph] Epoch [%03d] | "
+                "%s [Diag][A] Epoch [%03d] | "
                 "entropy_ratio=%.4f, diag_mass=%.4f, to_uniform_l2=%.6f, to_identity_l2=%.6f, "
+                "relation_identity_delta=%.6f, knowledge_state_graph_delta=%.6f, "
+                "knowledge_state_personal_delta=%.6f, share_concept_embeddings=%s, "
                 "tau_mean=%.4f, tau_std=%.4f, graph_reg_scale(train/val)=%.4f/%.4f",
                 run_tag,
                 epoch,
@@ -987,11 +1372,16 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["graph_diag_mass"],
                 diag["graph_to_uniform_l2"],
                 diag["graph_to_identity_l2"],
+                diag["relation_identity_delta"],
+                diag["knowledge_state_graph_delta"],
+                diag["knowledge_state_personal_delta"],
+                bool(diag["share_concept_embeddings"]),
                 diag["graph_tau_mean"],
                 diag["graph_tau_std"],
                 train_metrics.get("reg_graph_reg_scale", 1.0),
                 val_metrics.get("reg_graph_reg_scale", 1.0),
             )
+            last_diag = dict(diag)
 
             if getattr(_get_base_model(model), "use_personal_graph", False):
                 if diag["alpha_std"] < 1e-6:
@@ -1024,6 +1414,13 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                         diag.get("alpha_head_std", 0.0),
                         diag.get("alpha_std", 0.0),
                     )
+                if diag.get("alpha_id_path_absmean", 0.0) > max(diag.get("alpha_state_path_absmean", 0.0), 1e-6):
+                    logger.warning(
+                        "%s [Diag Warning][E] id path is dominating gate alpha: state_path=%.6f, id_path=%.6f",
+                        run_tag,
+                        diag.get("alpha_state_path_absmean", 0.0),
+                        diag.get("alpha_id_path_absmean", 0.0),
+                    )
             if diag["graph_entropy_ratio"] > 0.98:
                 graph_uniform_streak += 1
             else:
@@ -1047,9 +1444,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 + grad_norms["personal_v"]
                 + grad_norms["personal_alpha_bias"]
                 + grad_norms["personal_gate_emb"]
-                + grad_norms["personal_gate_student_proj"]
+                + grad_norms["personal_gate_state_proj"]
                 + grad_norms["personal_gate_context_proj"]
-                + grad_norms["personal_gate_student_direct"]
+                + grad_norms["personal_gate_state_direct"]
+                + grad_norms["personal_gate_id_direct"]
                 + grad_norms["personal_gate_context_direct"]
                 + grad_norms["personal_gate_out"]
                 + grad_norms["personal_generator_emb"]
@@ -1059,7 +1457,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 + grad_norms["personal_generator_context_to_v"]
                 + grad_norms["personal_generator_student_row"]
                 + grad_norms["personal_generator_student_col"]
-                + grad_norms["personal_generator_low_rank_scale"]
+                + grad_norms["personal_generator_student_adapter"]
+                + grad_norms["personal_generator_context_adapter"]
                 + grad_norms["personal_generator_direct_scale"]
             )
             if graph_grad_total < 1e-8:
@@ -1068,51 +1467,57 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 graph_low_grad_streak = 0
             if graph_low_grad_streak >= 2 and getattr(_get_base_model(model), "use_concept_graph", False):
                 logger.warning(
-                    "%s [Diag Warning][Graph] graph-related grad norms are near zero for %d epoch(s): "
-                    "relation_emb=%.6e, relation_tau=%.6e, relation_wq=%.6e, relation_wk=%.6e, "
-                    "personal_u=%.6e, personal_v=%.6e, personal_alpha_bias=%.6e, personal_gate_emb=%.6e, "
-                    "personal_gate_student_proj=%.6e, personal_gate_context_proj=%.6e, "
-                    "personal_gate_student_direct=%.6e, personal_gate_context_direct=%.6e, personal_gate_out=%.6e, "
-                    "personal_generator_emb=%.6e, personal_generator_context_proj=%.6e, "
-                    "personal_generator_context_hidden=%.6e, personal_generator_context_to_u=%.6e, "
-                    "personal_generator_context_to_v=%.6e, personal_generator_student_row=%.6e, "
-                    "personal_generator_student_col=%.6e, personal_generator_low_rank_scale=%.6e, "
-                    "personal_generator_direct_scale=%.6e",
-                    run_tag,
-                    graph_low_grad_streak,
-                    grad_norms["relation_emb"],
-                    grad_norms["relation_tau"],
+                        "%s [Diag Warning][Graph] graph-related grad norms are near zero for %d epoch(s): "
+                        "relation_emb=%.6e, relation_tau=%.6e, relation_wq=%.6e, relation_wk=%.6e, "
+                        "personal_u=%.6e, personal_v=%.6e, personal_alpha_bias=%.6e, personal_gate_emb=%.6e, "
+                        "personal_gate_state_proj=%.6e, personal_gate_context_proj=%.6e, "
+                        "personal_gate_state_direct=%.6e, personal_gate_id_direct=%.6e, "
+                        "personal_gate_context_direct=%.6e, personal_gate_out=%.6e, "
+                        "personal_generator_emb=%.6e, personal_generator_context_proj=%.6e, "
+                        "personal_generator_context_hidden=%.6e, personal_generator_context_to_u=%.6e, "
+                        "personal_generator_context_to_v=%.6e, personal_generator_student_row=%.6e, "
+                        "personal_generator_student_col=%.6e, personal_generator_student_adapter=%.6e, "
+                        "personal_generator_context_adapter=%.6e, "
+                        "personal_generator_direct_scale=%.6e",
+                        run_tag,
+                        graph_low_grad_streak,
+                        grad_norms["relation_emb"],
+                        grad_norms["relation_tau"],
                     grad_norms["relation_wq"],
-                    grad_norms["relation_wk"],
-                    grad_norms["personal_u"],
-                    grad_norms["personal_v"],
-                    grad_norms["personal_alpha_bias"],
-                    grad_norms["personal_gate_emb"],
-                    grad_norms["personal_gate_student_proj"],
-                    grad_norms["personal_gate_context_proj"],
-                    grad_norms["personal_gate_student_direct"],
-                    grad_norms["personal_gate_context_direct"],
-                    grad_norms["personal_gate_out"],
-                    grad_norms["personal_generator_emb"],
-                    grad_norms["personal_generator_context_proj"],
-                    grad_norms["personal_generator_context_hidden"],
-                    grad_norms["personal_generator_context_to_u"],
-                    grad_norms["personal_generator_context_to_v"],
-                    grad_norms["personal_generator_student_row"],
-                    grad_norms["personal_generator_student_col"],
-                    grad_norms["personal_generator_low_rank_scale"],
-                    grad_norms["personal_generator_direct_scale"],
-                )
+                        grad_norms["relation_wk"],
+                        grad_norms["personal_u"],
+                        grad_norms["personal_v"],
+                        grad_norms["personal_alpha_bias"],
+                        grad_norms["personal_gate_emb"],
+                        grad_norms["personal_gate_state_proj"],
+                        grad_norms["personal_gate_context_proj"],
+                        grad_norms["personal_gate_state_direct"],
+                        grad_norms["personal_gate_id_direct"],
+                        grad_norms["personal_gate_context_direct"],
+                        grad_norms["personal_gate_out"],
+                        grad_norms["personal_generator_emb"],
+                        grad_norms["personal_generator_context_proj"],
+                        grad_norms["personal_generator_context_hidden"],
+                        grad_norms["personal_generator_context_to_u"],
+                        grad_norms["personal_generator_context_to_v"],
+                        grad_norms["personal_generator_student_row"],
+                        grad_norms["personal_generator_student_col"],
+                        grad_norms["personal_generator_student_adapter"],
+                        grad_norms["personal_generator_context_adapter"],
+                        grad_norms["personal_generator_direct_scale"],
+                    )
             logger.info(
                 "%s [Grad Norms] Epoch [%03d] | "
                 "relation_emb=%.6e, relation_tau=%.6e, relation_wq=%.6e, relation_wk=%.6e, "
                 "personal_u=%.6e, personal_v=%.6e, personal_alpha_bias=%.6e, personal_gate_emb=%.6e, "
-                "personal_gate_student_proj=%.6e, personal_gate_context_proj=%.6e, "
-                "personal_gate_student_direct=%.6e, personal_gate_context_direct=%.6e, personal_gate_out=%.6e, "
+                "personal_gate_state_proj=%.6e, personal_gate_context_proj=%.6e, "
+                "personal_gate_state_direct=%.6e, personal_gate_id_direct=%.6e, "
+                "personal_gate_context_direct=%.6e, personal_gate_out=%.6e, "
                 "personal_generator_emb=%.6e, personal_generator_context_proj=%.6e, "
                 "personal_generator_context_hidden=%.6e, personal_generator_context_to_u=%.6e, "
                 "personal_generator_context_to_v=%.6e, personal_generator_student_row=%.6e, "
-                "personal_generator_student_col=%.6e, personal_generator_low_rank_scale=%.6e, "
+                "personal_generator_student_col=%.6e, personal_generator_student_adapter=%.6e, "
+                "personal_generator_context_adapter=%.6e, "
                 "personal_generator_direct_scale=%.6e",
                 run_tag,
                 epoch,
@@ -1124,9 +1529,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 grad_norms["personal_v"],
                 grad_norms["personal_alpha_bias"],
                 grad_norms["personal_gate_emb"],
-                grad_norms["personal_gate_student_proj"],
+                grad_norms["personal_gate_state_proj"],
                 grad_norms["personal_gate_context_proj"],
-                grad_norms["personal_gate_student_direct"],
+                grad_norms["personal_gate_state_direct"],
+                grad_norms["personal_gate_id_direct"],
                 grad_norms["personal_gate_context_direct"],
                 grad_norms["personal_gate_out"],
                 grad_norms["personal_generator_emb"],
@@ -1136,11 +1542,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 grad_norms["personal_generator_context_to_v"],
                 grad_norms["personal_generator_student_row"],
                 grad_norms["personal_generator_student_col"],
-                grad_norms["personal_generator_low_rank_scale"],
+                grad_norms["personal_generator_student_adapter"],
+                grad_norms["personal_generator_context_adapter"],
                 grad_norms["personal_generator_direct_scale"],
             )
 
-        scheduler.step(val_metrics["loss"])
+        scheduler.step(val_metrics["auc"])
 
         history["train"].append(train_metrics)
         history["val"].append(val_metrics)
@@ -1158,6 +1565,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                     "optimizer_state_dict": optimizer.state_dict(),
                     "val_auc": best_val_auc,
                     "val_metrics": val_metrics,
+                    "monitor": monitor_config,
+                    "debug_diag": last_diag,
                     "args": vars(args),
                     "info_dict": info_dict,
                 },
@@ -1203,6 +1612,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
 
     history["best_epoch"] = best_epoch
     history["best_val_auc"] = best_val_auc
+    history["last_debug_diag"] = last_diag
 
     history_path = os.path.join(args.save_dir, "training_history.json")
     save_epoch_history_csv(history, args.save_dir, logger)
@@ -1469,6 +1879,11 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         "test_seen_rows": int(after_rows),
         "test_seen_coverage": float(coverage),
         "train_only_split_hygiene": bool(info_dict.get("train_only_split_hygiene", False)),
+        "runtime_facts": runtime_facts,
+        "monitor": checkpoint.get("monitor", _default_monitor_config()),
+        "config_switches": _collect_structural_switches(loaded_args),
+        "ae_diagnostics": checkpoint.get("debug_diag", {}),
+        "failure_reason": None,
     }
 
     result_path = os.path.join(args.save_dir, "test_results.json")

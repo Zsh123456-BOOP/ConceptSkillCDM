@@ -41,6 +41,27 @@ NUM_RE = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
 ROW_START_RE = re.compile(
     r"(?<![\r\n])(?=(assist_09|assist_17|junyi),\d+,(best|ae_dominant),(full|no_A|no_E),)"
 )
+BOOLEAN_OPTIONAL_KEYS = {
+    "use_personal_graph",
+    "personal_disable_direct_bias",
+    "personal_disable_student_global_context",
+    "share_concept_embeddings",
+}
+STRUCTURAL_SWITCH_KEYS = (
+    "share_concept_embeddings",
+    "personal_disable_direct_bias",
+    "personal_direct_bias_scale",
+    "personal_alpha_bias_scale",
+    "personal_reg_warmup_epochs",
+    "personal_disable_student_global_context",
+    "use_personal_graph",
+    "use_concept_graph",
+    "graph_identity_residual",
+    "personal_delta_scale",
+    "personal_warmup_epochs",
+    "lambda_alpha_min",
+    "alpha_min_target",
+)
 
 
 @dataclass
@@ -70,8 +91,13 @@ BASE_SINGLE_ABLATIONS: Tuple[AblationSpec, ...] = (
     AblationSpec(
         name="no_E",
         flags={},
-        overrides={"lambda_sparse_personal": 0.0, "lambda_alpha": 0.0},
-        drop_keys=("use_personal_graph",),
+        overrides={
+            "use_personal_graph": False,
+            "lambda_sparse_personal": 0.0,
+            "lambda_alpha": 0.0,
+            "lambda_alpha_min": 0.0,
+            "alpha_min_target": 0.0,
+        },
     ),
 )
 
@@ -84,7 +110,9 @@ def append_arg(cmd: List[str], key: str, value: Any) -> None:
     if value is None:
         return
     if isinstance(value, bool):
-        if value:
+        if key in BOOLEAN_OPTIONAL_KEYS:
+            cmd.append(f"--{key}" if value else f"--no-{key}")
+        elif value:
             cmd.append(f"--{key}")
         return
     cmd.extend([f"--{key}", str(value)])
@@ -117,12 +145,23 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
         "graph_entropy_ratio": None,
         "alpha_std": None,
         "alpha_bias_std": None,
+        "alpha_state_path_absmean": None,
+        "alpha_id_path_absmean": None,
+        "alpha_bias_path_absmean": None,
         "irt_abs_mean": None,
         "personal_matrix_delta": None,
         "personal_matrix_student_std": None,
         "personal_delta_pre_softmax_norm": None,
         "personal_delta_student_std": None,
         "alpha_head_std": None,
+        "relation_identity_delta": None,
+        "knowledge_state_graph_delta": None,
+        "knowledge_state_personal_delta": None,
+        "personal_bad_row_count": None,
+        "personal_fallback_row_count": None,
+        "personal_student_mix": None,
+        "personal_student_adapter_scale": None,
+        "personal_logits_absmax": None,
         "warn_graph_uniform_count": 0,
         "warn_alpha_collapse_count": 0,
         "warn_personal_count": 0,
@@ -150,15 +189,37 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
                     "personal_delta_pre_softmax_norm",
                     "personal_delta_student_std",
                     "alpha_head_std",
+                    "alpha_state_path",
+                    "alpha_id_path",
+                    "alpha_bias_path",
+                    "personal_bad_rows",
+                    "personal_fallback_rows",
+                    "personal_student_mix",
+                    "personal_student_adapter",
+                    "personal_logits_absmax",
                 ):
                     v = extract_float(line, key)
                     if v is not None:
-                        out[key] = v
+                        mapped = {
+                            "alpha_state_path": "alpha_state_path_absmean",
+                            "alpha_id_path": "alpha_id_path_absmean",
+                            "alpha_bias_path": "alpha_bias_path_absmean",
+                            "personal_bad_rows": "personal_bad_row_count",
+                            "personal_fallback_rows": "personal_fallback_row_count",
+                            "personal_student_adapter": "personal_student_adapter_scale",
+                        }.get(key, key)
+                        out[mapped] = v
 
-            if "[Diag][Graph] Epoch" in line:
-                v = extract_float(line, "entropy_ratio")
-                if v is not None:
-                    out["graph_entropy_ratio"] = v
+            if "[Diag][A] Epoch" in line or "[Diag][Graph] Epoch" in line:
+                for key, target in (
+                    ("entropy_ratio", "graph_entropy_ratio"),
+                    ("relation_identity_delta", "relation_identity_delta"),
+                    ("knowledge_state_graph_delta", "knowledge_state_graph_delta"),
+                    ("knowledge_state_personal_delta", "knowledge_state_personal_delta"),
+                ):
+                    v = extract_float(line, key)
+                    if v is not None:
+                        out[target] = v
 
             if "[Diag Warning][Graph]" in line:
                 out["warn_graph_uniform_count"] += 1
@@ -171,6 +232,62 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
                 out["module_activity_epoch10"] = line.strip()
 
     return out
+
+
+def _expected_runtime_flags(job: JobSpec) -> Dict[str, Any]:
+    use_concept_graph = not bool(job.ablation.flags.get("ablate_concept_graph", False))
+    use_personal_graph = bool(job.params.get("use_personal_graph", job.ablation.name != "no_E"))
+    return {
+        "enable_module1": True,
+        "use_concept_graph": use_concept_graph,
+        "use_personal_graph": use_personal_graph,
+    }
+
+
+def _validate_runtime_flags(job: JobSpec, runtime_facts: Dict[str, Any]) -> Tuple[bool, str]:
+    expected = _expected_runtime_flags(job)
+    for key, expected_value in expected.items():
+        actual = runtime_facts.get(key)
+        if actual is None:
+            return False, f"missing_{key}"
+        if bool(actual) != bool(expected_value):
+            return False, f"{key}_expected_{expected_value}_got_{actual}"
+    return True, ""
+
+
+def _failure_from_metadata(
+    *,
+    exit_code: int,
+    save_dir: Path,
+    failure_json: Optional[Dict[str, Any]],
+    log_file: Optional[Path],
+) -> Tuple[str, str]:
+    if failure_json:
+        reason = str(failure_json.get("reason") or "runtime_exception")
+        stage = str(failure_json.get("stage") or "")
+        message = str(failure_json.get("message") or "")
+        if reason.startswith("nonfinite_"):
+            return reason, stage or "train_or_val"
+        if "Ablation mismatch" in message:
+            return "runtime_guardrail_fail", stage or "startup"
+        return reason, stage
+
+    if not (save_dir / "best_model.pth").exists():
+        return "checkpoint_missing", ""
+
+    if log_file and log_file.exists():
+        with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+            text = f.read()
+        if "Ablation mismatch" in text:
+            return "runtime_guardrail_fail", "startup"
+        if "Checkpoint/model architecture mismatch" in text or "State dict mismatch detected" in text:
+            return "checkpoint_mismatch", "inference"
+        if "nonfinite_" in text.lower() or "nan" in text.lower():
+            return "nonfinite_loss", ""
+
+    if exit_code != 0:
+        return "runtime_exception", ""
+    return "", ""
 
 
 def pick_base_ablations(component_set: str) -> List[AblationSpec]:
@@ -232,6 +349,7 @@ def collect_result(job: JobSpec, exit_code: int) -> Dict[str, Any]:
     }
 
     test_json = read_json(job.save_dir / "test_results.json") or {}
+    failure_json = read_json(job.save_dir / "failure_reason.json") or {}
     metrics = test_json.get("metrics", {}) if isinstance(test_json, dict) else {}
     row["test_auc"] = metrics.get("auc")
     row["test_acc"] = metrics.get("acc")
@@ -242,22 +360,50 @@ def collect_result(job: JobSpec, exit_code: int) -> Dict[str, Any]:
     row["test_seen_rows"] = test_json.get("test_seen_rows")
     row["test_seen_coverage"] = test_json.get("test_seen_coverage")
     row["clean_baseline"] = test_json.get("train_only_split_hygiene")
+    runtime_facts = test_json.get("runtime_facts", {}) if isinstance(test_json, dict) else {}
+    config_switches = test_json.get("config_switches", {}) if isinstance(test_json, dict) else {}
+    monitor = test_json.get("monitor", {}) if isinstance(test_json, dict) else {}
+    ae_diagnostics = test_json.get("ae_diagnostics", {}) if isinstance(test_json, dict) else {}
 
     hist = read_json(job.save_dir / "training_history.json") or {}
     row["best_epoch"] = hist.get("best_epoch") if isinstance(hist, dict) else None
 
     args_json = read_json(job.save_dir / "args.json") or {}
     for key in ("enable_module1", "use_concept_graph", "use_personal_graph"):
-        row[f"effective_{key}"] = args_json.get(key)
+        row[f"effective_{key}"] = runtime_facts.get(key, args_json.get(key))
+    for key in STRUCTURAL_SWITCH_KEYS:
+        row[key] = config_switches.get(key, args_json.get(key, job.params.get(key)))
+    for key, value in runtime_facts.items():
+        row[f"runtime_{key}"] = value
+    for key, value in monitor.items():
+        row[key] = value
 
     log_file = latest_train_log(job.log_dir)
     row["log_file"] = str(log_file) if log_file else ""
     row.update(parse_log_metrics(log_file))
+    for key, value in ae_diagnostics.items():
+        if key in row and row[key] in ("", None):
+            row[key] = value
 
     if exit_code == 0:
         row["status"] = "ok"
     elif row.get("test_auc") is not None:
         row["status"] = "metrics_ok"
+
+    failure_reason, failure_stage = _failure_from_metadata(
+        exit_code=exit_code,
+        save_dir=job.save_dir,
+        failure_json=failure_json,
+        log_file=log_file,
+    )
+    row["failure_reason"] = failure_reason
+    row["failure_stage"] = failure_stage
+
+    ablation_valid, ablation_invalid_reason = _validate_runtime_flags(job, runtime_facts)
+    row["ablation_valid"] = ablation_valid
+    row["ablation_invalid_reason"] = ablation_invalid_reason
+    if row["status"] in {"ok", "metrics_ok"} and not ablation_valid:
+        row["status"] = "invalid"
 
     row["params_json"] = json.dumps(job.params, ensure_ascii=False, sort_keys=True)
     row["flags_json"] = json.dumps(job.ablation.flags, ensure_ascii=False, sort_keys=True)
@@ -288,16 +434,43 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "graph_entropy_ratio",
         "alpha_std",
         "alpha_bias_std",
+        "alpha_state_path_absmean",
+        "alpha_id_path_absmean",
+        "alpha_bias_path_absmean",
         "irt_abs_mean",
         "personal_matrix_delta",
         "personal_matrix_student_std",
         "personal_delta_pre_softmax_norm",
         "personal_delta_student_std",
         "alpha_head_std",
+        "relation_identity_delta",
+        "knowledge_state_graph_delta",
+        "knowledge_state_personal_delta",
+        "personal_bad_row_count",
+        "personal_fallback_row_count",
+        "personal_student_mix",
+        "personal_student_adapter_scale",
+        "personal_logits_absmax",
+        "share_concept_embeddings",
+        "personal_disable_direct_bias",
+        "personal_direct_bias_scale",
+        "personal_alpha_bias_scale",
+        "personal_reg_warmup_epochs",
+        "personal_disable_student_global_context",
+        "scheduler_monitor",
+        "scheduler_mode",
+        "best_monitor",
+        "best_mode",
+        "early_stop_monitor",
+        "early_stop_mode",
         "warn_graph_uniform_count",
         "warn_alpha_collapse_count",
         "warn_personal_count",
         "module_activity_epoch10",
+        "failure_reason",
+        "failure_stage",
+        "ablation_valid",
+        "ablation_invalid_reason",
         "status",
         "exit_code",
         "save_dir",
@@ -381,11 +554,15 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
     ger = try_float(full_row.get("graph_entropy_ratio"))
     alpha_std = try_float(full_row.get("alpha_std"))
     alpha_bias_std = try_float(full_row.get("alpha_bias_std"))
+    alpha_state_path = try_float(full_row.get("alpha_state_path_absmean"))
+    alpha_id_path = try_float(full_row.get("alpha_id_path_absmean"))
     personal_matrix_delta = try_float(full_row.get("personal_matrix_delta"))
     personal_matrix_student_std = try_float(full_row.get("personal_matrix_student_std"))
     personal_delta_pre_softmax_norm = try_float(full_row.get("personal_delta_pre_softmax_norm"))
     personal_delta_student_std = try_float(full_row.get("personal_delta_student_std"))
     alpha_head_std = try_float(full_row.get("alpha_head_std"))
+    relation_identity_delta = try_float(full_row.get("relation_identity_delta"))
+    knowledge_state_graph_delta = try_float(full_row.get("knowledge_state_graph_delta"))
 
     if ger is not None and ger > 0.98:
         reasons.append("graph-uniform-risk")
@@ -403,6 +580,12 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
         reasons.append("personal-delta-student-flat")
     if alpha_head_std is not None and alpha_head_std < 0.001:
         reasons.append("alpha-head-collapse")
+    if alpha_state_path is not None and alpha_id_path is not None and alpha_id_path > max(alpha_state_path, 1e-6):
+        reasons.append("alpha-id-dominant")
+    if relation_identity_delta is not None and relation_identity_delta < 0.02:
+        reasons.append("A-near-identity")
+    if knowledge_state_graph_delta is not None and knowledge_state_graph_delta < 0.02:
+        reasons.append("A-state-delta-low")
     if delta_a is not None and abs(delta_a) < 0.002:
         reasons.append("A-delta-small")
     if delta_e is not None and abs(delta_e) < 0.002:
@@ -419,6 +602,8 @@ def write_summary(
     grouped: Dict[Tuple[str, str, str], Dict[str, Dict[str, Any]]] = {}
     for row in rows:
         if str(row.get("status", "")).lower() not in {"ok", "metrics_ok"}:
+            continue
+        if str(row.get("ablation_valid", "")).lower() == "false":
             continue
         key = (str(row.get("dataset", "")), str(row.get("seed", "")), str(row.get("profile", "")))
         grouped.setdefault(key, {})
@@ -460,14 +645,26 @@ def write_summary(
             "full_test_total_rows": try_float(full.get("test_total_rows")),
             "full_test_seen_rows": try_float(full.get("test_seen_rows")),
             "full_test_seen_coverage": try_float(full.get("test_seen_coverage")),
+            "full_share_concept_embeddings": full.get("share_concept_embeddings"),
+            "full_personal_disable_direct_bias": full.get("personal_disable_direct_bias"),
+            "full_personal_direct_bias_scale": try_float(full.get("personal_direct_bias_scale")),
+            "full_personal_alpha_bias_scale": try_float(full.get("personal_alpha_bias_scale")),
+            "full_personal_reg_warmup_epochs": try_float(full.get("personal_reg_warmup_epochs")),
+            "full_personal_disable_student_global_context": full.get("personal_disable_student_global_context"),
+            "full_ablation_valid": full.get("ablation_valid"),
             "full_graph_entropy_ratio": try_float(full.get("graph_entropy_ratio")),
             "full_alpha_std": try_float(full.get("alpha_std")),
             "full_alpha_bias_std": try_float(full.get("alpha_bias_std")),
+            "full_alpha_state_path_absmean": try_float(full.get("alpha_state_path_absmean")),
+            "full_alpha_id_path_absmean": try_float(full.get("alpha_id_path_absmean")),
             "full_personal_matrix_delta": try_float(full.get("personal_matrix_delta")),
             "full_personal_matrix_student_std": try_float(full.get("personal_matrix_student_std")),
             "full_personal_delta_pre_softmax_norm": try_float(full.get("personal_delta_pre_softmax_norm")),
             "full_personal_delta_student_std": try_float(full.get("personal_delta_student_std")),
             "full_alpha_head_std": try_float(full.get("alpha_head_std")),
+            "full_relation_identity_delta": try_float(full.get("relation_identity_delta")),
+            "full_knowledge_state_graph_delta": try_float(full.get("knowledge_state_graph_delta")),
+            "full_knowledge_state_personal_delta": try_float(full.get("knowledge_state_personal_delta")),
             "full_warn_graph_uniform_count": full.get("warn_graph_uniform_count"),
             "full_warn_alpha_collapse_count": full.get("warn_alpha_collapse_count"),
             "full_warn_personal_count": full.get("warn_personal_count"),
@@ -496,14 +693,26 @@ def write_summary(
         "full_test_total_rows",
         "full_test_seen_rows",
         "full_test_seen_coverage",
+        "full_share_concept_embeddings",
+        "full_personal_disable_direct_bias",
+        "full_personal_direct_bias_scale",
+        "full_personal_alpha_bias_scale",
+        "full_personal_reg_warmup_epochs",
+        "full_personal_disable_student_global_context",
+        "full_ablation_valid",
         "full_graph_entropy_ratio",
         "full_alpha_std",
         "full_alpha_bias_std",
+        "full_alpha_state_path_absmean",
+        "full_alpha_id_path_absmean",
         "full_personal_matrix_delta",
         "full_personal_matrix_student_std",
         "full_personal_delta_pre_softmax_norm",
         "full_personal_delta_student_std",
         "full_alpha_head_std",
+        "full_relation_identity_delta",
+        "full_knowledge_state_graph_delta",
+        "full_knowledge_state_personal_delta",
         "full_warn_graph_uniform_count",
         "full_warn_alpha_collapse_count",
         "full_warn_personal_count",
@@ -630,7 +839,7 @@ def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> 
                 "personal_delta_scale": 7.0,
                 "lambda_alpha_min": 0.10,
                 "alpha_min_target": 0.05,
-                "personal_alpha_bias_scale": 0.08,
+                "personal_alpha_bias_scale": 0.03,
                 "personal_direct_bias_scale": 0.0,
                 "personal_disable_direct_bias": True,
                 "personal_disable_student_global_context": True,
@@ -644,7 +853,7 @@ def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> 
             "personal_delta_scale": 5.0,
             "lambda_alpha_min": 0.08,
             "alpha_min_target": 0.04,
-            "personal_alpha_bias_scale": 0.08,
+            "personal_alpha_bias_scale": 0.015,
             "personal_direct_bias_scale": 0.0,
             "personal_disable_direct_bias": True,
             "personal_disable_student_global_context": True,
