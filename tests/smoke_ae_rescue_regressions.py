@@ -152,11 +152,64 @@ def _check_no_a_personal_graph_is_not_identity_locked() -> None:
     )
 
 
+def _check_personal_branch_is_state_primary_with_small_id_adapter() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    q_matrix = torch.eye(3, dtype=torch.float32)
+    model = CognitiveDiagnosisModel(
+        num_students=5,
+        num_exercises=3,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+        use_concept_graph=True,
+        use_personal_graph=True,
+        personal_rank=4,
+        personal_max_alpha=0.4,
+        personal_delta_scale=6.0,
+        personal_warmup_epochs=0,
+        personal_student_dim=8,
+    )
+    sm = model.structure_module
+
+    _assert(
+        hasattr(sm, "personal_gate_from_state"),
+        "E 分支缺少从 A 编码 student_repr 到 gate 的主路投影。",
+    )
+    _assert(
+        hasattr(sm, "personal_generator_from_state"),
+        "E 分支缺少从 A 编码 student_repr 到 generator 的主路投影。",
+    )
+    _assert(
+        hasattr(sm, "personal_gate_id_logit"),
+        "E 分支缺少 gate 的 id-adapter 缩放参数。",
+    )
+    _assert(
+        hasattr(sm, "personal_generator_id_logit"),
+        "E 分支缺少 generator 的 id-adapter 缩放参数。",
+    )
+
+    gate_id_scale = float(torch.sigmoid(sm.personal_gate_id_logit.detach()).item())
+    gen_id_scale = float(torch.sigmoid(sm.personal_generator_id_logit.detach()).item())
+    _assert(
+        gate_id_scale < 0.25,
+        f"gate 的 id-adapter 初始占比应较小，当前={gate_id_scale:.4f}",
+    )
+    _assert(
+        gen_id_scale < 0.25,
+        f"generator 的 id-adapter 初始占比应较小，当前={gen_id_scale:.4f}",
+    )
+
+
 def main() -> None:
     _check_no_a_keeps_gnn_layers()
     _check_best_configs_enable_e_rescue_knobs()
     _check_dataset_defaults_respect_explicit_zero_overrides()
     _check_no_a_personal_graph_is_not_identity_locked()
+    _check_personal_branch_is_state_primary_with_small_id_adapter()
     print("OK: AE rescue regression smoke checks passed.")
 
 

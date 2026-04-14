@@ -553,9 +553,15 @@ class ConceptStructureModeling(nn.Module):
             self.personal_gate_embedding = nn.Embedding(num_students, self.personal_student_dim)
             self.personal_generator_embedding = nn.Embedding(num_students, self.personal_student_dim)
             self.personal_alpha_bias = nn.Embedding(num_students, num_relation_heads)
+            self.personal_gate_from_state = nn.Linear(knowledge_dim, self.personal_student_dim, bias=False)
+            self.personal_generator_from_state = nn.Linear(knowledge_dim, self.personal_student_dim, bias=False)
+            self.personal_gate_id_logit = nn.Parameter(torch.tensor(-2.1972246))
+            self.personal_generator_id_logit = nn.Parameter(torch.tensor(-2.1972246))
             nn.init.normal_(self.personal_gate_embedding.weight, mean=0.0, std=0.05)
             nn.init.normal_(self.personal_generator_embedding.weight, mean=0.0, std=0.05)
             nn.init.zeros_(self.personal_alpha_bias.weight)
+            nn.init.xavier_normal_(self.personal_gate_from_state.weight)
+            nn.init.xavier_normal_(self.personal_generator_from_state.weight)
             context_dim = knowledge_dim * 3
             personal_hidden_dim = max(self.personal_student_dim, knowledge_dim)
             self.adaptive_gate = AdaptiveGate(
@@ -579,6 +585,10 @@ class ConceptStructureModeling(nn.Module):
             self.personal_gate_embedding = None
             self.personal_generator_embedding = None
             self.personal_alpha_bias = None
+            self.personal_gate_from_state = None
+            self.personal_generator_from_state = None
+            self.personal_gate_id_logit = None
+            self.personal_generator_id_logit = None
 
     def set_epoch(self, epoch: int) -> None:
         self._current_epoch = max(1, int(epoch))
@@ -647,8 +657,14 @@ class ConceptStructureModeling(nn.Module):
                 ],
                 dim=-1,
             )
-            gate_student_repr = self.personal_gate_embedding(student_ids)
-            generator_student_repr = self.personal_generator_embedding(student_ids)
+            gate_state_repr = torch.tanh(self.personal_gate_from_state(student_repr))
+            generator_state_repr = torch.tanh(self.personal_generator_from_state(student_repr))
+            gate_id_scale = torch.sigmoid(self.personal_gate_id_logit)
+            generator_id_scale = torch.sigmoid(self.personal_generator_id_logit)
+            gate_student_repr = gate_state_repr + gate_id_scale * self.personal_gate_embedding(student_ids)
+            generator_student_repr = (
+                generator_state_repr + generator_id_scale * self.personal_generator_embedding(student_ids)
+            )
             gate_alpha_bias = self.personal_alpha_bias(student_ids)
             gate_alpha, gate_alpha_logit = self.adaptive_gate(
                 gate_student_repr,
@@ -693,6 +709,12 @@ class ConceptStructureModeling(nn.Module):
             "alpha_logit": gate_alpha_logit,
             "alpha_student_bias": gate_alpha_bias,
             "alpha_effective": gate_alpha_effective,
+            "personal_gate_id_scale": None
+            if self.personal_gate_id_logit is None
+            else torch.sigmoid(self.personal_gate_id_logit).to(device=device, dtype=dtype),
+            "personal_generator_id_scale": None
+            if self.personal_generator_id_logit is None
+            else torch.sigmoid(self.personal_generator_id_logit).to(device=device, dtype=dtype),
             "personal_matrices": personal_matrices,
             "personal_matrix_delta": personal_matrix_delta,
             "personal_matrix_student_std": personal_matrix_student_std,
@@ -947,6 +969,10 @@ class CognitiveDiagnosisModel(nn.Module):
             if s_out.get("alpha_effective") is not None:
                 details["alpha_effective"] = s_out["alpha_effective"]
                 details["alpha_effective_detached"] = s_out["alpha_effective"].detach()
+            if s_out.get("personal_gate_id_scale") is not None:
+                details["personal_gate_id_scale"] = s_out["personal_gate_id_scale"]
+            if s_out.get("personal_generator_id_scale") is not None:
+                details["personal_generator_id_scale"] = s_out["personal_generator_id_scale"]
             if personal_matrices is not None:
                 details["personal_matrices"] = personal_matrices
                 details["personal_matrices_detached"] = personal_matrices.detach()
