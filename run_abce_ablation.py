@@ -396,6 +396,8 @@ def collect_result(job: JobSpec, exit_code: int) -> Dict[str, Any]:
         failure_json=failure_json,
         log_file=log_file,
     )
+    if row["status"] in {"ok", "metrics_ok"} and row.get("test_auc") is not None:
+        failure_reason, failure_stage = "", ""
     row["failure_reason"] = failure_reason
     row["failure_stage"] = failure_stage
 

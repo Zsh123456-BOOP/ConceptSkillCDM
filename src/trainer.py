@@ -861,6 +861,7 @@ def train_epoch(
     device: torch.device,
     logger,
     epoch: int,
+    max_batches: Optional[int] = None,
 ) -> Dict[str, float]:
     model.train()
 
@@ -874,8 +875,11 @@ def train_epoch(
     all_probs: List[float] = []
 
     bce_fn = nn.BCEWithLogitsLoss()
+    max_batches = None if max_batches is None else max(1, int(max_batches))
 
     for batch_idx, batch in enumerate(train_loader):
+        if max_batches is not None and batch_idx >= max_batches:
+            break
         student_ids, exercise_ids, labels = batch
         student_ids = student_ids.to(device)
         exercise_ids = exercise_ids.to(device)
@@ -954,6 +958,7 @@ def validate(
     device: torch.device,
     logger,
     epoch: int,
+    max_batches: Optional[int] = None,
 ) -> Dict[str, float]:
     model.eval()
 
@@ -967,9 +972,12 @@ def validate(
     all_probs: List[float] = []
 
     bce_fn = nn.BCEWithLogitsLoss()
+    max_batches = None if max_batches is None else max(1, int(max_batches))
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(val_loader):
+            if max_batches is not None and batch_idx >= max_batches:
+                break
             student_ids, exercise_ids, labels = batch
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)
@@ -1266,6 +1274,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             device,
             logger,
             epoch,
+            max_batches=getattr(args, "max_train_batches", None),
         )
         grad_norms = _collect_debug_grad_norms(model) if debug_graph_diag else None
 
@@ -1275,6 +1284,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             device,
             logger,
             epoch,
+            max_batches=getattr(args, "max_val_batches", None),
         )
 
         logger.info(
@@ -1837,9 +1847,13 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     all_labels: List[float] = []
     all_preds: List[float] = []
     all_probs: List[float] = []
+    max_test_batches = getattr(args, "max_test_batches", None)
+    max_test_batches = None if max_test_batches is None else max(1, int(max_test_batches))
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(test_loader):
+            if max_test_batches is not None and batch_idx >= max_test_batches:
+                break
             student_ids, exercise_ids, labels = batch
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)

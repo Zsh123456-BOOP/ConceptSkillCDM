@@ -137,6 +137,9 @@ def parse_args():
 
     # misc
     parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--max_train_batches", type=int, default=None)
+    parser.add_argument("--max_val_batches", type=int, default=None)
+    parser.add_argument("--max_test_batches", type=int, default=None)
     parser.add_argument("--no_cuda", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
 
