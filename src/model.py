@@ -389,6 +389,8 @@ class PersonalRelationGenerator(nn.Module):
         num_heads: int,
         rank: int = 4,
         hidden_dim: Optional[int] = None,
+        max_direct_scale: float = 0.5,
+        disable_direct_bias: bool = False,
     ):
         super().__init__()
         self.student_norm = nn.LayerNorm(student_dim)
@@ -396,6 +398,8 @@ class PersonalRelationGenerator(nn.Module):
         self.num_concepts = int(num_concepts)
         self.num_heads = int(num_heads)
         self.rank = int(rank)
+        self.max_direct_scale = max(0.0, float(max_direct_scale))
+        self.disable_direct_bias = bool(disable_direct_bias)
         hidden = max(1, max(student_dim, context_dim) // 2 if hidden_dim is None else int(hidden_dim))
 
         self.context_proj = nn.Linear(context_dim, hidden)
@@ -439,10 +443,14 @@ class PersonalRelationGenerator(nn.Module):
         u = self.base_u.unsqueeze(0) + self.student_scale * student_u + self.context_scale * torch.tanh(context_u)
         v = self.base_v.unsqueeze(0) + self.student_scale * student_v + self.context_scale * torch.tanh(context_v)
         low_rank_scores = torch.einsum("bhcr,bhkr->bhck", u, v) / math.sqrt(self.rank)
-        row_bias = torch.tanh(self.student_row_proj(student_code)).view(B, self.num_heads, self.num_concepts, 1)
-        col_bias = torch.tanh(self.student_col_proj(student_code)).view(B, self.num_heads, 1, self.num_concepts)
-        direct_scores = row_bias + col_bias
-        scores = self.low_rank_scale * low_rank_scores + self.direct_scale * direct_scores
+        direct_scores = 0.0
+        effective_direct_scale = low_rank_scores.new_tensor(0.0)
+        if (not self.disable_direct_bias) and self.max_direct_scale > 0:
+            row_bias = torch.tanh(self.student_row_proj(student_code)).view(B, self.num_heads, self.num_concepts, 1)
+            col_bias = torch.tanh(self.student_col_proj(student_code)).view(B, self.num_heads, 1, self.num_concepts)
+            direct_scores = row_bias + col_bias
+            effective_direct_scale = self.max_direct_scale * torch.sigmoid(self.direct_scale)
+        scores = self.low_rank_scale * low_rank_scores + effective_direct_scale * direct_scores
         scores = scores - scores.mean(dim=-1, keepdim=True)
         return scores
 
@@ -488,7 +496,12 @@ class ConceptStructureModeling(nn.Module):
         personal_max_alpha: float,
         personal_delta_scale: float,
         personal_warmup_epochs: int,
+        personal_reg_warmup_epochs: Optional[int],
         personal_student_dim: int,
+        personal_alpha_bias_scale: float,
+        personal_direct_bias_scale: float,
+        personal_disable_direct_bias: bool,
+        personal_disable_student_global_context: bool,
         # 完全消融开关
         enable_module: bool = True,
     ):
@@ -502,7 +515,16 @@ class ConceptStructureModeling(nn.Module):
         self.personal_max_alpha = float(personal_max_alpha)
         self.personal_delta_scale = max(0.0, float(personal_delta_scale))
         self.personal_warmup_epochs = max(0, int(personal_warmup_epochs))
+        self.personal_reg_warmup_epochs = (
+            self.personal_warmup_epochs
+            if personal_reg_warmup_epochs is None
+            else max(0, int(personal_reg_warmup_epochs))
+        )
         self.personal_student_dim = max(1, int(personal_student_dim))
+        self.personal_alpha_bias_scale = max(0.0, float(personal_alpha_bias_scale))
+        self.personal_direct_bias_scale = max(0.0, float(personal_direct_bias_scale))
+        self.personal_disable_direct_bias = bool(personal_disable_direct_bias)
+        self.personal_disable_student_global_context = bool(personal_disable_student_global_context)
         self._current_epoch = 1
 
         # -------- 完全消融：不创建任何可训练参数 --------
@@ -562,7 +584,7 @@ class ConceptStructureModeling(nn.Module):
             nn.init.zeros_(self.personal_alpha_bias.weight)
             nn.init.xavier_normal_(self.personal_gate_from_state.weight)
             nn.init.xavier_normal_(self.personal_generator_from_state.weight)
-            context_dim = knowledge_dim * 3
+            context_dim = knowledge_dim * (2 if self.personal_disable_student_global_context else 3)
             personal_hidden_dim = max(self.personal_student_dim, knowledge_dim)
             self.adaptive_gate = AdaptiveGate(
                 self.personal_student_dim,
@@ -578,6 +600,8 @@ class ConceptStructureModeling(nn.Module):
                 num_relation_heads,
                 personal_rank,
                 hidden_dim=personal_hidden_dim,
+                max_direct_scale=self.personal_direct_bias_scale,
+                disable_direct_bias=self.personal_disable_direct_bias,
             )
         else:
             self.adaptive_gate = None
@@ -597,6 +621,11 @@ class ConceptStructureModeling(nn.Module):
         if self.personal_warmup_epochs <= 0:
             return 1.0
         return min(1.0, float(self._current_epoch) / float(self.personal_warmup_epochs))
+
+    def _get_personal_reg_warmup_scale(self) -> float:
+        if self.personal_reg_warmup_epochs <= 0:
+            return 1.0
+        return min(1.0, float(self._current_epoch) / float(self.personal_reg_warmup_epochs))
 
     def forward(
         self,
@@ -649,14 +678,23 @@ class ConceptStructureModeling(nn.Module):
 
         if self.use_personal_graph and self.adaptive_gate is not None and self.personal_generator is not None:
             student_global_repr = self.knowledge_encoder.student_global(student_ids)  # (B,D)
-            context_repr = torch.cat(
-                [
-                    student_global_repr,
-                    student_repr,
-                    student_repr - student_global_repr,
-                ],
-                dim=-1,
-            )
+            if self.personal_disable_student_global_context:
+                context_repr = torch.cat(
+                    [
+                        student_repr,
+                        student_repr - student_global_repr,
+                    ],
+                    dim=-1,
+                )
+            else:
+                context_repr = torch.cat(
+                    [
+                        student_global_repr,
+                        student_repr,
+                        student_repr - student_global_repr,
+                    ],
+                    dim=-1,
+                )
             gate_state_repr = torch.tanh(self.personal_gate_from_state(student_repr))
             generator_state_repr = torch.tanh(self.personal_generator_from_state(student_repr))
             gate_id_scale = torch.sigmoid(self.personal_gate_id_logit)
@@ -665,7 +703,12 @@ class ConceptStructureModeling(nn.Module):
             generator_student_repr = (
                 generator_state_repr + generator_id_scale * self.personal_generator_embedding(student_ids)
             )
-            gate_alpha_bias = self.personal_alpha_bias(student_ids)
+            if self.personal_alpha_bias_scale > 0:
+                gate_alpha_bias = self.personal_alpha_bias_scale * torch.tanh(self.personal_alpha_bias(student_ids))
+            else:
+                gate_alpha_bias = torch.zeros(
+                    (student_ids.size(0), self.num_relation_heads), device=device, dtype=dtype
+                )
             gate_alpha, gate_alpha_logit = self.adaptive_gate(
                 gate_student_repr,
                 context_repr,
@@ -724,6 +767,15 @@ class ConceptStructureModeling(nn.Module):
             "personal_warmup_scale": torch.tensor(
                 self._get_personal_warmup_scale(), device=device, dtype=dtype
             ),
+            "personal_reg_warmup_scale": torch.tensor(
+                self._get_personal_reg_warmup_scale(), device=device, dtype=dtype
+            ),
+            "personal_alpha_bias_scale": torch.tensor(
+                self.personal_alpha_bias_scale, device=device, dtype=dtype
+            ),
+            "personal_direct_bias_scale": torch.tensor(
+                self.personal_direct_bias_scale, device=device, dtype=dtype
+            ),
         }
 
 
@@ -775,9 +827,15 @@ class CognitiveDiagnosisModel(nn.Module):
         personal_max_alpha: float = 0.35,
         personal_delta_scale: float = 1.0,
         personal_warmup_epochs: int = 0,
+        personal_reg_warmup_epochs: Optional[int] = None,
         personal_student_dim: Optional[int] = None,
         lambda_alpha_min: float = 0.0,
         alpha_min_target: float = 0.0,
+        personal_alpha_bias_scale: float = 1.0,
+        personal_direct_bias_scale: float = 0.5,
+        personal_disable_direct_bias: bool = False,
+        personal_disable_student_global_context: bool = False,
+        share_concept_embeddings: bool = False,
     ):
         super().__init__()
         self.num_students = int(num_students)
@@ -814,9 +872,19 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_max_alpha = max(0.0, float(personal_max_alpha))
         self.personal_delta_scale = max(0.0, float(personal_delta_scale))
         self.personal_warmup_epochs = max(0, int(personal_warmup_epochs))
+        self.personal_reg_warmup_epochs = (
+            self.personal_warmup_epochs
+            if personal_reg_warmup_epochs is None
+            else max(0, int(personal_reg_warmup_epochs))
+        )
         self.personal_student_dim = int(knowledge_dim if personal_student_dim is None else personal_student_dim)
         self.lambda_alpha_min = max(0.0, float(lambda_alpha_min))
         self.alpha_min_target = max(0.0, float(alpha_min_target))
+        self.personal_alpha_bias_scale = max(0.0, float(personal_alpha_bias_scale))
+        self.personal_direct_bias_scale = max(0.0, float(personal_direct_bias_scale))
+        self.personal_disable_direct_bias = bool(personal_disable_direct_bias)
+        self.personal_disable_student_global_context = bool(personal_disable_student_global_context)
+        self.share_concept_embeddings = bool(share_concept_embeddings)
 
         self.register_buffer("q_matrix", q_matrix)
 
@@ -842,15 +910,35 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_max_alpha=self.personal_max_alpha,
             personal_delta_scale=self.personal_delta_scale,
             personal_warmup_epochs=self.personal_warmup_epochs,
+            personal_reg_warmup_epochs=self.personal_reg_warmup_epochs,
             personal_student_dim=self.personal_student_dim,
+            personal_alpha_bias_scale=self.personal_alpha_bias_scale,
+            personal_direct_bias_scale=self.personal_direct_bias_scale,
+            personal_disable_direct_bias=self.personal_disable_direct_bias,
+            personal_disable_student_global_context=self.personal_disable_student_global_context,
             enable_module=self.enable_module1,
         )
+
+        if self.share_concept_embeddings:
+            self._tie_concept_embeddings()
 
         self.diagnosis_head = CognitiveDiagnosisHead(
             knowledge_dim=knowledge_dim,
             use_weight_norm=self.enable_module1,
         )
         self.exercise_encoder = ExerciseDifficultyEncoder(num_exercises=num_exercises)
+
+    def _tie_concept_embeddings(self) -> None:
+        if not self.enable_module1:
+            return
+        structure_module = getattr(self, "structure_module", None)
+        if structure_module is None:
+            return
+        relation_learning = getattr(structure_module, "relation_learning", None)
+        knowledge_encoder = getattr(structure_module, "knowledge_encoder", None)
+        if relation_learning is None or knowledge_encoder is None:
+            return
+        relation_learning.concept_embeddings = knowledge_encoder.concept_emb.weight
 
     # ------------------------------
     # Fix #1：行熵稀疏度（用于 personal graph 正则）
@@ -973,6 +1061,10 @@ class CognitiveDiagnosisModel(nn.Module):
                 details["personal_gate_id_scale"] = s_out["personal_gate_id_scale"]
             if s_out.get("personal_generator_id_scale") is not None:
                 details["personal_generator_id_scale"] = s_out["personal_generator_id_scale"]
+            if s_out.get("personal_alpha_bias_scale") is not None:
+                details["personal_alpha_bias_scale"] = s_out["personal_alpha_bias_scale"]
+            if s_out.get("personal_direct_bias_scale") is not None:
+                details["personal_direct_bias_scale"] = s_out["personal_direct_bias_scale"]
             if personal_matrices is not None:
                 details["personal_matrices"] = personal_matrices
                 details["personal_matrices_detached"] = personal_matrices.detach()
@@ -992,6 +1084,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 details["alpha_head_std"] = s_out["alpha_head_std"]
                 details["alpha_head_std_detached"] = s_out["alpha_head_std"].detach()
             details["personal_warmup_scale"] = s_out["personal_warmup_scale"].detach()
+            details["personal_reg_warmup_scale"] = s_out["personal_reg_warmup_scale"].detach()
 
         return out_main, details
 
@@ -1017,8 +1110,10 @@ class CognitiveDiagnosisModel(nn.Module):
             "alpha_collapse": torch.tensor(0.0, device=device),
         }
         graph_reg_ramp_t = relation_matrices.new_tensor(self._get_graph_reg_ramp())
+        personal_reg_ramp_t = relation_matrices.new_tensor(self._get_linear_warmup(self.personal_reg_warmup_epochs))
         if details is not None:
             details["graph_reg_ramp"] = graph_reg_ramp_t.detach()
+            details["personal_reg_ramp"] = personal_reg_ramp_t.detach()
 
         # (1) Global graph entropy band penalty
         if self.enable_module1 and self.use_concept_graph and self.lambda_graph_entropy > 0:
@@ -1115,20 +1210,21 @@ class CognitiveDiagnosisModel(nn.Module):
             ):
                 pm = details["personal_matrices"]
                 terms["personal_sparse"] = (
-                    self.lambda_sparse_personal * self._row_entropy(pm) * graph_reg_ramp_t
+                    self.lambda_sparse_personal * self._row_entropy(pm) * personal_reg_ramp_t
                 )
 
-            if "alpha" in details and details["alpha"] is not None and self.lambda_alpha > 0:
-                alpha_flat = details["alpha"].view(-1)
+            alpha_for_reg = details.get("alpha_effective", details.get("alpha"))
+            if alpha_for_reg is not None and self.lambda_alpha > 0:
+                alpha_flat = alpha_for_reg.view(-1)
                 alpha_var = alpha_flat.var() + 1e-6
                 if "alpha_student_bias" in details and details["alpha_student_bias"] is not None:
                     alpha_bias_flat = details["alpha_student_bias"].view(-1)
                     alpha_var = alpha_var + 0.5 * (alpha_bias_flat.var() + 1e-6)
                     details["alpha_bias_std_runtime"] = alpha_bias_flat.std(unbiased=False).detach()
-                terms["alpha_var"] = -self.lambda_alpha * alpha_var
+                terms["alpha_var"] = -self.lambda_alpha * alpha_var * personal_reg_ramp_t
 
-            if "alpha" in details and details["alpha"] is not None and self.lambda_alpha_min > 0:
-                alpha_flat = details["alpha"].view(-1)
+            if alpha_for_reg is not None and self.lambda_alpha_min > 0:
+                alpha_flat = alpha_for_reg.view(-1)
                 alpha_std = alpha_flat.std(unbiased=False)
                 alpha_target = torch.tensor(self.alpha_min_target, device=device, dtype=alpha_std.dtype)
                 alpha_pen = F.relu(alpha_target - alpha_std)
@@ -1147,7 +1243,7 @@ class CognitiveDiagnosisModel(nn.Module):
                     delta_student_target = 0.5 * alpha_target
                     alpha_pen = alpha_pen + 0.5 * F.relu(delta_student_target - delta_student_std)
                     details["personal_delta_student_std_runtime"] = delta_student_std.detach()
-                terms["alpha_collapse"] = self.lambda_alpha_min * alpha_pen
+                terms["alpha_collapse"] = self.lambda_alpha_min * alpha_pen * personal_reg_ramp_t
                 details["alpha_std_runtime"] = alpha_std.detach()
                 details["alpha_collapse_pen"] = alpha_pen.detach()
 

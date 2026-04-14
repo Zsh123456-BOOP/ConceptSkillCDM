@@ -238,6 +238,10 @@ def collect_result(job: JobSpec, exit_code: int) -> Dict[str, Any]:
     row["test_rmse"] = metrics.get("rmse")
     row["best_val_auc"] = test_json.get("best_val_auc")
     row["model_epoch"] = test_json.get("model_epoch")
+    row["test_total_rows"] = test_json.get("test_total_rows")
+    row["test_seen_rows"] = test_json.get("test_seen_rows")
+    row["test_seen_coverage"] = test_json.get("test_seen_coverage")
+    row["clean_baseline"] = test_json.get("train_only_split_hygiene")
 
     hist = read_json(job.save_dir / "training_history.json") or {}
     row["best_epoch"] = hist.get("best_epoch") if isinstance(hist, dict) else None
@@ -273,6 +277,10 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "best_val_auc",
         "best_epoch",
         "model_epoch",
+        "test_total_rows",
+        "test_seen_rows",
+        "test_seen_coverage",
+        "clean_baseline",
         "effective_enable_module1",
         "effective_use_concept_graph",
         "effective_use_personal_graph",
@@ -448,6 +456,10 @@ def write_summary(
             "delta_E_full_minus_noE": delta_e,
             "full_effective_use_concept_graph": full.get("effective_use_concept_graph"),
             "full_effective_use_personal_graph": full.get("effective_use_personal_graph"),
+            "full_clean_baseline": full.get("clean_baseline"),
+            "full_test_total_rows": try_float(full.get("test_total_rows")),
+            "full_test_seen_rows": try_float(full.get("test_seen_rows")),
+            "full_test_seen_coverage": try_float(full.get("test_seen_coverage")),
             "full_graph_entropy_ratio": try_float(full.get("graph_entropy_ratio")),
             "full_alpha_std": try_float(full.get("alpha_std")),
             "full_alpha_bias_std": try_float(full.get("alpha_bias_std")),
@@ -480,6 +492,10 @@ def write_summary(
         "delta_E_full_minus_noE",
         "full_effective_use_concept_graph",
         "full_effective_use_personal_graph",
+        "full_clean_baseline",
+        "full_test_total_rows",
+        "full_test_seen_rows",
+        "full_test_seen_coverage",
         "full_graph_entropy_ratio",
         "full_alpha_std",
         "full_alpha_bias_std",
@@ -542,6 +558,10 @@ def write_summary(
                 "full_auc_mean": mean_valid(full_aucs),
                 "delta_A_mean": mean_a,
                 "delta_E_mean": mean_e,
+                "full_clean_baseline_majority": _majority_value(grp, "full_clean_baseline"),
+                "full_test_seen_coverage_mean": mean_valid(
+                    [try_float(x.get("full_test_seen_coverage")) for x in grp]
+                ),
                 "A_useful_seed_ratio": useful_ratio(deltas_a),
                 "E_useful_seed_ratio": useful_ratio(deltas_e),
                 "suggest_keep_by_mean": ",".join(keep),
@@ -557,6 +577,8 @@ def write_summary(
         "full_auc_mean",
         "delta_A_mean",
         "delta_E_mean",
+        "full_clean_baseline_majority",
+        "full_test_seen_coverage_mean",
         "A_useful_seed_ratio",
         "E_useful_seed_ratio",
         "suggest_keep_by_mean",
@@ -601,20 +623,28 @@ def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> 
     if profile == "ae_dominant":
         if dataset == "assist_09":
             return {
-                "graph_identity_residual": 0.25,
-                "personal_warmup_epochs": 8,
+                "graph_identity_residual": 0.05,
+                "personal_warmup_epochs": 6,
+                "personal_reg_warmup_epochs": 6,
                 "personal_max_alpha": 0.45,
-                "personal_delta_scale": 1.10,
-                "lambda_alpha_min": 0.05,
-                "alpha_min_target": 0.02,
+                "personal_delta_scale": 7.0,
+                "lambda_alpha_min": 0.10,
+                "alpha_min_target": 0.05,
+                "personal_alpha_bias_scale": 0.08,
+                "personal_direct_bias_scale": 0.08,
+                "personal_disable_student_global_context": True,
             }
         return {
-            "graph_identity_residual": 0.10,
-            "personal_warmup_epochs": 6,
+            "graph_identity_residual": 0.05,
+            "personal_warmup_epochs": 4,
+            "personal_reg_warmup_epochs": 4,
             "personal_max_alpha": 0.40,
-            "personal_delta_scale": 1.05,
-            "lambda_alpha_min": 0.05,
-            "alpha_min_target": 0.02,
+            "personal_delta_scale": 5.0,
+            "lambda_alpha_min": 0.08,
+            "alpha_min_target": 0.04,
+            "personal_alpha_bias_scale": 0.08,
+            "personal_direct_bias_scale": 0.08,
+            "personal_disable_student_global_context": True,
         }
     raise ValueError(f"Unknown profile '{profile}'.")
 

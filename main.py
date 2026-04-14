@@ -215,12 +215,24 @@ def parse_args():
                         help="Scale factor on personal graph delta before softmax.")
     parser.add_argument("--personal_warmup_epochs", type=int, default=0,
                         help="Linear warmup epochs for personal graph mixing. 0 disables rescue warmup.")
+    parser.add_argument("--personal_reg_warmup_epochs", type=int, default=None,
+                        help="Linear warmup epochs for personal regularizers. Default follows personal_warmup_epochs.")
     parser.add_argument("--personal_student_dim", type=int, default=None,
                         help="Dedicated student embedding dim for E branch. Default follows knowledge_dim.")
     parser.add_argument("--lambda_alpha_min", type=float, default=0.0,
                         help="Penalty weight when personal alpha std falls below target.")
     parser.add_argument("--alpha_min_target", type=float, default=0.0,
                         help="Minimum desired std of personal alpha before collapse penalty becomes zero.")
+    parser.add_argument("--personal_alpha_bias_scale", type=float, default=1.0,
+                        help="Max magnitude scale for bounded student-specific alpha bias.")
+    parser.add_argument("--personal_direct_bias_scale", type=float, default=0.5,
+                        help="Upper bound for PersonalRelationGenerator direct row/col bias contribution.")
+    parser.add_argument("--personal_disable_direct_bias", action="store_true",
+                        help="Disable direct row/col bias in the personal graph generator.")
+    parser.add_argument("--personal_disable_student_global_context", action="store_true",
+                        help="Use state-primary personal context without raw student_global direct concatenation.")
+    parser.add_argument("--share_concept_embeddings", action="store_true",
+                        help="Share concept embeddings between relation learning and knowledge encoder.")
 
     #  GPU 
     parser.add_argument("--multi_gpu", action="store_true",

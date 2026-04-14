@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
 import numpy as np
-from typing import Tuple, Dict
+from typing import Tuple, Dict, List, Optional
 
 
 class CognitiveDiagnosisDataset(Dataset):
@@ -66,12 +66,42 @@ class CognitiveDiagnosisDataset(Dataset):
         )
 
 
-def build_id_mappings(sources: list) -> Tuple[Dict[int, int], Dict[int, int], Dict[int, int]]:
+def _load_source_df(src) -> pd.DataFrame:
+    if isinstance(src, str):
+        return pd.read_csv(src)
+    return src.copy() if isinstance(src, pd.DataFrame) else pd.DataFrame(src)
+
+
+def _iter_source_dfs(sources: Optional[list]):
+    for src in sources or []:
+        if src is None:
+            continue
+        yield _load_source_df(src)
+
+
+def _parse_concept_seq(seq) -> List[int]:
+    if isinstance(seq, (list, tuple, set, np.ndarray)):
+        return [int(cid) for cid in seq]
+    if pd.isna(seq):
+        return []
+    if isinstance(seq, str):
+        return [int(cid) for cid in seq.split(",") if str(cid).strip()]
+    return [int(seq)]
+
+
+def build_id_mappings(
+        train_sources: list,
+        metadata_sources: Optional[list] = None,
+) -> Tuple[Dict[int, int], Dict[int, int], Dict[int, int]]:
     """
-    从所有数据源中构建ID映射
+    基于 train-only 数据源构建 ID 映射。
+
+    metadata_sources 仅用于显式补充 train 中已出现习题的概念元数据；
+    它不会扩展 student/item 的 seen 空间，也不会隐式使用 val/test。
 
     Args:
-        sources: 列表，每个元素可以是 CSV 文件路径(str) 或 pandas.DataFrame
+        train_sources: 训练数据源列表，每个元素可以是 CSV 文件路径(str) 或 pandas.DataFrame
+        metadata_sources: 可选的显式题目元数据源，仅用于补充 train-seen exercise 的 concept 集合
 
     Returns:
         (stu_id_map, exer_id_map, cpt_id_map) 三个映射字典
@@ -80,26 +110,19 @@ def build_id_mappings(sources: list) -> Tuple[Dict[int, int], Dict[int, int], Di
     all_exer_ids = set()
     all_cpt_ids = set()
 
-    # 收集所有唯一ID
-    for src in sources:
-        if isinstance(src, str):
-            df = pd.read_csv(src)
-        else:
-            df = src
-
-        # 收集学生ID和习题ID
+    for df in _iter_source_dfs(train_sources):
         all_stu_ids.update(df['stu_id'].unique())
         all_exer_ids.update(df['exer_id'].unique())
-
-        # 收集知识点ID
         for seq in df['cpt_seq'].values:
-            if pd.isna(seq):
-                continue
-            if isinstance(seq, str):
-                concept_ids = [int(cid) for cid in seq.split(',')]
-            else:
-                concept_ids = [int(seq)]
-            all_cpt_ids.update(concept_ids)
+            all_cpt_ids.update(_parse_concept_seq(seq))
+
+    train_seen_exercises = set(all_exer_ids)
+    for df in _iter_source_dfs(metadata_sources):
+        if "exer_id" not in df.columns or "cpt_seq" not in df.columns:
+            continue
+        meta_df = df[df["exer_id"].isin(train_seen_exercises)]
+        for seq in meta_df["cpt_seq"].values:
+            all_cpt_ids.update(_parse_concept_seq(seq))
 
     # 创建映射字典：原始ID -> 连续的新ID (从0开始)
     stu_id_map = {old_id: new_id for new_id, old_id in enumerate(sorted(all_stu_ids))}
@@ -110,17 +133,19 @@ def build_id_mappings(sources: list) -> Tuple[Dict[int, int], Dict[int, int], Di
 
 
 def build_q_matrix(
-        sources: list,
+        train_sources: list,
         exer_id_map: Dict[int, int],
-        cpt_id_map: Dict[int, int]
+        cpt_id_map: Dict[int, int],
+        metadata_sources: Optional[list] = None,
 ) -> torch.Tensor:
     """
     构建Q矩阵 (习题-知识点关联矩阵)
 
     Args:
-        sources: 列表，每个元素可以是 CSV 文件路径(str) 或 pandas.DataFrame
+        train_sources: 训练数据源列表，每个元素可以是 CSV 文件路径(str) 或 pandas.DataFrame
         exer_id_map: 习题ID映射字典 {原始ID: 新ID}
         cpt_id_map: 知识点ID映射字典 {原始ID: 新ID}
+        metadata_sources: 可选的显式题目元数据，仅用于补充 train-seen 习题的概念关系
 
     Returns:
         Q矩阵，形状为 (习题总数, 知识点总数)
@@ -134,28 +159,19 @@ def build_q_matrix(
     # 用于存储习题和知识点的对应关系
     exercise_concepts = {}
 
-    # 从所有文件 / DataFrame 中收集习题-知识点关系
-    for src in sources:
-        if isinstance(src, str):
-            df = pd.read_csv(src)
-        else:
-            df = src
-
+    def _collect_relations_from_df(df: pd.DataFrame) -> None:
         for _, row in df.iterrows():
             exer_id = row['exer_id']
             cpt_seq = row['cpt_seq']
+
+            if exer_id not in exer_id_map:
+                continue
 
             # 获取映射后的习题ID
             mapped_exer_id = exer_id_map[exer_id]
 
             # 解析知识点序列
-            if pd.isna(cpt_seq):
-                continue
-
-            if isinstance(cpt_seq, str):
-                concept_ids = [int(cid) for cid in cpt_seq.split(',')]
-            else:
-                concept_ids = [int(cpt_seq)]
+            concept_ids = _parse_concept_seq(cpt_seq)
 
             # 存储该习题对应的知识点
             if mapped_exer_id not in exercise_concepts:
@@ -164,6 +180,14 @@ def build_q_matrix(
             for cid in concept_ids:
                 if cid in cpt_id_map:
                     exercise_concepts[mapped_exer_id].add(cpt_id_map[cid])
+
+    for df in _iter_source_dfs(train_sources):
+        _collect_relations_from_df(df)
+
+    for df in _iter_source_dfs(metadata_sources):
+        if "exer_id" not in df.columns or "cpt_seq" not in df.columns:
+            continue
+        _collect_relations_from_df(df)
 
     # 填充Q矩阵
     for exer_id, concepts in exercise_concepts.items():
@@ -224,8 +248,7 @@ def create_dataloaders(
 
     # --- 学生冷启动过滤 ---
     if min_stu_interactions > 0:
-        combined = pd.concat([train_df, val_df, test_df], ignore_index=True)
-        stu_counts = combined.groupby("stu_id").size()
+        stu_counts = train_df.groupby("stu_id").size()
         keep_users = set(
             stu_counts[stu_counts >= min_stu_interactions].index
         )
@@ -250,8 +273,7 @@ def create_dataloaders(
 
     # --- 题目冷门过滤 ---
     if min_exer_interactions > 0:
-        combined = pd.concat([train_df, val_df, test_df], ignore_index=True)
-        exer_counts = combined.groupby("exer_id").size()
+        exer_counts = train_df.groupby("exer_id").size()
         keep_items = set(
             exer_counts[exer_counts >= min_exer_interactions].index
         )
@@ -276,8 +298,7 @@ def create_dataloaders(
 
     # --- 毒题清洗（Acc=0 或 1 且作答数 >= min_poison_count） ---
     if min_poison_count > 0:
-        combined = pd.concat([train_df, val_df, test_df], ignore_index=True)
-        item_stats = combined.groupby("exer_id")["label"].agg(
+        item_stats = train_df.groupby("exer_id")["label"].agg(
             count="count", correct_rate="mean"
         ).reset_index()
 
@@ -314,14 +335,37 @@ def create_dataloaders(
     else:
         log("[数据清洗] 跳过毒题清洗（min_poison_count <= 0）。")
 
-    # 2. 构建ID映射 & Q矩阵（基于清洗后的 DataFrame）
-    csv_sources = [train_df, val_df, test_df]
+    # 2. 构建ID映射 & Q矩阵（严格基于 train-only）
+    train_sources = [train_df]
 
     log("正在构建ID映射...")
-    stu_id_map, exer_id_map, cpt_id_map = build_id_mappings(csv_sources)
+    stu_id_map, exer_id_map, cpt_id_map = build_id_mappings(train_sources=train_sources)
 
     log("正在构建Q矩阵...")
-    q_matrix = build_q_matrix(csv_sources, exer_id_map, cpt_id_map)
+    q_matrix = build_q_matrix(train_sources=train_sources, exer_id_map=exer_id_map, cpt_id_map=cpt_id_map)
+
+    def _filter_seen_support(df: pd.DataFrame, split_name: str):
+        before = len(df)
+        if before == 0:
+            log(f"[数据清洗] {split_name} split 为空，跳过 train-seen 过滤。")
+            return df.copy().reset_index(drop=True), before, before, 1.0
+
+        keep_mask = (
+            df["stu_id"].isin(stu_id_map.keys())
+            & df["exer_id"].isin(exer_id_map.keys())
+        )
+        df_new = df[keep_mask].reset_index(drop=True)
+        after = len(df_new)
+        coverage = after / before if before > 0 else 1.0
+        dropped = before - after
+        log(
+            f"[数据清洗] {split_name} train-seen 过滤：before={before}, after={after}, "
+            f"dropped={dropped}, coverage={coverage:.2%}"
+        )
+        return df_new, before, after, coverage
+
+    val_df, val_total_rows_raw, val_seen_rows, val_seen_coverage = _filter_seen_support(val_df, "Valid")
+    test_df, test_total_rows_raw, test_seen_rows, test_seen_coverage = _filter_seen_support(test_df, "Test")
 
     # ========= 统计每题的概念数量（全局 + 各数据集） =========
     # 每道题对应的概念数：按 Q 矩阵行求和
@@ -426,6 +470,13 @@ def create_dataloaders(
         'q_matrix': q_matrix,
         # 新增：每道题的“概念数量”，与 exer_id 内部索引对齐
         'concepts_per_exercise': concepts_per_exercise,
+        'train_only_split_hygiene': True,
+        'val_total_rows_raw': int(val_total_rows_raw),
+        'val_seen_rows': int(val_seen_rows),
+        'val_seen_coverage': float(val_seen_coverage),
+        'test_total_rows_raw': int(test_total_rows_raw),
+        'test_seen_rows': int(test_seen_rows),
+        'test_seen_coverage': float(test_seen_coverage),
     }
 
     return train_loader, val_loader, test_loader, info_dict

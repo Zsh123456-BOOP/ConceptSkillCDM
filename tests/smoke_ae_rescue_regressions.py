@@ -1,6 +1,9 @@
+import logging
 import os
 import sys
+import tempfile
 
+import pandas as pd
 import torch
 
 
@@ -204,12 +207,238 @@ def _check_personal_branch_is_state_primary_with_small_id_adapter() -> None:
     )
 
 
+def _check_split_hygiene_uses_train_only_maps_and_q_matrix() -> None:
+    from src.dataset import create_dataloaders
+
+    train_df = pd.DataFrame(
+        [
+            {"stu_id": 1, "exer_id": 10, "cpt_seq": "100", "label": 1},
+            {"stu_id": 2, "exer_id": 11, "cpt_seq": "101", "label": 0},
+        ]
+    )
+    val_df = pd.DataFrame(
+        [
+            {"stu_id": 1, "exer_id": 10, "cpt_seq": "100", "label": 1},
+            {"stu_id": 999, "exer_id": 10, "cpt_seq": "100", "label": 0},
+            {"stu_id": 1, "exer_id": 999, "cpt_seq": "999", "label": 0},
+        ]
+    )
+    test_df = pd.DataFrame(
+        [
+            {"stu_id": 2, "exer_id": 11, "cpt_seq": "101", "label": 0},
+            {"stu_id": 2, "exer_id": 12, "cpt_seq": "102", "label": 1},
+        ]
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        train_path = os.path.join(tmpdir, "train.csv")
+        val_path = os.path.join(tmpdir, "val.csv")
+        test_path = os.path.join(tmpdir, "test.csv")
+        train_df.to_csv(train_path, index=False)
+        val_df.to_csv(val_path, index=False)
+        test_df.to_csv(test_path, index=False)
+
+        train_loader, val_loader, test_loader, info_dict = create_dataloaders(
+            train_file=train_path,
+            val_file=val_path,
+            test_file=test_path,
+            batch_size=2,
+            num_workers=0,
+            min_stu_interactions=0,
+            min_exer_interactions=0,
+            min_poison_count=0,
+        )
+
+    _assert(
+        set(info_dict["stu_id_map"].keys()) == {1, 2},
+        f"student map 应严格基于 train 构建，当前={sorted(info_dict['stu_id_map'].keys())}",
+    )
+    _assert(
+        set(info_dict["exer_id_map"].keys()) == {10, 11},
+        f"exercise map 应严格基于 train 构建，当前={sorted(info_dict['exer_id_map'].keys())}",
+    )
+    _assert(
+        set(info_dict["cpt_id_map"].keys()) == {100, 101},
+        f"concept map 应严格基于 train 构建，当前={sorted(info_dict['cpt_id_map'].keys())}",
+    )
+    _assert(
+        tuple(info_dict["q_matrix"].shape) == (2, 2),
+        f"Q 矩阵维度应只覆盖 train 中 seen item/concept，当前={tuple(info_dict['q_matrix'].shape)}",
+    )
+    _assert(
+        len(train_loader.dataset) == 2 and len(val_loader.dataset) == 1 and len(test_loader.dataset) == 1,
+        "val/test 中未在 train 出现的 student/item 应在建 loader 前被过滤。",
+    )
+
+
+def _check_runtime_ablation_guardrails_cover_no_a_and_no_e() -> None:
+    from src.model import CognitiveDiagnosisModel
+    from src.trainer import _collect_runtime_ablation_facts, _log_and_assert_ablation_consistency
+
+    logger = logging.getLogger("smoke_ae_runtime")
+    if not logger.handlers:
+        logger.addHandler(logging.NullHandler())
+
+    q_matrix = torch.eye(3, dtype=torch.float32)
+
+    no_a_model = CognitiveDiagnosisModel(
+        num_students=4,
+        num_exercises=3,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+        use_concept_graph=False,
+        use_personal_graph=True,
+        personal_rank=4,
+        personal_max_alpha=0.4,
+        personal_delta_scale=6.0,
+        personal_warmup_epochs=0,
+        personal_student_dim=8,
+    )
+    facts_no_a = _collect_runtime_ablation_facts(no_a_model)
+    _assert(facts_no_a["enable_module1"] is True, "no_A 不应顺带关闭整个模块1。")
+    _assert(facts_no_a["use_concept_graph"] is False, "no_A runtime 必须显示 A 已关闭。")
+    _assert(facts_no_a["has_relation_learning"] is False, "no_A 时 relation_learning 不应物理存在。")
+    _assert(facts_no_a["use_personal_graph"] is True, "no_A 不应顺带关闭 E。")
+    _assert(facts_no_a["has_adaptive_gate"] is True, "no_A 时 E 的 adaptive_gate 应仍然存在。")
+    _assert(facts_no_a["has_personal_generator"] is True, "no_A 时 E 的 personal_generator 应仍然存在。")
+    _log_and_assert_ablation_consistency(
+        model=no_a_model,
+        logger=logger,
+        context="[smoke][no_A]",
+        ablate_module1=False,
+        expect_use_concept_graph=False,
+        expect_use_personal_graph=True,
+    )
+
+    no_e_model = CognitiveDiagnosisModel(
+        num_students=4,
+        num_exercises=3,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+        use_concept_graph=True,
+        use_personal_graph=False,
+        personal_rank=4,
+        personal_max_alpha=0.4,
+        personal_delta_scale=6.0,
+        personal_warmup_epochs=0,
+        personal_student_dim=8,
+    )
+    facts_no_e = _collect_runtime_ablation_facts(no_e_model)
+    _assert(facts_no_e["enable_module1"] is True, "no_E 不应顺带关闭整个模块1。")
+    _assert(facts_no_e["use_concept_graph"] is True, "no_E 不应顺带关闭 A。")
+    _assert(facts_no_e["has_relation_learning"] is True, "no_E 时 relation_learning 应仍然存在。")
+    _assert(facts_no_e["use_personal_graph"] is False, "no_E runtime 必须显示 E 已关闭。")
+    _assert(facts_no_e["has_adaptive_gate"] is False, "no_E 时 adaptive_gate 不应存在。")
+    _assert(facts_no_e["has_personal_generator"] is False, "no_E 时 personal_generator 不应存在。")
+    _log_and_assert_ablation_consistency(
+        model=no_e_model,
+        logger=logger,
+        context="[smoke][no_E]",
+        ablate_module1=False,
+        expect_use_concept_graph=True,
+        expect_use_personal_graph=False,
+    )
+
+
+def _check_direct_bias_can_be_disabled_without_collapsing_personal_graph() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    torch.manual_seed(0)
+    q_matrix = torch.tensor(
+        [
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=torch.float32,
+    )
+    model = CognitiveDiagnosisModel(
+        num_students=5,
+        num_exercises=4,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+        use_concept_graph=False,
+        use_personal_graph=True,
+        personal_rank=4,
+        personal_max_alpha=0.4,
+        personal_delta_scale=6.0,
+        personal_warmup_epochs=0,
+        personal_student_dim=8,
+        personal_alpha_bias_scale=0.0,
+        personal_direct_bias_scale=0.0,
+        personal_disable_student_global_context=True,
+    )
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0, 1], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    ident = model.identity_relations.unsqueeze(0)
+    matrix_delta = float((details["personal_matrices"] - ident).abs().mean())
+    _assert(
+        matrix_delta > 0.01,
+        f"禁用 direct bias 后，E 仍应能生成非 identity 个性化图，当前 delta={matrix_delta:.6f}",
+    )
+
+
+def _check_concept_embedding_sharing_uses_same_storage() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    q_matrix = torch.eye(3, dtype=torch.float32)
+    model = CognitiveDiagnosisModel(
+        num_students=4,
+        num_exercises=3,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+        use_concept_graph=True,
+        use_personal_graph=True,
+        share_concept_embeddings=True,
+        personal_rank=4,
+        personal_max_alpha=0.4,
+        personal_delta_scale=6.0,
+        personal_warmup_epochs=0,
+        personal_student_dim=8,
+    )
+    rel_weight = model.structure_module.relation_learning.concept_embeddings
+    enc_weight = model.structure_module.knowledge_encoder.concept_emb.weight
+    _assert(
+        rel_weight.data_ptr() == enc_weight.data_ptr(),
+        "开启 share_concept_embeddings 后，relation_learning 与 knowledge_encoder 应共享同一块参数存储。",
+    )
+
+
 def main() -> None:
     _check_no_a_keeps_gnn_layers()
     _check_best_configs_enable_e_rescue_knobs()
     _check_dataset_defaults_respect_explicit_zero_overrides()
     _check_no_a_personal_graph_is_not_identity_locked()
     _check_personal_branch_is_state_primary_with_small_id_adapter()
+    _check_split_hygiene_uses_train_only_maps_and_q_matrix()
+    _check_runtime_ablation_guardrails_cover_no_a_and_no_e()
+    _check_direct_bias_can_be_disabled_without_collapsing_personal_graph()
+    _check_concept_embedding_sharing_uses_same_storage()
     print("OK: AE rescue regression smoke checks passed.")
 
 

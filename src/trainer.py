@@ -72,6 +72,9 @@ def _collect_runtime_ablation_facts(model: nn.Module) -> Dict[str, Any]:
     """收集模型运行时的模块1开关与物理存在性，用于防止“假消融”"""
     base_model = _get_base_model(model)
     structure_module = getattr(base_model, "structure_module", None)
+    relation_learning = getattr(structure_module, "relation_learning", None) if structure_module is not None else None
+    adaptive_gate = getattr(structure_module, "adaptive_gate", None) if structure_module is not None else None
+    personal_generator = getattr(structure_module, "personal_generator", None) if structure_module is not None else None
 
     has_knowledge_encoder = (
         structure_module is not None and getattr(structure_module, "knowledge_encoder", None) is not None
@@ -79,7 +82,12 @@ def _collect_runtime_ablation_facts(model: nn.Module) -> Dict[str, Any]:
 
     return {
         "enable_module1": bool(getattr(base_model, "enable_module1", False)),
+        "use_concept_graph": bool(getattr(base_model, "use_concept_graph", False)),
+        "use_personal_graph": bool(getattr(base_model, "use_personal_graph", False)),
         "has_knowledge_encoder": bool(has_knowledge_encoder),
+        "has_relation_learning": bool(relation_learning is not None),
+        "has_adaptive_gate": bool(adaptive_gate is not None),
+        "has_personal_generator": bool(personal_generator is not None),
     }
 
 
@@ -89,6 +97,8 @@ def _log_and_assert_ablation_consistency(
     logger,
     context: str,
     ablate_module1: bool,
+    expect_use_concept_graph: Optional[bool] = None,
+    expect_use_personal_graph: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     记录并校验消融一致性：
@@ -100,18 +110,59 @@ def _log_and_assert_ablation_consistency(
     logger.info(
         "%s Ablation runtime check: "
         "args(ablate_module1=%s) | "
-        "model(enable_module1=%s) | "
-        "physical(has_knowledge_encoder=%s)",
+        "expect(use_concept_graph=%s,use_personal_graph=%s) | "
+        "model(enable_module1=%s,use_concept_graph=%s,use_personal_graph=%s) | "
+        "physical(has_knowledge_encoder=%s,has_relation_learning=%s,has_adaptive_gate=%s,has_personal_generator=%s)",
         context,
         ablate_module1,
+        expect_use_concept_graph,
+        expect_use_personal_graph,
         facts["enable_module1"],
+        facts["use_concept_graph"],
+        facts["use_personal_graph"],
         facts["has_knowledge_encoder"],
+        facts["has_relation_learning"],
+        facts["has_adaptive_gate"],
+        facts["has_personal_generator"],
     )
 
     if ablate_module1 and facts["enable_module1"]:
         raise RuntimeError("Ablation mismatch: ablate_module1=True but model.enable_module1=True.")
     if ablate_module1 and facts["has_knowledge_encoder"]:
         raise RuntimeError("Ablation mismatch: ablate_module1=True but knowledge_encoder still exists.")
+    if ablate_module1 and (
+        facts["use_concept_graph"]
+        or facts["use_personal_graph"]
+        or facts["has_relation_learning"]
+        or facts["has_adaptive_gate"]
+        or facts["has_personal_generator"]
+    ):
+        raise RuntimeError("Ablation mismatch: ablate_module1=True but Module1 submodules still remain active.")
+
+    if (not ablate_module1) and (not facts["enable_module1"] or not facts["has_knowledge_encoder"]):
+        raise RuntimeError("Ablation mismatch: ablate_module1=False but Module1 is not fully available.")
+
+    if expect_use_concept_graph is not None and facts["use_concept_graph"] != bool(expect_use_concept_graph):
+        raise RuntimeError(
+            f"Ablation mismatch: expected use_concept_graph={bool(expect_use_concept_graph)} "
+            f"but got {facts['use_concept_graph']}."
+        )
+    if expect_use_concept_graph is not None and bool(expect_use_concept_graph) and not facts["has_relation_learning"]:
+        raise RuntimeError("Ablation mismatch: use_concept_graph=True but relation_learning is missing.")
+    if expect_use_concept_graph is not None and (not bool(expect_use_concept_graph)) and facts["has_relation_learning"]:
+        raise RuntimeError("Ablation mismatch: use_concept_graph=False but relation_learning still exists.")
+
+    if expect_use_personal_graph is not None and facts["use_personal_graph"] != bool(expect_use_personal_graph):
+        raise RuntimeError(
+            f"Ablation mismatch: expected use_personal_graph={bool(expect_use_personal_graph)} "
+            f"but got {facts['use_personal_graph']}."
+        )
+    if expect_use_personal_graph is not None and bool(expect_use_personal_graph):
+        if not facts["has_adaptive_gate"] or not facts["has_personal_generator"]:
+            raise RuntimeError("Ablation mismatch: use_personal_graph=True but E submodules are missing.")
+    if expect_use_personal_graph is not None and (not bool(expect_use_personal_graph)):
+        if facts["has_adaptive_gate"] or facts["has_personal_generator"]:
+            raise RuntimeError("Ablation mismatch: use_personal_graph=False but E submodules still exist.")
 
     return facts
 
@@ -769,9 +820,17 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         personal_max_alpha=getattr(args, "personal_max_alpha", 0.35),
         personal_delta_scale=getattr(args, "personal_delta_scale", 1.0),
         personal_warmup_epochs=getattr(args, "personal_warmup_epochs", 0),
+        personal_reg_warmup_epochs=getattr(args, "personal_reg_warmup_epochs", None),
         personal_student_dim=getattr(args, "personal_student_dim", args.knowledge_dim),
         lambda_alpha_min=getattr(args, "lambda_alpha_min", 0.0),
         alpha_min_target=getattr(args, "alpha_min_target", 0.0),
+        personal_alpha_bias_scale=getattr(args, "personal_alpha_bias_scale", 1.0),
+        personal_direct_bias_scale=getattr(args, "personal_direct_bias_scale", 0.5),
+        personal_disable_direct_bias=getattr(args, "personal_disable_direct_bias", False),
+        personal_disable_student_global_context=getattr(
+            args, "personal_disable_student_global_context", False
+        ),
+        share_concept_embeddings=getattr(args, "share_concept_embeddings", False),
     ).to(device)
 
     # 多 GPU 支持（DataParallel）
@@ -792,6 +851,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         logger=logger,
         context=run_tag,
         ablate_module1=ablate_module1,
+        expect_use_concept_graph=use_concept_graph,
+        expect_use_personal_graph=getattr(args, "use_personal_graph", False),
     )
     if debug_graph_diag:
         logger.info("%s Debug diagnostics enabled: diag_batches=%d", run_tag, diag_batches)
@@ -1208,12 +1269,12 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     ].reset_index(drop=True)
     after_rows = len(filtered_test_df)
     dropped = before_rows - after_rows
+    coverage = (after_rows / before_rows) if before_rows > 0 else 1.0
 
-    if dropped > 0:
-        logger.info(
-            f"[Inference Filter] before={before_rows}, after={after_rows}, dropped={dropped} "
-            f"(students/items not seen after cleaning)"
-        )
+    logger.info(
+        f"[Inference Filter] before={before_rows}, after={after_rows}, dropped={dropped}, "
+        f"coverage={coverage:.2%} (train-only seen student/item support)"
+    )
 
     test_dataset = CognitiveDiagnosisDataset(
         csv_file=filtered_test_df,
@@ -1302,11 +1363,30 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         personal_warmup_epochs=loaded_args.get(
             "personal_warmup_epochs", getattr(args, "personal_warmup_epochs", 0)
         ),
+        personal_reg_warmup_epochs=loaded_args.get(
+            "personal_reg_warmup_epochs", getattr(args, "personal_reg_warmup_epochs", None)
+        ),
         personal_student_dim=loaded_args.get(
             "personal_student_dim", getattr(args, "personal_student_dim", args.knowledge_dim)
         ),
         lambda_alpha_min=loaded_args.get("lambda_alpha_min", getattr(args, "lambda_alpha_min", 0.0)),
         alpha_min_target=loaded_args.get("alpha_min_target", getattr(args, "alpha_min_target", 0.0)),
+        personal_alpha_bias_scale=loaded_args.get(
+            "personal_alpha_bias_scale", getattr(args, "personal_alpha_bias_scale", 1.0)
+        ),
+        personal_direct_bias_scale=loaded_args.get(
+            "personal_direct_bias_scale", getattr(args, "personal_direct_bias_scale", 0.5)
+        ),
+        personal_disable_direct_bias=loaded_args.get(
+            "personal_disable_direct_bias", getattr(args, "personal_disable_direct_bias", False)
+        ),
+        personal_disable_student_global_context=loaded_args.get(
+            "personal_disable_student_global_context",
+            getattr(args, "personal_disable_student_global_context", False),
+        ),
+        share_concept_embeddings=loaded_args.get(
+            "share_concept_embeddings", getattr(args, "share_concept_embeddings", False)
+        ),
     ).to(device)
 
     runtime_facts = _log_and_assert_ablation_consistency(
@@ -1314,6 +1394,10 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         logger=logger,
         context="[Inference]",
         ablate_module1=ablate_module1,
+        expect_use_concept_graph=use_concept_graph,
+        expect_use_personal_graph=loaded_args.get(
+            "use_personal_graph", getattr(args, "use_personal_graph", False)
+        ),
     )
     _log_graph_init_state(model, logger=logger, context="[Inference]")
 
@@ -1381,6 +1465,10 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         "num_samples": len(all_labels),
         "model_epoch": int(checkpoint["epoch"]),
         "best_val_auc": float(checkpoint.get("val_auc", 0.0)),
+        "test_total_rows": int(before_rows),
+        "test_seen_rows": int(after_rows),
+        "test_seen_coverage": float(coverage),
+        "train_only_split_hygiene": bool(info_dict.get("train_only_split_hygiene", False)),
     }
 
     result_path = os.path.join(args.save_dir, "test_results.json")
