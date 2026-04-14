@@ -1,0 +1,126 @@
+2026-04-14 10:49:57,059 - INFO - Arguments:
+2026-04-14 10:49:57,059 - INFO -   ablate_concept_graph: True
+2026-04-14 10:49:57,059 - INFO -   ablate_module1: False
+2026-04-14 10:49:57,059 - INFO -   allow_self_loop: True
+2026-04-14 10:49:57,059 - INFO -   alpha_min_target: 0.04
+2026-04-14 10:49:57,059 - INFO -   batch_size: 256
+2026-04-14 10:49:57,059 - INFO -   data_dir: ./data/junyi
+2026-04-14 10:49:57,059 - INFO -   dataset_name: junyi
+2026-04-14 10:49:57,060 - INFO -   debug_graph_diag: True
+2026-04-14 10:49:57,060 - INFO -   diag_batches: 1
+2026-04-14 10:49:57,060 - INFO -   disable_self_loop: False
+2026-04-14 10:49:57,060 - INFO -   dropout: 0.4
+2026-04-14 10:49:57,060 - INFO -   early_stop_patience: 3
+2026-04-14 10:49:57,060 - INFO -   enable_module1: True
+2026-04-14 10:49:57,060 - INFO -   epochs: 100
+2026-04-14 10:49:57,060 - INFO -   generate_diagnosis: True
+2026-04-14 10:49:57,060 - INFO -   gnn_residual_weight: 0.5
+2026-04-14 10:49:57,060 - INFO -   gpu_candidates: None
+2026-04-14 10:49:57,060 - INFO -   gpu_ids: None
+2026-04-14 10:49:57,060 - INFO -   gpu_memory_threshold: 2000
+2026-04-14 10:49:57,060 - INFO -   gpus: None
+2026-04-14 10:49:57,060 - INFO -   graph_dropout: 0.0
+2026-04-14 10:49:57,060 - INFO -   graph_entropy_max: 0.7
+2026-04-14 10:49:57,060 - INFO -   graph_entropy_min: 0.15
+2026-04-14 10:49:57,060 - INFO -   graph_identity_residual: 0.05
+2026-04-14 10:49:57,060 - INFO -   graph_reg_cap_ratio: 6.0
+2026-04-14 10:49:57,060 - INFO -   graph_reg_warmup_epochs: 2
+2026-04-14 10:49:57,060 - INFO -   graph_tau_init: 0.55
+2026-04-14 10:49:57,060 - INFO -   graph_topk: 24
+2026-04-14 10:49:57,060 - INFO -   graph_uniform_margin: 0.12
+2026-04-14 10:49:57,060 - INFO -   knowledge_dim: 128
+2026-04-14 10:49:57,060 - INFO -   lambda_alpha: 0.06
+2026-04-14 10:49:57,060 - INFO -   lambda_alpha_min: 0.08
+2026-04-14 10:49:57,060 - INFO -   lambda_graph_diag: 0.12
+2026-04-14 10:49:57,060 - INFO -   lambda_graph_uniform: 0.06
+2026-04-14 10:49:57,060 - INFO -   lambda_sparse: 0.6
+2026-04-14 10:49:57,060 - INFO -   lambda_sparse_personal: 0.0005
+2026-04-14 10:49:57,060 - INFO -   learning_rate: 0.003
+2026-04-14 10:49:57,060 - INFO -   log_dir: logs/abce_diag/remote_ae_verify_20260414_f28ff9d/junyi/seed42/ae_dominant_no_A
+2026-04-14 10:49:57,060 - INFO -   min_exer_interactions: 0
+2026-04-14 10:49:57,060 - INFO -   min_poison_count: 0
+2026-04-14 10:49:57,060 - INFO -   min_stu_interactions: 15
+2026-04-14 10:49:57,060 - INFO -   model_variant: junyi_abce_ae_dominant_no_A
+2026-04-14 10:49:57,060 - INFO -   multi_gpu: False
+2026-04-14 10:49:57,060 - INFO -   no_cuda: False
+2026-04-14 10:49:57,060 - INFO -   num_gnn_layers: 2
+2026-04-14 10:49:57,060 - INFO -   num_gpus: 1
+2026-04-14 10:49:57,060 - INFO -   num_relation_heads: 2
+2026-04-14 10:49:57,060 - INFO -   num_workers: 4
+2026-04-14 10:49:57,060 - INFO -   patience: 1
+2026-04-14 10:49:57,060 - INFO -   personal_alpha_bias_scale: 0.015
+2026-04-14 10:49:57,060 - INFO -   personal_delta_scale: 5.0
+2026-04-14 10:49:57,061 - INFO -   personal_direct_bias_scale: 0.0
+2026-04-14 10:49:57,061 - INFO -   personal_disable_direct_bias: True
+2026-04-14 10:49:57,061 - INFO -   personal_disable_student_global_context: True
+2026-04-14 10:49:57,061 - INFO -   personal_max_alpha: 0.4
+2026-04-14 10:49:57,061 - INFO -   personal_rank: 8
+2026-04-14 10:49:57,061 - INFO -   personal_reg_warmup_epochs: 4
+2026-04-14 10:49:57,061 - INFO -   personal_student_dim: 64
+2026-04-14 10:49:57,061 - INFO -   personal_warmup_epochs: 4
+2026-04-14 10:49:57,061 - INFO -   prediction_l2_lambda: 1e-05
+2026-04-14 10:49:57,061 - INFO -   save_dir: checkpoints/abce_diag/remote_ae_verify_20260414_f28ff9d/junyi/seed42/ae_dominant_no_A
+2026-04-14 10:49:57,061 - INFO -   save_interval: 10
+2026-04-14 10:49:57,061 - INFO -   seed: 42
+2026-04-14 10:49:57,061 - INFO -   share_concept_embeddings: True
+2026-04-14 10:49:57,061 - INFO -   use_concept_graph: False
+2026-04-14 10:49:57,061 - INFO -   use_exercise_graph: False
+2026-04-14 10:49:57,061 - INFO -   use_personal_graph: True
+2026-04-14 10:49:57,061 - INFO -   weight_decay: 0.001
+2026-04-14 10:49:57,136 - INFO - Using device: cuda:0 (physical gpu 3)
+2026-04-14 10:49:57,136 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Loading datasets...
+2026-04-14 10:49:57,137 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Regularization: graph_entropy(lambda_sparse)=0.600000, graph_diag=0.120000, graph_uniform=0.060000, personal_sparse=0.000500, alpha_penalty=0.060000, alpha_min=0.080000, prediction_l2=0.000010
+2026-04-14 10:49:57,137 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Graph controls: entropy_band=[0.15, 0.70], uniform_margin=0.12, warmup_epochs=2, cap_ratio=6.00, graph_dropout=0.000, graph_tau_init=0.550
+2026-04-14 10:49:57,137 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Personal controls: personal_max_alpha=0.400, personal_delta_scale=5.000, personal_warmup_epochs=4, personal_student_dim=64, alpha_min_target=0.0400
+2026-04-14 10:49:57,225 - INFO - [junyi] [数据清洗] 学生交互次数 < 15 次的学生：共移除 2188 个学生（仅统计用户数）
+2026-04-14 10:49:57,243 - INFO - [junyi] [数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 35779 条记录。
+2026-04-14 10:49:57,243 - INFO - [junyi] [数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。
+2026-04-14 10:49:57,243 - INFO - [junyi] [数据清洗] 跳过毒题清洗（min_poison_count <= 0）。
+2026-04-14 10:49:57,243 - INFO - [junyi] 正在构建ID映射...
+2026-04-14 10:49:57,532 - INFO - [junyi] 正在构建Q矩阵...
+2026-04-14 10:50:03,043 - INFO - [junyi] [数据清洗] Valid train-seen 过滤：before=22111, after=22111, dropped=0, coverage=100.00%
+2026-04-14 10:50:03,051 - INFO - [junyi] [数据清洗] Test train-seen 过滤：before=60499, after=60494, dropped=5, coverage=99.99%
+2026-04-14 10:50:03,055 - INFO - [junyi] [统计] 开始统计清洗后每道题的概念数量分布...
+2026-04-14 10:50:03,057 - INFO - [junyi] [Train] 概念数统计：题目数=697, 平均概念数=1.0000, min=1, max=1, 1概念=697 (100.00%), ≥2概念=0 (0.00%)
+2026-04-14 10:50:03,058 - INFO - [junyi] [Train] 概念数直方图（概念数: 题目数量）: {1: 697}
+2026-04-14 10:50:03,058 - INFO - [junyi] [Valid] 概念数统计：题目数=614, 平均概念数=1.0000, min=1, max=1, 1概念=614 (100.00%), ≥2概念=0 (0.00%)
+2026-04-14 10:50:03,058 - INFO - [junyi] [Valid] 概念数直方图（概念数: 题目数量）: {1: 614}
+2026-04-14 10:50:03,059 - INFO - [junyi] [Test] 概念数统计：题目数=663, 平均概念数=1.0000, min=1, max=1, 1概念=663 (100.00%), ≥2概念=0 (0.00%)
+2026-04-14 10:50:03,059 - INFO - [junyi] [Test] 概念数直方图（概念数: 题目数量）: {1: 663}
+2026-04-14 10:50:03,059 - INFO - [junyi] [统计] 概念数量统计完成。
+2026-04-14 10:50:03,059 - INFO - [junyi] 正在加载数据集...
+2026-04-14 10:50:03,160 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Train samples: 235446, Val samples: 22111
+2026-04-14 10:50:03,160 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Number of students: 7812
+2026-04-14 10:50:03,160 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Number of exercises: 697
+2026-04-14 10:50:03,160 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Number of concepts: 697
+2026-04-14 10:50:03,160 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Creating model...
+2026-04-14 10:50:03,160 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Ablation switches: ablate_module1=False | enable_module1=True | use_concept_graph=False | effective(num_gnn_layers=2)
+2026-04-14 10:50:03,449 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Ablation runtime check: args(ablate_module1=False) | expect(use_concept_graph=False,use_personal_graph=True) | model(enable_module1=True,use_concept_graph=False,use_personal_graph=True) | physical(has_knowledge_encoder=True,has_relation_learning=False,has_adaptive_gate=True,has_personal_generator=True)
+2026-04-14 10:50:03,449 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Debug diagnostics enabled: diag_batches=1
+2026-04-14 10:50:03,449 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] [Graph Init] graph_tau_mean=0.0000, graph_tau_std=0.0000, graph_dropout=0.000, use_personal_graph=True
+2026-04-14 10:50:03,450 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Total parameters: 6,819,244
+2026-04-14 10:50:03,450 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Trainable parameters: 6,819,244
+2026-04-14 10:50:04,445 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Monitor config: scheduler=val_auc(max), best_checkpoint=val_auc(max), early_stop=val_auc(max)
+2026-04-14 10:50:04,445 - INFO - [junyi|junyi_abce_ae_dominant_no_A|lr=0.003|drop=0.40] Starting training...
+2026-04-14 10:50:04,945 - ERROR - Run failed with exception: CUDA out of memory. Tried to allocate 238.00 MiB. GPU 0 has a total capacity of 23.53 GiB of which 175.31 MiB is free. Process 794880 has 2.95 GiB memory in use. Including non-PyTorch memory, this process has 20.39 GiB memory in use. Of the allocated memory 19.89 GiB is allocated by PyTorch, and 51.25 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+2026-04-14 10:50:04,945 - ERROR - Traceback (most recent call last):
+  File "/home/zsh/ConceptSkillCDM/main.py", line 378, in main
+    best_val_auc, best_epoch = train_one_experiment(args, logger)
+  File "/home/zsh/ConceptSkillCDM/src/trainer.py", line 1262, in train_one_experiment
+    train_metrics = train_epoch(
+  File "/home/zsh/ConceptSkillCDM/src/trainer.py", line 885, in train_epoch
+    logits, details = model(
+  File "/home/zsh/anaconda3/envs/xph_env/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zsh/anaconda3/envs/xph_env/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zsh/ConceptSkillCDM/src/model.py", line 1209, in forward
+    s_out = self.structure_module(student_ids, identity_relations=self.identity_relations)
+  File "/home/zsh/anaconda3/envs/xph_env/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+  File "/home/zsh/anaconda3/envs/xph_env/lib/python3.10/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/zsh/ConceptSkillCDM/src/model.py", line 904, in forward
+    int((~torch.isfinite(personal_logits)).sum().item()), dtype=torch.long
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 238.00 MiB. GPU 0 has a total capacity of 23.53 GiB of which 175.31 MiB is free. Process 794880 has 2.95 GiB memory in use. Including non-PyTorch memory, this process has 20.39 GiB memory in use. Of the allocated memory 19.89 GiB is allocated by PyTorch, and 51.25 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+

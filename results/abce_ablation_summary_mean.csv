@@ -1,3 +1,1 @@
 dataset,profile,n_seeds,full_auc_mean,delta_A_mean,delta_E_mean,full_clean_baseline_majority,full_test_seen_coverage_mean,A_useful_seed_ratio,E_useful_seed_ratio,suggest_keep_by_mean,state_A_majority,state_E_majority
-assist_09,ae_dominant,1,0.7472288772166383,-0.0013867345604404724,-0.010940282506276322,True,0.9722354374012826,0.0,0.0,,neutral,harmful_or_unstable
-assist_09,best,1,0.7467383368786435,-0.0005402782542706097,-0.0083099122294934,True,0.9722354374012826,0.0,0.0,,neutral,harmful_or_unstable
