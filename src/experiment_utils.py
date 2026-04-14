@@ -169,8 +169,13 @@ def _build_config_hash(args) -> str:
         "prediction_l2_lambda",
         "graph_reg_warmup_epochs",
         "graph_reg_cap_ratio",
+        "graph_propagation_alpha",
+        "graph_readout_1hop_scale",
+        "graph_readout_2hop_scale",
         "use_concept_graph",
         "use_personal_graph",
+        "personal_local_hops",
+        "personal_support_only",
     ]
     payload = {}
     for k in keys:

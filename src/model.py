@@ -273,12 +273,14 @@ class StudentKnowledgeEncoder(nn.Module):
         num_relation_heads: int = 4,
         dropout: float = 0.1,
         gnn_residual_weight: float = 0.5,
+        propagation_alpha: float = 0.20,
     ):
         super().__init__()
         self.num_students = int(num_students)
         self.num_concepts = int(num_concepts)
         self.knowledge_dim = int(knowledge_dim)
         self.gnn_residual_weight = float(gnn_residual_weight)
+        self.propagation_alpha = max(0.0, min(1.0, float(propagation_alpha)))
 
         self.student_global = nn.Embedding(num_students, knowledge_dim)
         self.concept_emb = nn.Embedding(num_concepts, knowledge_dim)
@@ -288,6 +290,7 @@ class StudentKnowledgeEncoder(nn.Module):
             for _ in range(num_gnn_layers)
         ])
         self.layer_norms = nn.ModuleList([nn.LayerNorm(knowledge_dim) for _ in range(num_gnn_layers)])
+        self.hop_mix_logits = nn.Parameter(torch.zeros(num_gnn_layers + 1))
         self.dropout = nn.Dropout(dropout)
         self._initialize_weights()
 
@@ -302,15 +305,20 @@ class StudentKnowledgeEncoder(nn.Module):
         return self.dropout(c + s.unsqueeze(1))
 
     def forward(self, student_ids: torch.Tensor, relation_matrices: torch.Tensor) -> torch.Tensor:
-        h = self.compose_initial_state(student_ids)
+        h0 = self.compose_initial_state(student_ids)
+        h = h0
+        hop_states = [h0]
 
         for gnn, ln in zip(self.gnn_layers, self.layer_norms):
-            h_in = h
-            h_out = gnn(h, relation_matrices)
-            h = ln(h_in + self.gnn_residual_weight * h_out)
+            propagated = gnn(h, relation_matrices)
+            residual = h + self.gnn_residual_weight * propagated
+            h = ln((1.0 - self.propagation_alpha) * residual + self.propagation_alpha * h0)
             h = F.relu(h)
+            hop_states.append(h)
 
-        return h  # (B, C, D)
+        hop_weights = F.softmax(self.hop_mix_logits[: len(hop_states)], dim=0)
+        mixed = sum(weight * state for weight, state in zip(hop_weights, hop_states))
+        return mixed  # (B, C, D)
 
 
 # ======================================================
@@ -321,9 +329,9 @@ class AdaptiveGate(nn.Module):
     """个性化图混合系数 alpha（B,H,1,1）。
 
     设计原则：
-    - 保留一条显式 student bias -> alpha 的短路径，避免个体信号被上下文支路淹没；
-    - student-id 分支与 context 分支分开建模，避免个体信号被 LayerNorm 洗掉；
-    - context 只做修正项，不取代 student-specific 路径。
+    - 主信号来自 state/context，不再保留 raw student bias -> alpha 的短路；
+    - student-id 只保留极小 adapter；
+    - 通过固定 head bias 控制 alpha 基线，而不是让 student embedding 直接主导。
     """
 
     def __init__(
@@ -333,7 +341,7 @@ class AdaptiveGate(nn.Module):
         num_heads: int,
         max_alpha: float = 0.35,
         hidden_dim: Optional[int] = None,
-        max_id_adapter_scale: float = 0.10,
+        max_id_adapter_scale: float = 0.05,
     ):
         super().__init__()
         self.num_heads = int(num_heads)
@@ -350,6 +358,7 @@ class AdaptiveGate(nn.Module):
         self.max_alpha = float(max_alpha)
         self.max_id_adapter_scale = max(0.0, float(max_id_adapter_scale))
         self.id_adapter_logit = nn.Parameter(torch.tensor(-2.9444390))
+        self.head_bias = nn.Parameter(torch.full((self.num_heads,), -1.75))
 
         nn.init.xavier_normal_(self.state_proj.weight)
         nn.init.xavier_normal_(self.context_proj.weight)
@@ -368,7 +377,6 @@ class AdaptiveGate(nn.Module):
         state_embedding: torch.Tensor,
         context_repr: torch.Tensor,
         student_id_embedding: torch.Tensor,
-        student_bias: torch.Tensor,
         id_adapter_scale: Optional[torch.Tensor] = None,
         return_diagnostics: bool = False,
     ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]]:
@@ -391,7 +399,10 @@ class AdaptiveGate(nn.Module):
                 dtype=state_embedding.dtype,
             )
         id_logit = effective_id_scale * torch.tanh(self.id_to_logit(student_id_embedding))
-        bias_logit = student_bias
+        bias_logit = self.head_bias.view(1, self.num_heads).to(
+            device=state_embedding.device,
+            dtype=state_embedding.dtype,
+        )
         alpha_logit = state_logit + id_logit + bias_logit
         alpha = self.max_alpha * torch.sigmoid(alpha_logit)
         if not return_diagnostics:
@@ -421,8 +432,8 @@ class PersonalRelationGenerator(nn.Module):
 
     设计目标：
     - 主信号来自 knowledge_state 的逐概念差异，而不是 student-id 的全局 shortcut；
-    - 所有 residual 都先做有界化与行内标准化，避免 junyi 上 large-C softmax 出现 NaN；
-    - 仍保留小幅 student/context adapter，作为状态主路之外的补偿项。
+    - student/context 仅作为低秩 adapter 注入到 state query/key；
+    - 输出的是有界 residual logits，后续在 A 的 support 上做 posterior reweighting。
     """
 
     def __init__(
@@ -436,8 +447,8 @@ class PersonalRelationGenerator(nn.Module):
         hidden_dim: Optional[int] = None,
         max_direct_scale: float = 0.5,
         disable_direct_bias: bool = False,
-        max_student_adapter_scale: float = 0.35,
-        max_context_adapter_scale: float = 0.15,
+        max_student_adapter_scale: float = 0.08,
+        max_context_adapter_scale: float = 0.12,
     ):
         super().__init__()
         self.student_norm = nn.LayerNorm(student_dim)
@@ -448,8 +459,8 @@ class PersonalRelationGenerator(nn.Module):
         self.rank = int(rank)
         self.max_direct_scale = max(0.0, float(max_direct_scale))
         self.disable_direct_bias = bool(disable_direct_bias)
-        self.max_state_mix = 1.35
-        self.max_student_mix = 0.35
+        self.max_state_mix = 1.20
+        self.max_student_mix = 0.15
         self.max_student_adapter_scale = max(0.0, float(max_student_adapter_scale))
         self.max_context_adapter_scale = max(0.0, float(max_context_adapter_scale))
         hidden = max(1, max(student_dim, context_dim) // 2 if hidden_dim is None else int(hidden_dim))
@@ -458,19 +469,14 @@ class PersonalRelationGenerator(nn.Module):
         self.hidden_proj = nn.Linear(hidden, hidden)
         self.state_query_proj = nn.Linear(knowledge_dim, self.num_heads * self.rank, bias=False)
         self.state_key_proj = nn.Linear(knowledge_dim, self.num_heads * self.rank, bias=False)
-        self.base_u = nn.Parameter(torch.randn(self.num_heads, num_concepts, rank) * 0.02)
-        self.base_v = nn.Parameter(torch.randn(self.num_heads, num_concepts, rank) * 0.02)
-        self.student_basis_u = nn.Parameter(torch.randn(self.num_heads, num_concepts, rank, student_dim) * 0.02)
-        self.student_basis_v = nn.Parameter(torch.randn(self.num_heads, num_concepts, rank, student_dim) * 0.02)
         self.context_to_u = nn.Linear(hidden, self.num_heads * num_concepts * rank, bias=False)
         self.context_to_v = nn.Linear(hidden, self.num_heads * num_concepts * rank, bias=False)
-        self.student_row_proj = nn.Linear(student_dim, self.num_heads * num_concepts, bias=False)
-        self.student_col_proj = nn.Linear(student_dim, self.num_heads * num_concepts, bias=False)
+        self.student_to_u = nn.Linear(student_dim, self.num_heads * num_concepts * rank, bias=False)
+        self.student_to_v = nn.Linear(student_dim, self.num_heads * num_concepts * rank, bias=False)
         self.student_adapter_logit = nn.Parameter(torch.tensor(-1.7346010))
         self.context_adapter_logit = nn.Parameter(torch.tensor(-2.1972246))
-        self.direct_scale = nn.Parameter(torch.tensor(-2.1972246))
-        self.state_mix_logit = nn.Parameter(torch.tensor(1.3862944))
-        self.student_mix_logit = nn.Parameter(torch.tensor(-2.1972246))
+        self.state_mix_logit = nn.Parameter(torch.tensor(1.0986123))
+        self.student_mix_logit = nn.Parameter(torch.tensor(-2.9444390))
 
         nn.init.xavier_normal_(self.context_proj.weight)
         nn.init.zeros_(self.context_proj.bias)
@@ -480,12 +486,8 @@ class PersonalRelationGenerator(nn.Module):
         nn.init.xavier_normal_(self.state_key_proj.weight, gain=0.8)
         nn.init.xavier_normal_(self.context_to_u.weight)
         nn.init.xavier_normal_(self.context_to_v.weight)
-        nn.init.xavier_normal_(self.student_row_proj.weight, gain=0.8)
-        nn.init.xavier_normal_(self.student_col_proj.weight, gain=0.8)
-        nn.init.xavier_normal_(self.base_u)
-        nn.init.xavier_normal_(self.base_v)
-        nn.init.xavier_normal_(self.student_basis_u)
-        nn.init.xavier_normal_(self.student_basis_v)
+        nn.init.xavier_normal_(self.student_to_u.weight, gain=0.3)
+        nn.init.xavier_normal_(self.student_to_v.weight, gain=0.3)
 
     @staticmethod
     def _normalize_scores(scores: torch.Tensor) -> torch.Tensor:
@@ -510,21 +512,28 @@ class PersonalRelationGenerator(nn.Module):
         id_adapter_scale: Optional[torch.Tensor] = None,
         return_diagnostics: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
-        student_code = torch.tanh(1.5 * self.student_norm(student_state_embedding))
+        student_code = torch.tanh(self.student_norm(student_state_embedding))
         if student_id_embedding is None:
             student_id_code = torch.zeros_like(student_code)
         else:
-            student_id_code = torch.tanh(1.5 * self.student_norm(student_id_embedding))
+            student_id_code = torch.tanh(self.student_norm(student_id_embedding))
         state_residual = knowledge_state - knowledge_state.mean(dim=1, keepdim=True)
         state_code = torch.tanh(self.state_norm(state_residual))
         hidden = self.context_proj(self.context_norm(context_repr))
         hidden = F.silu(hidden)
         hidden = F.silu(self.hidden_proj(hidden))
         B = hidden.size(0)
-        student_u = torch.einsum("bd,hcrd->bhcr", student_id_code, self.student_basis_u)
-        student_v = torch.einsum("bd,hcrd->bhcr", student_id_code, self.student_basis_v)
+
+        state_q = torch.tanh(self.state_query_proj(state_code))
+        state_k = torch.tanh(self.state_key_proj(state_code))
+        state_q = state_q.view(B, self.num_concepts, self.num_heads, self.rank).permute(0, 2, 1, 3)
+        state_k = state_k.view(B, self.num_concepts, self.num_heads, self.rank).permute(0, 2, 1, 3)
+
         context_u = self.context_to_u(hidden).view(B, self.num_heads, self.num_concepts, self.rank)
         context_v = self.context_to_v(hidden).view(B, self.num_heads, self.num_concepts, self.rank)
+        student_u = self.student_to_u(student_id_code).view(B, self.num_heads, self.num_concepts, self.rank)
+        student_v = self.student_to_v(student_id_code).view(B, self.num_heads, self.num_concepts, self.rank)
+
         student_adapter_scale = self.max_student_adapter_scale * torch.sigmoid(self.student_adapter_logit)
         if id_adapter_scale is not None:
             student_adapter_scale = student_adapter_scale * id_adapter_scale.to(
@@ -532,37 +541,27 @@ class PersonalRelationGenerator(nn.Module):
                 dtype=knowledge_state.dtype,
             )
         context_adapter_scale = self.max_context_adapter_scale * torch.sigmoid(self.context_adapter_logit)
-        u = torch.tanh(
-            self.base_u.unsqueeze(0)
-            + student_adapter_scale * student_u
-            + context_adapter_scale * torch.tanh(context_u)
+        adapter_q = (
+            context_adapter_scale * torch.tanh(context_u)
+            + student_adapter_scale * torch.tanh(student_u)
         )
-        v = torch.tanh(
-            self.base_v.unsqueeze(0)
-            + student_adapter_scale * student_v
-            + context_adapter_scale * torch.tanh(context_v)
+        adapter_k = (
+            context_adapter_scale * torch.tanh(context_v)
+            + student_adapter_scale * torch.tanh(student_v)
         )
-        student_scores = torch.einsum("bhcr,bhkr->bhck", u, v) / math.sqrt(self.rank)
-        direct_scores = 0.0
-        effective_direct_scale = student_scores.new_tensor(0.0)
-        if (not self.disable_direct_bias) and self.max_direct_scale > 0:
-            row_bias = torch.tanh(self.student_row_proj(student_code)).view(B, self.num_heads, self.num_concepts, 1)
-            col_bias = torch.tanh(self.student_col_proj(student_code)).view(B, self.num_heads, 1, self.num_concepts)
-            direct_scores = row_bias + col_bias
-            effective_direct_scale = self.max_direct_scale * torch.sigmoid(self.direct_scale)
-        student_scores = student_scores + effective_direct_scale * direct_scores
-        student_scores = self._normalize_scores(student_scores)
 
-        state_q = torch.tanh(self.state_query_proj(state_code))
-        state_k = torch.tanh(self.state_key_proj(state_code))
-        state_q = state_q.view(B, self.num_concepts, self.num_heads, self.rank).permute(0, 2, 1, 3)
-        state_k = state_k.view(B, self.num_concepts, self.num_heads, self.rank).permute(0, 2, 1, 3)
         state_scores = torch.einsum("bhcr,bhkr->bhck", state_q, state_k) / math.sqrt(self.rank)
         state_scores = self._normalize_scores(state_scores)
+        adapter_scores = torch.einsum(
+            "bhcr,bhkr->bhck",
+            state_q + adapter_q,
+            state_k + adapter_k,
+        ) / math.sqrt(self.rank)
+        adapter_scores = self._normalize_scores(adapter_scores - state_scores)
 
         state_mix = self.max_state_mix * torch.sigmoid(self.state_mix_logit)
         student_mix = self.max_student_mix * torch.sigmoid(self.student_mix_logit)
-        scores = state_mix * state_scores + student_mix * student_scores
+        scores = state_mix * state_scores + student_mix * adapter_scores
         scores = self._normalize_scores(scores)
         if not return_diagnostics:
             return scores
@@ -572,9 +571,9 @@ class PersonalRelationGenerator(nn.Module):
             "student_mix": scores.new_tensor(float(student_mix.item())),
             "student_adapter_scale": scores.new_tensor(float(torch.as_tensor(student_adapter_scale).item())),
             "context_adapter_scale": scores.new_tensor(float(context_adapter_scale.item())),
-            "direct_scale_effective": scores.new_tensor(float(effective_direct_scale.item())),
+            "direct_scale_effective": scores.new_tensor(0.0),
             "state_scores_absmean": state_scores.abs().mean(),
-            "student_scores_absmean": student_scores.abs().mean(),
+            "student_scores_absmean": adapter_scores.abs().mean(),
             "scores_absmax": scores.abs().max(),
             "scores_nonfinite_count": scores.new_tensor(int((~torch.isfinite(scores)).sum().item()), dtype=torch.long),
         }
@@ -616,6 +615,7 @@ class ConceptStructureModeling(nn.Module):
         graph_topk: Optional[int],
         allow_self_loop: bool,
         graph_identity_residual: float,
+        graph_propagation_alpha: float,
         # personal graph
         use_personal_graph: bool,
         personal_rank: int,
@@ -628,6 +628,8 @@ class ConceptStructureModeling(nn.Module):
         personal_direct_bias_scale: float,
         personal_disable_direct_bias: bool,
         personal_disable_student_global_context: bool,
+        personal_local_hops: int,
+        personal_support_only: bool,
         # 完全消融开关
         enable_module: bool = True,
     ):
@@ -651,6 +653,8 @@ class ConceptStructureModeling(nn.Module):
         self.personal_direct_bias_scale = max(0.0, float(personal_direct_bias_scale))
         self.personal_disable_direct_bias = bool(personal_disable_direct_bias)
         self.personal_disable_student_global_context = bool(personal_disable_student_global_context)
+        self.personal_local_hops = max(0, int(personal_local_hops))
+        self.personal_support_only = bool(personal_support_only)
         self._current_epoch = 1
 
         # -------- 完全消融：不创建任何可训练参数 --------
@@ -694,23 +698,23 @@ class ConceptStructureModeling(nn.Module):
             num_relation_heads=num_relation_heads,
             dropout=dropout,
             gnn_residual_weight=gnn_residual_weight,
+            propagation_alpha=graph_propagation_alpha,
         )
 
         # E) 个性化图（可选）
         if self.use_personal_graph:
             self.personal_gate_embedding = nn.Embedding(num_students, self.personal_student_dim)
             self.personal_generator_embedding = nn.Embedding(num_students, self.personal_student_dim)
-            self.personal_alpha_bias = nn.Embedding(num_students, num_relation_heads)
+            self.personal_alpha_bias = None
             self.personal_gate_from_state = nn.Linear(knowledge_dim, self.personal_student_dim, bias=False)
             self.personal_generator_from_state = nn.Linear(knowledge_dim, self.personal_student_dim, bias=False)
-            self.personal_gate_id_logit = nn.Parameter(torch.tensor(-2.1972246))
-            self.personal_generator_id_logit = nn.Parameter(torch.tensor(-2.1972246))
+            self.personal_gate_id_logit = nn.Parameter(torch.tensor(-2.9444390))
+            self.personal_generator_id_logit = nn.Parameter(torch.tensor(-2.9444390))
             nn.init.normal_(self.personal_gate_embedding.weight, mean=0.0, std=0.05)
             nn.init.normal_(self.personal_generator_embedding.weight, mean=0.0, std=0.05)
-            nn.init.zeros_(self.personal_alpha_bias.weight)
             nn.init.xavier_normal_(self.personal_gate_from_state.weight)
             nn.init.xavier_normal_(self.personal_generator_from_state.weight)
-            context_dim = knowledge_dim * (3 if self.personal_disable_student_global_context else 4)
+            context_dim = knowledge_dim * (4 if self.personal_disable_student_global_context else 5)
             personal_hidden_dim = max(self.personal_student_dim, knowledge_dim)
             self.adaptive_gate = AdaptiveGate(
                 self.personal_student_dim,
@@ -754,10 +758,92 @@ class ConceptStructureModeling(nn.Module):
             return 1.0
         return min(1.0, float(self._current_epoch) / float(self.personal_reg_warmup_epochs))
 
+    @staticmethod
+    def _masked_state_pool(states: torch.Tensor, mask: Optional[torch.Tensor]) -> torch.Tensor:
+        if mask is None:
+            return states.mean(dim=1)
+        weights = mask.float()
+        denom = weights.sum(dim=1, keepdim=True).clamp(min=1.0)
+        return (states * weights.unsqueeze(-1)).sum(dim=1) / denom
+
+    @staticmethod
+    def _masked_state_std(states: torch.Tensor, mask: Optional[torch.Tensor], pooled: torch.Tensor) -> torch.Tensor:
+        if mask is None:
+            return states.std(dim=1, unbiased=False)
+        weights = mask.float()
+        denom = weights.sum(dim=1, keepdim=True).clamp(min=1.0)
+        centered = (states - pooled.unsqueeze(1)).pow(2)
+        var = (centered * weights.unsqueeze(-1)).sum(dim=1) / denom
+        return torch.sqrt(var + 1e-12)
+
+    def _build_local_row_mask(
+        self,
+        concept_mask: Optional[torch.Tensor],
+        relation_matrices: Optional[torch.Tensor],
+    ) -> Optional[torch.Tensor]:
+        if concept_mask is None:
+            return None
+        local = (concept_mask > 0).float()
+        if relation_matrices is None or self.personal_local_hops <= 0:
+            return local
+
+        if relation_matrices.dim() == 3:
+            support = (relation_matrices.mean(dim=0) > 0).to(dtype=local.dtype)
+            frontier = local
+            for _ in range(self.personal_local_hops):
+                frontier = (torch.matmul(frontier, support) > 0).to(local.dtype)
+                local = torch.maximum(local, frontier)
+            return local
+
+        support = (relation_matrices.mean(dim=1) > 0).to(dtype=local.dtype)
+        frontier = local.unsqueeze(1)
+        for _ in range(self.personal_local_hops):
+            frontier = (torch.bmm(frontier, support) > 0).to(local.dtype)
+            local = torch.maximum(local, frontier.squeeze(1))
+        return local
+
+    def _build_personal_prior_logits(
+        self,
+        relation_matrices: torch.Tensor,
+        identity_relations: torch.Tensor,
+        local_row_mask: Optional[torch.Tensor],
+        batch_size: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        device = identity_relations.device
+        dtype = identity_relations.dtype
+        row_mask = None if local_row_mask is None else local_row_mask.unsqueeze(1).unsqueeze(-1).bool()
+
+        if self.use_concept_graph and self.relation_learning is not None:
+            support_mask = relation_matrices > 0
+            prior_logits = torch.full(
+                (batch_size, self.num_relation_heads, self.num_concepts, self.num_concepts),
+                -30.0,
+                device=device,
+                dtype=dtype,
+            )
+            support_logits = relation_matrices.clamp(min=1e-8).log().unsqueeze(0).expand_as(prior_logits)
+            support_mask_4d = support_mask.unsqueeze(0).expand_as(prior_logits)
+            prior_logits = torch.where(support_mask_4d, support_logits, prior_logits)
+            return prior_logits, support_mask_4d
+
+        neutral_logits = torch.zeros(
+            (batch_size, self.num_relation_heads, self.num_concepts, self.num_concepts),
+            device=device,
+            dtype=dtype,
+        )
+        support_mask = torch.ones_like(neutral_logits, dtype=torch.bool)
+        if row_mask is not None:
+            identity_logits = torch.full_like(neutral_logits, -30.0)
+            eye = torch.eye(self.num_concepts, device=device, dtype=torch.bool).view(1, 1, self.num_concepts, self.num_concepts)
+            identity_logits = torch.where(eye, torch.zeros_like(identity_logits), identity_logits)
+            neutral_logits = torch.where(row_mask.expand_as(neutral_logits), neutral_logits, identity_logits)
+        return neutral_logits, support_mask
+
     def forward(
         self,
         student_ids: torch.Tensor,
         identity_relations: torch.Tensor,   # (H,C,C)
+        concept_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, Any]:
         """
         输出统一字典，便于主模型组装 details 与正则项。
@@ -817,22 +903,37 @@ class ConceptStructureModeling(nn.Module):
         personal_fallback_row_count = None
         personal_logits_absmax = None
         personal_delta_absmax = None
+        local_row_ratio = None
+        personal_support_density = None
+        query_state_norm = None
         relation_used = relation_matrices
         initial_state = self.knowledge_encoder.compose_initial_state(student_ids)
         knowledge_state_pre_personal = knowledge_state
         relation_identity_delta = (relation_matrices - identity_relations).pow(2).mean().sqrt()
         knowledge_state_graph_delta = (knowledge_state_pre_personal - initial_state).pow(2).mean().sqrt()
         knowledge_state_personal_delta = relation_matrices.new_tensor(0.0)
+        local_row_mask = self._build_local_row_mask(
+            concept_mask,
+            relation_matrices if (self.use_concept_graph and self.relation_learning is not None) else None,
+        )
+        if local_row_mask is not None:
+            local_row_ratio = local_row_mask.mean()
 
         if self.use_personal_graph and self.adaptive_gate is not None and self.personal_generator is not None:
             student_global_repr = self.knowledge_encoder.student_global(student_ids)  # (B,D)
-            state_dispersion = knowledge_state.std(dim=1, unbiased=False)
+            query_mask = concept_mask.float() if concept_mask is not None else None
+            local_mask = local_row_mask if local_row_mask is not None else query_mask
+            query_state = self._masked_state_pool(knowledge_state, query_mask)
+            local_state = self._masked_state_pool(knowledge_state, local_mask)
+            local_dispersion = self._masked_state_std(knowledge_state, local_mask, local_state)
+            query_state_norm = query_state.norm(dim=-1).mean()
             if self.personal_disable_student_global_context:
                 context_repr = torch.cat(
                     [
-                        student_repr,
-                        state_dispersion,
-                        student_repr - student_global_repr,
+                        query_state,
+                        local_state,
+                        local_dispersion,
+                        local_state - query_state,
                     ],
                     dim=-1,
                 )
@@ -840,29 +941,26 @@ class ConceptStructureModeling(nn.Module):
                 context_repr = torch.cat(
                     [
                         student_global_repr,
-                        student_repr,
-                        state_dispersion,
-                        student_repr - student_global_repr,
+                        query_state,
+                        local_state,
+                        local_dispersion,
+                        local_state - query_state,
                     ],
                     dim=-1,
                 )
-            gate_state_repr = torch.tanh(self.personal_gate_from_state(student_repr))
-            generator_state_repr = torch.tanh(self.personal_generator_from_state(student_repr))
+            gate_state_repr = torch.tanh(self.personal_gate_from_state(local_state))
+            generator_state_repr = torch.tanh(
+                self.personal_generator_from_state(0.5 * (query_state + local_state))
+            )
             gate_id_scale = torch.sigmoid(self.personal_gate_id_logit)
             generator_id_scale = torch.sigmoid(self.personal_generator_id_logit)
             gate_id_embedding = self.personal_gate_embedding(student_ids)
             generator_id_embedding = self.personal_generator_embedding(student_ids)
-            if self.personal_alpha_bias_scale > 0:
-                gate_alpha_bias = self.personal_alpha_bias_scale * torch.tanh(self.personal_alpha_bias(student_ids))
-            else:
-                gate_alpha_bias = torch.zeros(
-                    (student_ids.size(0), self.num_relation_heads), device=device, dtype=dtype
-                )
+            gate_alpha_bias = None
             gate_out = self.adaptive_gate(
                 gate_state_repr,
                 context_repr,
                 gate_id_embedding,
-                gate_alpha_bias,
                 id_adapter_scale=gate_id_scale,
                 return_diagnostics=True,
             )
@@ -890,16 +988,26 @@ class ConceptStructureModeling(nn.Module):
             personal_delta_nonfinite_count = personal_diag["scores_nonfinite_count"]
             personal_delta_absmax = personal_diag["scores_absmax"]
             personal_delta = torch.nan_to_num(personal_delta, nan=0.0, posinf=1.0, neginf=-1.0)
-            if self.use_concept_graph and self.relation_learning is not None:
-                global_prior = relation_matrices.clamp(min=1e-8).log().unsqueeze(0)  # (1,H,C,C)
-            else:
-                # no_A 时不能继续使用 identity 的 log prior，
-                # 否则 off-diagonal 会被 -inf 级别的先验压死，E 实际上无法生成 personalized graph。
-                # 这里改为中性 prior，让 E 在没有 A 的条件下独立生成 row-stochastic 邻接。
-                global_prior = torch.zeros_like(relation_matrices).unsqueeze(0)  # (1,H,C,C)
-            personal_logits = global_prior + gate_alpha_effective * (
-                self.personal_delta_scale * personal_delta
+            personal_logits, support_mask = self._build_personal_prior_logits(
+                relation_matrices=relation_matrices,
+                identity_relations=identity_relations,
+                local_row_mask=local_row_mask,
+                batch_size=B,
             )
+            personal_support_density = support_mask.float().mean()
+            row_mask_4d = None
+            if local_row_mask is not None:
+                row_mask_4d = local_row_mask.unsqueeze(1).unsqueeze(-1).bool().expand_as(personal_logits)
+            posterior_delta = self.personal_delta_scale * personal_delta
+            posterior_logits = personal_logits + posterior_delta
+            if row_mask_4d is not None:
+                posterior_logits = torch.where(row_mask_4d, posterior_logits, personal_logits)
+            if self.personal_support_only and self.use_concept_graph and self.relation_learning is not None:
+                allowed_mask = support_mask
+                if row_mask_4d is not None:
+                    allowed_mask = (~row_mask_4d) | support_mask
+                posterior_logits = posterior_logits.masked_fill(~allowed_mask, -30.0)
+            personal_logits = posterior_logits
             personal_logits_nonfinite_count = personal_logits.new_tensor(
                 int((~torch.isfinite(personal_logits)).sum().item()), dtype=torch.long
             )
@@ -933,11 +1041,14 @@ class ConceptStructureModeling(nn.Module):
             personal_delta_student_std = personal_delta.std(dim=0, unbiased=False).mean()
             alpha_head_std = gate_alpha_effective.squeeze(-1).squeeze(-1).std(dim=1, unbiased=False).mean()
 
-            # personal_matrices 已经是最终 row-stochastic 个性化邻接，
-            # 其中全局 prior 与 alpha * delta 的混合已经体现在 softmax logits 中。
-            # 这里必须直接把它作为第二遍编码所使用的 relation_used，
-            # 否则在图卷积里再次按 alpha 与 global 混合，会把 E 的有效扰动压成近似 alpha^2。
-            relation_used = personal_matrices
+            if self.use_concept_graph and self.relation_learning is not None:
+                mixed_relation = (1.0 - gate_alpha_effective) * global_matrix + gate_alpha_effective * personal_matrices
+                if row_mask_4d is not None:
+                    relation_used = torch.where(row_mask_4d, mixed_relation, global_matrix)
+                else:
+                    relation_used = mixed_relation
+            else:
+                relation_used = personal_matrices
             knowledge_state = self.knowledge_encoder(student_ids, relation_used)
             student_repr = knowledge_state.mean(dim=1)
             knowledge_state_personal_delta = (knowledge_state - knowledge_state_pre_personal).pow(2).mean().sqrt()
@@ -982,6 +1093,10 @@ class ConceptStructureModeling(nn.Module):
             "personal_fallback_row_count": personal_fallback_row_count,
             "personal_logits_absmax": personal_logits_absmax,
             "personal_delta_absmax": personal_delta_absmax,
+            "local_row_ratio": local_row_ratio,
+            "personal_support_density": personal_support_density,
+            "query_state_norm": query_state_norm,
+            "local_row_mask": local_row_mask,
             "personal_warmup_scale": torch.tensor(
                 self._get_personal_warmup_scale(), device=device, dtype=dtype
             ),
@@ -1040,6 +1155,9 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_reg_cap_ratio: float = 6.0,
         graph_dropout: Optional[float] = None,
         graph_tau_init: float = 1.0,
+        graph_propagation_alpha: float = 0.20,
+        graph_readout_1hop_scale: float = 0.35,
+        graph_readout_2hop_scale: float = 0.15,
         prediction_l2_lambda: float = 5e-5,
         gnn_residual_weight: float = 0.5,
         personal_max_alpha: float = 0.35,
@@ -1053,6 +1171,8 @@ class CognitiveDiagnosisModel(nn.Module):
         personal_direct_bias_scale: float = 0.5,
         personal_disable_direct_bias: bool = False,
         personal_disable_student_global_context: bool = False,
+        personal_local_hops: int = 1,
+        personal_support_only: bool = True,
         share_concept_embeddings: bool = False,
     ):
         super().__init__()
@@ -1083,6 +1203,9 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_dropout = graph_dropout
         self.graph_tau_init = float(graph_tau_init)
         self.graph_identity_residual = max(0.0, min(1.0, float(graph_identity_residual)))
+        self.graph_propagation_alpha = max(0.0, min(1.0, float(graph_propagation_alpha)))
+        self.graph_readout_1hop_scale = max(0.0, float(graph_readout_1hop_scale))
+        self.graph_readout_2hop_scale = max(0.0, float(graph_readout_2hop_scale))
         self._current_epoch = 1
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
@@ -1102,6 +1225,8 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_direct_bias_scale = max(0.0, float(personal_direct_bias_scale))
         self.personal_disable_direct_bias = bool(personal_disable_direct_bias)
         self.personal_disable_student_global_context = bool(personal_disable_student_global_context)
+        self.personal_local_hops = max(0, int(personal_local_hops))
+        self.personal_support_only = bool(personal_support_only)
         self.share_concept_embeddings = bool(share_concept_embeddings)
 
         self.register_buffer("q_matrix", q_matrix)
@@ -1123,6 +1248,7 @@ class CognitiveDiagnosisModel(nn.Module):
             graph_topk=graph_topk,
             allow_self_loop=allow_self_loop,
             graph_identity_residual=self.graph_identity_residual,
+            graph_propagation_alpha=self.graph_propagation_alpha,
             use_personal_graph=self.use_personal_graph,
             personal_rank=personal_rank,
             personal_max_alpha=self.personal_max_alpha,
@@ -1134,6 +1260,8 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_direct_bias_scale=self.personal_direct_bias_scale,
             personal_disable_direct_bias=self.personal_disable_direct_bias,
             personal_disable_student_global_context=self.personal_disable_student_global_context,
+            personal_local_hops=self.personal_local_hops,
+            personal_support_only=self.personal_support_only,
             enable_module=self.enable_module1,
         )
 
@@ -1157,6 +1285,41 @@ class CognitiveDiagnosisModel(nn.Module):
         if relation_learning is None or knowledge_encoder is None:
             return
         relation_learning.concept_embeddings = knowledge_encoder.concept_emb.weight
+
+    @staticmethod
+    def _aggregate_with_relation(states: torch.Tensor, relation_matrices: torch.Tensor) -> torch.Tensor:
+        if relation_matrices.dim() == 3:
+            A = relation_matrices.mean(dim=0).to(dtype=states.dtype)
+            A = A / (A.sum(dim=-1, keepdim=True) + 1e-12)
+            return torch.matmul(A, states)
+        if relation_matrices.dim() == 4:
+            A = relation_matrices.mean(dim=1).to(dtype=states.dtype)
+            A = A / (A.sum(dim=-1, keepdim=True) + 1e-12)
+            return torch.bmm(A, states)
+        raise ValueError(f"Unsupported relation_matrices shape for aggregation: {tuple(relation_matrices.shape)}")
+
+    def _build_query_enhanced_state(
+        self,
+        knowledge_state: torch.Tensor,
+        relation_used: torch.Tensor,
+        concept_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        if (self.graph_readout_1hop_scale <= 0 and self.graph_readout_2hop_scale <= 0) or not self.enable_module1:
+            zero = knowledge_state.new_tensor(0.0)
+            return knowledge_state, zero, None
+
+        hop1 = self._aggregate_with_relation(knowledge_state, relation_used)
+        hop2 = self._aggregate_with_relation(hop1, relation_used)
+        enhanced = (
+            knowledge_state
+            + self.graph_readout_1hop_scale * (hop1 - knowledge_state)
+            + self.graph_readout_2hop_scale * (hop2 - hop1)
+        )
+        local_mask = self.structure_module._build_local_row_mask(concept_mask, relation_used)
+        if local_mask is not None:
+            enhanced = torch.where(local_mask.unsqueeze(-1).bool(), enhanced, knowledge_state)
+        delta = (enhanced - knowledge_state).pow(2).mean().sqrt()
+        return enhanced, delta, local_mask
 
     # ------------------------------
     # Fix #1：行熵稀疏度（用于 personal graph 正则）
@@ -1206,19 +1369,28 @@ class CognitiveDiagnosisModel(nn.Module):
         q_vector = concept_vector if concept_vector is not None else self.q_matrix[exercise_ids]  # (B,C)
 
         # ========== 1) Module 1：结构输出 ==========
-        s_out = self.structure_module(student_ids, identity_relations=self.identity_relations)
+        s_out = self.structure_module(
+            student_ids,
+            identity_relations=self.identity_relations,
+            concept_mask=q_vector,
+        )
         relation_matrices = s_out["relation_matrices"]
         relation_used = s_out["relation_used"]
         knowledge_state = s_out["knowledge_state"]
         student_repr = s_out["student_repr"]
         gate_alpha = s_out["alpha"]
         personal_matrices = s_out["personal_matrices"]
+        prediction_state, readout_query_delta, readout_local_mask = self._build_query_enhanced_state(
+            knowledge_state=knowledge_state,
+            relation_used=relation_used,
+            concept_mask=q_vector,
+        )
 
         # ========== 2) 固定预测头 D ==========
         b, a = self.exercise_encoder(exercise_ids)
         if return_details:
             irt_logit, diag_details = self.diagnosis_head(
-                knowledge_state=knowledge_state,
+                knowledge_state=prediction_state,
                 concept_mask=q_vector,
                 b=b,
                 a=a,
@@ -1226,7 +1398,7 @@ class CognitiveDiagnosisModel(nn.Module):
             )
         else:
             irt_logit = self.diagnosis_head(
-                knowledge_state=knowledge_state,
+                knowledge_state=prediction_state,
                 concept_mask=q_vector,
                 b=b,
                 a=a,
@@ -1251,6 +1423,7 @@ class CognitiveDiagnosisModel(nn.Module):
             "relation_matrices": relation_matrices,
             "relation_used": relation_used,
             "knowledge_state": knowledge_state,
+            "prediction_state": prediction_state,
             "student_repr": student_repr,
             "q_vector": q_vector,
             "irt_b": b.detach(),
@@ -1260,8 +1433,11 @@ class CognitiveDiagnosisModel(nn.Module):
             "relation_identity_delta": s_out["relation_identity_delta"].detach(),
             "knowledge_state_graph_delta": s_out["knowledge_state_graph_delta"].detach(),
             "knowledge_state_personal_delta": s_out["knowledge_state_personal_delta"].detach(),
+            "readout_query_delta": readout_query_delta.detach(),
         }
         details["irt_logit_for_reg"] = irt_logit
+        if readout_local_mask is not None:
+            details["readout_local_row_ratio"] = readout_local_mask.float().mean().detach()
 
         if diag_details is not None:
             details.update(diag_details)
@@ -1296,6 +1472,10 @@ class CognitiveDiagnosisModel(nn.Module):
                 "personal_fallback_row_count",
                 "personal_logits_absmax",
                 "personal_delta_absmax",
+                "local_row_ratio",
+                "personal_support_density",
+                "query_state_norm",
+                "local_row_mask",
             ):
                 if s_out.get(key) is not None:
                     details[key] = s_out[key].detach()

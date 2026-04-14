@@ -128,6 +128,24 @@ def parse_args():
         default=0.0,
         help="Blend ratio of identity residual into each learned global graph head.",
     )
+    parser.add_argument(
+        "--graph_propagation_alpha",
+        type=float,
+        default=0.20,
+        help="Teleport strength for APPNP-style concept propagation.",
+    )
+    parser.add_argument(
+        "--graph_readout_1hop_scale",
+        type=float,
+        default=0.35,
+        help="1-hop query-local graph readout scale before the fixed diagnosis head.",
+    )
+    parser.add_argument(
+        "--graph_readout_2hop_scale",
+        type=float,
+        default=0.15,
+        help="2-hop query-local graph readout scale before the fixed diagnosis head.",
+    )
     parser.add_argument("--lambda_sparse_personal", type=float, default=0.0)
     parser.add_argument("--lambda_alpha", type=float, default=0.0)
 
@@ -236,6 +254,10 @@ def parse_args():
                         help="Disable direct row/col bias in the personal graph generator.")
     parser.add_argument("--personal_disable_student_global_context", action=bool_action, default=None,
                         help="Use state-primary personal context without raw student_global direct concatenation.")
+    parser.add_argument("--personal_local_hops", type=int, default=1,
+                        help="Number of support hops around current item concepts used for local personalization.")
+    parser.add_argument("--personal_support_only", action=bool_action, default=None,
+                        help="Restrict personal residual edges to the support of global graph A when A is enabled.")
     parser.add_argument("--share_concept_embeddings", action=bool_action, default=None,
                         help="Share concept embeddings between relation learning and knowledge encoder.")
 
@@ -449,6 +471,15 @@ def main():
                 graph_identity_residual=loaded_args.get(
                     "graph_identity_residual", getattr(args, "graph_identity_residual", 0.0)
                 ),
+                graph_propagation_alpha=loaded_args.get(
+                    "graph_propagation_alpha", getattr(args, "graph_propagation_alpha", 0.20)
+                ),
+                graph_readout_1hop_scale=loaded_args.get(
+                    "graph_readout_1hop_scale", getattr(args, "graph_readout_1hop_scale", 0.35)
+                ),
+                graph_readout_2hop_scale=loaded_args.get(
+                    "graph_readout_2hop_scale", getattr(args, "graph_readout_2hop_scale", 0.15)
+                ),
                 lambda_graph_entropy=loaded_args.get("lambda_sparse", getattr(args, "lambda_sparse", 0.01)),
                 graph_entropy_min=loaded_args.get("graph_entropy_min", getattr(args, "graph_entropy_min", 0.15)),
                 graph_entropy_max=loaded_args.get("graph_entropy_max", getattr(args, "graph_entropy_max", 0.85)),
@@ -506,6 +537,12 @@ def main():
                 personal_disable_student_global_context=loaded_args.get(
                     "personal_disable_student_global_context",
                     getattr(args, "personal_disable_student_global_context", False),
+                ),
+                personal_local_hops=loaded_args.get(
+                    "personal_local_hops", getattr(args, "personal_local_hops", 1)
+                ),
+                personal_support_only=loaded_args.get(
+                    "personal_support_only", getattr(args, "personal_support_only", True)
                 ),
                 share_concept_embeddings=loaded_args.get(
                     "share_concept_embeddings", getattr(args, "share_concept_embeddings", False)

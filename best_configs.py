@@ -42,6 +42,9 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "graph_dropout": 0.0,
         "graph_tau_init": 0.55,
         "graph_identity_residual": 0.05,
+        "graph_propagation_alpha": 0.20,
+        "graph_readout_1hop_scale": 0.40,
+        "graph_readout_2hop_scale": 0.15,
         "graph_topk": 12,
         "personal_rank": 8,
         "personal_max_alpha": 0.40,
@@ -53,6 +56,8 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "personal_direct_bias_scale": 0.0,
         "personal_disable_direct_bias": True,
         "personal_disable_student_global_context": True,
+        "personal_local_hops": 1,
+        "personal_support_only": True,
         "share_concept_embeddings": True,
 
         # Fixed prediction head
@@ -104,6 +109,9 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "graph_dropout": 0.0,
         "graph_tau_init": 0.55,
         "graph_identity_residual": 0.05,
+        "graph_propagation_alpha": 0.25,
+        "graph_readout_1hop_scale": 0.30,
+        "graph_readout_2hop_scale": 0.10,
         "graph_topk": 24,
         "personal_rank": 8,
         "personal_max_alpha": 0.35,
@@ -115,6 +123,8 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "personal_direct_bias_scale": 0.0,
         "personal_disable_direct_bias": True,
         "personal_disable_student_global_context": True,
+        "personal_local_hops": 1,
+        "personal_support_only": True,
         "share_concept_embeddings": True,
 
         # Fixed prediction head

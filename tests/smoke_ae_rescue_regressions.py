@@ -40,6 +40,8 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "personal_warmup_epochs",
         "lambda_alpha_min",
         "alpha_min_target",
+        "graph_propagation_alpha",
+        "graph_readout_1hop_scale",
     )
     for dataset in ("assist_09", "junyi"):
         cfg = BEST_CFG[dataset]
@@ -86,6 +88,14 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
             float(cfg["personal_alpha_bias_scale"]) <= 0.03,
             f"{dataset} 的 personal_alpha_bias_scale 应降到 tiny adapter 量级，当前={cfg['personal_alpha_bias_scale']}",
         )
+        _assert(
+            int(cfg["personal_local_hops"]) >= 1,
+            f"{dataset} 应显式开启基于题目局部子图的 E，当前 personal_local_hops={cfg['personal_local_hops']}",
+        )
+        _assert(
+            bool(cfg["personal_support_only"]) is True,
+            f"{dataset} 应显式启用 support-preserving E，避免 E 再退化为 dense personal graph。",
+        )
 
 
 def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
@@ -101,10 +111,13 @@ def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
         "0.0",
         "--graph_identity_residual",
         "0.0",
+        "--graph_readout_1hop_scale",
+        "0.0",
         "--no-use_personal_graph",
         "--no-share_concept_embeddings",
         "--no-personal_disable_direct_bias",
         "--no-personal_disable_student_global_context",
+        "--no-personal_support_only",
     ]
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -124,6 +137,10 @@ def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
         "显式传入的 --graph_identity_residual 0.0 不应再被数据集默认值覆盖。",
     )
     _assert(
+        float(args.graph_readout_1hop_scale) == 0.0,
+        "显式传入的 --graph_readout_1hop_scale 0.0 不应再被数据集默认值覆盖。",
+    )
+    _assert(
         bool(args.use_personal_graph) is False,
         "显式传入的 --no-use_personal_graph 不应再被数据集默认值回写成 True。",
     )
@@ -138,6 +155,10 @@ def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
     _assert(
         bool(args.personal_disable_student_global_context) is False,
         "显式传入的 --no-personal_disable_student_global_context 不应被数据集默认值回写成 True。",
+    )
+    _assert(
+        bool(args.personal_support_only) is False,
+        "显式传入的 --no-personal_support_only 不应被数据集默认值回写成 True。",
     )
     _assert(
         float(args.lambda_sparse) == 0.3,
@@ -178,7 +199,6 @@ def _check_no_a_personal_graph_is_not_identity_locked() -> None:
     model.eval()
 
     with torch.no_grad():
-        model.structure_module.personal_alpha_bias.weight.fill_(10.0)
         _, details = model(
             student_ids=torch.tensor([0, 1], dtype=torch.long),
             exercise_ids=torch.tensor([0, 2], dtype=torch.long),
@@ -276,21 +296,18 @@ def _check_adaptive_gate_is_state_primary() -> None:
             state_a,
             context_a,
             id_a,
-            bias,
             return_diagnostics=True,
         )
         alpha_state, _, diag_state = gate(
             state_b,
             context_b,
             id_a,
-            bias,
             return_diagnostics=True,
         )
         alpha_id, _, diag_id = gate(
             state_a,
             context_a,
             id_b,
-            bias,
             return_diagnostics=True,
         )
 
@@ -307,6 +324,118 @@ def _check_adaptive_gate_is_state_primary() -> None:
     _assert(
         float(diag_base["effective_id_scale"].item()) < 0.02,
         f"id adapter 的有效缩放应保持在 tiny adapter 量级，当前={float(diag_base['effective_id_scale'].item()):.6f}",
+    )
+
+
+def _check_personal_graph_is_support_preserving_and_local() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    torch.manual_seed(0)
+    q_matrix = torch.tensor(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    model = CognitiveDiagnosisModel(
+        num_students=4,
+        num_exercises=2,
+        num_concepts=4,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+        use_concept_graph=True,
+        graph_topk=2,
+        use_personal_graph=True,
+        share_concept_embeddings=True,
+        graph_identity_residual=0.0,
+        personal_rank=4,
+        personal_max_alpha=0.4,
+        personal_delta_scale=4.0,
+        personal_warmup_epochs=0,
+        personal_reg_warmup_epochs=0,
+        personal_student_dim=8,
+        personal_disable_direct_bias=True,
+        personal_disable_student_global_context=True,
+        personal_local_hops=1,
+        personal_support_only=True,
+    )
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0], dtype=torch.long),
+            exercise_ids=torch.tensor([0], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    global_A = details["relation_matrices"].detach()
+    personal_A = details["personal_matrices"].detach()[0]
+    relation_used = details["relation_used"].detach()[0]
+    local_row_mask = details["local_row_mask"].detach()[0].bool()
+
+    support_mask = global_A > 0
+    unsupported_mass = float(personal_A.masked_select(~support_mask).abs().max().item())
+    _assert(
+        unsupported_mass < 1e-6,
+        f"E 应保持在 A 的 support 上重加权，当前 unsupported mass={unsupported_mass:.6e}",
+    )
+
+    local_rows = local_row_mask.unsqueeze(0).unsqueeze(-1).expand_as(relation_used)
+    off_local_delta = float((relation_used - global_A).masked_select(~local_rows).abs().max().item())
+    _assert(
+        off_local_delta < 1e-6,
+        f"E 不应改动题目局部子图之外的行，当前 off-local delta={off_local_delta:.6e}",
+    )
+    local_delta = float((relation_used - global_A).masked_select(local_rows).abs().mean().item())
+    _assert(
+        local_delta > 1e-5,
+        "局部 posterior mixing 应在题目相关子图上产生非零扰动，而不是完全退化回全局图。",
+    )
+
+
+def _check_query_readout_injects_graph_signal() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    torch.manual_seed(0)
+    q_matrix = torch.tensor(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    model = CognitiveDiagnosisModel(
+        num_students=3,
+        num_exercises=2,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+        use_concept_graph=True,
+        use_personal_graph=False,
+        graph_readout_1hop_scale=0.4,
+        graph_readout_2hop_scale=0.1,
+    )
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0], dtype=torch.long),
+            exercise_ids=torch.tensor([0], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    _assert(
+        float(details["readout_query_delta"].item()) > 1e-5,
+        "A 的 query-local readout 应对最终送入固定预测头的状态产生非零影响。",
     )
 
 
@@ -723,6 +852,8 @@ def main() -> None:
     _check_no_a_personal_graph_is_not_identity_locked()
     _check_personal_branch_is_state_primary_with_small_id_adapter()
     _check_adaptive_gate_is_state_primary()
+    _check_personal_graph_is_support_preserving_and_local()
+    _check_query_readout_injects_graph_signal()
     _check_split_hygiene_uses_train_only_maps_and_q_matrix()
     _check_runtime_ablation_guardrails_cover_no_a_and_no_e()
     _check_direct_bias_can_be_disabled_without_collapsing_personal_graph()
