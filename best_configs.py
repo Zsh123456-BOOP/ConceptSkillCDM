@@ -50,10 +50,10 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "personal_reg_warmup_epochs": 8,
         "personal_student_dim": 32,
         "personal_alpha_bias_scale": 0.10,
-        "personal_direct_bias_scale": 0.12,
-        "personal_disable_direct_bias": False,
+        "personal_direct_bias_scale": 0.0,
+        "personal_disable_direct_bias": True,
         "personal_disable_student_global_context": True,
-        "share_concept_embeddings": False,
+        "share_concept_embeddings": True,
 
         # Fixed prediction head
         "prediction_l2_lambda": 1e-5,
@@ -112,10 +112,10 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "personal_reg_warmup_epochs": 5,
         "personal_student_dim": 64,
         "personal_alpha_bias_scale": 0.10,
-        "personal_direct_bias_scale": 0.12,
-        "personal_disable_direct_bias": False,
+        "personal_direct_bias_scale": 0.0,
+        "personal_disable_direct_bias": True,
         "personal_disable_student_global_context": True,
-        "share_concept_embeddings": False,
+        "share_concept_embeddings": True,
 
         # Fixed prediction head
         "prediction_l2_lambda": 1e-5,

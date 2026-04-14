@@ -631,8 +631,10 @@ def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> 
                 "lambda_alpha_min": 0.10,
                 "alpha_min_target": 0.05,
                 "personal_alpha_bias_scale": 0.08,
-                "personal_direct_bias_scale": 0.08,
+                "personal_direct_bias_scale": 0.0,
+                "personal_disable_direct_bias": True,
                 "personal_disable_student_global_context": True,
+                "share_concept_embeddings": True,
             }
         return {
             "graph_identity_residual": 0.05,
@@ -643,8 +645,10 @@ def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> 
             "lambda_alpha_min": 0.08,
             "alpha_min_target": 0.04,
             "personal_alpha_bias_scale": 0.08,
-            "personal_direct_bias_scale": 0.08,
+            "personal_direct_bias_scale": 0.0,
+            "personal_disable_direct_bias": True,
             "personal_disable_student_global_context": True,
+            "share_concept_embeddings": True,
         }
     raise ValueError(f"Unknown profile '{profile}'.")
 

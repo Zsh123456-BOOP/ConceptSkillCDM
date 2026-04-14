@@ -379,12 +379,19 @@ class AdaptiveGate(nn.Module):
 
 
 class PersonalRelationGenerator(nn.Module):
-    """显式 student code + context residual 生成 per-head 个性化邻接 logits（B,H,C,C）。"""
+    """state-primary 的 per-head 个性化邻接 residual 生成器。
+
+    设计目标：
+    - 主信号来自 knowledge_state 的逐概念差异，而不是 student-id 的全局 shortcut；
+    - 所有 residual 都先做有界化与行内标准化，避免 junyi 上 large-C softmax 出现 NaN；
+    - 仍保留小幅 student/context adapter，作为状态主路之外的补偿项。
+    """
 
     def __init__(
         self,
         student_dim: int,
         context_dim: int,
+        knowledge_dim: int,
         num_concepts: int,
         num_heads: int,
         rank: int = 4,
@@ -395,15 +402,20 @@ class PersonalRelationGenerator(nn.Module):
         super().__init__()
         self.student_norm = nn.LayerNorm(student_dim)
         self.context_norm = nn.LayerNorm(context_dim)
+        self.state_norm = nn.LayerNorm(knowledge_dim)
         self.num_concepts = int(num_concepts)
         self.num_heads = int(num_heads)
         self.rank = int(rank)
         self.max_direct_scale = max(0.0, float(max_direct_scale))
         self.disable_direct_bias = bool(disable_direct_bias)
+        self.max_state_mix = 1.25
+        self.max_student_mix = 0.75
         hidden = max(1, max(student_dim, context_dim) // 2 if hidden_dim is None else int(hidden_dim))
 
         self.context_proj = nn.Linear(context_dim, hidden)
         self.hidden_proj = nn.Linear(hidden, hidden)
+        self.state_query_proj = nn.Linear(knowledge_dim, self.num_heads * self.rank, bias=False)
+        self.state_key_proj = nn.Linear(knowledge_dim, self.num_heads * self.rank, bias=False)
         self.base_u = nn.Parameter(torch.randn(self.num_heads, num_concepts, rank) * 0.02)
         self.base_v = nn.Parameter(torch.randn(self.num_heads, num_concepts, rank) * 0.02)
         self.student_basis_u = nn.Parameter(torch.randn(self.num_heads, num_concepts, rank, student_dim) * 0.02)
@@ -414,13 +426,16 @@ class PersonalRelationGenerator(nn.Module):
         self.student_col_proj = nn.Linear(student_dim, self.num_heads * num_concepts, bias=False)
         self.student_scale = nn.Parameter(torch.tensor(1.25))
         self.context_scale = nn.Parameter(torch.tensor(0.25))
-        self.low_rank_scale = nn.Parameter(torch.tensor(2.0))
         self.direct_scale = nn.Parameter(torch.tensor(0.50))
+        self.state_mix_logit = nn.Parameter(torch.tensor(1.3862944))
+        self.student_mix_logit = nn.Parameter(torch.tensor(-1.3862944))
 
         nn.init.xavier_normal_(self.context_proj.weight)
         nn.init.zeros_(self.context_proj.bias)
         nn.init.xavier_normal_(self.hidden_proj.weight)
         nn.init.zeros_(self.hidden_proj.bias)
+        nn.init.xavier_normal_(self.state_query_proj.weight, gain=0.8)
+        nn.init.xavier_normal_(self.state_key_proj.weight, gain=0.8)
         nn.init.xavier_normal_(self.context_to_u.weight)
         nn.init.xavier_normal_(self.context_to_v.weight)
         nn.init.xavier_normal_(self.student_row_proj.weight, gain=0.8)
@@ -430,8 +445,26 @@ class PersonalRelationGenerator(nn.Module):
         nn.init.xavier_normal_(self.student_basis_u)
         nn.init.xavier_normal_(self.student_basis_v)
 
-    def forward(self, student_embedding: torch.Tensor, context_repr: torch.Tensor) -> torch.Tensor:
+    @staticmethod
+    def _normalize_scores(scores: torch.Tensor) -> torch.Tensor:
+        scores = torch.nan_to_num(scores, nan=0.0, posinf=6.0, neginf=-6.0)
+        scores = scores - scores.mean(dim=-1, keepdim=True)
+        row_rms = scores.pow(2).mean(dim=-1, keepdim=True).sqrt()
+        row_rms = torch.where(torch.isfinite(row_rms), row_rms, torch.ones_like(row_rms))
+        row_rms = row_rms.clamp_min(1e-4)
+        scores = scores / row_rms
+        scores = torch.tanh(scores)
+        return torch.nan_to_num(scores, nan=0.0, posinf=1.0, neginf=-1.0)
+
+    def forward(
+        self,
+        student_embedding: torch.Tensor,
+        context_repr: torch.Tensor,
+        knowledge_state: torch.Tensor,
+    ) -> torch.Tensor:
         student_code = torch.tanh(1.5 * self.student_norm(student_embedding))
+        state_residual = knowledge_state - knowledge_state.mean(dim=1, keepdim=True)
+        state_code = torch.tanh(self.state_norm(state_residual))
         hidden = self.context_proj(self.context_norm(context_repr))
         hidden = F.silu(hidden)
         hidden = F.silu(self.hidden_proj(hidden))
@@ -440,18 +473,38 @@ class PersonalRelationGenerator(nn.Module):
         student_v = torch.einsum("bd,hcrd->bhcr", student_code, self.student_basis_v)
         context_u = self.context_to_u(hidden).view(B, self.num_heads, self.num_concepts, self.rank)
         context_v = self.context_to_v(hidden).view(B, self.num_heads, self.num_concepts, self.rank)
-        u = self.base_u.unsqueeze(0) + self.student_scale * student_u + self.context_scale * torch.tanh(context_u)
-        v = self.base_v.unsqueeze(0) + self.student_scale * student_v + self.context_scale * torch.tanh(context_v)
-        low_rank_scores = torch.einsum("bhcr,bhkr->bhck", u, v) / math.sqrt(self.rank)
+        u = torch.tanh(
+            self.base_u.unsqueeze(0)
+            + self.student_scale * student_u
+            + self.context_scale * torch.tanh(context_u)
+        )
+        v = torch.tanh(
+            self.base_v.unsqueeze(0)
+            + self.student_scale * student_v
+            + self.context_scale * torch.tanh(context_v)
+        )
+        student_scores = torch.einsum("bhcr,bhkr->bhck", u, v) / math.sqrt(self.rank)
         direct_scores = 0.0
-        effective_direct_scale = low_rank_scores.new_tensor(0.0)
+        effective_direct_scale = student_scores.new_tensor(0.0)
         if (not self.disable_direct_bias) and self.max_direct_scale > 0:
             row_bias = torch.tanh(self.student_row_proj(student_code)).view(B, self.num_heads, self.num_concepts, 1)
             col_bias = torch.tanh(self.student_col_proj(student_code)).view(B, self.num_heads, 1, self.num_concepts)
             direct_scores = row_bias + col_bias
             effective_direct_scale = self.max_direct_scale * torch.sigmoid(self.direct_scale)
-        scores = self.low_rank_scale * low_rank_scores + effective_direct_scale * direct_scores
-        scores = scores - scores.mean(dim=-1, keepdim=True)
+        student_scores = student_scores + effective_direct_scale * direct_scores
+        student_scores = self._normalize_scores(student_scores)
+
+        state_q = torch.tanh(self.state_query_proj(state_code))
+        state_k = torch.tanh(self.state_key_proj(state_code))
+        state_q = state_q.view(B, self.num_concepts, self.num_heads, self.rank).permute(0, 2, 1, 3)
+        state_k = state_k.view(B, self.num_concepts, self.num_heads, self.rank).permute(0, 2, 1, 3)
+        state_scores = torch.einsum("bhcr,bhkr->bhck", state_q, state_k) / math.sqrt(self.rank)
+        state_scores = self._normalize_scores(state_scores)
+
+        state_mix = self.max_state_mix * torch.sigmoid(self.state_mix_logit)
+        student_mix = self.max_student_mix * torch.sigmoid(self.student_mix_logit)
+        scores = state_mix * state_scores + student_mix * student_scores
+        scores = self._normalize_scores(scores)
         return scores
 
 
@@ -584,7 +637,7 @@ class ConceptStructureModeling(nn.Module):
             nn.init.zeros_(self.personal_alpha_bias.weight)
             nn.init.xavier_normal_(self.personal_gate_from_state.weight)
             nn.init.xavier_normal_(self.personal_generator_from_state.weight)
-            context_dim = knowledge_dim * (2 if self.personal_disable_student_global_context else 3)
+            context_dim = knowledge_dim * (3 if self.personal_disable_student_global_context else 4)
             personal_hidden_dim = max(self.personal_student_dim, knowledge_dim)
             self.adaptive_gate = AdaptiveGate(
                 self.personal_student_dim,
@@ -596,6 +649,7 @@ class ConceptStructureModeling(nn.Module):
             self.personal_generator = PersonalRelationGenerator(
                 self.personal_student_dim,
                 context_dim,
+                knowledge_dim,
                 num_concepts,
                 num_relation_heads,
                 personal_rank,
@@ -678,10 +732,12 @@ class ConceptStructureModeling(nn.Module):
 
         if self.use_personal_graph and self.adaptive_gate is not None and self.personal_generator is not None:
             student_global_repr = self.knowledge_encoder.student_global(student_ids)  # (B,D)
+            state_dispersion = knowledge_state.std(dim=1, unbiased=False)
             if self.personal_disable_student_global_context:
                 context_repr = torch.cat(
                     [
                         student_repr,
+                        state_dispersion,
                         student_repr - student_global_repr,
                     ],
                     dim=-1,
@@ -691,6 +747,7 @@ class ConceptStructureModeling(nn.Module):
                     [
                         student_global_repr,
                         student_repr,
+                        state_dispersion,
                         student_repr - student_global_repr,
                     ],
                     dim=-1,
@@ -716,7 +773,12 @@ class ConceptStructureModeling(nn.Module):
             )
             personal_warmup_scale = self._get_personal_warmup_scale()
             gate_alpha_effective = gate_alpha * personal_warmup_scale
-            personal_delta = self.personal_generator(generator_student_repr, context_repr)  # (B,H,C,C)
+            personal_delta = self.personal_generator(
+                generator_student_repr,
+                context_repr,
+                knowledge_state,
+            )  # (B,H,C,C)
+            personal_delta = torch.nan_to_num(personal_delta, nan=0.0, posinf=1.0, neginf=-1.0)
             if self.use_concept_graph and self.relation_learning is not None:
                 global_prior = relation_matrices.clamp(min=1e-8).log().unsqueeze(0)  # (1,H,C,C)
             else:
@@ -727,7 +789,23 @@ class ConceptStructureModeling(nn.Module):
             personal_logits = global_prior + gate_alpha_effective * (
                 self.personal_delta_scale * personal_delta
             )
+            personal_logits = torch.nan_to_num(personal_logits, nan=0.0, posinf=20.0, neginf=-20.0)
+            personal_logits = personal_logits.clamp(min=-20.0, max=20.0)
             personal_matrices = F.softmax(personal_logits, dim=-1)            # (B,H,C,C)
+            personal_matrices = torch.nan_to_num(personal_matrices, nan=0.0, posinf=1.0, neginf=0.0)
+            row_sum = personal_matrices.sum(dim=-1, keepdim=True)
+            bad_rows = (~torch.isfinite(row_sum.squeeze(-1))) | (row_sum.squeeze(-1) < 1e-12)
+            if bad_rows.any():
+                fallback = identity_relations.unsqueeze(0).expand_as(personal_matrices)
+                if self.use_concept_graph and self.relation_learning is not None:
+                    fallback = relation_matrices.unsqueeze(0).expand_as(personal_matrices)
+                personal_matrices = torch.where(
+                    bad_rows.unsqueeze(-1).expand_as(personal_matrices),
+                    fallback,
+                    personal_matrices,
+                )
+                row_sum = personal_matrices.sum(dim=-1, keepdim=True)
+            personal_matrices = personal_matrices / (row_sum + 1e-12)
             global_matrix = relation_matrices.unsqueeze(0)
             personal_matrix_delta = (personal_matrices - global_matrix).abs().mean(dim=(-1, -2, -3))
             personal_matrix_student_std = personal_matrices.std(dim=0, unbiased=False).mean()

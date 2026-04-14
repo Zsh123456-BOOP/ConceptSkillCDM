@@ -58,6 +58,16 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         float(assist_cfg["lambda_alpha_min"]) > 0.0,
         "assist_09 仍需保留 alpha anti-collapse 约束，避免 E 直接塌掉。",
     )
+    for dataset in ("assist_09", "junyi"):
+        cfg = BEST_CFG[dataset]
+        _assert(
+            bool(cfg["share_concept_embeddings"]) is True,
+            f"{dataset} 应开启 share_concept_embeddings，避免 A 的图学习和知识编码继续分裂成两套概念空间。",
+        )
+        _assert(
+            bool(cfg["personal_disable_direct_bias"]) is True,
+            f"{dataset} 应禁用 E 的 direct bias shortcut，避免个性化图继续退化为 student-id 偏置。",
+        )
 
 
 def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
@@ -429,6 +439,44 @@ def _check_concept_embedding_sharing_uses_same_storage() -> None:
     )
 
 
+def _check_personal_generator_is_state_aware_and_bounded() -> None:
+    from src.model import PersonalRelationGenerator
+
+    torch.manual_seed(0)
+    generator = PersonalRelationGenerator(
+        student_dim=8,
+        context_dim=16,
+        knowledge_dim=8,
+        num_concepts=4,
+        num_heads=2,
+        rank=3,
+        max_direct_scale=0.0,
+        disable_direct_bias=True,
+    )
+    generator.eval()
+
+    student_embedding = torch.zeros(2, 8)
+    context_repr = torch.zeros(2, 16)
+    knowledge_state_a = torch.randn(2, 4, 8) * 50.0
+    knowledge_state_b = knowledge_state_a.clone()
+    knowledge_state_b[1] = knowledge_state_b[1].flip(0)
+
+    with torch.no_grad():
+        out_a = generator(student_embedding, context_repr, knowledge_state_a)
+        out_b = generator(student_embedding, context_repr, knowledge_state_b)
+
+    _assert(torch.isfinite(out_a).all(), "state-aware personal generator 的输出不应出现 NaN/Inf。")
+    _assert(
+        float(out_a.abs().max()) <= 1.0001,
+        "state-aware personal generator 应输出有界 residual，避免大图上的 softmax logits 爆炸。",
+    )
+    delta = float((out_a[1] - out_b[1]).abs().mean())
+    _assert(
+        delta > 1e-3,
+        f"personal generator 应对 knowledge_state 变化敏感，当前差异过小: {delta:.6f}",
+    )
+
+
 def main() -> None:
     _check_no_a_keeps_gnn_layers()
     _check_best_configs_enable_e_rescue_knobs()
@@ -439,6 +487,7 @@ def main() -> None:
     _check_runtime_ablation_guardrails_cover_no_a_and_no_e()
     _check_direct_bias_can_be_disabled_without_collapsing_personal_graph()
     _check_concept_embedding_sharing_uses_same_storage()
+    _check_personal_generator_is_state_aware_and_bounded()
     print("OK: AE rescue regression smoke checks passed.")
 
 
