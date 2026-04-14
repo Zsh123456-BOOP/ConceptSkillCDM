@@ -174,8 +174,17 @@ def _build_config_hash(args) -> str:
         "graph_readout_2hop_scale",
         "use_concept_graph",
         "use_personal_graph",
+        "share_concept_embeddings",
+        "graph_identity_residual",
         "personal_local_hops",
         "personal_support_only",
+        "personal_alpha_bias_scale",
+        "personal_reg_warmup_epochs",
+        "personal_disable_student_global_context",
+        "personal_delta_scale",
+        "personal_warmup_epochs",
+        "lambda_alpha_min",
+        "alpha_min_target",
     ]
     payload = {}
     for k in keys:
@@ -242,12 +251,16 @@ def append_summary_csv(
     row["model_epoch"] = int(model_epoch)
 
     # 运行时事实：防止“CSV 标记消融，但模型实际未生效”
-    key = "enable_module1"
-    out_key = "final_enable_module1"
-    if final_model_facts is not None and key in final_model_facts:
-        row[out_key] = bool(final_model_facts[key])
-    elif hasattr(args, key):
-        row[out_key] = bool(getattr(args, key))
+    runtime_keys = (
+        ("enable_module1", "final_enable_module1"),
+        ("use_concept_graph", "final_use_concept_graph"),
+        ("use_personal_graph", "final_use_personal_graph"),
+    )
+    for key, out_key in runtime_keys:
+        if final_model_facts is not None and key in final_model_facts:
+            row[out_key] = bool(final_model_facts[key])
+        elif hasattr(args, key):
+            row[out_key] = bool(getattr(args, key))
 
     # === 3. 把 args 里的超参数摊平成后面的列 ===
     skip_keys = {
@@ -317,6 +330,8 @@ def append_summary_csv(
         "best_val_auc",
         "model_epoch",
         "final_enable_module1",
+        "final_use_concept_graph",
+        "final_use_personal_graph",
     ]
     front_cols = [c for c in front_cols if c in df.columns]
     other_cols = [c for c in df.columns if c not in front_cols]

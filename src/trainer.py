@@ -40,8 +40,6 @@ MONITOR_NAME = "val_auc"
 MONITOR_MODE = "max"
 STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "share_concept_embeddings",
-    "personal_disable_direct_bias",
-    "personal_direct_bias_scale",
     "personal_alpha_bias_scale",
     "personal_reg_warmup_epochs",
     "personal_disable_student_global_context",
@@ -233,6 +231,7 @@ def _build_nonfinite_payload(
             "alpha_state_path_absmean": _to_float(details.get("alpha_state_path_absmean")),
             "alpha_id_path_absmean": _to_float(details.get("alpha_id_path_absmean")),
             "alpha_bias_path_absmean": _to_float(details.get("alpha_bias_path_absmean")),
+            "head_bias_path_absmean": _to_float(details.get("head_bias_path_absmean")),
             "alpha_id_adapter_scale": _to_float(details.get("alpha_id_adapter_scale")),
             "personal_delta_nonfinite_count": _to_int(details.get("personal_delta_nonfinite_count")),
             "personal_delta_absmax": _to_float(details.get("personal_delta_absmax")),
@@ -599,6 +598,7 @@ def _collect_debug_forward_stats(
     alpha_state_path_vals: List[float] = []
     alpha_id_path_vals: List[float] = []
     alpha_bias_path_vals: List[float] = []
+    head_bias_path_vals: List[float] = []
     relation_identity_delta_vals: List[float] = []
     knowledge_state_graph_delta_vals: List[float] = []
     knowledge_state_personal_delta_vals: List[float] = []
@@ -684,6 +684,7 @@ def _collect_debug_forward_stats(
                     ("alpha_state_path_absmean", alpha_state_path_vals),
                     ("alpha_id_path_absmean", alpha_id_path_vals),
                     ("alpha_bias_path_absmean", alpha_bias_path_vals),
+                    ("head_bias_path_absmean", head_bias_path_vals),
                     ("relation_identity_delta", relation_identity_delta_vals),
                     ("knowledge_state_graph_delta", knowledge_state_graph_delta_vals),
                     ("knowledge_state_personal_delta", knowledge_state_personal_delta_vals),
@@ -734,6 +735,7 @@ def _collect_debug_forward_stats(
     alpha_state_path_mean, _ = _safe_mean_std(alpha_state_path_vals)
     alpha_id_path_mean, _ = _safe_mean_std(alpha_id_path_vals)
     alpha_bias_path_mean, _ = _safe_mean_std(alpha_bias_path_vals)
+    head_bias_path_mean, _ = _safe_mean_std(head_bias_path_vals)
     relation_identity_delta_mean, _ = _safe_mean_std(relation_identity_delta_vals)
     knowledge_state_graph_delta_mean, _ = _safe_mean_std(knowledge_state_graph_delta_vals)
     knowledge_state_personal_delta_mean, _ = _safe_mean_std(knowledge_state_personal_delta_vals)
@@ -768,6 +770,7 @@ def _collect_debug_forward_stats(
         "alpha_state_path_absmean": alpha_state_path_mean,
         "alpha_id_path_absmean": alpha_id_path_mean,
         "alpha_bias_path_absmean": alpha_bias_path_mean,
+        "head_bias_path_absmean": head_bias_path_mean,
         "relation_identity_delta": relation_identity_delta_mean,
         "knowledge_state_graph_delta": knowledge_state_graph_delta_mean,
         "knowledge_state_personal_delta": knowledge_state_personal_delta_mean,
@@ -833,9 +836,12 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
     personal_generator_context_hidden = getattr(getattr(personal_generator, "hidden_proj", None), "weight", None)
     personal_generator_context_to_u = getattr(getattr(personal_generator, "context_to_u", None), "weight", None)
     personal_generator_context_to_v = getattr(getattr(personal_generator, "context_to_v", None), "weight", None)
-    personal_generator_student_row = getattr(getattr(personal_generator, "student_to_u", None), "weight", None)
-    personal_generator_student_col = getattr(getattr(personal_generator, "student_to_v", None), "weight", None)
-    personal_generator_student_adapter = getattr(personal_generator, "student_adapter_logit", None)
+    personal_generator_state_row = getattr(getattr(personal_generator, "state_to_u", None), "weight", None)
+    personal_generator_state_col = getattr(getattr(personal_generator, "state_to_v", None), "weight", None)
+    personal_generator_id_row = getattr(getattr(personal_generator, "id_to_u", None), "weight", None)
+    personal_generator_id_col = getattr(getattr(personal_generator, "id_to_v", None), "weight", None)
+    personal_generator_state_adapter = getattr(personal_generator, "state_adapter_logit", None)
+    personal_generator_id_adapter = getattr(personal_generator, "id_adapter_logit", None)
     personal_generator_context_adapter = getattr(personal_generator, "context_adapter_logit", None)
     personal_generator_direct_scale = getattr(personal_generator, "state_mix_logit", None)
 
@@ -859,9 +865,12 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
         "personal_generator_context_hidden": _grad_norm_or_zero(personal_generator_context_hidden),
         "personal_generator_context_to_u": _grad_norm_or_zero(personal_generator_context_to_u),
         "personal_generator_context_to_v": _grad_norm_or_zero(personal_generator_context_to_v),
-        "personal_generator_student_row": _grad_norm_or_zero(personal_generator_student_row),
-        "personal_generator_student_col": _grad_norm_or_zero(personal_generator_student_col),
-        "personal_generator_student_adapter": _grad_norm_or_zero(personal_generator_student_adapter),
+        "personal_generator_state_row": _grad_norm_or_zero(personal_generator_state_row),
+        "personal_generator_state_col": _grad_norm_or_zero(personal_generator_state_col),
+        "personal_generator_id_row": _grad_norm_or_zero(personal_generator_id_row),
+        "personal_generator_id_col": _grad_norm_or_zero(personal_generator_id_col),
+        "personal_generator_state_adapter": _grad_norm_or_zero(personal_generator_state_adapter),
+        "personal_generator_id_adapter": _grad_norm_or_zero(personal_generator_id_adapter),
         "personal_generator_context_adapter": _grad_norm_or_zero(personal_generator_context_adapter),
         "personal_generator_direct_scale": _grad_norm_or_zero(personal_generator_direct_scale),
     }
@@ -890,6 +899,7 @@ def train_epoch(
     all_labels: List[float] = []
     all_preds: List[float] = []
     all_probs: List[float] = []
+    num_batches_processed = 0
 
     bce_fn = nn.BCEWithLogitsLoss()
     max_batches = None if max_batches is None else max(1, int(max_batches))
@@ -940,6 +950,7 @@ def train_epoch(
         total_reg += float(reg_loss.item())
         for key in _REG_COMPONENT_KEYS:
             reg_component_sums[key] += float(reg_terms[key].item())
+        num_batches_processed += 1
 
         with torch.no_grad():
             probs = _sigmoid_torch(logits)
@@ -949,11 +960,12 @@ def train_epoch(
         all_preds.extend(preds.detach().cpu().numpy().tolist())
         all_probs.extend(probs.detach().cpu().numpy().tolist())
 
-    avg_loss = total_loss / max(1, len(train_loader))
-    avg_bce = total_bce / max(1, len(train_loader))
-    avg_reg = total_reg / max(1, len(train_loader))
+    denom = max(1, num_batches_processed)
+    avg_loss = total_loss / denom
+    avg_bce = total_bce / denom
+    avg_reg = total_reg / denom
     avg_reg_components = {
-        f"reg_{key}": reg_component_sums[key] / max(1, len(train_loader))
+        f"reg_{key}": reg_component_sums[key] / denom
         for key in _REG_COMPONENT_KEYS
     }
     reg_bce_ratio = avg_reg / (abs(avg_bce) + 1e-12)
@@ -987,6 +999,7 @@ def validate(
     all_labels: List[float] = []
     all_preds: List[float] = []
     all_probs: List[float] = []
+    num_batches_processed = 0
 
     bce_fn = nn.BCEWithLogitsLoss()
     max_batches = None if max_batches is None else max(1, int(max_batches))
@@ -1032,6 +1045,7 @@ def validate(
             total_reg += float(reg_loss.item())
             for key in _REG_COMPONENT_KEYS:
                 reg_component_sums[key] += float(reg_terms[key].item())
+            num_batches_processed += 1
 
             probs = _sigmoid_torch(logits)
             preds = (probs > 0.5).float()
@@ -1040,11 +1054,12 @@ def validate(
             all_preds.extend(preds.cpu().numpy().tolist())
             all_probs.extend(probs.cpu().numpy().tolist())
 
-    avg_loss = total_loss / max(1, len(val_loader))
-    avg_bce = total_bce / max(1, len(val_loader))
-    avg_reg = total_reg / max(1, len(val_loader))
+    denom = max(1, num_batches_processed)
+    avg_loss = total_loss / denom
+    avg_bce = total_bce / denom
+    avg_reg = total_reg / denom
     avg_reg_components = {
-        f"reg_{key}": reg_component_sums[key] / max(1, len(val_loader))
+        f"reg_{key}": reg_component_sums[key] / denom
         for key in _REG_COMPONENT_KEYS
     }
     reg_bce_ratio = avg_reg / (abs(avg_bce) + 1e-12)
@@ -1211,8 +1226,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         lambda_alpha_min=getattr(args, "lambda_alpha_min", 0.0),
         alpha_min_target=getattr(args, "alpha_min_target", 0.0),
         personal_alpha_bias_scale=getattr(args, "personal_alpha_bias_scale", 1.0),
-        personal_direct_bias_scale=getattr(args, "personal_direct_bias_scale", 0.5),
-        personal_disable_direct_bias=getattr(args, "personal_disable_direct_bias", False),
         personal_disable_student_global_context=getattr(
             args, "personal_disable_student_global_context", False
         ),
@@ -1368,7 +1381,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "irt_abs_mean=%.4f, irt_std=%.4f, personal_warmup_scale=%.2f, "
                 "graph_row_entropy=%.4f, graph_entropy_ratio=%.4f, "
                 "alpha_mean=%.4f, alpha_std=%.4f, alpha_bias_std=%.4f, "
-                "alpha_state_path=%.4f, alpha_id_path=%.4f, alpha_bias_path=%.4f, "
+                "alpha_state_path=%.4f, alpha_id_path=%.4f, alpha_bias_path=%.4f, head_bias_path=%.4f, "
                 "personal_row_entropy=%.4f, personal_matrix_delta=%.4f, personal_matrix_student_std=%.4f, "
                 "personal_delta_pre_softmax_norm=%.4f, personal_delta_student_std=%.4f, alpha_head_std=%.4f, "
                 "personal_student_mix=%.4f, personal_student_adapter=%.4f, "
@@ -1387,6 +1400,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["alpha_state_path_absmean"],
                 diag["alpha_id_path_absmean"],
                 diag["alpha_bias_path_absmean"],
+                diag["head_bias_path_absmean"],
                 diag["personal_row_entropy"],
                 diag["personal_matrix_delta"],
                 diag["personal_matrix_student_std"],
@@ -1497,9 +1511,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 + grad_norms["personal_generator_context_hidden"]
                 + grad_norms["personal_generator_context_to_u"]
                 + grad_norms["personal_generator_context_to_v"]
-                + grad_norms["personal_generator_student_row"]
-                + grad_norms["personal_generator_student_col"]
-                + grad_norms["personal_generator_student_adapter"]
+                + grad_norms["personal_generator_state_row"]
+                + grad_norms["personal_generator_state_col"]
+                + grad_norms["personal_generator_id_row"]
+                + grad_norms["personal_generator_id_col"]
+                + grad_norms["personal_generator_state_adapter"]
+                + grad_norms["personal_generator_id_adapter"]
                 + grad_norms["personal_generator_context_adapter"]
                 + grad_norms["personal_generator_direct_scale"]
             )
@@ -1517,9 +1534,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                         "personal_gate_context_direct=%.6e, personal_gate_out=%.6e, "
                         "personal_generator_emb=%.6e, personal_generator_context_proj=%.6e, "
                         "personal_generator_context_hidden=%.6e, personal_generator_context_to_u=%.6e, "
-                        "personal_generator_context_to_v=%.6e, personal_generator_student_row=%.6e, "
-                        "personal_generator_student_col=%.6e, personal_generator_student_adapter=%.6e, "
-                        "personal_generator_context_adapter=%.6e, "
+                        "personal_generator_context_to_v=%.6e, personal_generator_state_row=%.6e, "
+                        "personal_generator_state_col=%.6e, personal_generator_id_row=%.6e, "
+                        "personal_generator_id_col=%.6e, personal_generator_state_adapter=%.6e, "
+                        "personal_generator_id_adapter=%.6e, personal_generator_context_adapter=%.6e, "
                         "personal_generator_direct_scale=%.6e",
                         run_tag,
                         graph_low_grad_streak,
@@ -1542,9 +1560,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                         grad_norms["personal_generator_context_hidden"],
                         grad_norms["personal_generator_context_to_u"],
                         grad_norms["personal_generator_context_to_v"],
-                        grad_norms["personal_generator_student_row"],
-                        grad_norms["personal_generator_student_col"],
-                        grad_norms["personal_generator_student_adapter"],
+                        grad_norms["personal_generator_state_row"],
+                        grad_norms["personal_generator_state_col"],
+                        grad_norms["personal_generator_id_row"],
+                        grad_norms["personal_generator_id_col"],
+                        grad_norms["personal_generator_state_adapter"],
+                        grad_norms["personal_generator_id_adapter"],
                         grad_norms["personal_generator_context_adapter"],
                         grad_norms["personal_generator_direct_scale"],
                     )
@@ -1557,9 +1578,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "personal_gate_context_direct=%.6e, personal_gate_out=%.6e, "
                 "personal_generator_emb=%.6e, personal_generator_context_proj=%.6e, "
                 "personal_generator_context_hidden=%.6e, personal_generator_context_to_u=%.6e, "
-                "personal_generator_context_to_v=%.6e, personal_generator_student_row=%.6e, "
-                "personal_generator_student_col=%.6e, personal_generator_student_adapter=%.6e, "
-                "personal_generator_context_adapter=%.6e, "
+                "personal_generator_context_to_v=%.6e, personal_generator_state_row=%.6e, "
+                "personal_generator_state_col=%.6e, personal_generator_id_row=%.6e, "
+                "personal_generator_id_col=%.6e, personal_generator_state_adapter=%.6e, "
+                "personal_generator_id_adapter=%.6e, personal_generator_context_adapter=%.6e, "
                 "personal_generator_direct_scale=%.6e",
                 run_tag,
                 epoch,
@@ -1582,9 +1604,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 grad_norms["personal_generator_context_hidden"],
                 grad_norms["personal_generator_context_to_u"],
                 grad_norms["personal_generator_context_to_v"],
-                grad_norms["personal_generator_student_row"],
-                grad_norms["personal_generator_student_col"],
-                grad_norms["personal_generator_student_adapter"],
+                grad_norms["personal_generator_state_row"],
+                grad_norms["personal_generator_state_col"],
+                grad_norms["personal_generator_id_row"],
+                grad_norms["personal_generator_id_col"],
+                grad_norms["personal_generator_state_adapter"],
+                grad_norms["personal_generator_id_adapter"],
                 grad_norms["personal_generator_context_adapter"],
                 grad_norms["personal_generator_direct_scale"],
             )
@@ -1835,12 +1860,6 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         personal_alpha_bias_scale=loaded_args.get(
             "personal_alpha_bias_scale", getattr(args, "personal_alpha_bias_scale", 1.0)
         ),
-        personal_direct_bias_scale=loaded_args.get(
-            "personal_direct_bias_scale", getattr(args, "personal_direct_bias_scale", 0.5)
-        ),
-        personal_disable_direct_bias=loaded_args.get(
-            "personal_disable_direct_bias", getattr(args, "personal_disable_direct_bias", False)
-        ),
         personal_disable_student_global_context=loaded_args.get(
             "personal_disable_student_global_context",
             getattr(args, "personal_disable_student_global_context", False),
@@ -1997,8 +2016,8 @@ def save_component_analysis_data(
     """
     保存组件可视化分析所需的数据：
     1. 全局概念图 relation_matrices
-    2. Gate Alpha 分布（个性化图混合系数）
-    3. 个性化图采样
+    2. 真实推理路径上的 Gate Alpha / personal graph / relation_used 采样
+    3. 与题目相关的 q_vector / local_row_mask / exercise_ids
     """
     base_model = _get_base_model(model)
     model.eval()
@@ -2013,39 +2032,71 @@ def save_component_analysis_data(
             analysis_data["global_relation_matrices"] = relation_matrices.detach().cpu().numpy()
             logger.info(f"[Component Analysis] Global graph: {relation_matrices.shape}")
         
-        # ========== 2) 个性化图分析 ==========
+        # ========== 2) 真实推理路径上的个性化图分析 ==========
         if base_model.use_personal_graph and base_model.structure_module.personal_generator is not None:
             gate_alphas = []
             personal_graphs = []
+            relation_used_samples = []
+            local_row_masks = []
+            q_vectors = []
+            exercise_id_samples = []
             sample_count = 0
             
             for batch in train_loader:
                 if sample_count >= num_samples:
                     break
-                student_ids, _, _ = batch
+                student_ids, exercise_ids, _ = batch
                 student_ids = student_ids.to(device)
-                
-                s_out = base_model.structure_module(
+                exercise_ids = exercise_ids.to(device)
+
+                _, details = model(
                     student_ids,
-                    identity_relations=base_model.identity_relations,
+                    exercise_ids,
+                    return_details=True,
+                    return_logits=True,
                 )
-                
-                if s_out["alpha"] is not None:
-                    gate_alphas.append(s_out["alpha"].squeeze().detach().cpu().numpy())
-                if s_out["personal_matrices"] is not None:
-                    personal_graphs.append(s_out["personal_matrices"].detach().cpu().numpy())
-                
-                sample_count += len(student_ids)
+
+                remaining = max(0, int(num_samples) - sample_count)
+                if remaining <= 0:
+                    break
+                take = min(int(student_ids.size(0)), remaining)
+
+                alpha = details.get("alpha_effective", details.get("alpha"))
+                if alpha is not None:
+                    gate_alphas.append(alpha[:take].detach().cpu().numpy())
+                if details.get("personal_matrices") is not None:
+                    personal_graphs.append(details["personal_matrices"][:take].detach().cpu().numpy())
+                if details.get("relation_used") is not None:
+                    relation_used_samples.append(details["relation_used"][:take].detach().cpu().numpy())
+                if details.get("local_row_mask") is not None:
+                    local_row_masks.append(details["local_row_mask"][:take].detach().cpu().numpy())
+                if details.get("q_vector") is not None:
+                    q_vectors.append(details["q_vector"][:take].detach().cpu().numpy())
+                exercise_id_samples.append(exercise_ids[:take].detach().cpu().numpy())
+
+                sample_count += take
             
             if gate_alphas:
                 analysis_data["gate_alpha"] = np.concatenate([g.flatten() for g in gate_alphas])[:num_samples]
                 logger.info(f"[Component Analysis] Gate alpha samples: {len(analysis_data['gate_alpha'])}")
             
             if personal_graphs:
-                # 只保存少量个性化图样本（节省空间）
                 personal_arr = np.concatenate(personal_graphs, axis=0)[:min(10, num_samples)]
                 analysis_data["personal_matrices_samples"] = personal_arr
                 logger.info(f"[Component Analysis] Personal graph samples: {personal_arr.shape}")
+            if relation_used_samples:
+                relation_arr = np.concatenate(relation_used_samples, axis=0)[:min(10, num_samples)]
+                analysis_data["relation_used_samples"] = relation_arr
+                logger.info(f"[Component Analysis] relation_used samples: {relation_arr.shape}")
+            if local_row_masks:
+                local_mask_arr = np.concatenate(local_row_masks, axis=0)[:num_samples]
+                analysis_data["local_row_mask_samples"] = local_mask_arr
+            if q_vectors:
+                q_arr = np.concatenate(q_vectors, axis=0)[:num_samples]
+                analysis_data["q_vector_samples"] = q_arr
+            if exercise_id_samples:
+                exercise_arr = np.concatenate(exercise_id_samples, axis=0)[:num_samples]
+                analysis_data["exercise_ids_samples"] = exercise_arr
     
     # ========== 保存数据 ==========
     analysis_path = os.path.join(save_dir, "component_analysis_data.npz")

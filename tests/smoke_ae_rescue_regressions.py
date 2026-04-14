@@ -4,9 +4,11 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import torch
+from torch.utils.data import DataLoader, TensorDataset
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -69,12 +71,8 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
             f"{dataset} 应开启 share_concept_embeddings，避免 A 的图学习和知识编码继续分裂成两套概念空间。",
         )
         _assert(
-            bool(cfg["personal_disable_direct_bias"]) is True,
-            f"{dataset} 应禁用 E 的 direct bias shortcut，避免个性化图继续退化为 student-id 偏置。",
-        )
-        _assert(
-            float(cfg["personal_direct_bias_scale"]) == 0.0,
-            f"{dataset} 的 personal_direct_bias_scale 必须显式为 0.0，避免 direct bias 被旧默认值偷偷带回。",
+            "personal_disable_direct_bias" not in cfg and "personal_direct_bias_scale" not in cfg,
+            f"{dataset} 不应再保留已经失效的 direct bias 配置开关；否则实验表会继续记录假结构。",
         )
         _assert(
             bool(cfg["personal_disable_student_global_context"]) is True,
@@ -113,9 +111,10 @@ def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
         "0.0",
         "--graph_readout_1hop_scale",
         "0.0",
+        "--personal_alpha_bias_scale",
+        "0.0",
         "--no-use_personal_graph",
         "--no-share_concept_embeddings",
-        "--no-personal_disable_direct_bias",
         "--no-personal_disable_student_global_context",
         "--no-personal_support_only",
     ]
@@ -149,8 +148,8 @@ def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
         "显式传入的 --no-share_concept_embeddings 不应被数据集默认值回写成 True。",
     )
     _assert(
-        bool(args.personal_disable_direct_bias) is False,
-        "显式传入的 --no-personal_disable_direct_bias 不应被数据集默认值回写成 True。",
+        float(args.personal_alpha_bias_scale) == 0.0,
+        "显式传入的 personal_alpha_bias_scale=0.0 不应被数据集默认值回写成非零值。",
     )
     _assert(
         bool(args.personal_disable_student_global_context) is False,
@@ -163,6 +162,10 @@ def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
     _assert(
         float(args.lambda_sparse) == 0.3,
         "未显式覆盖的字段仍应继续继承数据集默认值，避免把默认机制整体打坏。",
+    )
+    _assert(
+        not hasattr(args, "personal_disable_direct_bias") and not hasattr(args, "personal_direct_bias_scale"),
+        "direct bias 既然已经从 E 结构里删除，parser/defaults 也不应继续暴露这些假开关。",
     )
 
 
@@ -358,7 +361,6 @@ def _check_personal_graph_is_support_preserving_and_local() -> None:
         personal_warmup_epochs=0,
         personal_reg_warmup_epochs=0,
         personal_student_dim=8,
-        personal_disable_direct_bias=True,
         personal_disable_student_global_context=True,
         personal_local_hops=1,
         personal_support_only=True,
@@ -580,10 +582,9 @@ def _check_runtime_ablation_guardrails_cover_no_a_and_no_e() -> None:
     )
 
 
-def _check_direct_bias_can_be_disabled_without_collapsing_personal_graph() -> None:
+def _build_tiny_ae_model(**overrides):
     from src.model import CognitiveDiagnosisModel
 
-    torch.manual_seed(0)
     q_matrix = torch.tensor(
         [
             [1.0, 0.0, 1.0],
@@ -593,7 +594,7 @@ def _check_direct_bias_can_be_disabled_without_collapsing_personal_graph() -> No
         ],
         dtype=torch.float32,
     )
-    model = CognitiveDiagnosisModel(
+    kwargs = dict(
         num_students=5,
         num_exercises=4,
         num_concepts=3,
@@ -602,32 +603,324 @@ def _check_direct_bias_can_be_disabled_without_collapsing_personal_graph() -> No
         num_relation_heads=2,
         num_gnn_layers=1,
         dropout=0.0,
-        use_concept_graph=False,
+        use_concept_graph=True,
         use_personal_graph=True,
         personal_rank=4,
         personal_max_alpha=0.4,
         personal_delta_scale=6.0,
         personal_warmup_epochs=0,
+        personal_reg_warmup_epochs=0,
         personal_student_dim=8,
-        personal_alpha_bias_scale=0.0,
-        personal_direct_bias_scale=0.0,
+        personal_alpha_bias_scale=0.02,
         personal_disable_student_global_context=True,
+        personal_local_hops=1,
+        personal_support_only=True,
+        share_concept_embeddings=True,
     )
-    model.eval()
+    kwargs.update(overrides)
+    return CognitiveDiagnosisModel(**kwargs)
+
+
+def _check_generator_state_adapter_is_live() -> None:
+    from src.model import PersonalRelationGenerator
+
+    torch.manual_seed(0)
+    generator = PersonalRelationGenerator(
+        student_dim=8,
+        context_dim=12,
+        knowledge_dim=6,
+        num_concepts=4,
+        num_heads=2,
+        rank=3,
+        hidden_dim=10,
+    )
+    generator.eval()
+
+    student_state_a = torch.tensor([[0.2, -0.3, 0.4, -0.5, 0.6, -0.7, 0.8, -0.9]], dtype=torch.float32)
+    student_state_b = torch.tensor([[-0.9, 0.8, -0.7, 0.6, -0.5, 0.4, -0.3, 0.2]], dtype=torch.float32)
+    student_id_a = torch.tensor([[0.1, 0.0, -0.1, 0.2, -0.2, 0.3, -0.3, 0.4]], dtype=torch.float32)
+    student_id_b = torch.tensor([[0.4, -0.3, 0.2, -0.1, 0.0, 0.1, -0.2, 0.3]], dtype=torch.float32)
+    context = torch.tensor([[0.2, -0.1, 0.3, -0.2, 0.4, -0.3, 0.5, -0.4, 0.6, -0.5, 0.7, -0.6]], dtype=torch.float32)
+    knowledge_state = torch.tensor(
+        [[[0.2, -0.1, 0.0, 0.3, -0.2, 0.1],
+          [-0.3, 0.4, -0.2, 0.1, 0.0, -0.1],
+          [0.5, -0.4, 0.3, -0.2, 0.1, 0.0],
+          [-0.1, 0.2, -0.3, 0.4, -0.5, 0.6]]],
+        dtype=torch.float32,
+    )
 
     with torch.no_grad():
-        _, details = model(
+        base_scores = generator(student_state_a, context, knowledge_state, student_id_embedding=student_id_a)
+        state_scores = generator(student_state_b, context, knowledge_state, student_id_embedding=student_id_a)
+        id_scores = generator(student_state_a, context, knowledge_state, student_id_embedding=student_id_b)
+
+    state_delta = float((state_scores - base_scores).abs().max().item())
+    id_delta = float((id_scores - base_scores).abs().mean().item())
+    _assert(
+        state_delta > 1e-6,
+        "generator 的 student_state_embedding 改变后，输出应发生变化；否则 state adapter 仍是死路径。",
+    )
+    _assert(
+        state_delta > id_delta,
+        f"state adapter 应比 tiny id adapter 更有影响；当前 state_delta={state_delta:.6f}, id_delta={id_delta:.6f}",
+    )
+
+
+def _check_alpha_bias_scale_is_live() -> None:
+    torch.manual_seed(0)
+    model_zero = _build_tiny_ae_model(personal_alpha_bias_scale=0.0)
+    torch.manual_seed(0)
+    model_bias = _build_tiny_ae_model(personal_alpha_bias_scale=0.05)
+    model_zero.eval()
+    model_bias.eval()
+
+    with torch.no_grad():
+        _, details_zero = model_zero(
+            student_ids=torch.tensor([0, 1], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+        _, details_bias = model_bias(
             student_ids=torch.tensor([0, 1], dtype=torch.long),
             exercise_ids=torch.tensor([0, 2], dtype=torch.long),
             return_details=True,
             return_logits=True,
         )
 
-    ident = model.identity_relations.unsqueeze(0)
-    matrix_delta = float((details["personal_matrices"] - ident).abs().mean())
     _assert(
-        matrix_delta > 0.01,
-        f"禁用 direct bias 后，E 仍应能生成非 identity 个性化图，当前 delta={matrix_delta:.6f}",
+        details_bias.get("alpha_student_bias") is not None,
+        "启用 personal_alpha_bias_scale 后，应返回真实的 alpha_student_bias 诊断张量。",
+    )
+    alpha_logit_delta = float((details_bias["alpha_logit"] - details_zero["alpha_logit"]).abs().max().item())
+    bias_delta = float(details_bias["alpha_student_bias"].abs().max().item())
+    _assert(
+        bias_delta > 1e-6 and alpha_logit_delta > 1e-6,
+        "调整 personal_alpha_bias_scale 后，alpha bias 路径和 alpha_logit 都应发生变化；否则该开关仍是 no-op。",
+    )
+
+
+def _check_config_hash_tracks_ae_structure_switches() -> None:
+    from src.experiment_utils import _build_config_hash
+
+    base = dict(
+        dataset_name="assist_09",
+        seed=42,
+        model_variant="assist_09_abce_best_full",
+        ablate_module1=False,
+        learning_rate=3e-4,
+        dropout=0.2,
+        batch_size=128,
+        lambda_sparse=0.8,
+        lambda_sparse_personal=5e-4,
+        lambda_alpha=0.0,
+        prediction_l2_lambda=1e-5,
+        graph_reg_warmup_epochs=4,
+        graph_reg_cap_ratio=6.0,
+        graph_propagation_alpha=0.2,
+        graph_readout_1hop_scale=0.4,
+        graph_readout_2hop_scale=0.15,
+        use_concept_graph=True,
+        use_personal_graph=True,
+        personal_local_hops=1,
+        personal_support_only=True,
+        share_concept_embeddings=True,
+        personal_alpha_bias_scale=0.03,
+        personal_reg_warmup_epochs=8,
+        personal_disable_student_global_context=True,
+        graph_identity_residual=0.1,
+        personal_delta_scale=6.0,
+        personal_warmup_epochs=8,
+        lambda_alpha_min=0.08,
+        alpha_min_target=0.05,
+    )
+    hash_base = _build_config_hash(SimpleNamespace(**base))
+    hash_share = _build_config_hash(SimpleNamespace(**{**base, "share_concept_embeddings": False}))
+    hash_alpha_bias = _build_config_hash(SimpleNamespace(**{**base, "personal_alpha_bias_scale": 0.0}))
+    hash_reg_warmup = _build_config_hash(SimpleNamespace(**{**base, "personal_reg_warmup_epochs": 4}))
+
+    _assert(hash_base != hash_share, "config hash 必须区分 share_concept_embeddings 的结构差异。")
+    _assert(hash_base != hash_alpha_bias, "config hash 必须区分 personal_alpha_bias_scale 的结构差异。")
+    _assert(hash_base != hash_reg_warmup, "config hash 必须区分 personal_reg_warmup_epochs 的差异。")
+
+
+def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
+    from src.experiment_utils import append_summary_csv
+
+    results_path = Path(ROOT) / "results" / "experiment_results.csv"
+    backup = results_path.read_bytes() if results_path.exists() else None
+
+    args = SimpleNamespace(
+        dataset_name="assist_09",
+        model_variant="assist_09_abce_best_full",
+        save_dir=str(Path(ROOT) / "tmp_smoke_save"),
+        seed=42,
+        share_concept_embeddings=True,
+        personal_disable_student_global_context=True,
+        personal_support_only=True,
+        graph_identity_residual=0.1,
+        personal_delta_scale=6.0,
+        personal_warmup_epochs=8,
+        lambda_alpha_min=0.08,
+        alpha_min_target=0.05,
+    )
+    logger = logging.getLogger("smoke_append_summary")
+    if not logger.handlers:
+        logger.addHandler(logging.NullHandler())
+
+    try:
+        append_summary_csv(
+            args,
+            metrics={"auc": 0.75, "acc": 0.70, "rmse": 0.43},
+            best_val_auc=0.74,
+            model_epoch=6,
+            logger=logger,
+            final_model_facts={
+                "enable_module1": True,
+                "use_concept_graph": True,
+                "use_personal_graph": True,
+            },
+        )
+        df = pd.read_csv(results_path)
+        row = df.iloc[-1].to_dict()
+    finally:
+        if backup is None:
+            if results_path.exists():
+                results_path.unlink()
+        else:
+            results_path.write_bytes(backup)
+
+    for key in (
+        "final_use_concept_graph",
+        "final_use_personal_graph",
+        "share_concept_embeddings",
+        "personal_disable_student_global_context",
+        "personal_support_only",
+        "graph_identity_residual",
+        "personal_delta_scale",
+        "personal_warmup_epochs",
+        "lambda_alpha_min",
+        "alpha_min_target",
+    ):
+        _assert(key in row, f"experiment_results.csv 必须记录 {key}，否则看不清真实结构。")
+    _assert(bool(row["final_use_concept_graph"]) is True, "summary 应记录最终 runtime 的 use_concept_graph。")
+    _assert(bool(row["final_use_personal_graph"]) is True, "summary 应记录最终 runtime 的 use_personal_graph。")
+
+
+def _check_component_analysis_uses_real_q_conditioned_path() -> None:
+    from src.trainer import save_component_analysis_data
+
+    model = _build_tiny_ae_model()
+    loader = DataLoader(
+        TensorDataset(
+            torch.tensor([0, 1, 2], dtype=torch.long),
+            torch.tensor([0, 1, 2], dtype=torch.long),
+            torch.tensor([1.0, 0.0, 1.0], dtype=torch.float32),
+        ),
+        batch_size=2,
+        shuffle=False,
+    )
+    logger = logging.getLogger("smoke_component_analysis")
+    if not logger.handlers:
+        logger.addHandler(logging.NullHandler())
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        analysis = save_component_analysis_data(
+            model=model,
+            train_loader=loader,
+            device=torch.device("cpu"),
+            save_dir=tmpdir,
+            logger=logger,
+            num_samples=3,
+        )
+
+    for key in (
+        "relation_used_samples",
+        "local_row_mask_samples",
+        "q_vector_samples",
+        "exercise_ids_samples",
+        "personal_matrices_samples",
+    ):
+        _assert(key in analysis, f"component analysis 必须保存 {key}，否则分析图不是走真实推理路径。")
+    q_vectors = torch.tensor(analysis["q_vector_samples"])
+    local_masks = torch.tensor(analysis["local_row_mask_samples"])
+    exercise_ids = torch.tensor(analysis["exercise_ids_samples"])
+    _assert(q_vectors.shape[0] == local_masks.shape[0], "analysis 中 q_vector 与 local_row_mask 样本数应一致。")
+    _assert(
+        int(torch.unique(exercise_ids).numel()) >= 2,
+        "component analysis 至少应保留两个不同题目的样本，才能验证它走的是题目条件化路径。",
+    )
+    _assert(
+        torch.allclose(q_vectors.float(), model.q_matrix[exercise_ids].cpu().float()),
+        "component analysis 保存的 q_vector 应与真实 exercise_ids 对应的题目概念向量一致。",
+    )
+
+
+def _check_train_validate_use_processed_batch_count() -> None:
+    from src.trainer import train_epoch, validate
+
+    model = _build_tiny_ae_model()
+    logger = logging.getLogger("smoke_batch_mean")
+    if not logger.handlers:
+        logger.addHandler(logging.NullHandler())
+
+    dataset = TensorDataset(
+        torch.tensor([0, 1, 2, 3], dtype=torch.long),
+        torch.tensor([0, 1, 2, 3], dtype=torch.long),
+        torch.tensor([1.0, 0.0, 1.0, 0.0], dtype=torch.float32),
+    )
+    loader = DataLoader(dataset, batch_size=2, shuffle=False)
+    student_ids, exercise_ids, labels = next(iter(loader))
+
+    model.eval()
+    with torch.no_grad():
+        logits, details = model(
+            student_ids,
+            exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+        bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+        reg = model.get_regularization_components(details["relation_matrices"], details, bce)["total"]
+        expected_val_loss = float((bce + reg).item())
+
+    val_metrics = validate(
+        model=model,
+        val_loader=loader,
+        device=torch.device("cpu"),
+        logger=logger,
+        epoch=1,
+        max_batches=1,
+    )
+    _assert(
+        abs(val_metrics["loss"] - expected_val_loss) < 1e-6,
+        f"validate 使用 max_batches 时应按实际处理 batch 数取平均；当前 loss={val_metrics['loss']:.6f}, expected={expected_val_loss:.6f}",
+    )
+
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.0)
+    model.train()
+    logits, details = model(
+        student_ids,
+        exercise_ids,
+        return_details=True,
+        return_logits=True,
+    )
+    bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+    reg = model.get_regularization_components(details["relation_matrices"], details, bce)["total"]
+    expected_train_loss = float((bce + reg).item())
+
+    train_metrics = train_epoch(
+        model=model,
+        train_loader=loader,
+        optimizer=optimizer,
+        device=torch.device("cpu"),
+        logger=logger,
+        epoch=1,
+        max_batches=1,
+    )
+    _assert(
+        abs(train_metrics["loss"] - expected_train_loss) < 1e-6,
+        f"train_epoch 使用 max_batches 时应按实际处理 batch 数取平均；当前 loss={train_metrics['loss']:.6f}, expected={expected_train_loss:.6f}",
     )
 
 
@@ -672,8 +965,6 @@ def _check_personal_generator_is_state_aware_and_bounded() -> None:
         num_concepts=4,
         num_heads=2,
         rank=3,
-        max_direct_scale=0.0,
-        disable_direct_bias=True,
     )
     generator.eval()
 
@@ -725,8 +1016,6 @@ def _check_junyi_like_personal_graph_stays_finite() -> None:
         personal_reg_warmup_epochs=0,
         personal_student_dim=8,
         personal_alpha_bias_scale=0.015,
-        personal_direct_bias_scale=0.0,
-        personal_disable_direct_bias=True,
         personal_disable_student_global_context=True,
     )
     model.eval()
@@ -856,7 +1145,12 @@ def main() -> None:
     _check_query_readout_injects_graph_signal()
     _check_split_hygiene_uses_train_only_maps_and_q_matrix()
     _check_runtime_ablation_guardrails_cover_no_a_and_no_e()
-    _check_direct_bias_can_be_disabled_without_collapsing_personal_graph()
+    _check_generator_state_adapter_is_live()
+    _check_alpha_bias_scale_is_live()
+    _check_config_hash_tracks_ae_structure_switches()
+    _check_append_summary_csv_tracks_runtime_structure_fields()
+    _check_component_analysis_uses_real_q_conditioned_path()
+    _check_train_validate_use_processed_batch_count()
     _check_concept_embedding_sharing_uses_same_storage()
     _check_personal_generator_is_state_aware_and_bounded()
     _check_junyi_like_personal_graph_stays_finite()

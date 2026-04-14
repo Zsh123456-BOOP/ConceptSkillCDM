@@ -248,10 +248,6 @@ def parse_args():
                         help="Minimum desired std of personal alpha before collapse penalty becomes zero.")
     parser.add_argument("--personal_alpha_bias_scale", type=float, default=1.0,
                         help="Max magnitude scale for bounded student-specific alpha bias.")
-    parser.add_argument("--personal_direct_bias_scale", type=float, default=0.5,
-                        help="Upper bound for PersonalRelationGenerator direct row/col bias contribution.")
-    parser.add_argument("--personal_disable_direct_bias", action=bool_action, default=None,
-                        help="Disable direct row/col bias in the personal graph generator.")
     parser.add_argument("--personal_disable_student_global_context", action=bool_action, default=None,
                         help="Use state-primary personal context without raw student_global direct concatenation.")
     parser.add_argument("--personal_local_hops", type=int, default=1,
@@ -527,12 +523,6 @@ def main():
                 alpha_min_target=loaded_args.get("alpha_min_target", getattr(args, "alpha_min_target", 0.0)),
                 personal_alpha_bias_scale=loaded_args.get(
                     "personal_alpha_bias_scale", getattr(args, "personal_alpha_bias_scale", 0.0)
-                ),
-                personal_direct_bias_scale=loaded_args.get(
-                    "personal_direct_bias_scale", getattr(args, "personal_direct_bias_scale", 0.0)
-                ),
-                personal_disable_direct_bias=loaded_args.get(
-                    "personal_disable_direct_bias", getattr(args, "personal_disable_direct_bias", False)
                 ),
                 personal_disable_student_global_context=loaded_args.get(
                     "personal_disable_student_global_context",
