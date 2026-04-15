@@ -65,6 +65,9 @@ STRUCTURAL_SWITCH_KEYS = (
     "lambda_alpha_min",
     "alpha_min_target",
 )
+OOM_SAFE_E_BATCH_SIZE = {
+    "junyi": 64,
+}
 
 
 @dataclass
@@ -119,6 +122,34 @@ def append_arg(cmd: List[str], key: str, value: Any) -> None:
             cmd.append(f"--{key}")
         return
     cmd.extend([f"--{key}", str(value)])
+
+
+def _job_uses_personal_graph(params: Dict[str, Any], ablation: AblationSpec) -> bool:
+    if "use_personal_graph" in params:
+        return bool(params["use_personal_graph"])
+    return ablation.name != "no_E"
+
+
+def _apply_oom_safety_overrides(dataset: str, ablation: AblationSpec, params: Dict[str, Any]) -> None:
+    e_batch_cap = OOM_SAFE_E_BATCH_SIZE.get(dataset)
+    if e_batch_cap is None or not _job_uses_personal_graph(params, ablation):
+        return
+    current_batch = int(params.get("batch_size", e_batch_cap))
+    params["batch_size"] = min(current_batch, int(e_batch_cap))
+
+
+def _build_job_env(base_env: Dict[str, str], gpu_id: int) -> Dict[str, str]:
+    env = dict(base_env)
+    env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    alloc_conf = str(env.get("PYTORCH_CUDA_ALLOC_CONF", "") or "").strip()
+    expandable_token = "expandable_segments:True"
+    if not alloc_conf:
+        env["PYTORCH_CUDA_ALLOC_CONF"] = expandable_token
+    elif expandable_token not in {token.strip() for token in alloc_conf.split(",") if token.strip()}:
+        env["PYTORCH_CUDA_ALLOC_CONF"] = f"{alloc_conf},{expandable_token}"
+    else:
+        env["PYTORCH_CUDA_ALLOC_CONF"] = alloc_conf
+    return env
 
 
 def read_json(path: Path) -> Optional[Dict[str, Any]]:
@@ -953,6 +984,8 @@ def make_jobs(args: argparse.Namespace, run_id: str) -> List[JobSpec]:
                     for key in set(ablation.drop_keys) | set(ablation.flags.keys()):
                         params.pop(key, None)
 
+                    _apply_oom_safety_overrides(dataset, ablation, params)
+
                     model_variant = f"{dataset}_abce_{profile}_{ablation.name}"
                     save_dir = Path("checkpoints") / "abce_diag" / run_id / dataset / f"seed{seed}" / f"{profile}_{ablation.name}"
                     log_dir = Path("logs") / "abce_diag" / run_id / dataset / f"seed{seed}" / f"{profile}_{ablation.name}"
@@ -1026,8 +1059,7 @@ def run_jobs(args: argparse.Namespace, jobs: Sequence[JobSpec]) -> None:
             if args.dry_run:
                 idx += 1
                 continue
-            env = os.environ.copy()
-            env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+            env = _build_job_env(os.environ.copy(), gpu_id)
             proc = subprocess.Popen(job.cmd, env=env)
             running.append((proc, gpu_id, job))
             gpu_load[gpu_id] = gpu_load.get(gpu_id, 0) + 1

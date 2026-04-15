@@ -1134,6 +1134,56 @@ def _check_failure_reason_is_collected() -> None:
     _assert(row["failure_stage"] == "train", "collector 应保留 failure stage。")
 
 
+def _check_junyi_e_on_jobs_use_oom_safe_batch_size() -> None:
+    from run_abce_ablation import make_jobs
+
+    args = SimpleNamespace(
+        datasets="junyi",
+        seeds="42",
+        component_set="single",
+        ablations="full,no_A,no_E",
+        profiles="best",
+        rerun_existing=True,
+        epochs=None,
+        early_stop_patience=None,
+        learning_rate=None,
+        generate_diagnosis=True,
+    )
+    jobs = make_jobs(args, run_id="smoke_junyi_batch")
+    jobs_by_ablation = {job.ablation.name: job for job in jobs}
+
+    _assert(set(jobs_by_ablation.keys()) == {"full", "no_A", "no_E"}, "junyi smoke 应生成 full/no_A/no_E 三个作业。")
+    _assert(
+        int(jobs_by_ablation["full"].params["batch_size"]) == 64,
+        f"junyi full 在 E 开启时应自动降到 OOM-safe batch_size=64，当前={jobs_by_ablation['full'].params['batch_size']}",
+    )
+    _assert(
+        int(jobs_by_ablation["no_A"].params["batch_size"]) == 64,
+        f"junyi no_A 在 E 开启时也应自动降到 OOM-safe batch_size=64，当前={jobs_by_ablation['no_A'].params['batch_size']}",
+    )
+    _assert(
+        int(jobs_by_ablation["no_E"].params["batch_size"]) == 256,
+        f"junyi no_E 不应被错误降 batch；当前={jobs_by_ablation['no_E'].params['batch_size']}",
+    )
+
+
+def _check_runner_env_enables_expandable_segments() -> None:
+    from run_abce_ablation import _build_job_env
+
+    env = _build_job_env({"PATH": "dummy"}, gpu_id=2)
+    _assert(env["CUDA_VISIBLE_DEVICES"] == "2", "runner 应按作业设置 CUDA_VISIBLE_DEVICES。")
+    _assert(
+        env["PYTORCH_CUDA_ALLOC_CONF"] == "expandable_segments:True",
+        "runner 应默认启用 expandable_segments 以减轻 CUDA 显存碎片化。",
+    )
+
+    env2 = _build_job_env({"PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:128"}, gpu_id=1)
+    _assert(
+        env2["PYTORCH_CUDA_ALLOC_CONF"] == "max_split_size_mb:128,expandable_segments:True",
+        "runner 应保留已有 CUDA alloc 配置，并追加 expandable_segments:True。",
+    )
+
+
 def main() -> None:
     _check_no_a_keeps_gnn_layers()
     _check_best_configs_enable_e_rescue_knobs()
@@ -1157,6 +1207,8 @@ def main() -> None:
     _check_trainer_monitors_are_aligned()
     _check_invalid_ablation_rows_are_filtered_from_summary()
     _check_failure_reason_is_collected()
+    _check_junyi_e_on_jobs_use_oom_safe_batch_size()
+    _check_runner_env_enables_expandable_segments()
     print("OK: AE rescue regression smoke checks passed.")
 
 
