@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 import tempfile
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -43,7 +44,14 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "lambda_alpha_min",
         "alpha_min_target",
         "graph_propagation_alpha",
-        "graph_readout_1hop_scale",
+        "graph_query_writeback_scale",
+        "graph_query_writeback_2hop_scale",
+        "personal_alpha_temperature",
+        "personal_alpha_budget",
+        "personal_query_row_budget",
+        "personal_neighbor_row_budget",
+        "personal_state_lr_mult",
+        "personal_id_lr_mult",
     )
     for dataset in ("assist_09", "junyi"):
         cfg = BEST_CFG[dataset]
@@ -83,8 +91,8 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
             f"{dataset} 必须显式声明 personal_reg_warmup_epochs，不能再靠隐式回退。",
         )
         _assert(
-            float(cfg["personal_alpha_bias_scale"]) <= 0.03,
-            f"{dataset} 的 personal_alpha_bias_scale 应降到 tiny adapter 量级，当前={cfg['personal_alpha_bias_scale']}",
+            float(cfg["personal_alpha_bias_scale"]) == 0.0,
+            f"{dataset} 默认实验不应继续依赖 student alpha bias shortcut，当前={cfg['personal_alpha_bias_scale']}",
         )
         _assert(
             int(cfg["personal_local_hops"]) >= 1,
@@ -93,6 +101,14 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         _assert(
             bool(cfg["personal_support_only"]) is True,
             f"{dataset} 应显式启用 support-preserving E，避免 E 再退化为 dense personal graph。",
+        )
+        _assert(
+            float(cfg["graph_query_writeback_scale"]) == float(cfg["graph_readout_1hop_scale"]),
+            f"{dataset} 应保证 query writeback 与 legacy readout alias 一致。",
+        )
+        _assert(
+            float(cfg["graph_query_writeback_2hop_scale"]) == float(cfg["graph_readout_2hop_scale"]),
+            f"{dataset} 应保证 2-hop query writeback 与 legacy readout alias 一致。",
         )
 
 
@@ -111,7 +127,11 @@ def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
         "0.0",
         "--graph_readout_1hop_scale",
         "0.0",
+        "--graph_query_writeback_scale",
+        "0.0",
         "--personal_alpha_bias_scale",
+        "0.0",
+        "--personal_alpha_budget",
         "0.0",
         "--no-use_personal_graph",
         "--no-share_concept_embeddings",
@@ -140,6 +160,10 @@ def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
         "显式传入的 --graph_readout_1hop_scale 0.0 不应再被数据集默认值覆盖。",
     )
     _assert(
+        float(args.graph_query_writeback_scale) == 0.0,
+        "显式传入的 --graph_query_writeback_scale 0.0 不应再被数据集默认值覆盖。",
+    )
+    _assert(
         bool(args.use_personal_graph) is False,
         "显式传入的 --no-use_personal_graph 不应再被数据集默认值回写成 True。",
     )
@@ -150,6 +174,10 @@ def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
     _assert(
         float(args.personal_alpha_bias_scale) == 0.0,
         "显式传入的 personal_alpha_bias_scale=0.0 不应被数据集默认值回写成非零值。",
+    )
+    _assert(
+        float(args.personal_alpha_budget) == 0.0,
+        "显式传入的 personal_alpha_budget=0.0 不应被数据集默认值回写成非零值。",
     )
     _assert(
         bool(args.personal_disable_student_global_context) is False,
@@ -330,6 +358,67 @@ def _check_adaptive_gate_is_state_primary() -> None:
     )
 
 
+def _check_gate_saturation_regression() -> None:
+    from src.model import AdaptiveGate
+
+    torch.manual_seed(0)
+    gate = AdaptiveGate(
+        student_dim=8,
+        context_dim=12,
+        num_heads=2,
+        max_alpha=0.28,
+        hidden_dim=16,
+        alpha_temperature=2.0,
+        alpha_budget=0.10,
+        alpha_base_init=0.05,
+    )
+    gate.eval()
+
+    huge_state = torch.full((4, 8), 25.0, dtype=torch.float32)
+    huge_context = torch.full((4, 12), -18.0, dtype=torch.float32)
+    student_id = torch.randn(4, 8)
+
+    with torch.no_grad():
+        _, _, diag = gate(
+            huge_state,
+            huge_context,
+            student_id,
+            warmup_scale=1.0,
+            return_diagnostics=True,
+        )
+
+    _assert(
+        float(diag["alpha_delta_absmean"].item()) > 1e-4,
+        "大 state logit 下 alpha_delta_absmean 仍应非零，否则 gate 的 state 路径被抹平了。",
+    )
+    _assert(
+        float(diag["alpha_saturation_ratio"].item()) < 0.95,
+        f"新 gate 不应在大 state logit 下几乎全部打满边界，当前 saturation_ratio={float(diag['alpha_saturation_ratio'].item()):.6f}",
+    )
+
+
+def _check_assist_like_harmfulness_proxy_warning() -> None:
+    from src.trainer import _collect_diag_warning_tags
+
+    diag = {
+        "alpha_std": 0.001,
+        "alpha_saturation_ratio": 0.92,
+        "alpha_delta_absmean": 0.05,
+        "personal_matrix_delta": 0.0012,
+        "personal_matrix_student_std": 0.0002,
+        "personal_query_row_std": 0.0001,
+        "readout_query_delta": 0.21,
+        "query_row_graph_delta": 0.18,
+        "alpha_head_std": 0.0005,
+        "personal_delta_student_std": 0.05,
+        "alpha_id_path_absmean": 0.0,
+        "alpha_state_path_absmean": 1.0,
+    }
+    tags = set(_collect_diag_warning_tags(diag))
+    for expected in ("gate-saturated", "personalization-flat", "query-readout-overamplified"):
+        _assert(expected in tags, f"assist-like harmfulness proxy 应触发 {expected} warning。")
+
+
 def _check_personal_graph_is_support_preserving_and_local() -> None:
     from src.model import CognitiveDiagnosisModel
 
@@ -411,7 +500,7 @@ def _check_query_readout_injects_graph_signal() -> None:
         ],
         dtype=torch.float32,
     )
-    model = CognitiveDiagnosisModel(
+    model_off = CognitiveDiagnosisModel(
         num_students=3,
         num_exercises=2,
         num_concepts=3,
@@ -422,13 +511,35 @@ def _check_query_readout_injects_graph_signal() -> None:
         dropout=0.0,
         use_concept_graph=True,
         use_personal_graph=False,
-        graph_readout_1hop_scale=0.4,
-        graph_readout_2hop_scale=0.1,
+        graph_query_writeback_scale=0.0,
+        graph_query_writeback_2hop_scale=0.0,
     )
-    model.eval()
+    torch.manual_seed(0)
+    model_on = CognitiveDiagnosisModel(
+        num_students=3,
+        num_exercises=2,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+        use_concept_graph=True,
+        use_personal_graph=False,
+        graph_query_writeback_scale=0.5,
+        graph_query_writeback_2hop_scale=0.15,
+    )
+    model_off.eval()
+    model_on.eval()
 
     with torch.no_grad():
-        _, details = model(
+        logits_off, details_off = model_off(
+            student_ids=torch.tensor([0], dtype=torch.long),
+            exercise_ids=torch.tensor([0], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+        logits_on, details_on = model_on(
             student_ids=torch.tensor([0], dtype=torch.long),
             exercise_ids=torch.tensor([0], dtype=torch.long),
             return_details=True,
@@ -436,8 +547,16 @@ def _check_query_readout_injects_graph_signal() -> None:
         )
 
     _assert(
-        float(details["readout_query_delta"].item()) > 1e-5,
+        float(details_on["readout_query_delta"].item()) > 1e-5,
         "A 的 query-local readout 应对最终送入固定预测头的状态产生非零影响。",
+    )
+    _assert(
+        float(details_on["query_row_graph_delta"].item()) > 1e-5,
+        "query-row writeback 应直接改动 queried concept rows，而不是只在全局状态里稀释。",
+    )
+    _assert(
+        float((logits_on - logits_off).abs().mean().item()) > 1e-6,
+        "打开 query-row writeback 后，最终 logits 应出现可测变化。",
     )
 
 
@@ -611,10 +730,17 @@ def _build_tiny_ae_model(**overrides):
         personal_warmup_epochs=0,
         personal_reg_warmup_epochs=0,
         personal_student_dim=8,
+        personal_alpha_temperature=2.0,
+        personal_alpha_budget=0.10,
+        personal_alpha_base_init=0.05,
         personal_alpha_bias_scale=0.02,
         personal_disable_student_global_context=True,
         personal_local_hops=1,
+        personal_query_row_budget=1.0,
+        personal_neighbor_row_budget=0.30,
         personal_support_only=True,
+        graph_query_writeback_scale=0.40,
+        graph_query_writeback_2hop_scale=0.12,
         share_concept_embeddings=True,
     )
     kwargs.update(overrides)
@@ -700,6 +826,48 @@ def _check_alpha_bias_scale_is_live() -> None:
     )
 
 
+def _check_alpha_bias_diagnostics_consistency() -> None:
+    from src.trainer import _collect_debug_forward_stats
+
+    model = _build_tiny_ae_model(personal_alpha_bias_scale=0.0)
+    loader = DataLoader(
+        TensorDataset(
+            torch.tensor([0, 1], dtype=torch.long),
+            torch.tensor([0, 2], dtype=torch.long),
+            torch.tensor([1.0, 0.0], dtype=torch.float32),
+        ),
+        batch_size=2,
+        shuffle=False,
+    )
+    model.eval()
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0, 1], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    _assert(
+        details.get("alpha_student_bias") is None,
+        "当 personal_alpha_bias_scale=0 时，details 不应伪造 alpha_student_bias。",
+    )
+    diag = _collect_debug_forward_stats(model, loader, torch.device("cpu"), max_batches=1)
+    _assert(
+        diag.get("alpha_bias_std") is None,
+        "当 alpha student bias 不存在时，trainer 不应继续输出 alpha_bias_std。",
+    )
+
+
+def _check_summary_classification_regression() -> None:
+    from run_abce_ablation import classify_delta
+
+    _assert(
+        classify_delta(-0.0029, threshold=0.003) == "non_positive",
+        "delta_E=-0.0029 不应继续被标成 neutral。",
+    )
+
+
 def _check_config_hash_tracks_ae_structure_switches() -> None:
     from src.experiment_utils import _build_config_hash
 
@@ -718,13 +886,20 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
         graph_reg_warmup_epochs=4,
         graph_reg_cap_ratio=6.0,
         graph_propagation_alpha=0.2,
+        graph_query_writeback_scale=0.6,
+        graph_query_writeback_2hop_scale=0.2,
         graph_readout_1hop_scale=0.4,
         graph_readout_2hop_scale=0.15,
         use_concept_graph=True,
         use_personal_graph=True,
         personal_local_hops=1,
+        personal_query_row_budget=1.0,
+        personal_neighbor_row_budget=0.35,
         personal_support_only=True,
         share_concept_embeddings=True,
+        personal_alpha_temperature=2.2,
+        personal_alpha_budget=0.10,
+        personal_alpha_base_init=0.05,
         personal_alpha_bias_scale=0.03,
         personal_reg_warmup_epochs=8,
         personal_disable_student_global_context=True,
@@ -733,15 +908,19 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
         personal_warmup_epochs=8,
         lambda_alpha_min=0.08,
         alpha_min_target=0.05,
+        personal_state_lr_mult=1.0,
+        personal_id_lr_mult=0.5,
     )
     hash_base = _build_config_hash(SimpleNamespace(**base))
     hash_share = _build_config_hash(SimpleNamespace(**{**base, "share_concept_embeddings": False}))
     hash_alpha_bias = _build_config_hash(SimpleNamespace(**{**base, "personal_alpha_bias_scale": 0.0}))
     hash_reg_warmup = _build_config_hash(SimpleNamespace(**{**base, "personal_reg_warmup_epochs": 4}))
+    hash_writeback = _build_config_hash(SimpleNamespace(**{**base, "graph_query_writeback_scale": 0.4}))
 
     _assert(hash_base != hash_share, "config hash 必须区分 share_concept_embeddings 的结构差异。")
     _assert(hash_base != hash_alpha_bias, "config hash 必须区分 personal_alpha_bias_scale 的结构差异。")
     _assert(hash_base != hash_reg_warmup, "config hash 必须区分 personal_reg_warmup_epochs 的差异。")
+    _assert(hash_base != hash_writeback, "config hash 必须区分 graph_query_writeback_scale 的结构差异。")
 
 
 def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
@@ -763,6 +942,10 @@ def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
         personal_warmup_epochs=8,
         lambda_alpha_min=0.08,
         alpha_min_target=0.05,
+        graph_query_writeback_scale=0.60,
+        graph_query_writeback_2hop_scale=0.20,
+        personal_query_row_budget=1.0,
+        personal_neighbor_row_budget=0.35,
     )
     logger = logging.getLogger("smoke_append_summary")
     if not logger.handlers:
@@ -801,10 +984,71 @@ def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
         "personal_warmup_epochs",
         "lambda_alpha_min",
         "alpha_min_target",
+        "graph_query_writeback_scale",
+        "graph_query_writeback_2hop_scale",
+        "personal_query_row_budget",
+        "personal_neighbor_row_budget",
     ):
         _assert(key in row, f"experiment_results.csv 必须记录 {key}，否则看不清真实结构。")
     _assert(bool(row["final_use_concept_graph"]) is True, "summary 应记录最终 runtime 的 use_concept_graph。")
     _assert(bool(row["final_use_personal_graph"]) is True, "summary 应记录最终 runtime 的 use_personal_graph。")
+
+
+def _check_diagnosis_csv_schema_upgrade() -> None:
+    from run_abce_ablation import append_result_row
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        csv_path = Path(tmpdir) / "diagnosis.csv"
+        csv_path.write_text(
+            "dataset,seed,profile,ablation,test_seen_coverage,clean_baseline,status\n"
+            "assist_09,42,best,full,0.97,True,ok\n",
+            encoding="utf-8",
+        )
+        append_result_row(
+            csv_path,
+            {
+                "dataset": "assist_09",
+                "seed": 42,
+                "profile": "best",
+                "ablation": "no_E",
+                "model_variant": "assist_09_abce_best_no_E",
+                "test_auc": 0.76,
+                "test_acc": 0.73,
+                "test_rmse": 0.43,
+                "best_val_auc": 0.75,
+                "best_epoch": 2,
+                "model_epoch": 2,
+                "test_total_rows": 100,
+                "test_seen_rows": 97,
+                "test_seen_coverage": 0.97,
+                "effective_batch_size": 128,
+                "clean_baseline": True,
+                "effective_enable_module1": True,
+                "effective_use_concept_graph": True,
+                "effective_use_personal_graph": False,
+                "status": "ok",
+                "exit_code": 0,
+                "save_dir": "tmp/save",
+                "log_dir": "tmp/logs",
+                "log_file": "tmp/logs/train.log",
+                "params_json": "{}",
+                "flags_json": "{}",
+            },
+        )
+        df = pd.read_csv(csv_path)
+
+    _assert(
+        "effective_batch_size" in df.columns,
+        "diagnosis.csv 遇到旧表头时应自动升级到新 schema。",
+    )
+    _assert(
+        int(df.iloc[-1]["effective_batch_size"]) == 128,
+        "升级后的 diagnosis.csv 应把新行的 effective_batch_size 写到正确列，而不是造成整行错位。",
+    )
+    _assert(
+        str(df.iloc[0]["status"]) == "ok",
+        "旧 schema 升级时不应破坏原有行的数据对齐。",
+    )
 
 
 def _check_component_analysis_uses_real_q_conditioned_path() -> None:
@@ -1015,8 +1259,15 @@ def _check_junyi_like_personal_graph_stays_finite() -> None:
         personal_warmup_epochs=0,
         personal_reg_warmup_epochs=0,
         personal_student_dim=8,
-        personal_alpha_bias_scale=0.015,
+        personal_alpha_temperature=1.8,
+        personal_alpha_budget=0.09,
+        personal_alpha_base_init=0.04,
+        personal_alpha_bias_scale=0.0,
         personal_disable_student_global_context=True,
+        personal_query_row_budget=1.3,
+        personal_neighbor_row_budget=0.20,
+        graph_query_writeback_scale=0.40,
+        graph_query_writeback_2hop_scale=0.10,
     )
     model.eval()
 
@@ -1035,8 +1286,16 @@ def _check_junyi_like_personal_graph_stays_finite() -> None:
         f"junyi-like 单概念场景下不应出现 bad row fallback，当前={_to_int_tensor(details['personal_bad_row_count'])}",
     )
     _assert(
-        float(details["personal_matrix_delta"].mean().item()) > 1e-3,
-        "禁用 direct bias 后，junyi-like 场景下 E 仍应保留非零个性化扰动。",
+        float(details["personal_matrix_student_std"].item()) > 1e-5,
+        "junyi-like 单概念场景下 personal_matrix_student_std 不应继续接近 0。",
+    )
+    _assert(
+        float(details["query_row_personal_delta"].item()) > 1e-4,
+        "junyi-like 单概念场景下 queried concept rows 必须有非零 personalization。",
+    )
+    _assert(
+        float(details["personal_query_row_std"].item()) > 1e-6,
+        "junyi-like 单概念场景下 queried concept rows 之间应保留非零学生差异。",
     )
 
 
@@ -1148,6 +1407,10 @@ def _check_junyi_e_on_jobs_use_oom_safe_batch_size() -> None:
         early_stop_patience=None,
         learning_rate=None,
         generate_diagnosis=True,
+        max_train_batches=None,
+        max_val_batches=None,
+        max_test_batches=None,
+        include_matched_no_e=False,
     )
     jobs = make_jobs(args, run_id="smoke_junyi_batch")
     jobs_by_ablation = {job.ablation.name: job for job in jobs}
@@ -1184,6 +1447,34 @@ def _check_runner_env_enables_expandable_segments() -> None:
     )
 
 
+def _check_matched_no_e_job_can_be_enabled() -> None:
+    from run_abce_ablation import make_jobs
+
+    args = SimpleNamespace(
+        datasets="junyi",
+        seeds="42",
+        component_set="single",
+        ablations="full,no_A,no_E",
+        profiles="best",
+        rerun_existing=True,
+        epochs=None,
+        early_stop_patience=None,
+        learning_rate=None,
+        generate_diagnosis=True,
+        max_train_batches=None,
+        max_val_batches=None,
+        max_test_batches=None,
+        include_matched_no_e=True,
+    )
+    jobs = make_jobs(args, run_id="smoke_junyi_matched_no_e")
+    jobs_by_ablation = {job.ablation.name: job for job in jobs}
+    _assert("no_E_bs64" in jobs_by_ablation, "启用 include_matched_no_e 后应生成 junyi 的 no_E_bs64 对照作业。")
+    _assert(
+        int(jobs_by_ablation["no_E_bs64"].params["batch_size"]) == 64,
+        "matched no_E 作业应固定使用 batch_size=64。",
+    )
+
+
 def main() -> None:
     _check_no_a_keeps_gnn_layers()
     _check_best_configs_enable_e_rescue_knobs()
@@ -1191,24 +1482,30 @@ def main() -> None:
     _check_no_a_personal_graph_is_not_identity_locked()
     _check_personal_branch_is_state_primary_with_small_id_adapter()
     _check_adaptive_gate_is_state_primary()
+    _check_gate_saturation_regression()
+    _check_assist_like_harmfulness_proxy_warning()
     _check_personal_graph_is_support_preserving_and_local()
     _check_query_readout_injects_graph_signal()
     _check_split_hygiene_uses_train_only_maps_and_q_matrix()
     _check_runtime_ablation_guardrails_cover_no_a_and_no_e()
     _check_generator_state_adapter_is_live()
     _check_alpha_bias_scale_is_live()
+    _check_alpha_bias_diagnostics_consistency()
     _check_config_hash_tracks_ae_structure_switches()
     _check_append_summary_csv_tracks_runtime_structure_fields()
+    _check_diagnosis_csv_schema_upgrade()
     _check_component_analysis_uses_real_q_conditioned_path()
     _check_train_validate_use_processed_batch_count()
     _check_concept_embedding_sharing_uses_same_storage()
     _check_personal_generator_is_state_aware_and_bounded()
     _check_junyi_like_personal_graph_stays_finite()
     _check_trainer_monitors_are_aligned()
+    _check_summary_classification_regression()
     _check_invalid_ablation_rows_are_filtered_from_summary()
     _check_failure_reason_is_collected()
     _check_junyi_e_on_jobs_use_oom_safe_batch_size()
     _check_runner_env_enables_expandable_segments()
+    _check_matched_no_e_job_can_be_enabled()
     print("OK: AE rescue regression smoke checks passed.")
 
 

@@ -341,7 +341,10 @@ class AdaptiveGate(nn.Module):
         num_heads: int,
         max_alpha: float = 0.35,
         hidden_dim: Optional[int] = None,
-        max_id_adapter_scale: float = 0.05,
+        max_id_adapter_scale: float = 0.03,
+        alpha_temperature: float = 2.0,
+        alpha_budget: float = 0.10,
+        alpha_base_init: float = 0.08,
     ):
         super().__init__()
         self.num_heads = int(num_heads)
@@ -357,8 +360,14 @@ class AdaptiveGate(nn.Module):
         self.out = nn.Linear(hid, self.num_heads)
         self.max_alpha = float(max_alpha)
         self.max_id_adapter_scale = max(0.0, float(max_id_adapter_scale))
+        self.alpha_temperature = max(1e-4, float(alpha_temperature))
+        self.alpha_budget = max(0.0, float(alpha_budget))
         self.id_adapter_logit = nn.Parameter(torch.tensor(-2.9444390))
-        self.head_bias = nn.Parameter(torch.full((self.num_heads,), -1.75))
+        safe_base = min(max(float(alpha_base_init), 1e-4), max(self.max_alpha - 1e-4, 1e-4))
+        base_ratio = safe_base / max(self.max_alpha, 1e-4)
+        base_ratio = min(max(base_ratio, 1e-4), 1.0 - 1e-4)
+        head_bias_init = math.log(base_ratio / (1.0 - base_ratio))
+        self.head_bias = nn.Parameter(torch.full((self.num_heads,), head_bias_init))
 
         nn.init.xavier_normal_(self.state_proj.weight)
         nn.init.xavier_normal_(self.context_proj.weight)
@@ -379,6 +388,7 @@ class AdaptiveGate(nn.Module):
         student_id_embedding: torch.Tensor,
         id_adapter_scale: Optional[torch.Tensor] = None,
         extra_bias: Optional[torch.Tensor] = None,
+        warmup_scale: float = 1.0,
         return_diagnostics: bool = False,
     ) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]]:
         state_norm = self.state_norm(state_embedding)
@@ -411,28 +421,43 @@ class AdaptiveGate(nn.Module):
                 device=state_embedding.device,
                 dtype=state_embedding.dtype,
             )
-        alpha_logit = state_logit + id_logit + head_bias_logit + alpha_bias_logit
-        alpha = self.max_alpha * torch.sigmoid(alpha_logit)
+        warmup = float(max(0.0, min(1.0, warmup_scale)))
+        alpha_base = self.max_alpha * torch.sigmoid(head_bias_logit + alpha_bias_logit)
+        delta_input = (state_logit + id_logit) / self.alpha_temperature
+        alpha_delta = self.alpha_budget * torch.tanh(delta_input)
+        alpha = torch.clamp(
+            alpha_base + warmup * alpha_delta,
+            min=0.0,
+            max=self.max_alpha,
+        )
+        alpha_preclamp = alpha_base + warmup * alpha_delta
         if not return_diagnostics:
-            return alpha.unsqueeze(-1).unsqueeze(-1), alpha_logit.unsqueeze(-1).unsqueeze(-1)
+            return alpha.unsqueeze(-1).unsqueeze(-1), alpha_preclamp.unsqueeze(-1).unsqueeze(-1)
 
+        saturation_margin = max(1e-4, 0.05 * max(self.max_alpha, 1e-4))
+        saturation_ratio = (alpha >= max(self.max_alpha - saturation_margin, saturation_margin)).float().mean()
         diagnostics = {
             "state_logit": state_logit,
             "id_logit": id_logit,
             "head_bias_logit": head_bias_logit,
             "alpha_bias_logit": alpha_bias_logit,
+            "alpha_base": alpha_base,
+            "alpha_delta": alpha_delta,
             "state_path_absmean": state_logit.abs().mean(),
             "id_path_absmean": id_logit.abs().mean(),
             "bias_path_absmean": alpha_bias_logit.abs().mean(),
             "head_bias_path_absmean": head_bias_logit.abs().mean(),
+            "alpha_base_mean": alpha_base.mean(),
+            "alpha_delta_absmean": alpha_delta.abs().mean(),
+            "alpha_saturation_ratio": saturation_ratio,
             "effective_id_scale": alpha.new_tensor(float(torch.as_tensor(effective_id_scale).item())),
-            "alpha_logit_nonfinite_count": alpha_logit.new_tensor(
-                int((~torch.isfinite(alpha_logit)).sum().item()), dtype=torch.long
+            "alpha_logit_nonfinite_count": alpha_preclamp.new_tensor(
+                int((~torch.isfinite(alpha_preclamp)).sum().item()), dtype=torch.long
             ),
         }
         return (
             alpha.unsqueeze(-1).unsqueeze(-1),
-            alpha_logit.unsqueeze(-1).unsqueeze(-1),
+            alpha_preclamp.unsqueeze(-1).unsqueeze(-1),
             diagnostics,
         )
 
@@ -467,7 +492,7 @@ class PersonalRelationGenerator(nn.Module):
         self.num_heads = int(num_heads)
         self.rank = int(rank)
         self.max_state_mix = 1.20
-        self.max_student_mix = 0.15
+        self.max_student_mix = 0.10
         self.max_state_adapter_scale = max(0.0, float(max_state_adapter_scale))
         self.max_context_adapter_scale = max(0.0, float(max_context_adapter_scale))
         self.max_id_adapter_scale = max(0.0, float(max_id_adapter_scale))
@@ -503,16 +528,20 @@ class PersonalRelationGenerator(nn.Module):
         nn.init.xavier_normal_(self.id_to_v.weight, gain=0.15)
 
     @staticmethod
-    def _normalize_scores(scores: torch.Tensor) -> torch.Tensor:
+    def _normalize_scores(
+        scores: torch.Tensor,
+        row_budget_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         scores = torch.nan_to_num(scores, nan=0.0, posinf=6.0, neginf=-6.0)
         scores = scores - scores.mean(dim=-1, keepdim=True)
-        scores = scores - scores.mean(dim=(-1, -2), keepdim=True)
-        head_rms = scores.pow(2).mean(dim=(-1, -2), keepdim=True).sqrt()
-        head_rms = torch.where(torch.isfinite(head_rms), head_rms, torch.ones_like(head_rms))
-        head_rms = head_rms.clamp_min(1e-4)
-        scores = scores / head_rms
+        row_rms = scores.pow(2).mean(dim=-1, keepdim=True).sqrt()
+        row_rms = torch.where(torch.isfinite(row_rms), row_rms, torch.ones_like(row_rms))
+        row_rms = row_rms.clamp_min(1e-4)
+        scores = scores / row_rms
         scores = torch.tanh(scores)
         scores = scores - scores.mean(dim=-1, keepdim=True)
+        if row_budget_mask is not None:
+            scores = scores * row_budget_mask.unsqueeze(1).unsqueeze(-1).to(dtype=scores.dtype, device=scores.device)
         scores = torch.tanh(scores)
         return torch.nan_to_num(scores, nan=0.0, posinf=1.0, neginf=-1.0)
 
@@ -523,6 +552,7 @@ class PersonalRelationGenerator(nn.Module):
         knowledge_state: torch.Tensor,
         student_id_embedding: Optional[torch.Tensor] = None,
         id_adapter_scale: Optional[torch.Tensor] = None,
+        row_budget_mask: Optional[torch.Tensor] = None,
         return_diagnostics: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         student_code = torch.tanh(self.student_norm(student_state_embedding))
@@ -575,12 +605,12 @@ class PersonalRelationGenerator(nn.Module):
             state_q + adapter_q,
             state_k + adapter_k,
         ) / math.sqrt(self.rank)
-        adapter_scores = self._normalize_scores(adapter_scores - state_scores)
+        adapter_scores = self._normalize_scores(adapter_scores - state_scores, row_budget_mask=row_budget_mask)
 
         state_mix = self.max_state_mix * torch.sigmoid(self.state_mix_logit)
         student_mix = self.max_student_mix * torch.sigmoid(self.student_mix_logit)
         scores = state_mix * state_scores + student_mix * adapter_scores
-        scores = self._normalize_scores(scores)
+        scores = self._normalize_scores(scores, row_budget_mask=row_budget_mask)
         if not return_diagnostics:
             return scores
 
@@ -643,9 +673,14 @@ class ConceptStructureModeling(nn.Module):
         personal_warmup_epochs: int,
         personal_reg_warmup_epochs: Optional[int],
         personal_student_dim: int,
+        personal_alpha_temperature: float,
+        personal_alpha_budget: float,
+        personal_alpha_base_init: float,
         personal_alpha_bias_scale: float,
         personal_disable_student_global_context: bool,
         personal_local_hops: int,
+        personal_query_row_budget: float,
+        personal_neighbor_row_budget: float,
         personal_support_only: bool,
         # 完全消融开关
         enable_module: bool = True,
@@ -666,9 +701,14 @@ class ConceptStructureModeling(nn.Module):
             else max(0, int(personal_reg_warmup_epochs))
         )
         self.personal_student_dim = max(1, int(personal_student_dim))
+        self.personal_alpha_temperature = max(1e-4, float(personal_alpha_temperature))
+        self.personal_alpha_budget = max(0.0, float(personal_alpha_budget))
+        self.personal_alpha_base_init = max(0.0, float(personal_alpha_base_init))
         self.personal_alpha_bias_scale = max(0.0, float(personal_alpha_bias_scale))
         self.personal_disable_student_global_context = bool(personal_disable_student_global_context)
         self.personal_local_hops = max(0, int(personal_local_hops))
+        self.personal_query_row_budget = max(0.0, float(personal_query_row_budget))
+        self.personal_neighbor_row_budget = max(0.0, float(personal_neighbor_row_budget))
         self.personal_support_only = bool(personal_support_only)
         self._current_epoch = 1
 
@@ -740,7 +780,7 @@ class ConceptStructureModeling(nn.Module):
                 nn.init.normal_(self.personal_alpha_bias.weight, mean=0.0, std=0.05)
             nn.init.xavier_normal_(self.personal_gate_from_state.weight)
             nn.init.xavier_normal_(self.personal_generator_from_state.weight)
-            context_dim = knowledge_dim * (4 if self.personal_disable_student_global_context else 5)
+            context_dim = knowledge_dim * (6 if self.personal_disable_student_global_context else 7)
             personal_hidden_dim = max(self.personal_student_dim, knowledge_dim)
             self.adaptive_gate = AdaptiveGate(
                 self.personal_student_dim,
@@ -748,6 +788,9 @@ class ConceptStructureModeling(nn.Module):
                 num_heads=num_relation_heads,
                 max_alpha=self.personal_max_alpha,
                 hidden_dim=personal_hidden_dim,
+                alpha_temperature=self.personal_alpha_temperature,
+                alpha_budget=self.personal_alpha_budget,
+                alpha_base_init=self.personal_alpha_base_init,
             )
             self.personal_generator = PersonalRelationGenerator(
                 self.personal_student_dim,
@@ -825,6 +868,26 @@ class ConceptStructureModeling(nn.Module):
             frontier = (torch.bmm(frontier, support) > 0).to(local.dtype)
             local = torch.maximum(local, frontier.squeeze(1))
         return local
+
+    def _build_personal_row_budget_mask(
+        self,
+        concept_mask: Optional[torch.Tensor],
+        local_row_mask: Optional[torch.Tensor],
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        if concept_mask is None and local_row_mask is None:
+            return None, None, None
+
+        if concept_mask is None:
+            query_rows = torch.zeros_like(local_row_mask)
+        else:
+            query_rows = (concept_mask > 0).float()
+        local_rows = query_rows if local_row_mask is None else (local_row_mask > 0).float()
+        neighbor_rows = torch.clamp(local_rows - query_rows, min=0.0)
+        row_budget_mask = (
+            self.personal_query_row_budget * query_rows
+            + self.personal_neighbor_row_budget * neighbor_rows
+        )
+        return row_budget_mask, query_rows, neighbor_rows
 
     def _build_personal_prior_logits(
         self,
@@ -930,6 +993,13 @@ class ConceptStructureModeling(nn.Module):
         local_row_ratio = None
         personal_support_density = None
         query_state_norm = None
+        alpha_base_mean = None
+        alpha_delta_absmean = None
+        alpha_saturation_ratio = None
+        query_row_personal_delta = None
+        neighbor_row_personal_delta = None
+        personal_row_budget_mean = None
+        personal_query_row_std = None
         relation_used = relation_matrices
         initial_state = self.knowledge_encoder.compose_initial_state(student_ids)
         knowledge_state_pre_personal = knowledge_state
@@ -950,6 +1020,9 @@ class ConceptStructureModeling(nn.Module):
             query_state = self._masked_state_pool(knowledge_state, query_mask)
             local_state = self._masked_state_pool(knowledge_state, local_mask)
             local_dispersion = self._masked_state_std(knowledge_state, local_mask, local_state)
+            global_state = knowledge_state.mean(dim=1)
+            query_contrast = query_state - global_state
+            local_contrast = local_state - global_state
             query_state_norm = query_state.norm(dim=-1).mean()
             if self.personal_disable_student_global_context:
                 context_repr = torch.cat(
@@ -958,6 +1031,8 @@ class ConceptStructureModeling(nn.Module):
                         local_state,
                         local_dispersion,
                         local_state - query_state,
+                        query_contrast,
+                        local_contrast,
                     ],
                     dim=-1,
                 )
@@ -969,28 +1044,38 @@ class ConceptStructureModeling(nn.Module):
                         local_state,
                         local_dispersion,
                         local_state - query_state,
+                        query_contrast,
+                        local_contrast,
                     ],
                     dim=-1,
                 )
-            gate_state_repr = torch.tanh(self.personal_gate_from_state(local_state))
+            gate_state_input = query_state + 0.5 * query_contrast
+            generator_state_input = query_state + 0.5 * local_contrast
+            gate_state_repr = torch.tanh(self.personal_gate_from_state(gate_state_input))
             generator_state_repr = torch.tanh(
-                self.personal_generator_from_state(0.5 * (query_state + local_state))
+                self.personal_generator_from_state(generator_state_input)
             )
             gate_id_scale = torch.sigmoid(self.personal_gate_id_logit)
             generator_id_scale = torch.sigmoid(self.personal_generator_id_logit)
             gate_id_embedding = self.personal_gate_embedding(student_ids)
             generator_id_embedding = self.personal_generator_embedding(student_ids)
+            row_budget_mask, query_row_mask, neighbor_row_mask = self._build_personal_row_budget_mask(
+                concept_mask,
+                local_row_mask,
+            )
             gate_alpha_bias = None
             if self.personal_alpha_bias is not None:
                 gate_alpha_bias = self.personal_alpha_bias_scale * torch.tanh(
                     self.personal_alpha_bias(student_ids)
                 )
+            personal_warmup_scale = self._get_personal_warmup_scale()
             gate_out = self.adaptive_gate(
                 gate_state_repr,
                 context_repr,
                 gate_id_embedding,
                 id_adapter_scale=gate_id_scale,
                 extra_bias=gate_alpha_bias,
+                warmup_scale=personal_warmup_scale,
                 return_diagnostics=True,
             )
             gate_alpha, gate_alpha_logit, gate_diag = gate_out
@@ -998,15 +1083,18 @@ class ConceptStructureModeling(nn.Module):
             alpha_id_path_absmean = gate_diag["id_path_absmean"]
             alpha_bias_path_absmean = gate_diag["bias_path_absmean"]
             head_bias_path_absmean = gate_diag["head_bias_path_absmean"]
+            alpha_base_mean = gate_diag["alpha_base_mean"]
+            alpha_delta_absmean = gate_diag["alpha_delta_absmean"]
+            alpha_saturation_ratio = gate_diag["alpha_saturation_ratio"]
             alpha_id_adapter_scale = gate_diag["effective_id_scale"]
-            personal_warmup_scale = self._get_personal_warmup_scale()
-            gate_alpha_effective = gate_alpha * personal_warmup_scale
+            gate_alpha_effective = gate_alpha
             personal_out = self.personal_generator(
                 generator_state_repr,
                 context_repr,
                 knowledge_state,
                 student_id_embedding=generator_id_embedding,
                 id_adapter_scale=generator_id_scale,
+                row_budget_mask=row_budget_mask,
                 return_diagnostics=True,
             )  # (B,H,C,C)
             personal_delta, personal_diag = personal_out
@@ -1027,7 +1115,32 @@ class ConceptStructureModeling(nn.Module):
             row_mask_4d = None
             if local_row_mask is not None:
                 row_mask_4d = local_row_mask.unsqueeze(1).unsqueeze(-1).bool().expand_as(personal_logits)
+            query_row_mask_4d = None
+            neighbor_row_mask_4d = None
+            if query_row_mask is not None:
+                query_row_mask_4d = query_row_mask.unsqueeze(1).unsqueeze(-1).bool().expand_as(personal_logits)
+                query_count = query_row_mask_4d.float().sum(dim=(1, 2, 3)).clamp(min=1.0)
+            else:
+                query_count = None
+            if neighbor_row_mask is not None:
+                neighbor_row_mask_4d = neighbor_row_mask.unsqueeze(1).unsqueeze(-1).bool().expand_as(personal_logits)
+                neighbor_count = neighbor_row_mask_4d.float().sum(dim=(1, 2, 3)).clamp(min=1.0)
+            else:
+                neighbor_count = None
+            if row_budget_mask is not None:
+                personal_row_budget_mean = row_budget_mask.mean()
             posterior_delta = self.personal_delta_scale * personal_delta
+            if query_row_mask_4d is not None:
+                query_delta_per_sample = (
+                    posterior_delta.abs() * query_row_mask_4d.float()
+                ).sum(dim=(1, 2, 3)) / query_count
+                query_row_personal_delta = query_delta_per_sample.mean()
+                personal_query_row_std = query_delta_per_sample.std(unbiased=False)
+            if neighbor_row_mask_4d is not None:
+                neighbor_delta_per_sample = (
+                    posterior_delta.abs() * neighbor_row_mask_4d.float()
+                ).sum(dim=(1, 2, 3)) / neighbor_count
+                neighbor_row_personal_delta = neighbor_delta_per_sample.mean()
             posterior_logits = personal_logits + posterior_delta
             if row_mask_4d is not None:
                 posterior_logits = torch.where(row_mask_4d, posterior_logits, personal_logits)
@@ -1098,6 +1211,9 @@ class ConceptStructureModeling(nn.Module):
             "alpha_id_path_absmean": alpha_id_path_absmean,
             "alpha_bias_path_absmean": alpha_bias_path_absmean,
             "head_bias_path_absmean": head_bias_path_absmean,
+            "alpha_base_mean": alpha_base_mean,
+            "alpha_delta_absmean": alpha_delta_absmean,
+            "alpha_saturation_ratio": alpha_saturation_ratio,
             "alpha_id_adapter_scale": alpha_id_adapter_scale,
             "personal_gate_id_scale": None
             if self.personal_gate_id_logit is None
@@ -1111,6 +1227,10 @@ class ConceptStructureModeling(nn.Module):
             "personal_delta_pre_softmax_norm": personal_delta_pre_softmax_norm,
             "personal_delta_student_std": personal_delta_student_std,
             "alpha_head_std": alpha_head_std,
+            "query_row_personal_delta": query_row_personal_delta,
+            "neighbor_row_personal_delta": neighbor_row_personal_delta,
+            "personal_row_budget_mean": personal_row_budget_mean,
+            "personal_query_row_std": personal_query_row_std,
             "personal_state_mix": personal_state_mix,
             "personal_student_mix": personal_student_mix,
             "personal_student_adapter_scale": personal_student_adapter_scale,
@@ -1184,6 +1304,8 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_propagation_alpha: float = 0.20,
         graph_readout_1hop_scale: float = 0.35,
         graph_readout_2hop_scale: float = 0.15,
+        graph_query_writeback_scale: Optional[float] = None,
+        graph_query_writeback_2hop_scale: Optional[float] = None,
         prediction_l2_lambda: float = 5e-5,
         gnn_residual_weight: float = 0.5,
         personal_max_alpha: float = 0.35,
@@ -1193,9 +1315,14 @@ class CognitiveDiagnosisModel(nn.Module):
         personal_student_dim: Optional[int] = None,
         lambda_alpha_min: float = 0.0,
         alpha_min_target: float = 0.0,
+        personal_alpha_temperature: float = 2.0,
+        personal_alpha_budget: float = 0.10,
+        personal_alpha_base_init: float = 0.08,
         personal_alpha_bias_scale: float = 1.0,
         personal_disable_student_global_context: bool = False,
         personal_local_hops: int = 1,
+        personal_query_row_budget: float = 1.0,
+        personal_neighbor_row_budget: float = 0.30,
         personal_support_only: bool = True,
         share_concept_embeddings: bool = False,
     ):
@@ -1230,6 +1357,16 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_propagation_alpha = max(0.0, min(1.0, float(graph_propagation_alpha)))
         self.graph_readout_1hop_scale = max(0.0, float(graph_readout_1hop_scale))
         self.graph_readout_2hop_scale = max(0.0, float(graph_readout_2hop_scale))
+        self.graph_query_writeback_scale = max(
+            0.0,
+            float(self.graph_readout_1hop_scale if graph_query_writeback_scale is None else graph_query_writeback_scale),
+        )
+        self.graph_query_writeback_2hop_scale = max(
+            0.0,
+            float(self.graph_readout_2hop_scale if graph_query_writeback_2hop_scale is None else graph_query_writeback_2hop_scale),
+        )
+        self.graph_readout_1hop_scale = self.graph_query_writeback_scale
+        self.graph_readout_2hop_scale = self.graph_query_writeback_2hop_scale
         self._current_epoch = 1
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
@@ -1245,9 +1382,14 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_student_dim = int(knowledge_dim if personal_student_dim is None else personal_student_dim)
         self.lambda_alpha_min = max(0.0, float(lambda_alpha_min))
         self.alpha_min_target = max(0.0, float(alpha_min_target))
+        self.personal_alpha_temperature = max(1e-4, float(personal_alpha_temperature))
+        self.personal_alpha_budget = max(0.0, float(personal_alpha_budget))
+        self.personal_alpha_base_init = max(0.0, float(personal_alpha_base_init))
         self.personal_alpha_bias_scale = max(0.0, float(personal_alpha_bias_scale))
         self.personal_disable_student_global_context = bool(personal_disable_student_global_context)
         self.personal_local_hops = max(0, int(personal_local_hops))
+        self.personal_query_row_budget = max(0.0, float(personal_query_row_budget))
+        self.personal_neighbor_row_budget = max(0.0, float(personal_neighbor_row_budget))
         self.personal_support_only = bool(personal_support_only)
         self.share_concept_embeddings = bool(share_concept_embeddings)
 
@@ -1278,9 +1420,14 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_warmup_epochs=self.personal_warmup_epochs,
             personal_reg_warmup_epochs=self.personal_reg_warmup_epochs,
             personal_student_dim=self.personal_student_dim,
+            personal_alpha_temperature=self.personal_alpha_temperature,
+            personal_alpha_budget=self.personal_alpha_budget,
+            personal_alpha_base_init=self.personal_alpha_base_init,
             personal_alpha_bias_scale=self.personal_alpha_bias_scale,
             personal_disable_student_global_context=self.personal_disable_student_global_context,
             personal_local_hops=self.personal_local_hops,
+            personal_query_row_budget=self.personal_query_row_budget,
+            personal_neighbor_row_budget=self.personal_neighbor_row_budget,
             personal_support_only=self.personal_support_only,
             enable_module=self.enable_module1,
         )
@@ -1323,23 +1470,41 @@ class CognitiveDiagnosisModel(nn.Module):
         knowledge_state: torch.Tensor,
         relation_used: torch.Tensor,
         concept_mask: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
-        if (self.graph_readout_1hop_scale <= 0 and self.graph_readout_2hop_scale <= 0) or not self.enable_module1:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if (
+            (self.graph_query_writeback_scale <= 0 and self.graph_query_writeback_2hop_scale <= 0)
+            or not self.enable_module1
+        ):
             zero = knowledge_state.new_tensor(0.0)
-            return knowledge_state, zero, None
+            return knowledge_state, zero, zero, zero
 
         hop1 = self._aggregate_with_relation(knowledge_state, relation_used)
         hop2 = self._aggregate_with_relation(hop1, relation_used)
-        enhanced = (
-            knowledge_state
-            + self.graph_readout_1hop_scale * (hop1 - knowledge_state)
-            + self.graph_readout_2hop_scale * (hop2 - hop1)
+        query_mask = concept_mask.float()
+        query_rows = query_mask.unsqueeze(-1).bool()
+        graph_delta = (
+            self.graph_query_writeback_scale * (hop1 - knowledge_state)
+            + self.graph_query_writeback_2hop_scale * (hop2 - hop1)
         )
-        local_mask = self.structure_module._build_local_row_mask(concept_mask, relation_used)
-        if local_mask is not None:
-            enhanced = torch.where(local_mask.unsqueeze(-1).bool(), enhanced, knowledge_state)
+        enhanced = torch.where(query_rows, knowledge_state + graph_delta, knowledge_state)
         delta = (enhanced - knowledge_state).pow(2).mean().sqrt()
-        return enhanced, delta, local_mask
+
+        query_weight = query_mask.unsqueeze(-1)
+        query_denom = (query_weight.sum() * float(knowledge_state.size(-1))).clamp(min=1.0)
+        query_row_graph_delta = (
+            ((enhanced - knowledge_state).pow(2) * query_weight).sum() / query_denom
+        ).sqrt()
+
+        if relation_used.dim() == 4:
+            relation_mean = relation_used.mean(dim=1)
+        elif relation_used.dim() == 3:
+            relation_mean = relation_used.mean(dim=0, keepdim=True).expand(knowledge_state.size(0), -1, -1)
+        else:
+            raise ValueError(f"Unsupported relation_used shape for query writeback: {tuple(relation_used.shape)}")
+        query_seed = query_mask / query_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+        query_support = torch.bmm(query_seed.unsqueeze(1), relation_mean).squeeze(1)
+        readout_query_support_mass = (query_support * (1.0 - query_mask)).sum(dim=1).mean()
+        return enhanced, delta, query_row_graph_delta, readout_query_support_mass
 
     # ------------------------------
     # Fix #1：行熵稀疏度（用于 personal graph 正则）
@@ -1400,7 +1565,7 @@ class CognitiveDiagnosisModel(nn.Module):
         student_repr = s_out["student_repr"]
         gate_alpha = s_out["alpha"]
         personal_matrices = s_out["personal_matrices"]
-        prediction_state, readout_query_delta, readout_local_mask = self._build_query_enhanced_state(
+        prediction_state, readout_query_delta, query_row_graph_delta, readout_query_support_mass = self._build_query_enhanced_state(
             knowledge_state=knowledge_state,
             relation_used=relation_used,
             concept_mask=q_vector,
@@ -1454,10 +1619,11 @@ class CognitiveDiagnosisModel(nn.Module):
             "knowledge_state_graph_delta": s_out["knowledge_state_graph_delta"].detach(),
             "knowledge_state_personal_delta": s_out["knowledge_state_personal_delta"].detach(),
             "readout_query_delta": readout_query_delta.detach(),
+            "query_row_graph_delta": query_row_graph_delta.detach(),
+            "readout_query_support_mass": readout_query_support_mass.detach(),
         }
         details["irt_logit_for_reg"] = irt_logit
-        if readout_local_mask is not None:
-            details["readout_local_row_ratio"] = readout_local_mask.float().mean().detach()
+        details["readout_local_row_ratio"] = q_vector.float().mean().detach()
 
         if diag_details is not None:
             details.update(diag_details)
@@ -1476,6 +1642,9 @@ class CognitiveDiagnosisModel(nn.Module):
                 details["alpha_effective"] = s_out["alpha_effective"]
                 details["alpha_effective_detached"] = s_out["alpha_effective"].detach()
             for key in (
+                "alpha_base_mean",
+                "alpha_delta_absmean",
+                "alpha_saturation_ratio",
                 "alpha_state_path_absmean",
                 "alpha_id_path_absmean",
                 "alpha_bias_path_absmean",
@@ -1495,6 +1664,10 @@ class CognitiveDiagnosisModel(nn.Module):
                 "local_row_ratio",
                 "personal_support_density",
                 "query_state_norm",
+                "query_row_personal_delta",
+                "neighbor_row_personal_delta",
+                "personal_row_budget_mean",
+                "personal_query_row_std",
                 "local_row_mask",
             ):
                 if s_out.get(key) is not None:

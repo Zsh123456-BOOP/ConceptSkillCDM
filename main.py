@@ -146,6 +146,18 @@ def parse_args():
         default=0.15,
         help="2-hop query-local graph readout scale before the fixed diagnosis head.",
     )
+    parser.add_argument(
+        "--graph_query_writeback_scale",
+        type=float,
+        default=None,
+        help="1-hop query-row graph writeback scale before the fixed diagnosis head. Default follows graph_readout_1hop_scale.",
+    )
+    parser.add_argument(
+        "--graph_query_writeback_2hop_scale",
+        type=float,
+        default=None,
+        help="2-hop query-row graph writeback scale before the fixed diagnosis head. Default follows graph_readout_2hop_scale.",
+    )
     parser.add_argument("--lambda_sparse_personal", type=float, default=0.0)
     parser.add_argument("--lambda_alpha", type=float, default=0.0)
 
@@ -246,16 +258,30 @@ def parse_args():
                         help="Penalty weight when personal alpha std falls below target.")
     parser.add_argument("--alpha_min_target", type=float, default=0.0,
                         help="Minimum desired std of personal alpha before collapse penalty becomes zero.")
-    parser.add_argument("--personal_alpha_bias_scale", type=float, default=1.0,
+    parser.add_argument("--personal_alpha_temperature", type=float, default=2.0,
+                        help="Temperature used by bounded personal alpha delta.")
+    parser.add_argument("--personal_alpha_budget", type=float, default=0.10,
+                        help="Maximum additive alpha delta driven by state/context.")
+    parser.add_argument("--personal_alpha_base_init", type=float, default=0.08,
+                        help="Initial alpha base level before state-driven delta.")
+    parser.add_argument("--personal_alpha_bias_scale", type=float, default=0.0,
                         help="Max magnitude scale for bounded student-specific alpha bias.")
     parser.add_argument("--personal_disable_student_global_context", action=bool_action, default=None,
                         help="Use state-primary personal context without raw student_global direct concatenation.")
     parser.add_argument("--personal_local_hops", type=int, default=1,
                         help="Number of support hops around current item concepts used for local personalization.")
+    parser.add_argument("--personal_query_row_budget", type=float, default=1.0,
+                        help="Relative personalization budget assigned to queried concept rows.")
+    parser.add_argument("--personal_neighbor_row_budget", type=float, default=0.30,
+                        help="Relative personalization budget assigned to 1-hop local neighbor rows.")
     parser.add_argument("--personal_support_only", action=bool_action, default=None,
                         help="Restrict personal residual edges to the support of global graph A when A is enabled.")
     parser.add_argument("--share_concept_embeddings", action=bool_action, default=None,
                         help="Share concept embeddings between relation learning and knowledge encoder.")
+    parser.add_argument("--personal_state_lr_mult", type=float, default=1.0,
+                        help="Learning-rate multiplier for E state/context adapters.")
+    parser.add_argument("--personal_id_lr_mult", type=float, default=0.5,
+                        help="Learning-rate multiplier for E id/bias adapters.")
 
     #  GPU 
     parser.add_argument("--multi_gpu", action="store_true",
@@ -290,6 +316,13 @@ def main():
     args = parser.parse_args(raw_argv)
     explicit_dests = collect_explicit_arg_dests(raw_argv, parser)
     args = apply_dataset_defaults(args, parser, explicit_dests=explicit_dests)
+
+    if getattr(args, "graph_query_writeback_scale", None) is None:
+        args.graph_query_writeback_scale = getattr(args, "graph_readout_1hop_scale", 0.35)
+    if getattr(args, "graph_query_writeback_2hop_scale", None) is None:
+        args.graph_query_writeback_2hop_scale = getattr(args, "graph_readout_2hop_scale", 0.15)
+    args.graph_readout_1hop_scale = float(args.graph_query_writeback_scale)
+    args.graph_readout_2hop_scale = float(args.graph_query_writeback_2hop_scale)
 
     # =========================================================
     # -1) main  launcher 
@@ -470,6 +503,14 @@ def main():
                 graph_propagation_alpha=loaded_args.get(
                     "graph_propagation_alpha", getattr(args, "graph_propagation_alpha", 0.20)
                 ),
+                graph_query_writeback_scale=loaded_args.get(
+                    "graph_query_writeback_scale",
+                    getattr(args, "graph_query_writeback_scale", getattr(args, "graph_readout_1hop_scale", 0.35)),
+                ),
+                graph_query_writeback_2hop_scale=loaded_args.get(
+                    "graph_query_writeback_2hop_scale",
+                    getattr(args, "graph_query_writeback_2hop_scale", getattr(args, "graph_readout_2hop_scale", 0.15)),
+                ),
                 graph_readout_1hop_scale=loaded_args.get(
                     "graph_readout_1hop_scale", getattr(args, "graph_readout_1hop_scale", 0.35)
                 ),
@@ -521,6 +562,15 @@ def main():
                     "lambda_alpha_min", getattr(args, "lambda_alpha_min", 0.0)
                 ),
                 alpha_min_target=loaded_args.get("alpha_min_target", getattr(args, "alpha_min_target", 0.0)),
+                personal_alpha_temperature=loaded_args.get(
+                    "personal_alpha_temperature", getattr(args, "personal_alpha_temperature", 2.0)
+                ),
+                personal_alpha_budget=loaded_args.get(
+                    "personal_alpha_budget", getattr(args, "personal_alpha_budget", 0.10)
+                ),
+                personal_alpha_base_init=loaded_args.get(
+                    "personal_alpha_base_init", getattr(args, "personal_alpha_base_init", 0.08)
+                ),
                 personal_alpha_bias_scale=loaded_args.get(
                     "personal_alpha_bias_scale", getattr(args, "personal_alpha_bias_scale", 0.0)
                 ),
@@ -530,6 +580,12 @@ def main():
                 ),
                 personal_local_hops=loaded_args.get(
                     "personal_local_hops", getattr(args, "personal_local_hops", 1)
+                ),
+                personal_query_row_budget=loaded_args.get(
+                    "personal_query_row_budget", getattr(args, "personal_query_row_budget", 1.0)
+                ),
+                personal_neighbor_row_budget=loaded_args.get(
+                    "personal_neighbor_row_budget", getattr(args, "personal_neighbor_row_budget", 0.30)
                 ),
                 personal_support_only=loaded_args.get(
                     "personal_support_only", getattr(args, "personal_support_only", True)

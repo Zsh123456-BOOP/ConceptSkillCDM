@@ -40,21 +40,30 @@ MONITOR_NAME = "val_auc"
 MONITOR_MODE = "max"
 STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "share_concept_embeddings",
+    "personal_alpha_temperature",
+    "personal_alpha_budget",
+    "personal_alpha_base_init",
     "personal_alpha_bias_scale",
     "personal_reg_warmup_epochs",
     "personal_disable_student_global_context",
     "personal_local_hops",
+    "personal_query_row_budget",
+    "personal_neighbor_row_budget",
     "personal_support_only",
     "use_personal_graph",
     "use_concept_graph",
     "graph_identity_residual",
     "graph_propagation_alpha",
+    "graph_query_writeback_scale",
+    "graph_query_writeback_2hop_scale",
     "graph_readout_1hop_scale",
     "graph_readout_2hop_scale",
     "personal_delta_scale",
     "personal_warmup_epochs",
     "lambda_alpha_min",
     "alpha_min_target",
+    "personal_state_lr_mult",
+    "personal_id_lr_mult",
 )
 
 
@@ -148,6 +157,12 @@ def _to_int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _fmt_diag_value(value: Optional[float], fmt: str = ".4f") -> str:
+    if value is None:
+        return "NA"
+    return format(float(value), fmt)
 
 
 def _tensor_stats(name: str, tensor: Optional[torch.Tensor]) -> Dict[str, Any]:
@@ -342,6 +357,119 @@ def _clip_stability_sensitive_grads(model: nn.Module) -> Dict[str, float]:
         "personal_clip_norm": _clip_grad_group(personal_params, max_norm=1.0),
         "other_clip_norm": _clip_grad_group(other_params, max_norm=5.0),
     }
+
+
+def _build_optimizer(model: nn.Module, args) -> optim.Optimizer:
+    base_model = _get_base_model(model)
+    structure_module = getattr(base_model, "structure_module", None)
+    adaptive_gate = getattr(structure_module, "adaptive_gate", None) if structure_module is not None else None
+    personal_generator = getattr(structure_module, "personal_generator", None) if structure_module is not None else None
+
+    state_params: List[torch.nn.Parameter] = []
+    id_params: List[torch.nn.Parameter] = []
+
+    if structure_module is not None:
+        for module in (
+            getattr(structure_module, "personal_gate_from_state", None),
+            getattr(structure_module, "personal_generator_from_state", None),
+        ):
+            if module is not None:
+                state_params.extend(list(module.parameters()))
+
+        if adaptive_gate is not None:
+            for module in (
+                getattr(adaptive_gate, "state_norm", None),
+                getattr(adaptive_gate, "context_norm", None),
+                getattr(adaptive_gate, "state_proj", None),
+                getattr(adaptive_gate, "context_proj", None),
+                getattr(adaptive_gate, "fusion_proj", None),
+                getattr(adaptive_gate, "state_to_logit", None),
+                getattr(adaptive_gate, "context_to_logit", None),
+                getattr(adaptive_gate, "out", None),
+            ):
+                if module is not None:
+                    state_params.extend(list(module.parameters()))
+            for module in (
+                getattr(adaptive_gate, "id_to_logit", None),
+            ):
+                if module is not None:
+                    id_params.extend(list(module.parameters()))
+            for param_name in ("id_adapter_logit", "head_bias"):
+                param = getattr(adaptive_gate, param_name, None)
+                if isinstance(param, torch.nn.Parameter):
+                    id_params.append(param)
+
+        if personal_generator is not None:
+            for module in (
+                getattr(personal_generator, "student_norm", None),
+                getattr(personal_generator, "context_norm", None),
+                getattr(personal_generator, "state_norm", None),
+                getattr(personal_generator, "context_proj", None),
+                getattr(personal_generator, "hidden_proj", None),
+                getattr(personal_generator, "state_query_proj", None),
+                getattr(personal_generator, "state_key_proj", None),
+                getattr(personal_generator, "context_to_u", None),
+                getattr(personal_generator, "context_to_v", None),
+                getattr(personal_generator, "state_to_u", None),
+                getattr(personal_generator, "state_to_v", None),
+            ):
+                if module is not None:
+                    state_params.extend(list(module.parameters()))
+            for module in (
+                getattr(personal_generator, "id_to_u", None),
+                getattr(personal_generator, "id_to_v", None),
+            ):
+                if module is not None:
+                    id_params.extend(list(module.parameters()))
+            for param_name in (
+                "state_adapter_logit",
+                "context_adapter_logit",
+                "state_mix_logit",
+                "student_mix_logit",
+            ):
+                param = getattr(personal_generator, param_name, None)
+                if isinstance(param, torch.nn.Parameter):
+                    state_params.append(param)
+            for param_name in ("id_adapter_logit",):
+                param = getattr(personal_generator, param_name, None)
+                if isinstance(param, torch.nn.Parameter):
+                    id_params.append(param)
+
+        for module_name in ("personal_gate_embedding", "personal_generator_embedding", "personal_alpha_bias"):
+            module = getattr(structure_module, module_name, None)
+            if module is not None:
+                id_params.extend(list(module.parameters()))
+        for param_name in ("personal_gate_id_logit", "personal_generator_id_logit"):
+            param = getattr(structure_module, param_name, None)
+            if isinstance(param, torch.nn.Parameter):
+                id_params.append(param)
+
+    state_params = _dedupe_params(state_params)
+    id_params = _dedupe_params(id_params)
+    grouped_ids = {id(p) for p in state_params + id_params}
+    backbone_params = _dedupe_params([p for p in base_model.parameters() if id(p) not in grouped_ids])
+
+    param_groups: List[Dict[str, Any]] = []
+    if backbone_params:
+        param_groups.append({"params": backbone_params, "lr": float(args.learning_rate), "group_name": "backbone"})
+    if state_params:
+        param_groups.append(
+            {
+                "params": state_params,
+                "lr": float(args.learning_rate) * float(getattr(args, "personal_state_lr_mult", 1.0)),
+                "group_name": "personal_state",
+            }
+        )
+    if id_params:
+        param_groups.append(
+            {
+                "params": id_params,
+                "lr": float(args.learning_rate) * float(getattr(args, "personal_id_lr_mult", 0.5)),
+                "group_name": "personal_id",
+            }
+        )
+
+    return optim.Adam(param_groups, weight_decay=args.weight_decay)
 
 
 def _get_base_model(model: nn.Module) -> CognitiveDiagnosisModel:
@@ -589,6 +717,9 @@ def _collect_debug_forward_stats(
     irt_vals: List[float] = []
     alpha_vals: List[float] = []
     alpha_bias_vals: List[float] = []
+    alpha_base_vals: List[float] = []
+    alpha_delta_vals: List[float] = []
+    alpha_saturation_vals: List[float] = []
     personal_entropy_vals: List[float] = []
     personal_matrix_delta_vals: List[float] = []
     personal_matrix_student_std_vals: List[float] = []
@@ -610,6 +741,12 @@ def _collect_debug_forward_stats(
     local_row_ratio_vals: List[float] = []
     personal_support_density_vals: List[float] = []
     readout_query_delta_vals: List[float] = []
+    query_row_graph_delta_vals: List[float] = []
+    query_row_personal_delta_vals: List[float] = []
+    neighbor_row_personal_delta_vals: List[float] = []
+    personal_row_budget_mean_vals: List[float] = []
+    personal_query_row_std_vals: List[float] = []
+    readout_query_support_mass_vals: List[float] = []
 
     graph_row_entropy_mean = 0.0
     graph_entropy_ratio = 0.0
@@ -657,6 +794,15 @@ def _collect_debug_forward_stats(
             if alpha_student_bias is not None:
                 alpha_bias_vals.extend(alpha_student_bias.detach().reshape(-1).cpu().numpy().tolist())
 
+            for detail_key, target in (
+                ("alpha_base_mean", alpha_base_vals),
+                ("alpha_delta_absmean", alpha_delta_vals),
+                ("alpha_saturation_ratio", alpha_saturation_vals),
+            ):
+                val = details.get(detail_key)
+                if val is not None:
+                    target.extend(val.detach().reshape(-1).cpu().numpy().tolist())
+
             personal_matrices = details.get("personal_matrices")
             if personal_matrices is not None:
                 pm = personal_matrices.detach().cpu().numpy()
@@ -685,9 +831,6 @@ def _collect_debug_forward_stats(
                     ("alpha_id_path_absmean", alpha_id_path_vals),
                     ("alpha_bias_path_absmean", alpha_bias_path_vals),
                     ("head_bias_path_absmean", head_bias_path_vals),
-                    ("relation_identity_delta", relation_identity_delta_vals),
-                    ("knowledge_state_graph_delta", knowledge_state_graph_delta_vals),
-                    ("knowledge_state_personal_delta", knowledge_state_personal_delta_vals),
                     ("personal_bad_row_count", personal_bad_row_vals),
                     ("personal_fallback_row_count", personal_fallback_row_vals),
                     ("personal_student_mix", personal_student_mix_vals),
@@ -695,11 +838,26 @@ def _collect_debug_forward_stats(
                     ("personal_logits_absmax", personal_logits_absmax_vals),
                     ("local_row_ratio", local_row_ratio_vals),
                     ("personal_support_density", personal_support_density_vals),
-                    ("readout_query_delta", readout_query_delta_vals),
+                    ("query_row_personal_delta", query_row_personal_delta_vals),
+                    ("neighbor_row_personal_delta", neighbor_row_personal_delta_vals),
+                    ("personal_row_budget_mean", personal_row_budget_mean_vals),
+                    ("personal_query_row_std", personal_query_row_std_vals),
                 ):
                     val = details.get(detail_key)
                     if val is not None:
                         target.extend(val.detach().reshape(-1).cpu().numpy().tolist())
+
+            for detail_key, target in (
+                ("relation_identity_delta", relation_identity_delta_vals),
+                ("knowledge_state_graph_delta", knowledge_state_graph_delta_vals),
+                ("knowledge_state_personal_delta", knowledge_state_personal_delta_vals),
+                ("readout_query_delta", readout_query_delta_vals),
+                ("query_row_graph_delta", query_row_graph_delta_vals),
+                ("readout_query_support_mass", readout_query_support_mass_vals),
+            ):
+                val = details.get(detail_key)
+                if val is not None:
+                    target.extend(val.detach().reshape(-1).cpu().numpy().tolist())
 
             if details.get("personal_warmup_scale") is not None:
                 personal_warmup_scale = float(details["personal_warmup_scale"].detach().reshape(-1)[0].item())
@@ -725,7 +883,11 @@ def _collect_debug_forward_stats(
 
     irt_abs_mean, irt_std = _safe_abs_mean_std(irt_vals)
     alpha_mean, alpha_std = _safe_mean_std(alpha_vals)
-    _, alpha_bias_std = _safe_mean_std(alpha_bias_vals)
+    alpha_base_mean, _ = _safe_mean_std(alpha_base_vals)
+    alpha_delta_absmean, _ = _safe_mean_std(alpha_delta_vals)
+    alpha_saturation_ratio, _ = _safe_mean_std(alpha_saturation_vals)
+    _, alpha_bias_std_raw = _safe_mean_std(alpha_bias_vals)
+    alpha_bias_std = alpha_bias_std_raw if alpha_bias_vals else None
     personal_row_entropy, _ = _safe_mean_std(personal_entropy_vals)
     personal_matrix_delta_mean, _ = _safe_mean_std(personal_matrix_delta_vals)
     personal_matrix_student_std_mean, _ = _safe_mean_std(personal_matrix_student_std_vals)
@@ -747,6 +909,12 @@ def _collect_debug_forward_stats(
     local_row_ratio_mean, _ = _safe_mean_std(local_row_ratio_vals)
     personal_support_density_mean, _ = _safe_mean_std(personal_support_density_vals)
     readout_query_delta_mean, _ = _safe_mean_std(readout_query_delta_vals)
+    query_row_graph_delta_mean, _ = _safe_mean_std(query_row_graph_delta_vals)
+    query_row_personal_delta_mean, _ = _safe_mean_std(query_row_personal_delta_vals)
+    neighbor_row_personal_delta_mean, _ = _safe_mean_std(neighbor_row_personal_delta_vals)
+    personal_row_budget_mean, _ = _safe_mean_std(personal_row_budget_mean_vals)
+    personal_query_row_std_mean, _ = _safe_mean_std(personal_query_row_std_vals)
+    readout_query_support_mass_mean, _ = _safe_mean_std(readout_query_support_mass_vals)
 
     return {
         "irt_abs_mean": irt_abs_mean,
@@ -760,6 +928,9 @@ def _collect_debug_forward_stats(
         "graph_tau_std": tau_std,
         "alpha_mean": alpha_mean,
         "alpha_std": alpha_std,
+        "alpha_base_mean": alpha_base_mean,
+        "alpha_delta_absmean": alpha_delta_absmean,
+        "alpha_saturation_ratio": alpha_saturation_ratio,
         "alpha_bias_std": alpha_bias_std,
         "personal_row_entropy": personal_row_entropy,
         "personal_matrix_delta": personal_matrix_delta_mean,
@@ -782,6 +953,12 @@ def _collect_debug_forward_stats(
         "local_row_ratio": local_row_ratio_mean,
         "personal_support_density": personal_support_density_mean,
         "readout_query_delta": readout_query_delta_mean,
+        "query_row_graph_delta": query_row_graph_delta_mean,
+        "query_row_personal_delta": query_row_personal_delta_mean,
+        "neighbor_row_personal_delta": neighbor_row_personal_delta_mean,
+        "personal_row_budget_mean": personal_row_budget_mean,
+        "personal_query_row_std": personal_query_row_std_mean,
+        "readout_query_support_mass": readout_query_support_mass_mean,
         "personal_warmup_scale": personal_warmup_scale,
         "share_concept_embeddings": share_concept_embeddings,
     }
@@ -874,6 +1051,25 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
         "personal_generator_context_adapter": _grad_norm_or_zero(personal_generator_context_adapter),
         "personal_generator_direct_scale": _grad_norm_or_zero(personal_generator_direct_scale),
     }
+
+
+def _collect_diag_warning_tags(diag: Dict[str, float]) -> List[str]:
+    tags: List[str] = []
+    if diag.get("alpha_std", 0.0) < 1e-6:
+        tags.append("personal-alpha-collapse")
+    if diag.get("personal_delta_student_std", 0.0) < 1e-6:
+        tags.append("personal-delta-student-flat")
+    if diag.get("alpha_head_std", 0.0) < 1e-6:
+        tags.append("alpha-head-collapse")
+    if diag.get("alpha_id_path_absmean", 0.0) > max(diag.get("alpha_state_path_absmean", 0.0), 1e-6):
+        tags.append("alpha-id-dominant")
+    if diag.get("alpha_saturation_ratio", 0.0) > 0.60 and diag.get("alpha_std", 0.0) < 0.02:
+        tags.append("gate-saturated")
+    if diag.get("personal_matrix_delta", 0.0) > 1e-5 and diag.get("personal_matrix_student_std", 0.0) < 5e-4:
+        tags.append("personalization-flat")
+    if diag.get("readout_query_delta", 0.0) > 0.10 and diag.get("personal_matrix_delta", 0.0) < 0.002:
+        tags.append("query-readout-overamplified")
+    return tags
 
 
 # ======================================================
@@ -1117,7 +1313,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     logger.info(
         "%s Personal controls: personal_max_alpha=%.3f, personal_delta_scale=%.3f, personal_warmup_epochs=%d, "
         "personal_student_dim=%s, alpha_min_target=%.4f, personal_local_hops=%s, personal_support_only=%s, "
-        "graph_propagation_alpha=%.3f, graph_readout_1hop_scale=%.3f, graph_readout_2hop_scale=%.3f",
+        "personal_alpha_temperature=%.3f, personal_alpha_budget=%.3f, personal_query_row_budget=%.3f, "
+        "personal_neighbor_row_budget=%.3f, personal_state_lr_mult=%.3f, personal_id_lr_mult=%.3f, "
+        "graph_propagation_alpha=%.3f, graph_query_writeback_scale=%.3f, graph_query_writeback_2hop_scale=%.3f",
         run_tag,
         float(getattr(args, "personal_max_alpha", 0.35)),
         float(getattr(args, "personal_delta_scale", 1.0)),
@@ -1126,9 +1324,15 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         float(getattr(args, "alpha_min_target", 0.0)),
         getattr(args, "personal_local_hops", None),
         getattr(args, "personal_support_only", None),
+        float(getattr(args, "personal_alpha_temperature", 2.0)),
+        float(getattr(args, "personal_alpha_budget", 0.10)),
+        float(getattr(args, "personal_query_row_budget", 1.0)),
+        float(getattr(args, "personal_neighbor_row_budget", 0.30)),
+        float(getattr(args, "personal_state_lr_mult", 1.0)),
+        float(getattr(args, "personal_id_lr_mult", 0.5)),
         float(getattr(args, "graph_propagation_alpha", 0.20)),
-        float(getattr(args, "graph_readout_1hop_scale", 0.35)),
-        float(getattr(args, "graph_readout_2hop_scale", 0.15)),
+        float(getattr(args, "graph_query_writeback_scale", getattr(args, "graph_readout_1hop_scale", 0.35))),
+        float(getattr(args, "graph_query_writeback_2hop_scale", getattr(args, "graph_readout_2hop_scale", 0.15))),
     )
 
     data_dir = args.data_dir
@@ -1202,6 +1406,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         graph_dropout=_resolve_optional_graph_dropout(getattr(args, "graph_dropout", -1.0)),
         graph_tau_init=getattr(args, "graph_tau_init", 1.0),
         graph_propagation_alpha=getattr(args, "graph_propagation_alpha", 0.20),
+        graph_query_writeback_scale=getattr(
+            args, "graph_query_writeback_scale", getattr(args, "graph_readout_1hop_scale", 0.35)
+        ),
+        graph_query_writeback_2hop_scale=getattr(
+            args, "graph_query_writeback_2hop_scale", getattr(args, "graph_readout_2hop_scale", 0.15)
+        ),
         graph_readout_1hop_scale=getattr(args, "graph_readout_1hop_scale", 0.35),
         graph_readout_2hop_scale=getattr(args, "graph_readout_2hop_scale", 0.15),
         personal_rank=getattr(args, "personal_rank", 4),
@@ -1225,11 +1435,16 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         personal_student_dim=getattr(args, "personal_student_dim", args.knowledge_dim),
         lambda_alpha_min=getattr(args, "lambda_alpha_min", 0.0),
         alpha_min_target=getattr(args, "alpha_min_target", 0.0),
+        personal_alpha_temperature=getattr(args, "personal_alpha_temperature", 2.0),
+        personal_alpha_budget=getattr(args, "personal_alpha_budget", 0.10),
+        personal_alpha_base_init=getattr(args, "personal_alpha_base_init", 0.08),
         personal_alpha_bias_scale=getattr(args, "personal_alpha_bias_scale", 1.0),
         personal_disable_student_global_context=getattr(
             args, "personal_disable_student_global_context", False
         ),
         personal_local_hops=getattr(args, "personal_local_hops", 1),
+        personal_query_row_budget=getattr(args, "personal_query_row_budget", 1.0),
+        personal_neighbor_row_budget=getattr(args, "personal_neighbor_row_budget", 0.30),
         personal_support_only=getattr(args, "personal_support_only", True),
         share_concept_embeddings=getattr(args, "share_concept_embeddings", False),
     ).to(device)
@@ -1264,11 +1479,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     logger.info("%s Total parameters: %s", run_tag, f"{total_params:,}")
     logger.info("%s Trainable parameters: %s", run_tag, f"{trainable_params:,}")
 
-    optimizer = optim.Adam(
-        model.parameters(),
-        lr=args.learning_rate,
-        weight_decay=args.weight_decay,
+    optimizer = _build_optimizer(model, args)
+    param_group_desc = ", ".join(
+        f"{group.get('group_name', f'group{i}')}@lr={group['lr']:.6g}"
+        for i, group in enumerate(optimizer.param_groups)
     )
+    logger.info("%s Optimizer param groups: %s", run_tag, param_group_desc)
 
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
@@ -1376,14 +1592,18 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 device=device,
                 max_batches=diag_batches,
             )
+            alpha_bias_std_text = _fmt_diag_value(diag.get("alpha_bias_std"), ".4f")
             logger.info(
                 "%s [Diag][AE] Epoch [%03d] | "
                 "irt_abs_mean=%.4f, irt_std=%.4f, personal_warmup_scale=%.2f, "
                 "graph_row_entropy=%.4f, graph_entropy_ratio=%.4f, "
-                "alpha_mean=%.4f, alpha_std=%.4f, alpha_bias_std=%.4f, "
+                "alpha_mean=%.4f, alpha_std=%.4f, alpha_base_mean=%.4f, alpha_delta_absmean=%.4f, "
+                "alpha_saturation_ratio=%.4f, alpha_bias_std=%s, "
                 "alpha_state_path=%.4f, alpha_id_path=%.4f, alpha_bias_path=%.4f, head_bias_path=%.4f, "
                 "personal_row_entropy=%.4f, personal_matrix_delta=%.4f, personal_matrix_student_std=%.4f, "
                 "personal_delta_pre_softmax_norm=%.4f, personal_delta_student_std=%.4f, alpha_head_std=%.4f, "
+                "query_row_graph_delta=%.4f, query_row_personal_delta=%.4f, neighbor_row_personal_delta=%.4f, "
+                "personal_row_budget_mean=%.4f, personal_query_row_std=%.4f, readout_query_support_mass=%.4f, "
                 "personal_student_mix=%.4f, personal_student_adapter=%.4f, "
                 "local_row_ratio=%.4f, support_density=%.4f, readout_query_delta=%.4f, "
                 "personal_bad_rows=%.2f, personal_fallback_rows=%.2f, personal_logits_absmax=%.4f",
@@ -1396,7 +1616,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["graph_entropy_ratio"],
                 diag["alpha_mean"],
                 diag["alpha_std"],
-                diag["alpha_bias_std"],
+                diag["alpha_base_mean"],
+                diag["alpha_delta_absmean"],
+                diag["alpha_saturation_ratio"],
+                alpha_bias_std_text,
                 diag["alpha_state_path_absmean"],
                 diag["alpha_id_path_absmean"],
                 diag["alpha_bias_path_absmean"],
@@ -1407,6 +1630,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["personal_delta_pre_softmax_norm"],
                 diag["personal_delta_student_std"],
                 diag["alpha_head_std"],
+                diag["query_row_graph_delta"],
+                diag["query_row_personal_delta"],
+                diag["neighbor_row_personal_delta"],
+                diag["personal_row_budget_mean"],
+                diag["personal_query_row_std"],
+                diag["readout_query_support_mass"],
                 diag["personal_student_mix"],
                 diag["personal_student_adapter_scale"],
                 diag["local_row_ratio"],
@@ -1454,7 +1683,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                         diag["alpha_std"],
                         diag["personal_row_entropy"],
                     )
-                if diag.get("personal_delta_student_std", 0.0) < 1e-6:
+                warning_tags = set(_collect_diag_warning_tags(diag))
+                if "personal-delta-student-flat" in warning_tags:
                     logger.warning(
                         "%s [Diag Warning][E] personal_delta_student_std is near zero: "
                         "personal_delta_student_std=%.6f, personal_delta_pre_softmax_norm=%.6f",
@@ -1462,7 +1692,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                         diag.get("personal_delta_student_std", 0.0),
                         diag.get("personal_delta_pre_softmax_norm", 0.0),
                     )
-                if diag.get("alpha_head_std", 0.0) < 1e-6:
+                if "alpha-head-collapse" in warning_tags:
                     logger.warning(
                         "%s [Diag Warning][E] alpha_head_std is near zero: "
                         "alpha_head_std=%.6f, alpha_std=%.6f",
@@ -1470,12 +1700,36 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                         diag.get("alpha_head_std", 0.0),
                         diag.get("alpha_std", 0.0),
                     )
-                if diag.get("alpha_id_path_absmean", 0.0) > max(diag.get("alpha_state_path_absmean", 0.0), 1e-6):
+                if "alpha-id-dominant" in warning_tags:
                     logger.warning(
                         "%s [Diag Warning][E] id path is dominating gate alpha: state_path=%.6f, id_path=%.6f",
                         run_tag,
                         diag.get("alpha_state_path_absmean", 0.0),
                         diag.get("alpha_id_path_absmean", 0.0),
+                    )
+                if "gate-saturated" in warning_tags:
+                    logger.warning(
+                        "%s [Diag Warning][E] gate-saturated: alpha_saturation_ratio=%.6f, alpha_std=%.6f, alpha_delta_absmean=%.6f",
+                        run_tag,
+                        diag.get("alpha_saturation_ratio", 0.0),
+                        diag.get("alpha_std", 0.0),
+                        diag.get("alpha_delta_absmean", 0.0),
+                    )
+                if "personalization-flat" in warning_tags:
+                    logger.warning(
+                        "%s [Diag Warning][E] personalization-flat: personal_matrix_delta=%.6f, personal_matrix_student_std=%.6f, personal_query_row_std=%.6f",
+                        run_tag,
+                        diag.get("personal_matrix_delta", 0.0),
+                        diag.get("personal_matrix_student_std", 0.0),
+                        diag.get("personal_query_row_std", 0.0),
+                    )
+                if "query-readout-overamplified" in warning_tags:
+                    logger.warning(
+                        "%s [Diag Warning][AE] query-readout-overamplified: readout_query_delta=%.6f, query_row_graph_delta=%.6f, personal_matrix_delta=%.6f",
+                        run_tag,
+                        diag.get("readout_query_delta", 0.0),
+                        diag.get("query_row_graph_delta", 0.0),
+                        diag.get("personal_matrix_delta", 0.0),
                     )
             if diag["graph_entropy_ratio"] > 0.98:
                 graph_uniform_streak += 1
@@ -1828,6 +2082,14 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         graph_propagation_alpha=loaded_args.get(
             "graph_propagation_alpha", getattr(args, "graph_propagation_alpha", 0.20)
         ),
+        graph_query_writeback_scale=loaded_args.get(
+            "graph_query_writeback_scale",
+            getattr(args, "graph_query_writeback_scale", getattr(args, "graph_readout_1hop_scale", 0.35)),
+        ),
+        graph_query_writeback_2hop_scale=loaded_args.get(
+            "graph_query_writeback_2hop_scale",
+            getattr(args, "graph_query_writeback_2hop_scale", getattr(args, "graph_readout_2hop_scale", 0.15)),
+        ),
         graph_readout_1hop_scale=loaded_args.get(
             "graph_readout_1hop_scale", getattr(args, "graph_readout_1hop_scale", 0.35)
         ),
@@ -1857,6 +2119,15 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         lambda_alpha_min=loaded_args.get("lambda_alpha_min", getattr(args, "lambda_alpha_min", 0.0)),
         alpha_min_target=loaded_args.get("alpha_min_target", getattr(args, "alpha_min_target", 0.0)),
+        personal_alpha_temperature=loaded_args.get(
+            "personal_alpha_temperature", getattr(args, "personal_alpha_temperature", 2.0)
+        ),
+        personal_alpha_budget=loaded_args.get(
+            "personal_alpha_budget", getattr(args, "personal_alpha_budget", 0.10)
+        ),
+        personal_alpha_base_init=loaded_args.get(
+            "personal_alpha_base_init", getattr(args, "personal_alpha_base_init", 0.08)
+        ),
         personal_alpha_bias_scale=loaded_args.get(
             "personal_alpha_bias_scale", getattr(args, "personal_alpha_bias_scale", 1.0)
         ),
@@ -1866,6 +2137,12 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         personal_local_hops=loaded_args.get(
             "personal_local_hops", getattr(args, "personal_local_hops", 1)
+        ),
+        personal_query_row_budget=loaded_args.get(
+            "personal_query_row_budget", getattr(args, "personal_query_row_budget", 1.0)
+        ),
+        personal_neighbor_row_budget=loaded_args.get(
+            "personal_neighbor_row_budget", getattr(args, "personal_neighbor_row_budget", 0.30)
         ),
         personal_support_only=loaded_args.get(
             "personal_support_only", getattr(args, "personal_support_only", True)
@@ -1958,6 +2235,7 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         "test_total_rows": int(before_rows),
         "test_seen_rows": int(after_rows),
         "test_seen_coverage": float(coverage),
+        "effective_batch_size": int(getattr(args, "batch_size", 0)),
         "train_only_split_hygiene": bool(info_dict.get("train_only_split_hygiene", False)),
         "runtime_facts": runtime_facts,
         "monitor": checkpoint.get("monitor", _default_monitor_config()),

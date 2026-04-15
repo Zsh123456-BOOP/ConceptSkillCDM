@@ -170,6 +170,8 @@ def _build_config_hash(args) -> str:
         "graph_reg_warmup_epochs",
         "graph_reg_cap_ratio",
         "graph_propagation_alpha",
+        "graph_query_writeback_scale",
+        "graph_query_writeback_2hop_scale",
         "graph_readout_1hop_scale",
         "graph_readout_2hop_scale",
         "use_concept_graph",
@@ -177,7 +179,12 @@ def _build_config_hash(args) -> str:
         "share_concept_embeddings",
         "graph_identity_residual",
         "personal_local_hops",
+        "personal_query_row_budget",
+        "personal_neighbor_row_budget",
         "personal_support_only",
+        "personal_alpha_temperature",
+        "personal_alpha_budget",
+        "personal_alpha_base_init",
         "personal_alpha_bias_scale",
         "personal_reg_warmup_epochs",
         "personal_disable_student_global_context",
@@ -185,6 +192,8 @@ def _build_config_hash(args) -> str:
         "personal_warmup_epochs",
         "lambda_alpha_min",
         "alpha_min_target",
+        "personal_state_lr_mult",
+        "personal_id_lr_mult",
     ]
     payload = {}
     for k in keys:
@@ -249,6 +258,7 @@ def append_summary_csv(
     row["test_rmse"] = float(metrics["rmse"])
     row["best_val_auc"] = float(best_val_auc)
     row["model_epoch"] = int(model_epoch)
+    row["effective_batch_size"] = int(getattr(args, "batch_size", 0))
 
     # 运行时事实：防止“CSV 标记消融，但模型实际未生效”
     runtime_keys = (
@@ -329,6 +339,7 @@ def append_summary_csv(
         "test_rmse",
         "best_val_auc",
         "model_epoch",
+        "effective_batch_size",
         "final_enable_module1",
         "final_use_concept_graph",
         "final_use_personal_graph",

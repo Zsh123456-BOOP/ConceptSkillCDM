@@ -49,21 +49,30 @@ BOOLEAN_OPTIONAL_KEYS = {
 }
 STRUCTURAL_SWITCH_KEYS = (
     "share_concept_embeddings",
+    "personal_alpha_temperature",
+    "personal_alpha_budget",
+    "personal_alpha_base_init",
     "personal_alpha_bias_scale",
     "personal_reg_warmup_epochs",
     "personal_disable_student_global_context",
     "personal_local_hops",
+    "personal_query_row_budget",
+    "personal_neighbor_row_budget",
     "personal_support_only",
     "use_personal_graph",
     "use_concept_graph",
     "graph_identity_residual",
     "graph_propagation_alpha",
+    "graph_query_writeback_scale",
+    "graph_query_writeback_2hop_scale",
     "graph_readout_1hop_scale",
     "graph_readout_2hop_scale",
     "personal_delta_scale",
     "personal_warmup_epochs",
     "lambda_alpha_min",
     "alpha_min_target",
+    "personal_state_lr_mult",
+    "personal_id_lr_mult",
 )
 OOM_SAFE_E_BATCH_SIZE = {
     "junyi": 64,
@@ -179,15 +188,25 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
         "graph_entropy_ratio": None,
         "alpha_std": None,
         "alpha_bias_std": None,
+        "alpha_base_mean": None,
+        "alpha_delta_absmean": None,
+        "alpha_saturation_ratio": None,
         "alpha_state_path_absmean": None,
         "alpha_id_path_absmean": None,
         "alpha_bias_path_absmean": None,
+        "head_bias_path_absmean": None,
         "irt_abs_mean": None,
         "personal_matrix_delta": None,
         "personal_matrix_student_std": None,
         "personal_delta_pre_softmax_norm": None,
         "personal_delta_student_std": None,
         "alpha_head_std": None,
+        "query_row_graph_delta": None,
+        "query_row_personal_delta": None,
+        "neighbor_row_personal_delta": None,
+        "personal_row_budget_mean": None,
+        "personal_query_row_std": None,
+        "readout_query_support_mass": None,
         "relation_identity_delta": None,
         "knowledge_state_graph_delta": None,
         "knowledge_state_personal_delta": None,
@@ -221,6 +240,9 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
                     "irt_abs_mean",
                     "alpha_std",
                     "alpha_bias_std",
+                    "alpha_base_mean",
+                    "alpha_delta_absmean",
+                    "alpha_saturation_ratio",
                     "personal_matrix_delta",
                     "personal_matrix_student_std",
                     "personal_delta_pre_softmax_norm",
@@ -238,6 +260,12 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
                     "local_row_ratio",
                     "support_density",
                     "readout_query_delta",
+                    "query_row_graph_delta",
+                    "query_row_personal_delta",
+                    "neighbor_row_personal_delta",
+                    "personal_row_budget_mean",
+                    "personal_query_row_std",
+                    "readout_query_support_mass",
                 ):
                     v = extract_float(line, key)
                     if v is not None:
@@ -402,6 +430,7 @@ def collect_result(job: JobSpec, exit_code: int) -> Dict[str, Any]:
     row["test_total_rows"] = test_json.get("test_total_rows")
     row["test_seen_rows"] = test_json.get("test_seen_rows")
     row["test_seen_coverage"] = test_json.get("test_seen_coverage")
+    row["effective_batch_size"] = test_json.get("effective_batch_size", job.params.get("batch_size"))
     row["clean_baseline"] = test_json.get("train_only_split_hygiene")
     runtime_facts = test_json.get("runtime_facts", {}) if isinstance(test_json, dict) else {}
     config_switches = test_json.get("config_switches", {}) if isinstance(test_json, dict) else {}
@@ -471,6 +500,7 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "test_total_rows",
         "test_seen_rows",
         "test_seen_coverage",
+        "effective_batch_size",
         "clean_baseline",
         "effective_enable_module1",
         "effective_use_concept_graph",
@@ -479,6 +509,9 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "graph_entropy_ratio",
         "alpha_std",
         "alpha_bias_std",
+        "alpha_base_mean",
+        "alpha_delta_absmean",
+        "alpha_saturation_ratio",
         "alpha_state_path_absmean",
         "alpha_id_path_absmean",
         "alpha_bias_path_absmean",
@@ -500,15 +533,30 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "local_row_ratio",
         "personal_support_density",
         "readout_query_delta",
+        "query_row_graph_delta",
+        "query_row_personal_delta",
+        "neighbor_row_personal_delta",
+        "personal_row_budget_mean",
+        "personal_query_row_std",
+        "readout_query_support_mass",
         "share_concept_embeddings",
+        "personal_alpha_temperature",
+        "personal_alpha_budget",
+        "personal_alpha_base_init",
         "personal_alpha_bias_scale",
         "personal_reg_warmup_epochs",
         "personal_disable_student_global_context",
         "personal_local_hops",
+        "personal_query_row_budget",
+        "personal_neighbor_row_budget",
         "personal_support_only",
         "graph_propagation_alpha",
+        "graph_query_writeback_scale",
+        "graph_query_writeback_2hop_scale",
         "graph_readout_1hop_scale",
         "graph_readout_2hop_scale",
+        "personal_state_lr_mult",
+        "personal_id_lr_mult",
         "scheduler_monitor",
         "scheduler_mode",
         "best_monitor",
@@ -532,6 +580,19 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "flags_json",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.stat().st_size > 0:
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            reader = csv.reader(f)
+            existing_header = next(reader, [])
+        if existing_header != fieldnames:
+            with open(path, "r", encoding="utf-8", newline="") as f:
+                old_rows = list(csv.DictReader(f))
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                for old_row in old_rows:
+                    old_row.pop(None, None)
+                    writer.writerow({key: old_row.get(key, "") for key in fieldnames})
     need_header = not path.exists()
 
     if not need_header and path.stat().st_size > 0:
@@ -584,8 +645,8 @@ def classify_delta(delta: Optional[float], threshold: float = 0.003) -> str:
         return "untested"
     if delta > threshold:
         return "useful"
-    if delta < -threshold:
-        return "harmful_or_unstable"
+    if delta < 0:
+        return "non_positive"
     return "neutral"
 
 
@@ -606,6 +667,7 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
     ger = try_float(full_row.get("graph_entropy_ratio"))
     alpha_std = try_float(full_row.get("alpha_std"))
     alpha_bias_std = try_float(full_row.get("alpha_bias_std"))
+    alpha_saturation_ratio = try_float(full_row.get("alpha_saturation_ratio"))
     alpha_state_path = try_float(full_row.get("alpha_state_path_absmean"))
     alpha_id_path = try_float(full_row.get("alpha_id_path_absmean"))
     personal_matrix_delta = try_float(full_row.get("personal_matrix_delta"))
@@ -613,15 +675,21 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
     personal_delta_pre_softmax_norm = try_float(full_row.get("personal_delta_pre_softmax_norm"))
     personal_delta_student_std = try_float(full_row.get("personal_delta_student_std"))
     alpha_head_std = try_float(full_row.get("alpha_head_std"))
+    query_row_personal_delta = try_float(full_row.get("query_row_personal_delta"))
+    personal_query_row_std = try_float(full_row.get("personal_query_row_std"))
+    readout_query_delta = try_float(full_row.get("readout_query_delta"))
     relation_identity_delta = try_float(full_row.get("relation_identity_delta"))
     knowledge_state_graph_delta = try_float(full_row.get("knowledge_state_graph_delta"))
+    alpha_bias_scale = try_float(full_row.get("personal_alpha_bias_scale"))
 
     if ger is not None and ger > 0.98:
         reasons.append("graph-uniform-risk")
     if alpha_std is not None and alpha_std < 1e-6:
         reasons.append("personal-alpha-collapse")
-    if alpha_bias_std is not None and alpha_bias_std < 1e-6:
+    if alpha_bias_scale is not None and alpha_bias_scale > 0 and alpha_bias_std is not None and alpha_bias_std < 1e-6:
         reasons.append("personal-bias-collapse")
+    if alpha_saturation_ratio is not None and alpha_std is not None and alpha_saturation_ratio > 0.60 and alpha_std < 0.02:
+        reasons.append("gate-saturated")
     if personal_matrix_delta is not None and personal_matrix_delta < 0.01:
         reasons.append("personal-matrix-delta-low")
     if personal_matrix_student_std is not None and personal_matrix_student_std < 0.001:
@@ -632,6 +700,12 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
         reasons.append("personal-delta-student-flat")
     if alpha_head_std is not None and alpha_head_std < 0.001:
         reasons.append("alpha-head-collapse")
+    if query_row_personal_delta is not None and personal_query_row_std is not None:
+        if query_row_personal_delta < 0.002 or personal_query_row_std < 5e-4:
+            reasons.append("query-personal-flat")
+    if readout_query_delta is not None and personal_matrix_delta is not None:
+        if readout_query_delta > 0.10 and personal_matrix_delta < 0.002:
+            reasons.append("query-readout-overamplified")
     if alpha_state_path is not None and alpha_id_path is not None and alpha_id_path > max(alpha_state_path, 1e-6):
         reasons.append("alpha-id-dominant")
     if relation_identity_delta is not None and relation_identity_delta < 0.02:
@@ -674,13 +748,20 @@ def write_summary(
         delta_a = (full_auc - no_a_auc) if (full_auc is not None and no_a_auc is not None) else None
         delta_e = (full_auc - no_e_auc) if (full_auc is not None and no_e_auc is not None) else None
 
+        diagnosis_reason = diagnose_reason(full, delta_a, delta_e)
         comp_state = {
             "A": classify_delta(delta_a, threshold),
             "E": classify_delta(delta_e, threshold),
         }
+        if comp_state["A"] == "non_positive" and any(tag in diagnosis_reason for tag in ("graph-uniform-risk", "A-near-identity", "A-state-delta-low")):
+            comp_state["A"] = "harmful_or_unstable"
+        if comp_state["E"] == "non_positive" and any(
+            tag in diagnosis_reason for tag in ("gate-saturated", "query-personal-flat", "query-readout-overamplified", "personal-alpha-collapse")
+        ):
+            comp_state["E"] = "harmful_or_unstable"
         keep = [key for key, value in comp_state.items() if value == "useful"]
         drop = [key for key, value in comp_state.items() if value == "harmful_or_unstable"]
-        tune = [key for key, value in comp_state.items() if value == "neutral"]
+        tune = [key for key, value in comp_state.items() if value in {"neutral", "non_positive"}]
 
         row = {
             "dataset": dataset,
@@ -697,19 +778,30 @@ def write_summary(
             "full_test_total_rows": try_float(full.get("test_total_rows")),
             "full_test_seen_rows": try_float(full.get("test_seen_rows")),
             "full_test_seen_coverage": try_float(full.get("test_seen_coverage")),
+            "full_effective_batch_size": try_float(full.get("effective_batch_size")),
             "full_share_concept_embeddings": full.get("share_concept_embeddings"),
+            "full_personal_alpha_temperature": try_float(full.get("personal_alpha_temperature")),
+            "full_personal_alpha_budget": try_float(full.get("personal_alpha_budget")),
+            "full_personal_alpha_base_init": try_float(full.get("personal_alpha_base_init")),
             "full_personal_alpha_bias_scale": try_float(full.get("personal_alpha_bias_scale")),
             "full_personal_reg_warmup_epochs": try_float(full.get("personal_reg_warmup_epochs")),
             "full_personal_disable_student_global_context": full.get("personal_disable_student_global_context"),
             "full_personal_local_hops": try_float(full.get("personal_local_hops")),
+            "full_personal_query_row_budget": try_float(full.get("personal_query_row_budget")),
+            "full_personal_neighbor_row_budget": try_float(full.get("personal_neighbor_row_budget")),
             "full_personal_support_only": full.get("personal_support_only"),
             "full_graph_propagation_alpha": try_float(full.get("graph_propagation_alpha")),
+            "full_graph_query_writeback_scale": try_float(full.get("graph_query_writeback_scale")),
+            "full_graph_query_writeback_2hop_scale": try_float(full.get("graph_query_writeback_2hop_scale")),
             "full_graph_readout_1hop_scale": try_float(full.get("graph_readout_1hop_scale")),
             "full_graph_readout_2hop_scale": try_float(full.get("graph_readout_2hop_scale")),
             "full_ablation_valid": full.get("ablation_valid"),
             "full_graph_entropy_ratio": try_float(full.get("graph_entropy_ratio")),
             "full_alpha_std": try_float(full.get("alpha_std")),
             "full_alpha_bias_std": try_float(full.get("alpha_bias_std")),
+            "full_alpha_base_mean": try_float(full.get("alpha_base_mean")),
+            "full_alpha_delta_absmean": try_float(full.get("alpha_delta_absmean")),
+            "full_alpha_saturation_ratio": try_float(full.get("alpha_saturation_ratio")),
             "full_alpha_state_path_absmean": try_float(full.get("alpha_state_path_absmean")),
             "full_alpha_id_path_absmean": try_float(full.get("alpha_id_path_absmean")),
             "full_personal_matrix_delta": try_float(full.get("personal_matrix_delta")),
@@ -717,6 +809,9 @@ def write_summary(
             "full_personal_delta_pre_softmax_norm": try_float(full.get("personal_delta_pre_softmax_norm")),
             "full_personal_delta_student_std": try_float(full.get("personal_delta_student_std")),
             "full_alpha_head_std": try_float(full.get("alpha_head_std")),
+            "full_query_row_graph_delta": try_float(full.get("query_row_graph_delta")),
+            "full_query_row_personal_delta": try_float(full.get("query_row_personal_delta")),
+            "full_personal_query_row_std": try_float(full.get("personal_query_row_std")),
             "full_relation_identity_delta": try_float(full.get("relation_identity_delta")),
             "full_knowledge_state_graph_delta": try_float(full.get("knowledge_state_graph_delta")),
             "full_knowledge_state_personal_delta": try_float(full.get("knowledge_state_personal_delta")),
@@ -729,7 +824,7 @@ def write_summary(
             "suggest_keep": ",".join(keep),
             "suggest_drop": ",".join(drop),
             "suggest_tune": ",".join(tune),
-            "diagnosis_reason": diagnose_reason(full, delta_a, delta_e),
+            "diagnosis_reason": diagnosis_reason,
         }
         summary_rows.append(row)
 
@@ -748,19 +843,30 @@ def write_summary(
         "full_test_total_rows",
         "full_test_seen_rows",
         "full_test_seen_coverage",
+        "full_effective_batch_size",
         "full_share_concept_embeddings",
+        "full_personal_alpha_temperature",
+        "full_personal_alpha_budget",
+        "full_personal_alpha_base_init",
         "full_personal_alpha_bias_scale",
         "full_personal_reg_warmup_epochs",
         "full_personal_disable_student_global_context",
         "full_personal_local_hops",
+        "full_personal_query_row_budget",
+        "full_personal_neighbor_row_budget",
         "full_personal_support_only",
         "full_graph_propagation_alpha",
+        "full_graph_query_writeback_scale",
+        "full_graph_query_writeback_2hop_scale",
         "full_graph_readout_1hop_scale",
         "full_graph_readout_2hop_scale",
         "full_ablation_valid",
         "full_graph_entropy_ratio",
         "full_alpha_std",
         "full_alpha_bias_std",
+        "full_alpha_base_mean",
+        "full_alpha_delta_absmean",
+        "full_alpha_saturation_ratio",
         "full_alpha_state_path_absmean",
         "full_alpha_id_path_absmean",
         "full_personal_matrix_delta",
@@ -768,6 +874,9 @@ def write_summary(
         "full_personal_delta_pre_softmax_norm",
         "full_personal_delta_student_std",
         "full_alpha_head_std",
+        "full_query_row_graph_delta",
+        "full_query_row_personal_delta",
+        "full_personal_query_row_std",
         "full_relation_identity_delta",
         "full_knowledge_state_graph_delta",
         "full_knowledge_state_personal_delta",
@@ -881,6 +990,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--early_stop_patience", type=int, default=None)
     parser.add_argument("--learning_rate", type=float, default=None)
+    parser.add_argument("--max_train_batches", type=int, default=None)
+    parser.add_argument("--max_val_batches", type=int, default=None)
+    parser.add_argument("--max_test_batches", type=int, default=None)
+    parser.add_argument("--include_matched_no_e", action="store_true", help="Add junyi no_E control with matched batch_size=64.")
     return parser.parse_args()
 
 
@@ -891,36 +1004,54 @@ def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> 
         if dataset == "assist_09":
             return {
                 "graph_identity_residual": 0.05,
-                "graph_propagation_alpha": 0.22,
-                "graph_readout_1hop_scale": 0.45,
-                "graph_readout_2hop_scale": 0.18,
+                "graph_propagation_alpha": 0.26,
+                "graph_query_writeback_scale": 0.65,
+                "graph_query_writeback_2hop_scale": 0.22,
+                "graph_readout_1hop_scale": 0.65,
+                "graph_readout_2hop_scale": 0.22,
                 "personal_warmup_epochs": 6,
                 "personal_reg_warmup_epochs": 6,
-                "personal_max_alpha": 0.45,
-                "personal_delta_scale": 7.0,
+                "personal_max_alpha": 0.30,
+                "personal_delta_scale": 4.8,
                 "lambda_alpha_min": 0.10,
                 "alpha_min_target": 0.05,
-                "personal_alpha_bias_scale": 0.03,
+                "personal_alpha_temperature": 2.4,
+                "personal_alpha_budget": 0.12,
+                "personal_alpha_base_init": 0.05,
+                "personal_alpha_bias_scale": 0.0,
                 "personal_disable_student_global_context": True,
                 "personal_local_hops": 1,
+                "personal_query_row_budget": 1.0,
+                "personal_neighbor_row_budget": 0.40,
                 "personal_support_only": True,
+                "personal_state_lr_mult": 1.0,
+                "personal_id_lr_mult": 0.5,
                 "share_concept_embeddings": True,
             }
         return {
             "graph_identity_residual": 0.05,
             "graph_propagation_alpha": 0.28,
-            "graph_readout_1hop_scale": 0.34,
+            "graph_query_writeback_scale": 0.45,
+            "graph_query_writeback_2hop_scale": 0.12,
+            "graph_readout_1hop_scale": 0.45,
             "graph_readout_2hop_scale": 0.12,
             "personal_warmup_epochs": 4,
             "personal_reg_warmup_epochs": 4,
-            "personal_max_alpha": 0.40,
+            "personal_max_alpha": 0.28,
             "personal_delta_scale": 5.0,
             "lambda_alpha_min": 0.08,
             "alpha_min_target": 0.04,
-            "personal_alpha_bias_scale": 0.015,
+            "personal_alpha_temperature": 1.7,
+            "personal_alpha_budget": 0.10,
+            "personal_alpha_base_init": 0.04,
+            "personal_alpha_bias_scale": 0.0,
             "personal_disable_student_global_context": True,
             "personal_local_hops": 1,
+            "personal_query_row_budget": 1.5,
+            "personal_neighbor_row_budget": 0.25,
             "personal_support_only": True,
+            "personal_state_lr_mult": 1.5,
+            "personal_id_lr_mult": 0.25,
             "share_concept_embeddings": True,
         }
     raise ValueError(f"Unknown profile '{profile}'.")
@@ -963,10 +1094,26 @@ def make_jobs(args: argparse.Namespace, run_id: str) -> List[JobSpec]:
         if dataset not in BEST_CFG:
             raise ValueError(f"Dataset '{dataset}' not found in BEST_CFG.")
         base_cfg = dict(BEST_CFG[dataset])
+        dataset_abls = list(base_abls)
+        if dataset == "junyi" and bool(getattr(args, "include_matched_no_e", False)):
+            dataset_abls.append(
+                AblationSpec(
+                    name="no_E_bs64",
+                    flags={},
+                    overrides={
+                        "use_personal_graph": False,
+                        "lambda_sparse_personal": 0.0,
+                        "lambda_alpha": 0.0,
+                        "lambda_alpha_min": 0.0,
+                        "alpha_min_target": 0.0,
+                        "batch_size": 64,
+                    },
+                )
+            )
 
         for profile in profiles:
             profile_cfg = _profile_overrides(profile, dataset, args)
-            for ablation in base_abls:
+            for ablation in dataset_abls:
                 for seed in seeds:
                     params = dict(base_cfg)
                     params.update(profile_cfg)
@@ -980,6 +1127,12 @@ def make_jobs(args: argparse.Namespace, run_id: str) -> List[JobSpec]:
                         params["early_stop_patience"] = int(args.early_stop_patience)
                     if args.learning_rate is not None:
                         params["learning_rate"] = float(args.learning_rate)
+                    if args.max_train_batches is not None:
+                        params["max_train_batches"] = int(args.max_train_batches)
+                    if args.max_val_batches is not None:
+                        params["max_val_batches"] = int(args.max_val_batches)
+                    if args.max_test_batches is not None:
+                        params["max_test_batches"] = int(args.max_test_batches)
 
                     for key in set(ablation.drop_keys) | set(ablation.flags.keys()):
                         params.pop(key, None)
