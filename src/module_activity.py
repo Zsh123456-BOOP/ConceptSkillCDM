@@ -71,14 +71,12 @@ def compute_module_activity(
             if alpha_bias is not None:
                 alpha_biases.extend(alpha_bias.reshape(-1).detach().cpu().numpy().tolist())
 
-            personal_matrices = details.get("personal_matrices")
-            relation_matrices = details.get("relation_matrices")
-            if personal_matrices is not None and relation_matrices is not None:
-                pm = personal_matrices.detach()
-                gm = relation_matrices.detach().mean(dim=0, keepdim=True)
-                delta = (pm - gm).abs().mean(dim=(-1, -2))
-                personal_matrix_deltas.extend(delta.cpu().numpy().tolist())
-                personal_matrix_student_stds.append(float(pm.std(dim=0, unbiased=False).mean().item()))
+            pm_delta = details.get("personal_matrix_delta")
+            if pm_delta is not None:
+                personal_matrix_deltas.extend(pm_delta.detach().reshape(-1).cpu().numpy().tolist())
+            pm_student_std = details.get("personal_matrix_student_std")
+            if pm_student_std is not None:
+                personal_matrix_student_stds.append(float(pm_student_std.detach().item()))
 
             sample_count += len(student_ids)
 

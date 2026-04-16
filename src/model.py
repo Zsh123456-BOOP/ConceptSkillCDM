@@ -33,6 +33,235 @@ import torch.nn.functional as F
 from src.prediction_head import CognitiveDiagnosisHead, ExerciseDifficultyEncoder
 
 
+def _pack_active_row_index(row_is_active: Optional[torch.Tensor]) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    if row_is_active is None:
+        return None, None
+    row_is_active = row_is_active.bool()
+    B, C = row_is_active.shape
+    counts = row_is_active.sum(dim=1)
+    max_rows = int(counts.max().item()) if counts.numel() > 0 else 0
+    device = row_is_active.device
+    if max_rows <= 0:
+        empty_index = torch.empty((B, 0), device=device, dtype=torch.long)
+        empty_mask = torch.empty((B, 0), device=device, dtype=torch.bool)
+        return empty_index, empty_mask
+
+    active_row_index = torch.full((B, max_rows), -1, device=device, dtype=torch.long)
+    active_row_valid_mask = torch.zeros((B, max_rows), device=device, dtype=torch.bool)
+    for b in range(B):
+        idx = torch.nonzero(row_is_active[b], as_tuple=False).reshape(-1)
+        if idx.numel() == 0:
+            continue
+        active_row_index[b, : idx.numel()] = idx
+        active_row_valid_mask[b, : idx.numel()] = True
+    return active_row_index, active_row_valid_mask
+
+
+def _build_support_cache(
+    relation_matrices: torch.Tensor,
+    *,
+    allow_full_support: bool = False,
+) -> Dict[str, torch.Tensor]:
+    H, C, _ = relation_matrices.shape
+    device = relation_matrices.device
+    dtype = relation_matrices.dtype
+
+    if allow_full_support:
+        support_col_index = torch.arange(C, device=device, dtype=torch.long).view(1, 1, C).expand(H, C, C)
+        support_valid_mask = torch.ones((H, C, C), device=device, dtype=torch.bool)
+        global_support_prob = torch.full((H, C, C), 1.0 / float(max(1, C)), device=device, dtype=dtype)
+        return {
+            "support_col_index": support_col_index,
+            "support_valid_mask": support_valid_mask,
+            "global_support_prob": global_support_prob,
+            "global_support_logprob": global_support_prob.clamp(min=1e-8).log(),
+        }
+
+    support_counts = (relation_matrices > 0).sum(dim=-1)
+    k_max = int(max(1, support_counts.max().item()))
+    global_support_prob, support_col_index = torch.topk(relation_matrices, k=k_max, dim=-1)
+    support_valid_mask = global_support_prob > 0
+
+    # Fallback: if a row becomes empty numerically, keep a self-loop support entry.
+    row_has_support = support_valid_mask.any(dim=-1)
+    if not bool(row_has_support.all()):
+        missing = ~row_has_support
+        missing_4d = missing.unsqueeze(-1)
+        replacement_cols = torch.zeros_like(support_col_index)
+        replacement_cols[..., 0] = torch.arange(C, device=device, dtype=torch.long).view(1, C).expand(H, -1)
+        replacement_prob = torch.zeros_like(global_support_prob)
+        replacement_prob[..., 0] = 1.0
+        replacement_valid = torch.zeros_like(support_valid_mask)
+        replacement_valid[..., 0] = True
+        support_col_index = torch.where(missing_4d, replacement_cols, support_col_index)
+        global_support_prob = torch.where(missing_4d, replacement_prob, global_support_prob)
+        support_valid_mask = torch.where(missing_4d, replacement_valid, support_valid_mask)
+
+    denom = global_support_prob.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+    global_support_prob = global_support_prob / denom
+    return {
+        "support_col_index": support_col_index,
+        "support_valid_mask": support_valid_mask,
+        "global_support_prob": global_support_prob,
+        "global_support_logprob": global_support_prob.clamp(min=1e-8).log(),
+    }
+
+
+def _gather_row_support(
+    support_cache: Dict[str, torch.Tensor],
+    active_row_index: torch.Tensor,
+    active_row_valid_mask: torch.Tensor,
+) -> Dict[str, torch.Tensor]:
+    row_index = active_row_index.clamp(min=0)
+    support_col_parts = []
+    support_valid_parts = []
+    global_prob_parts = []
+    global_logprob_parts = []
+    for h in range(support_cache["support_col_index"].size(0)):
+        support_col_parts.append(support_cache["support_col_index"][h][row_index])
+        support_valid_parts.append(support_cache["support_valid_mask"][h][row_index])
+        global_prob_parts.append(support_cache["global_support_prob"][h][row_index])
+        global_logprob_parts.append(support_cache["global_support_logprob"][h][row_index])
+
+    support_col_index = torch.stack(support_col_parts, dim=1)
+    support_valid_mask = torch.stack(support_valid_parts, dim=1)
+    global_support_prob = torch.stack(global_prob_parts, dim=1)
+    global_support_logprob = torch.stack(global_logprob_parts, dim=1)
+    support_valid_mask = support_valid_mask & active_row_valid_mask.unsqueeze(1).unsqueeze(-1)
+    global_support_prob = global_support_prob * support_valid_mask.to(dtype=global_support_prob.dtype)
+    denom = global_support_prob.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+    global_support_prob = torch.where(
+        support_valid_mask.any(dim=-1, keepdim=True),
+        global_support_prob / denom,
+        global_support_prob,
+    )
+    return {
+        "support_col_index": support_col_index,
+        "support_valid_mask": support_valid_mask,
+        "global_support_prob": global_support_prob,
+        "global_support_logprob": torch.where(
+            support_valid_mask,
+            global_support_prob.clamp(min=1e-8).log(),
+            torch.full_like(global_support_prob, -30.0),
+        ),
+    }
+
+
+def _gather_head_rows(x: torch.Tensor, row_index: torch.Tensor, row_valid_mask: torch.Tensor) -> torch.Tensor:
+    if row_index is None:
+        return x.new_zeros((x.size(0), x.size(1), 0, x.size(-1)))
+    if row_index.numel() == 0:
+        return x.new_zeros((x.size(0), x.size(1), 0, x.size(-1)))
+    idx = row_index.clamp(min=0).unsqueeze(1).unsqueeze(-1).expand(-1, x.size(1), -1, x.size(-1))
+    gathered = torch.gather(x, 2, idx)
+    return gathered * row_valid_mask.unsqueeze(1).unsqueeze(-1).to(dtype=gathered.dtype)
+
+
+def _gather_head_support_features(x: torch.Tensor, support_col_index: torch.Tensor, support_valid_mask: torch.Tensor) -> torch.Tensor:
+    B, H, _, D = x.shape
+    if support_col_index.numel() == 0:
+        return x.new_zeros((*support_col_index.shape, D))
+    batch_idx = torch.arange(B, device=x.device, dtype=torch.long).view(B, 1, 1)
+    outs = []
+    for h in range(H):
+        cols = support_col_index[:, h]
+        gathered = x[:, h][batch_idx.expand_as(cols), cols]
+        outs.append(gathered)
+    out = torch.stack(outs, dim=1)
+    return out * support_valid_mask.unsqueeze(-1).to(dtype=out.dtype)
+
+
+def _normalize_sparse_scores(
+    scores: torch.Tensor,
+    support_valid_mask: torch.Tensor,
+    row_budget: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    mask = support_valid_mask.to(dtype=scores.dtype)
+    scores = torch.nan_to_num(scores, nan=0.0, posinf=6.0, neginf=-6.0) * mask
+    denom = mask.sum(dim=-1, keepdim=True).clamp(min=1.0)
+    mean = (scores * mask).sum(dim=-1, keepdim=True) / denom
+    centered = (scores - mean) * mask
+    row_var = ((centered.pow(2) * mask).sum(dim=-1, keepdim=True) / denom).clamp_min(1e-8)
+    row_rms = row_var.sqrt()
+    centered = centered / row_rms
+    centered = torch.tanh(centered) * mask
+    mean2 = (centered * mask).sum(dim=-1, keepdim=True) / denom
+    centered = (centered - mean2) * mask
+    if row_budget is not None:
+        centered = centered * row_budget.unsqueeze(1).unsqueeze(-1).to(dtype=centered.dtype, device=centered.device)
+    centered = torch.tanh(centered) * mask
+    return torch.nan_to_num(centered, nan=0.0, posinf=1.0, neginf=-1.0)
+
+
+def _masked_support_softmax(logits: torch.Tensor, support_valid_mask: torch.Tensor) -> torch.Tensor:
+    masked_logits = torch.where(
+        support_valid_mask,
+        logits,
+        torch.full_like(logits, -30.0),
+    )
+    probs = F.softmax(masked_logits, dim=-1)
+    probs = probs * support_valid_mask.to(dtype=probs.dtype)
+    denom = probs.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+    fallback = support_valid_mask.to(dtype=probs.dtype)
+    fallback = fallback / fallback.sum(dim=-1, keepdim=True).clamp(min=1.0)
+    return torch.where(support_valid_mask.any(dim=-1, keepdim=True), probs / denom, fallback)
+
+
+def _masked_sparse_row_entropy(probs: torch.Tensor, support_valid_mask: torch.Tensor) -> torch.Tensor:
+    mask = support_valid_mask.to(dtype=probs.dtype)
+    probs = probs.clamp(min=1e-12) * mask
+    denom = mask.sum(dim=-1).clamp(min=1.0)
+    row_entropy = -(probs * probs.clamp(min=1e-12).log()).sum(dim=-1)
+    return (row_entropy * (denom > 0).to(dtype=probs.dtype)).sum() / (denom > 0).to(dtype=probs.dtype).sum().clamp(min=1.0)
+
+
+def _apply_sparse_local_posterior(
+    states: torch.Tensor,
+    relation_spec: Dict[str, torch.Tensor],
+    *,
+    reduce_heads: bool,
+) -> torch.Tensor:
+    global_matrices = relation_spec["global_matrices"]
+    if states.dim() != 3:
+        raise ValueError(f"Expected states shape (B,C,D), got {tuple(states.shape)}")
+    B, C, D = states.shape
+    H = global_matrices.size(0)
+    expanded_states = states.unsqueeze(1).expand(-1, H, -1, -1)
+
+    global_outs = []
+    for h in range(H):
+        A = global_matrices[h].to(dtype=states.dtype)
+        A = A / (A.sum(dim=-1, keepdim=True) + 1e-12)
+        global_outs.append(torch.matmul(A, states))
+    global_out = torch.stack(global_outs, dim=1)  # (B,H,C,D)
+
+    active_row_index = relation_spec.get("active_row_index")
+    active_row_valid_mask = relation_spec.get("active_row_valid_mask")
+    if active_row_index is None or active_row_valid_mask is None or active_row_index.numel() == 0:
+        return global_out.mean(dim=1) if reduce_heads else global_out
+
+    support_col_index = relation_spec["support_col_index"]
+    support_valid_mask = relation_spec["support_valid_mask"]
+    global_support_prob = relation_spec["global_support_prob"]
+    posterior_prob = relation_spec["posterior_prob"]
+    gate_alpha = relation_spec["gate_alpha"]
+
+    row_features = _gather_head_rows(expanded_states, active_row_index, active_row_valid_mask)
+    support_features = _gather_head_support_features(expanded_states, support_col_index, support_valid_mask)
+    del row_features  # row features are not needed in the operator itself; keep gather path symmetrical.
+
+    global_local = (global_support_prob.unsqueeze(-1) * support_features).sum(dim=-2)
+    post_local = (posterior_prob.unsqueeze(-1) * support_features).sum(dim=-2)
+    mixed_local = global_local + gate_alpha.unsqueeze(-1).unsqueeze(-1) * (post_local - global_local)
+
+    out = global_out.clone()
+    batch_idx = torch.arange(B, device=states.device, dtype=torch.long).unsqueeze(1).expand_as(active_row_index)
+    valid = active_row_valid_mask
+    for h in range(H):
+        out[:, h][batch_idx[valid], active_row_index.clamp(min=0)[valid]] = mixed_local[:, h][valid]
+    return out.mean(dim=1) if reduce_heads else out
+
+
 # ======================================================
 # 模块 1（A）：全局概念图学习 - MultiHeadRelationLearning
 # ======================================================
@@ -200,34 +429,38 @@ class ConceptGraphConv(nn.Module):
         relation_matrices:
           - (H, C, C) or
           - (B, H, C, C)
+          - sparse/local posterior relation spec dict
         """
         outputs = []
         for h in range(self.num_heads):
             Wh = self.head_transforms[h](x)  # (B, C, Dout)
 
             if isinstance(relation_matrices, dict):
-                # 优化路径：个性化图混合，逐 head 计算避免 4D 张量
-                global_A = relation_matrices["global_matrices"][h]  # (C, C)
-                personal_all = relation_matrices["personal_matrices"]
-                gate_all = relation_matrices["gate_alpha"]
-                if personal_all.dim() == 4:
-                    personal_A = personal_all[:, h, :, :]  # (B, C, C)
-                else:
-                    personal_A = personal_all  # (B, C, C)
-                if gate_all.dim() == 2:
-                    gate = gate_all[:, h].view(-1, 1, 1)  # (B, 1, 1)
-                else:
-                    gate = gate_all.view(-1, 1, 1)  # (B, 1, 1)
-                 
-                global_A = global_A.to(dtype=Wh.dtype)
-                personal_A = personal_A.to(dtype=Wh.dtype)
-                
-                # 混合：A = (1-gate)*global + gate*personal，逐样本计算
-                global_A_expanded = global_A.unsqueeze(0)  # (1, C, C)
-                A = (1.0 - gate) * global_A_expanded + gate * personal_A  # (B, C, C)
-                A = A / (A.sum(dim=-1, keepdim=True) + 1e-12)
-                out = torch.bmm(A, Wh)  # (B,C,C) @ (B,C,D) -> (B,C,D)
-                
+                global_A = relation_matrices["global_matrices"][h].to(dtype=Wh.dtype)  # (C, C)
+                global_A = global_A / (global_A.sum(dim=-1, keepdim=True) + 1e-12)
+                out = torch.matmul(global_A, Wh)
+
+                active_row_index = relation_matrices.get("active_row_index")
+                active_row_valid_mask = relation_matrices.get("active_row_valid_mask")
+                if active_row_index is not None and active_row_valid_mask is not None and active_row_index.numel() > 0:
+                    support_col_index = relation_matrices["support_col_index"][:, h]
+                    support_valid_mask = relation_matrices["support_valid_mask"][:, h]
+                    global_support_prob = relation_matrices["global_support_prob"][:, h].to(dtype=Wh.dtype)
+                    posterior_prob = relation_matrices["posterior_prob"][:, h].to(dtype=Wh.dtype)
+                    gate = relation_matrices["gate_alpha"][:, h].to(dtype=Wh.dtype).view(-1, 1, 1)
+
+                    support_features = _gather_head_support_features(
+                        Wh.unsqueeze(1),
+                        support_col_index.unsqueeze(1),
+                        support_valid_mask.unsqueeze(1),
+                    ).squeeze(1)
+                    global_local = (global_support_prob.unsqueeze(-1) * support_features).sum(dim=-2)
+                    post_local = (posterior_prob.unsqueeze(-1) * support_features).sum(dim=-2)
+                    mixed_local = global_local + gate * (post_local - global_local)
+
+                    batch_idx = torch.arange(Wh.size(0), device=Wh.device, dtype=torch.long).unsqueeze(1).expand_as(active_row_index)
+                    valid = active_row_valid_mask
+                    out[batch_idx[valid], active_row_index.clamp(min=0)[valid]] = mixed_local[valid]
             elif relation_matrices.dim() == 3:
                 # 全局邻接
                 A = relation_matrices[h]  # (C, C)
@@ -527,24 +760,6 @@ class PersonalRelationGenerator(nn.Module):
         nn.init.xavier_normal_(self.id_to_u.weight, gain=0.15)
         nn.init.xavier_normal_(self.id_to_v.weight, gain=0.15)
 
-    @staticmethod
-    def _normalize_scores(
-        scores: torch.Tensor,
-        row_budget_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        scores = torch.nan_to_num(scores, nan=0.0, posinf=6.0, neginf=-6.0)
-        scores = scores - scores.mean(dim=-1, keepdim=True)
-        row_rms = scores.pow(2).mean(dim=-1, keepdim=True).sqrt()
-        row_rms = torch.where(torch.isfinite(row_rms), row_rms, torch.ones_like(row_rms))
-        row_rms = row_rms.clamp_min(1e-4)
-        scores = scores / row_rms
-        scores = torch.tanh(scores)
-        scores = scores - scores.mean(dim=-1, keepdim=True)
-        if row_budget_mask is not None:
-            scores = scores * row_budget_mask.unsqueeze(1).unsqueeze(-1).to(dtype=scores.dtype, device=scores.device)
-        scores = torch.tanh(scores)
-        return torch.nan_to_num(scores, nan=0.0, posinf=1.0, neginf=-1.0)
-
     def forward(
         self,
         student_state_embedding: torch.Tensor,
@@ -552,7 +767,10 @@ class PersonalRelationGenerator(nn.Module):
         knowledge_state: torch.Tensor,
         student_id_embedding: Optional[torch.Tensor] = None,
         id_adapter_scale: Optional[torch.Tensor] = None,
-        row_budget_mask: Optional[torch.Tensor] = None,
+        active_row_index: Optional[torch.Tensor] = None,
+        active_row_valid_mask: Optional[torch.Tensor] = None,
+        support_row_cache: Optional[Dict[str, torch.Tensor]] = None,
+        row_budget_values: Optional[torch.Tensor] = None,
         return_diagnostics: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         student_code = torch.tanh(self.student_norm(student_state_embedding))
@@ -598,19 +816,44 @@ class PersonalRelationGenerator(nn.Module):
             + id_adapter_scale_effective * torch.tanh(id_v)
         )
 
-        state_scores = torch.einsum("bhcr,bhkr->bhck", state_q, state_k) / math.sqrt(self.rank)
-        state_scores = self._normalize_scores(state_scores)
-        adapter_scores = torch.einsum(
-            "bhcr,bhkr->bhck",
-            state_q + adapter_q,
+        if active_row_index is None or active_row_valid_mask is None:
+            full_row_mask = torch.ones(
+                (B, self.num_concepts),
+                device=knowledge_state.device,
+                dtype=torch.bool,
+            )
+            active_row_index, active_row_valid_mask = _pack_active_row_index(full_row_mask)
+        if support_row_cache is None:
+            fallback_cache = _build_support_cache(
+                torch.eye(self.num_concepts, device=knowledge_state.device, dtype=knowledge_state.dtype)
+                .unsqueeze(0)
+                .expand(self.num_heads, -1, -1),
+                allow_full_support=True,
+            )
+            support_row_cache = _gather_row_support(fallback_cache, active_row_index, active_row_valid_mask)
+
+        q_rows = _gather_head_rows(state_q, active_row_index, active_row_valid_mask)
+        q_rows_adapter = _gather_head_rows(state_q + adapter_q, active_row_index, active_row_valid_mask)
+        k_support = _gather_head_support_features(state_k, support_row_cache["support_col_index"], support_row_cache["support_valid_mask"])
+        k_support_adapter = _gather_head_support_features(
             state_k + adapter_k,
-        ) / math.sqrt(self.rank)
-        adapter_scores = self._normalize_scores(adapter_scores - state_scores, row_budget_mask=row_budget_mask)
+            support_row_cache["support_col_index"],
+            support_row_cache["support_valid_mask"],
+        )
+
+        state_scores = (q_rows.unsqueeze(-2) * k_support).sum(dim=-1) / math.sqrt(self.rank)
+        state_scores = _normalize_sparse_scores(state_scores, support_row_cache["support_valid_mask"])
+        adapter_scores = (q_rows_adapter.unsqueeze(-2) * k_support_adapter).sum(dim=-1) / math.sqrt(self.rank)
+        adapter_scores = _normalize_sparse_scores(
+            adapter_scores - state_scores,
+            support_row_cache["support_valid_mask"],
+            row_budget=row_budget_values,
+        )
 
         state_mix = self.max_state_mix * torch.sigmoid(self.state_mix_logit)
         student_mix = self.max_student_mix * torch.sigmoid(self.student_mix_logit)
         scores = state_mix * state_scores + student_mix * adapter_scores
-        scores = self._normalize_scores(scores, row_budget_mask=row_budget_mask)
+        scores = _normalize_sparse_scores(scores, support_row_cache["support_valid_mask"], row_budget=row_budget_values)
         if not return_diagnostics:
             return scores
 
@@ -624,6 +867,7 @@ class PersonalRelationGenerator(nn.Module):
             "state_scores_absmean": state_scores.abs().mean(),
             "student_scores_absmean": adapter_scores.abs().mean(),
             "scores_absmax": scores.abs().max(),
+            "active_row_count_mean": active_row_valid_mask.float().sum(dim=1).mean(),
             "scores_nonfinite_count": scores.new_tensor(int((~torch.isfinite(scores)).sum().item()), dtype=torch.long),
         }
         return scores, diagnostics
@@ -1000,6 +1244,12 @@ class ConceptStructureModeling(nn.Module):
         neighbor_row_personal_delta = None
         personal_row_budget_mean = None
         personal_query_row_std = None
+        active_row_index = None
+        active_row_valid_mask = None
+        support_col_index = None
+        support_valid_mask = None
+        global_support_prob = None
+        posterior_prob = None
         relation_used = relation_matrices
         initial_state = self.knowledge_encoder.compose_initial_state(student_ids)
         knowledge_state_pre_personal = knowledge_state
@@ -1063,6 +1313,22 @@ class ConceptStructureModeling(nn.Module):
                 concept_mask,
                 local_row_mask,
             )
+            active_row_index, active_row_valid_mask = _pack_active_row_index(local_row_mask.bool() if local_row_mask is not None else None)
+            if row_budget_mask is not None and active_row_index is not None:
+                row_budget_values = torch.gather(row_budget_mask, 1, active_row_index.clamp(min=0))
+                row_budget_values = row_budget_values * active_row_valid_mask.to(dtype=row_budget_values.dtype)
+                personal_row_budget_mean = row_budget_values.sum() / active_row_valid_mask.float().sum().clamp(min=1.0)
+            else:
+                row_budget_values = None
+            allow_full_support = (not self.use_concept_graph) or (not self.personal_support_only)
+            support_cache = _build_support_cache(relation_matrices, allow_full_support=allow_full_support)
+            if active_row_index is not None and active_row_valid_mask is not None:
+                support_row_cache = _gather_row_support(support_cache, active_row_index, active_row_valid_mask)
+                support_col_index = support_row_cache["support_col_index"]
+                support_valid_mask = support_row_cache["support_valid_mask"]
+                global_support_prob = support_row_cache["global_support_prob"]
+            else:
+                support_row_cache = None
             gate_alpha_bias = None
             if self.personal_alpha_bias is not None:
                 gate_alpha_bias = self.personal_alpha_bias_scale * torch.tanh(
@@ -1094,9 +1360,12 @@ class ConceptStructureModeling(nn.Module):
                 knowledge_state,
                 student_id_embedding=generator_id_embedding,
                 id_adapter_scale=generator_id_scale,
-                row_budget_mask=row_budget_mask,
+                active_row_index=active_row_index,
+                active_row_valid_mask=active_row_valid_mask,
+                support_row_cache=support_row_cache,
+                row_budget_values=row_budget_values,
                 return_diagnostics=True,
-            )  # (B,H,C,C)
+            )  # (B,H,R,K)
             personal_delta, personal_diag = personal_out
             personal_state_mix = personal_diag["state_mix"]
             personal_student_mix = personal_diag["student_mix"]
@@ -1105,92 +1374,72 @@ class ConceptStructureModeling(nn.Module):
             personal_delta_nonfinite_count = personal_diag["scores_nonfinite_count"]
             personal_delta_absmax = personal_diag["scores_absmax"]
             personal_delta = torch.nan_to_num(personal_delta, nan=0.0, posinf=1.0, neginf=-1.0)
-            personal_logits, support_mask = self._build_personal_prior_logits(
-                relation_matrices=relation_matrices,
-                identity_relations=identity_relations,
-                local_row_mask=local_row_mask,
-                batch_size=B,
-            )
-            personal_support_density = support_mask.float().mean()
-            row_mask_4d = None
-            if local_row_mask is not None:
-                row_mask_4d = local_row_mask.unsqueeze(1).unsqueeze(-1).bool().expand_as(personal_logits)
-            query_row_mask_4d = None
-            neighbor_row_mask_4d = None
-            if query_row_mask is not None:
-                query_row_mask_4d = query_row_mask.unsqueeze(1).unsqueeze(-1).bool().expand_as(personal_logits)
-                query_count = query_row_mask_4d.float().sum(dim=(1, 2, 3)).clamp(min=1.0)
-            else:
-                query_count = None
-            if neighbor_row_mask is not None:
-                neighbor_row_mask_4d = neighbor_row_mask.unsqueeze(1).unsqueeze(-1).bool().expand_as(personal_logits)
-                neighbor_count = neighbor_row_mask_4d.float().sum(dim=(1, 2, 3)).clamp(min=1.0)
-            else:
-                neighbor_count = None
-            if row_budget_mask is not None:
-                personal_row_budget_mean = row_budget_mask.mean()
+            personal_support_density = support_valid_mask.float().mean() if support_valid_mask is not None else relation_matrices.new_tensor(0.0)
             posterior_delta = self.personal_delta_scale * personal_delta
-            if query_row_mask_4d is not None:
-                query_delta_per_sample = (
-                    posterior_delta.abs() * query_row_mask_4d.float()
-                ).sum(dim=(1, 2, 3)) / query_count
-                query_row_personal_delta = query_delta_per_sample.mean()
-                personal_query_row_std = query_delta_per_sample.std(unbiased=False)
-            if neighbor_row_mask_4d is not None:
-                neighbor_delta_per_sample = (
-                    posterior_delta.abs() * neighbor_row_mask_4d.float()
-                ).sum(dim=(1, 2, 3)) / neighbor_count
-                neighbor_row_personal_delta = neighbor_delta_per_sample.mean()
-            posterior_logits = personal_logits + posterior_delta
-            if row_mask_4d is not None:
-                posterior_logits = torch.where(row_mask_4d, posterior_logits, personal_logits)
-            if self.personal_support_only and self.use_concept_graph and self.relation_learning is not None:
-                allowed_mask = support_mask
-                if row_mask_4d is not None:
-                    allowed_mask = (~row_mask_4d) | support_mask
-                posterior_logits = posterior_logits.masked_fill(~allowed_mask, -30.0)
-            personal_logits = posterior_logits
-            personal_logits_nonfinite_count = personal_logits.new_tensor(
-                int((~torch.isfinite(personal_logits)).sum().item()), dtype=torch.long
-            )
-            personal_logits_absmax = torch.nan_to_num(personal_logits, nan=0.0, posinf=20.0, neginf=-20.0).abs().max()
-            personal_logits = torch.nan_to_num(personal_logits, nan=0.0, posinf=20.0, neginf=-20.0)
-            personal_logits = personal_logits.clamp(min=-20.0, max=20.0)
-            personal_matrices = F.softmax(personal_logits, dim=-1)            # (B,H,C,C)
-            personal_matrix_nonfinite_count = personal_matrices.new_tensor(
-                int((~torch.isfinite(personal_matrices)).sum().item()), dtype=torch.long
-            )
-            personal_matrices = torch.nan_to_num(personal_matrices, nan=0.0, posinf=1.0, neginf=0.0)
-            row_sum = personal_matrices.sum(dim=-1, keepdim=True)
-            bad_rows = (~torch.isfinite(row_sum.squeeze(-1))) | (row_sum.squeeze(-1) < 1e-12)
-            personal_bad_row_count = row_sum.new_tensor(int(bad_rows.sum().item()), dtype=torch.long)
-            personal_fallback_row_count = personal_bad_row_count.clone()
-            if bad_rows.any():
-                fallback = identity_relations.unsqueeze(0).expand_as(personal_matrices)
-                if self.use_concept_graph and self.relation_learning is not None:
-                    fallback = relation_matrices.unsqueeze(0).expand_as(personal_matrices)
-                personal_matrices = torch.where(
-                    bad_rows.unsqueeze(-1).expand_as(personal_matrices),
-                    fallback,
-                    personal_matrices,
+            global_logprob = support_row_cache["global_support_logprob"] if support_row_cache is not None else None
+            if global_logprob is not None:
+                posterior_logits = torch.where(
+                    support_valid_mask,
+                    global_logprob + posterior_delta,
+                    torch.full_like(posterior_delta, -30.0),
                 )
-                row_sum = personal_matrices.sum(dim=-1, keepdim=True)
-            personal_matrices = personal_matrices / (row_sum + 1e-12)
-            global_matrix = relation_matrices.unsqueeze(0)
-            personal_matrix_delta = (personal_matrices - global_matrix).abs().mean(dim=(-1, -2, -3))
-            personal_matrix_student_std = personal_matrices.std(dim=0, unbiased=False).mean()
-            personal_delta_pre_softmax_norm = personal_delta.pow(2).mean().sqrt()
-            personal_delta_student_std = personal_delta.std(dim=0, unbiased=False).mean()
-            alpha_head_std = gate_alpha_effective.squeeze(-1).squeeze(-1).std(dim=1, unbiased=False).mean()
+                posterior_prob = _masked_support_softmax(posterior_logits, support_valid_mask)
+                personal_logits_nonfinite_count = posterior_logits.new_tensor(
+                    int((~torch.isfinite(posterior_logits)).sum().item()), dtype=torch.long
+                )
+                personal_logits_absmax = torch.nan_to_num(
+                    posterior_logits, nan=0.0, posinf=20.0, neginf=-20.0
+                ).abs().max()
+                personal_matrix_nonfinite_count = posterior_prob.new_tensor(
+                    int((~torch.isfinite(posterior_prob)).sum().item()), dtype=torch.long
+                )
+                bad_rows = ~support_valid_mask.any(dim=-1)
+                personal_bad_row_count = posterior_prob.new_tensor(int(bad_rows.sum().item()), dtype=torch.long)
+                personal_fallback_row_count = personal_bad_row_count.clone()
 
-            if self.use_concept_graph and self.relation_learning is not None:
-                mixed_relation = (1.0 - gate_alpha_effective) * global_matrix + gate_alpha_effective * personal_matrices
-                if row_mask_4d is not None:
-                    relation_used = torch.where(row_mask_4d, mixed_relation, global_matrix)
-                else:
-                    relation_used = mixed_relation
-            else:
-                relation_used = personal_matrices
+                valid_float = support_valid_mask.float()
+                delta_denom = valid_float.sum(dim=(1, 2, 3)).clamp(min=1.0)
+                personal_matrix_delta = (
+                    (posterior_prob - global_support_prob).abs() * valid_float
+                ).sum(dim=(1, 2, 3)) / delta_denom
+                personal_matrix_student_std = posterior_prob.std(dim=0, unbiased=False).mean()
+                personal_delta_pre_softmax_norm = (
+                    (posterior_delta.pow(2) * valid_float).sum() / valid_float.sum().clamp(min=1.0)
+                ).sqrt()
+                personal_delta_student_std = (posterior_delta * valid_float).std(dim=0, unbiased=False).mean()
+                alpha_head_std = gate_alpha_effective.squeeze(-1).squeeze(-1).std(dim=1, unbiased=False).mean()
+
+                if query_row_mask is not None and active_row_index is not None:
+                    query_active = torch.gather(query_row_mask.float(), 1, active_row_index.clamp(min=0))
+                    query_active = query_active * active_row_valid_mask.float()
+                    query_mask_sparse = query_active.unsqueeze(1).unsqueeze(-1) * valid_float
+                    query_count = query_mask_sparse.sum(dim=(1, 2, 3)).clamp(min=1.0)
+                    query_delta_per_sample = (
+                        posterior_delta.abs() * query_mask_sparse
+                    ).sum(dim=(1, 2, 3)) / query_count
+                    query_row_personal_delta = query_delta_per_sample.mean()
+                    personal_query_row_std = query_delta_per_sample.std(unbiased=False)
+                if neighbor_row_mask is not None and active_row_index is not None:
+                    neighbor_active = torch.gather(neighbor_row_mask.float(), 1, active_row_index.clamp(min=0))
+                    neighbor_active = neighbor_active * active_row_valid_mask.float()
+                    neighbor_mask_sparse = neighbor_active.unsqueeze(1).unsqueeze(-1) * valid_float
+                    neighbor_count = neighbor_mask_sparse.sum(dim=(1, 2, 3)).clamp(min=1.0)
+                    neighbor_delta_per_sample = (
+                        posterior_delta.abs() * neighbor_mask_sparse
+                    ).sum(dim=(1, 2, 3)) / neighbor_count
+                    neighbor_row_personal_delta = neighbor_delta_per_sample.mean()
+
+                relation_used = {
+                    "global_matrices": relation_matrices,
+                    "active_row_index": active_row_index,
+                    "active_row_valid_mask": active_row_valid_mask,
+                    "support_col_index": support_col_index,
+                    "support_valid_mask": support_valid_mask,
+                    "global_support_prob": global_support_prob,
+                    "posterior_prob": posterior_prob,
+                    "gate_alpha": gate_alpha_effective.squeeze(-1).squeeze(-1),
+                }
+                personal_matrices = None
             knowledge_state = self.knowledge_encoder(student_ids, relation_used)
             student_repr = knowledge_state.mean(dim=1)
             knowledge_state_personal_delta = (knowledge_state - knowledge_state_pre_personal).pow(2).mean().sqrt()
@@ -1231,6 +1480,12 @@ class ConceptStructureModeling(nn.Module):
             "neighbor_row_personal_delta": neighbor_row_personal_delta,
             "personal_row_budget_mean": personal_row_budget_mean,
             "personal_query_row_std": personal_query_row_std,
+            "active_row_index": active_row_index,
+            "active_row_valid_mask": active_row_valid_mask,
+            "support_col_index": support_col_index,
+            "support_valid_mask": support_valid_mask,
+            "global_support_prob": global_support_prob,
+            "posterior_prob": posterior_prob,
             "personal_state_mix": personal_state_mix,
             "personal_student_mix": personal_student_mix,
             "personal_student_adapter_scale": personal_student_adapter_scale,
@@ -1455,6 +1710,8 @@ class CognitiveDiagnosisModel(nn.Module):
 
     @staticmethod
     def _aggregate_with_relation(states: torch.Tensor, relation_matrices: torch.Tensor) -> torch.Tensor:
+        if isinstance(relation_matrices, dict):
+            return _apply_sparse_local_posterior(states, relation_matrices, reduce_heads=True)
         if relation_matrices.dim() == 3:
             A = relation_matrices.mean(dim=0).to(dtype=states.dtype)
             A = A / (A.sum(dim=-1, keepdim=True) + 1e-12)
@@ -1495,14 +1752,8 @@ class CognitiveDiagnosisModel(nn.Module):
             ((enhanced - knowledge_state).pow(2) * query_weight).sum() / query_denom
         ).sqrt()
 
-        if relation_used.dim() == 4:
-            relation_mean = relation_used.mean(dim=1)
-        elif relation_used.dim() == 3:
-            relation_mean = relation_used.mean(dim=0, keepdim=True).expand(knowledge_state.size(0), -1, -1)
-        else:
-            raise ValueError(f"Unsupported relation_used shape for query writeback: {tuple(relation_used.shape)}")
         query_seed = query_mask / query_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
-        query_support = torch.bmm(query_seed.unsqueeze(1), relation_mean).squeeze(1)
+        query_support = self._aggregate_with_relation(query_seed.unsqueeze(-1), relation_used).squeeze(-1)
         readout_query_support_mass = (query_support * (1.0 - query_mask)).sum(dim=1).mean()
         return enhanced, delta, query_row_graph_delta, readout_query_support_mass
 
@@ -1669,6 +1920,12 @@ class CognitiveDiagnosisModel(nn.Module):
                 "personal_row_budget_mean",
                 "personal_query_row_std",
                 "local_row_mask",
+                "active_row_index",
+                "active_row_valid_mask",
+                "support_col_index",
+                "support_valid_mask",
+                "global_support_prob",
+                "posterior_prob",
             ):
                 if s_out.get(key) is not None:
                     details[key] = s_out[key].detach()
@@ -1678,9 +1935,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 details["personal_generator_id_scale"] = s_out["personal_generator_id_scale"]
             if s_out.get("personal_alpha_bias_scale") is not None:
                 details["personal_alpha_bias_scale"] = s_out["personal_alpha_bias_scale"]
-            if personal_matrices is not None:
-                details["personal_matrices"] = personal_matrices
-                details["personal_matrices_detached"] = personal_matrices.detach()
+            details["personal_matrices"] = None
             if s_out.get("personal_matrix_delta") is not None:
                 details["personal_matrix_delta"] = s_out["personal_matrix_delta"]
                 details["personal_matrix_delta_detached"] = s_out["personal_matrix_delta"].detach()
@@ -1816,7 +2071,15 @@ class CognitiveDiagnosisModel(nn.Module):
 
         # (3) Personal graph regularizers
         if self.enable_module1 and self.use_personal_graph and details is not None:
-            if (
+            posterior_prob = details.get("posterior_prob")
+            support_valid_mask = details.get("support_valid_mask")
+            if posterior_prob is not None and support_valid_mask is not None and self.lambda_sparse_personal > 0:
+                terms["personal_sparse"] = (
+                    self.lambda_sparse_personal
+                    * _masked_sparse_row_entropy(posterior_prob, support_valid_mask.bool())
+                    * personal_reg_ramp_t
+                )
+            elif (
                 "personal_matrices" in details
                 and details["personal_matrices"] is not None
                 and self.lambda_sparse_personal > 0

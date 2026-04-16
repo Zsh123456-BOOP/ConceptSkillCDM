@@ -803,49 +803,51 @@ def _collect_debug_forward_stats(
                 if val is not None:
                     target.extend(val.detach().reshape(-1).cpu().numpy().tolist())
 
+            posterior_prob = details.get("posterior_prob")
+            support_valid_mask = details.get("support_valid_mask")
             personal_matrices = details.get("personal_matrices")
-            if personal_matrices is not None:
+            if posterior_prob is not None and support_valid_mask is not None:
+                probs = posterior_prob.detach()
+                valid = support_valid_mask.detach().bool()
+                masked = probs.clamp(min=1e-12) * valid.to(dtype=probs.dtype)
+                row_entropy = -(masked * masked.clamp(min=1e-12).log()).sum(dim=-1)
+                row_valid = valid.any(dim=-1)
+                if bool(row_valid.any()):
+                    personal_entropy_vals.append(float(row_entropy[row_valid].mean().item()))
+            elif personal_matrices is not None:
                 pm = personal_matrices.detach().cpu().numpy()
                 personal_entropy_vals.append(_row_entropy_mean(pm))
-                pm_delta = details.get("personal_matrix_delta")
-                if pm_delta is not None:
-                    personal_matrix_delta_vals.extend(pm_delta.detach().reshape(-1).cpu().numpy().tolist())
-                relation_matrices = details.get("relation_matrices")
-                if relation_matrices is not None:
-                    rm = relation_matrices.detach()
-                    global_matrix = rm.mean(dim=0, keepdim=True)
-                    if pm_delta is None:
-                        delta_mean = (personal_matrices.detach() - global_matrix).abs().mean(dim=(-1, -2))
-                        personal_matrix_delta_vals.extend(delta_mean.cpu().numpy().tolist())
-                    student_std = details.get("personal_matrix_student_std")
-                    if student_std is not None:
-                        personal_matrix_student_std_vals.append(float(student_std.detach().item()))
-                    else:
-                        matrix_std = personal_matrices.detach().std(dim=0, unbiased=False).mean()
-                        personal_matrix_student_std_vals.append(float(matrix_std.item()))
-                for detail_key, target in (
-                    ("personal_delta_pre_softmax_norm", personal_delta_pre_softmax_norm_vals),
-                    ("personal_delta_student_std", personal_delta_student_std_vals),
-                    ("alpha_head_std", alpha_head_std_vals),
-                    ("alpha_state_path_absmean", alpha_state_path_vals),
-                    ("alpha_id_path_absmean", alpha_id_path_vals),
-                    ("alpha_bias_path_absmean", alpha_bias_path_vals),
-                    ("head_bias_path_absmean", head_bias_path_vals),
-                    ("personal_bad_row_count", personal_bad_row_vals),
-                    ("personal_fallback_row_count", personal_fallback_row_vals),
-                    ("personal_student_mix", personal_student_mix_vals),
-                    ("personal_student_adapter_scale", personal_student_adapter_vals),
-                    ("personal_logits_absmax", personal_logits_absmax_vals),
-                    ("local_row_ratio", local_row_ratio_vals),
-                    ("personal_support_density", personal_support_density_vals),
-                    ("query_row_personal_delta", query_row_personal_delta_vals),
-                    ("neighbor_row_personal_delta", neighbor_row_personal_delta_vals),
-                    ("personal_row_budget_mean", personal_row_budget_mean_vals),
-                    ("personal_query_row_std", personal_query_row_std_vals),
-                ):
-                    val = details.get(detail_key)
-                    if val is not None:
-                        target.extend(val.detach().reshape(-1).cpu().numpy().tolist())
+
+            pm_delta = details.get("personal_matrix_delta")
+            if pm_delta is not None:
+                personal_matrix_delta_vals.extend(pm_delta.detach().reshape(-1).cpu().numpy().tolist())
+            student_std = details.get("personal_matrix_student_std")
+            if student_std is not None:
+                personal_matrix_student_std_vals.append(float(student_std.detach().item()))
+
+            for detail_key, target in (
+                ("personal_delta_pre_softmax_norm", personal_delta_pre_softmax_norm_vals),
+                ("personal_delta_student_std", personal_delta_student_std_vals),
+                ("alpha_head_std", alpha_head_std_vals),
+                ("alpha_state_path_absmean", alpha_state_path_vals),
+                ("alpha_id_path_absmean", alpha_id_path_vals),
+                ("alpha_bias_path_absmean", alpha_bias_path_vals),
+                ("head_bias_path_absmean", head_bias_path_vals),
+                ("personal_bad_row_count", personal_bad_row_vals),
+                ("personal_fallback_row_count", personal_fallback_row_vals),
+                ("personal_student_mix", personal_student_mix_vals),
+                ("personal_student_adapter_scale", personal_student_adapter_vals),
+                ("personal_logits_absmax", personal_logits_absmax_vals),
+                ("local_row_ratio", local_row_ratio_vals),
+                ("personal_support_density", personal_support_density_vals),
+                ("query_row_personal_delta", query_row_personal_delta_vals),
+                ("neighbor_row_personal_delta", neighbor_row_personal_delta_vals),
+                ("personal_row_budget_mean", personal_row_budget_mean_vals),
+                ("personal_query_row_std", personal_query_row_std_vals),
+            ):
+                val = details.get(detail_key)
+                if val is not None:
+                    target.extend(val.detach().reshape(-1).cpu().numpy().tolist())
 
             for detail_key, target in (
                 ("relation_identity_delta", relation_identity_delta_vals),
@@ -2283,6 +2285,39 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     return metrics, results
 
 
+def _materialize_personal_dense_preview(details: Dict[str, Any]) -> Optional[np.ndarray]:
+    personal = details.get("personal_matrices")
+    if personal is not None:
+        return personal.detach().cpu().numpy()
+
+    relation_used = details.get("relation_used")
+    if not isinstance(relation_used, dict):
+        return None
+
+    global_A = relation_used["global_matrices"].detach()
+    active_row_index = relation_used["active_row_index"].detach()
+    active_row_valid_mask = relation_used["active_row_valid_mask"].detach().bool()
+    support_col_index = relation_used["support_col_index"].detach()
+    support_valid_mask = relation_used["support_valid_mask"].detach().bool()
+    posterior_prob = relation_used["posterior_prob"].detach()
+
+    B = active_row_index.size(0)
+    H, C, _ = global_A.shape
+    dense = global_A.unsqueeze(0).expand(B, -1, -1, -1).clone()
+    for b in range(B):
+        for r in range(active_row_index.size(1)):
+            if not bool(active_row_valid_mask[b, r]):
+                continue
+            row = int(active_row_index[b, r].item())
+            for h in range(H):
+                dense[b, h, row] = 0.0
+                valid = support_valid_mask[b, h, r]
+                cols = support_col_index[b, h, r][valid]
+                probs = posterior_prob[b, h, r][valid]
+                dense[b, h, row, cols] = probs
+    return dense.cpu().numpy()
+
+
 def save_component_analysis_data(
     model: CognitiveDiagnosisModel,
     train_loader: DataLoader,
@@ -2342,15 +2377,39 @@ def save_component_analysis_data(
                 alpha = details.get("alpha_effective", details.get("alpha"))
                 if alpha is not None:
                     gate_alphas.append(alpha[:take].detach().cpu().numpy())
-                if details.get("personal_matrices") is not None:
-                    personal_graphs.append(details["personal_matrices"][:take].detach().cpu().numpy())
+                dense_preview = _materialize_personal_dense_preview(details)
+                if dense_preview is not None:
+                    personal_graphs.append(dense_preview[:take])
                 if details.get("relation_used") is not None:
-                    relation_used_samples.append(details["relation_used"][:take].detach().cpu().numpy())
+                    relation_used = details["relation_used"]
+                    if isinstance(relation_used, dict):
+                        dense_relation = _materialize_personal_dense_preview(details)
+                        if dense_relation is not None:
+                            relation_used_samples.append(dense_relation[:take])
+                    else:
+                        relation_used_samples.append(relation_used[:take].detach().cpu().numpy())
                 if details.get("local_row_mask") is not None:
                     local_row_masks.append(details["local_row_mask"][:take].detach().cpu().numpy())
                 if details.get("q_vector") is not None:
                     q_vectors.append(details["q_vector"][:take].detach().cpu().numpy())
                 exercise_id_samples.append(exercise_ids[:take].detach().cpu().numpy())
+                if isinstance(details.get("relation_used"), dict):
+                    spec = details["relation_used"]
+                    analysis_data.setdefault("active_row_index_samples", []).append(
+                        spec["active_row_index"][:take].detach().cpu().numpy()
+                    )
+                    analysis_data.setdefault("active_row_valid_mask_samples", []).append(
+                        spec["active_row_valid_mask"][:take].detach().cpu().numpy()
+                    )
+                    analysis_data.setdefault("support_col_index_samples", []).append(
+                        spec["support_col_index"][:take].detach().cpu().numpy()
+                    )
+                    analysis_data.setdefault("support_valid_mask_samples", []).append(
+                        spec["support_valid_mask"][:take].detach().cpu().numpy()
+                    )
+                    analysis_data.setdefault("posterior_prob_samples", []).append(
+                        spec["posterior_prob"][:take].detach().cpu().numpy()
+                    )
 
                 sample_count += take
             
@@ -2375,7 +2434,16 @@ def save_component_analysis_data(
             if exercise_id_samples:
                 exercise_arr = np.concatenate(exercise_id_samples, axis=0)[:num_samples]
                 analysis_data["exercise_ids_samples"] = exercise_arr
-    
+            for key in (
+                "active_row_index_samples",
+                "active_row_valid_mask_samples",
+                "support_col_index_samples",
+                "support_valid_mask_samples",
+                "posterior_prob_samples",
+            ):
+                if key in analysis_data and analysis_data[key]:
+                    analysis_data[key] = np.concatenate(analysis_data[key], axis=0)[:min(10, num_samples)]
+
     # ========== 保存数据 ==========
     analysis_path = os.path.join(save_dir, "component_analysis_data.npz")
     np.savez_compressed(analysis_path, **analysis_data)

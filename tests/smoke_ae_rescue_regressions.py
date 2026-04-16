@@ -22,6 +22,71 @@ def _assert(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def _materialize_sparse_personal_dense(details: dict) -> torch.Tensor:
+    personal = details.get("personal_matrices")
+    if personal is not None:
+        return personal.detach()
+
+    relation_used = details.get("relation_used")
+    _assert(isinstance(relation_used, dict), "缺少 sparse relation spec，无法重建 personal graph。")
+
+    global_A = relation_used["global_matrices"].detach()
+    active_row_index = relation_used["active_row_index"].detach()
+    active_row_valid_mask = relation_used["active_row_valid_mask"].detach().bool()
+    support_col_index = relation_used["support_col_index"].detach()
+    support_valid_mask = relation_used["support_valid_mask"].detach().bool()
+    posterior_prob = relation_used["posterior_prob"].detach()
+
+    B = active_row_index.size(0)
+    H, C, _ = global_A.shape
+    dense = global_A.unsqueeze(0).expand(B, -1, -1, -1).clone()
+    for b in range(B):
+        for r in range(active_row_index.size(1)):
+            if not bool(active_row_valid_mask[b, r]):
+                continue
+            row = int(active_row_index[b, r].item())
+            for h in range(H):
+                dense[b, h, row] = 0.0
+                valid = support_valid_mask[b, h, r]
+                cols = support_col_index[b, h, r][valid]
+                probs = posterior_prob[b, h, r][valid]
+                dense[b, h, row, cols] = probs
+    return dense
+
+
+def _materialize_relation_used_dense(details: dict) -> torch.Tensor:
+    relation_used = details.get("relation_used")
+    if not isinstance(relation_used, dict):
+        return relation_used.detach()
+
+    global_A = relation_used["global_matrices"].detach()
+    active_row_index = relation_used["active_row_index"].detach()
+    active_row_valid_mask = relation_used["active_row_valid_mask"].detach().bool()
+    support_col_index = relation_used["support_col_index"].detach()
+    support_valid_mask = relation_used["support_valid_mask"].detach().bool()
+    global_support_prob = relation_used["global_support_prob"].detach()
+    posterior_prob = relation_used["posterior_prob"].detach()
+    gate_alpha = relation_used["gate_alpha"].detach()
+
+    B = active_row_index.size(0)
+    H, C, _ = global_A.shape
+    dense = global_A.unsqueeze(0).expand(B, -1, -1, -1).clone()
+    for b in range(B):
+        for r in range(active_row_index.size(1)):
+            if not bool(active_row_valid_mask[b, r]):
+                continue
+            row = int(active_row_index[b, r].item())
+            for h in range(H):
+                mixed_row = global_A[h, row].clone()
+                valid = support_valid_mask[b, h, r]
+                cols = support_col_index[b, h, r][valid]
+                post = posterior_prob[b, h, r][valid]
+                glob = global_support_prob[b, h, r][valid]
+                mixed_row[cols] = glob + gate_alpha[b, h] * (post - glob)
+                dense[b, h, row] = mixed_row
+    return dense
+
+
 def _check_no_a_keeps_gnn_layers() -> None:
     from src.trainer import _hard_ablation_effective_hparams
 
@@ -238,7 +303,8 @@ def _check_no_a_personal_graph_is_not_identity_locked() -> None:
         )
 
     ident = model.identity_relations.unsqueeze(0)
-    matrix_delta = float((details["personal_matrices"] - ident).abs().mean())
+    personal_dense = _materialize_sparse_personal_dense(details)
+    matrix_delta = float((personal_dense - ident).abs().mean())
     _assert(
         float(details["personal_delta_pre_softmax_norm"]) > 0.05,
         "测试前提失败：personal delta 本身应明显非零。",
@@ -465,8 +531,8 @@ def _check_personal_graph_is_support_preserving_and_local() -> None:
         )
 
     global_A = details["relation_matrices"].detach()
-    personal_A = details["personal_matrices"].detach()[0]
-    relation_used = details["relation_used"].detach()[0]
+    personal_A = _materialize_sparse_personal_dense(details)[0]
+    relation_used = _materialize_relation_used_dense(details)[0]
     local_row_mask = details["local_row_mask"].detach()[0].bool()
 
     support_mask = global_A > 0
@@ -486,6 +552,73 @@ def _check_personal_graph_is_support_preserving_and_local() -> None:
     _assert(
         local_delta > 1e-5,
         "局部 posterior mixing 应在题目相关子图上产生非零扰动，而不是完全退化回全局图。",
+    )
+
+
+def _check_personal_graph_uses_sparse_runtime_spec() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    torch.manual_seed(0)
+    q_matrix = torch.tensor(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    model = CognitiveDiagnosisModel(
+        num_students=4,
+        num_exercises=2,
+        num_concepts=4,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+        use_concept_graph=True,
+        graph_topk=2,
+        use_personal_graph=True,
+        share_concept_embeddings=True,
+        graph_identity_residual=0.05,
+        personal_rank=4,
+        personal_max_alpha=0.4,
+        personal_delta_scale=4.0,
+        personal_warmup_epochs=0,
+        personal_reg_warmup_epochs=0,
+        personal_student_dim=8,
+        personal_disable_student_global_context=True,
+        personal_local_hops=1,
+        personal_support_only=True,
+    )
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0], dtype=torch.long),
+            exercise_ids=torch.tensor([0], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    relation_used = details["relation_used"]
+    _assert(
+        isinstance(relation_used, dict),
+        "E 开启时主训练路径应改用 sparse/local relation spec，而不是继续传 dense (B,H,C,C) 矩阵。",
+    )
+    for key in (
+        "global_matrices",
+        "active_row_index",
+        "active_row_valid_mask",
+        "support_col_index",
+        "support_valid_mask",
+        "global_support_prob",
+        "posterior_prob",
+        "gate_alpha",
+    ):
+        _assert(key in relation_used, f"sparse relation spec 缺少关键字段: {key}")
+    _assert(
+        details.get("personal_matrices") is None,
+        "训练/诊断主路径不应再默认物化 dense personal_matrices；否则 E 仍会在大数据集上退回 O(B*H*C*C)。",
     )
 
 
@@ -1280,7 +1413,8 @@ def _check_junyi_like_personal_graph_stays_finite() -> None:
         )
 
     _assert(torch.isfinite(details["knowledge_state"]).all(), "junyi-like 单概念场景下 knowledge_state 仍必须保持 finite。")
-    _assert(torch.isfinite(details["personal_matrices"]).all(), "junyi-like 单概念场景下 personal_matrices 不应出现 NaN/Inf。")
+    personal_dense = _materialize_sparse_personal_dense(details)
+    _assert(torch.isfinite(personal_dense).all(), "junyi-like 单概念场景下 personal graph 不应出现 NaN/Inf。")
     _assert(
         _to_int_tensor(details["personal_bad_row_count"]) == 0,
         f"junyi-like 单概念场景下不应出现 bad row fallback，当前={_to_int_tensor(details['personal_bad_row_count'])}",
@@ -1485,6 +1619,7 @@ def main() -> None:
     _check_gate_saturation_regression()
     _check_assist_like_harmfulness_proxy_warning()
     _check_personal_graph_is_support_preserving_and_local()
+    _check_personal_graph_uses_sparse_runtime_spec()
     _check_query_readout_injects_graph_signal()
     _check_split_hygiene_uses_train_only_maps_and_q_matrix()
     _check_runtime_ablation_guardrails_cover_no_a_and_no_e()
