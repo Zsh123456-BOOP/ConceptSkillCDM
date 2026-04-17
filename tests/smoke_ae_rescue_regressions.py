@@ -109,12 +109,15 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "lambda_alpha_min",
         "alpha_min_target",
         "graph_propagation_alpha",
-        "graph_query_writeback_scale",
-        "graph_query_writeback_2hop_scale",
+        "graph_query_readout_scale",
+        "graph_query_readout_2hop_scale",
         "personal_alpha_temperature",
         "personal_alpha_budget",
         "personal_query_row_budget",
         "personal_neighbor_row_budget",
+        "personal_query_correction_scale",
+        "lambda_personal_kl",
+        "lambda_personal_query_residual",
         "personal_state_lr_mult",
         "personal_id_lr_mult",
     )
@@ -164,16 +167,20 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
             f"{dataset} 应显式开启基于题目局部子图的 E，当前 personal_local_hops={cfg['personal_local_hops']}",
         )
         _assert(
+            bool(cfg["personal_include_neighbor_rows"]) is False,
+            f"{dataset} 当前默认实验应切到 query rows only，neighbor rows 只保留为可选消融。",
+        )
+        _assert(
             bool(cfg["personal_support_only"]) is True,
             f"{dataset} 应显式启用 support-preserving E，避免 E 再退化为 dense personal graph。",
         )
         _assert(
-            float(cfg["graph_query_writeback_scale"]) == float(cfg["graph_readout_1hop_scale"]),
-            f"{dataset} 应保证 query writeback 与 legacy readout alias 一致。",
+            "graph_query_writeback_scale" not in cfg and "graph_readout_1hop_scale" not in cfg,
+            f"{dataset} 的 best config 不应继续存旧 alias 字段；内部应只保留 graph_query_readout_scale。",
         )
         _assert(
-            float(cfg["graph_query_writeback_2hop_scale"]) == float(cfg["graph_readout_2hop_scale"]),
-            f"{dataset} 应保证 2-hop query writeback 与 legacy readout alias 一致。",
+            "graph_query_writeback_2hop_scale" not in cfg and "graph_readout_2hop_scale" not in cfg,
+            f"{dataset} 的 best config 不应继续存旧 2-hop alias 字段；内部应只保留 graph_query_readout_2hop_scale。",
         )
 
 
@@ -190,9 +197,7 @@ def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
         "0.0",
         "--graph_identity_residual",
         "0.0",
-        "--graph_readout_1hop_scale",
-        "0.0",
-        "--graph_query_writeback_scale",
+        "--graph_query_readout_scale",
         "0.0",
         "--personal_alpha_bias_scale",
         "0.0",
@@ -221,12 +226,12 @@ def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
         "显式传入的 --graph_identity_residual 0.0 不应再被数据集默认值覆盖。",
     )
     _assert(
-        float(args.graph_readout_1hop_scale) == 0.0,
-        "显式传入的 --graph_readout_1hop_scale 0.0 不应再被数据集默认值覆盖。",
+        float(args.graph_query_readout_scale) == 0.0,
+        "显式传入的 --graph_query_readout_scale 0.0 不应再被数据集默认值覆盖。",
     )
     _assert(
-        float(args.graph_query_writeback_scale) == 0.0,
-        "显式传入的 --graph_query_writeback_scale 0.0 不应再被数据集默认值覆盖。",
+        float(args.graph_query_readout_scale) == 0.0,
+        "canonical graph_query_readout_scale 不应被数据集默认值覆盖。",
     )
     _assert(
         bool(args.use_personal_graph) is False,
@@ -644,8 +649,8 @@ def _check_query_readout_injects_graph_signal() -> None:
         dropout=0.0,
         use_concept_graph=True,
         use_personal_graph=False,
-        graph_query_writeback_scale=0.0,
-        graph_query_writeback_2hop_scale=0.0,
+        graph_query_readout_scale=0.0,
+        graph_query_readout_2hop_scale=0.0,
     )
     torch.manual_seed(0)
     model_on = CognitiveDiagnosisModel(
@@ -659,8 +664,8 @@ def _check_query_readout_injects_graph_signal() -> None:
         dropout=0.0,
         use_concept_graph=True,
         use_personal_graph=False,
-        graph_query_writeback_scale=0.5,
-        graph_query_writeback_2hop_scale=0.15,
+        graph_query_readout_scale=0.5,
+        graph_query_readout_2hop_scale=0.15,
     )
     model_off.eval()
     model_on.eval()
@@ -684,13 +689,158 @@ def _check_query_readout_injects_graph_signal() -> None:
         "A 的 query-local readout 应对最终送入固定预测头的状态产生非零影响。",
     )
     _assert(
-        float(details_on["query_row_graph_delta"].item()) > 1e-5,
-        "query-row writeback 应直接改动 queried concept rows，而不是只在全局状态里稀释。",
+        float(details_on["query_row_global_readout_delta"].item()) > 1e-5,
+        "A 的 global query readout 应直接改动 queried concept rows，而不是只在全局状态里稀释。",
     )
     _assert(
         float((logits_on - logits_off).abs().mean().item()) > 1e-6,
         "打开 query-row writeback 后，最终 logits 应出现可测变化。",
     )
+
+
+def _check_e_query_only_active_rows() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    torch.manual_seed(0)
+    q_matrix = torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float32)
+    model = CognitiveDiagnosisModel(
+        num_students=3,
+        num_exercises=1,
+        num_concepts=4,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+        use_concept_graph=True,
+        use_personal_graph=True,
+        personal_include_neighbor_rows=False,
+        personal_support_only=True,
+    )
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0], dtype=torch.long),
+            exercise_ids=torch.tensor([0], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    active_row_index = details["active_row_index"][0]
+    active_row_valid_mask = details["active_row_valid_mask"][0].bool()
+    active_rows = active_row_index[active_row_valid_mask].tolist()
+    _assert(active_rows == [0], f"default E 应只激活 query rows，当前 active_rows={active_rows}")
+
+
+def _check_e_readout_only_does_not_change_backbone() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    torch.manual_seed(0)
+    q_matrix = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32)
+    model = CognitiveDiagnosisModel(
+        num_students=3,
+        num_exercises=1,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+        use_concept_graph=True,
+        use_personal_graph=True,
+        personal_include_neighbor_rows=False,
+    )
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0], dtype=torch.long),
+            exercise_ids=torch.tensor([0], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    _assert(
+        float(details["knowledge_state_personal_delta"].item()) == 0.0,
+        "E 改成 query-time correction 后，不应再改 backbone knowledge_state。",
+    )
+
+
+def _check_posterior_equal_global_gives_zero_personal_query_correction() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    torch.manual_seed(0)
+    q_matrix = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32)
+    model = CognitiveDiagnosisModel(
+        num_students=3,
+        num_exercises=1,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+        use_concept_graph=True,
+        use_personal_graph=True,
+        personal_include_neighbor_rows=False,
+    )
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0], dtype=torch.long),
+            exercise_ids=torch.tensor([0], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+        relation_spec = details["personal_relation_spec"]
+        relation_spec = dict(relation_spec)
+        relation_spec["posterior_prob"] = relation_spec["global_support_prob"].clone()
+        correction, msg_delta, post_abs, post_kl, _ = model._build_personal_query_correction(
+            details["knowledge_state"],
+            relation_spec,
+            details["q_vector"],
+        )
+
+    _assert(float(correction.abs().max().item()) < 1e-8, "当 posterior==global 时，personal query correction 应为 0。")
+    _assert(float(msg_delta.item()) < 1e-8, "当 posterior==global 时，query_row_personal_message_delta 应为 0。")
+    _assert(float(post_abs.item()) < 1e-8 and float(post_kl.item()) < 1e-8, "posterior==global 时 raw posterior diagnostics 也应归零。")
+
+
+def _check_summary_prefers_matched_no_e() -> None:
+    from run_abce_ablation import write_summary
+
+    rows = [
+        {"dataset": "junyi", "seed": "42", "profile": "best", "ablation": "full", "status": "ok", "ablation_valid": "True", "test_auc": "0.8281"},
+        {"dataset": "junyi", "seed": "42", "profile": "best", "ablation": "no_A", "status": "ok", "ablation_valid": "True", "test_auc": "0.8270"},
+        {"dataset": "junyi", "seed": "42", "profile": "best", "ablation": "no_E", "status": "ok", "ablation_valid": "True", "test_auc": "0.8290"},
+        {"dataset": "junyi", "seed": "42", "profile": "best", "ablation": "no_E_bs64", "status": "ok", "ablation_valid": "True", "test_auc": "0.8278"},
+    ]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        summary_rows, _ = write_summary(Path(tmpdir) / "summary.csv", Path(tmpdir) / "mean.csv", rows)
+
+    _assert(len(summary_rows) == 1, "matched no_E summary smoke 应生成单行 summary。")
+    row = summary_rows[0]
+    _assert(abs(float(row["no_E_matched_auc"]) - 0.8278) < 1e-8, "summary 应优先写入 no_E_bs64 作为 matched 对照。")
+    _assert(abs(float(row["delta_E_full_minus_noE_matched"]) - (0.8281 - 0.8278)) < 1e-8, "matched delta_E 计算错误。")
+
+
+def _check_module_activity_brief_uses_live_risk() -> None:
+    from src.module_activity import format_activity_brief
+
+    brief = format_activity_brief(
+        {
+            "graph_enabled": True,
+            "graph_active": True,
+            "personal_graph_enabled": True,
+            "personal_graph_active": True,
+            "personal_graph_risk": True,
+        }
+    )
+    _assert("Graph[LIVE]" in brief, "module_activity 简报不应继续输出 Graph[OK]。")
+    _assert("Personal[RISK]" in brief, "module_activity 简报应能区分 active 但 risky 的 E。")
 
 
 def _check_split_hygiene_uses_train_only_maps_and_q_matrix() -> None:
@@ -872,8 +1022,9 @@ def _build_tiny_ae_model(**overrides):
         personal_query_row_budget=1.0,
         personal_neighbor_row_budget=0.30,
         personal_support_only=True,
-        graph_query_writeback_scale=0.40,
-        graph_query_writeback_2hop_scale=0.12,
+        personal_include_neighbor_rows=False,
+        graph_query_readout_scale=0.40,
+        graph_query_readout_2hop_scale=0.12,
         share_concept_embeddings=True,
     )
     kwargs.update(overrides)
@@ -1019,16 +1170,16 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
         graph_reg_warmup_epochs=4,
         graph_reg_cap_ratio=6.0,
         graph_propagation_alpha=0.2,
-        graph_query_writeback_scale=0.6,
-        graph_query_writeback_2hop_scale=0.2,
-        graph_readout_1hop_scale=0.4,
-        graph_readout_2hop_scale=0.15,
+        graph_query_readout_scale=0.6,
+        graph_query_readout_2hop_scale=0.2,
         use_concept_graph=True,
         use_personal_graph=True,
         personal_local_hops=1,
+        personal_include_neighbor_rows=False,
         personal_query_row_budget=1.0,
         personal_neighbor_row_budget=0.35,
         personal_support_only=True,
+        personal_query_correction_scale=0.10,
         share_concept_embeddings=True,
         personal_alpha_temperature=2.2,
         personal_alpha_budget=0.10,
@@ -1039,6 +1190,9 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
         graph_identity_residual=0.1,
         personal_delta_scale=6.0,
         personal_warmup_epochs=8,
+        lambda_personal_kl=0.02,
+        lambda_personal_query_residual=0.05,
+        personal_query_residual_margin=0.08,
         lambda_alpha_min=0.08,
         alpha_min_target=0.05,
         personal_state_lr_mult=1.0,
@@ -1048,12 +1202,14 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
     hash_share = _build_config_hash(SimpleNamespace(**{**base, "share_concept_embeddings": False}))
     hash_alpha_bias = _build_config_hash(SimpleNamespace(**{**base, "personal_alpha_bias_scale": 0.0}))
     hash_reg_warmup = _build_config_hash(SimpleNamespace(**{**base, "personal_reg_warmup_epochs": 4}))
-    hash_writeback = _build_config_hash(SimpleNamespace(**{**base, "graph_query_writeback_scale": 0.4}))
+    hash_query_readout = _build_config_hash(SimpleNamespace(**{**base, "graph_query_readout_scale": 0.4}))
+    hash_query_residual = _build_config_hash(SimpleNamespace(**{**base, "lambda_personal_query_residual": 0.02}))
 
     _assert(hash_base != hash_share, "config hash 必须区分 share_concept_embeddings 的结构差异。")
     _assert(hash_base != hash_alpha_bias, "config hash 必须区分 personal_alpha_bias_scale 的结构差异。")
     _assert(hash_base != hash_reg_warmup, "config hash 必须区分 personal_reg_warmup_epochs 的差异。")
-    _assert(hash_base != hash_writeback, "config hash 必须区分 graph_query_writeback_scale 的结构差异。")
+    _assert(hash_base != hash_query_readout, "config hash 必须区分 graph_query_readout_scale 的结构差异。")
+    _assert(hash_base != hash_query_residual, "config hash 必须区分 lambda_personal_query_residual 的差异。")
 
 
 def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
@@ -1073,10 +1229,15 @@ def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
         graph_identity_residual=0.1,
         personal_delta_scale=6.0,
         personal_warmup_epochs=8,
+        personal_include_neighbor_rows=False,
+        personal_query_correction_scale=0.10,
+        lambda_personal_kl=0.02,
+        lambda_personal_query_residual=0.05,
+        personal_query_residual_margin=0.08,
         lambda_alpha_min=0.08,
         alpha_min_target=0.05,
-        graph_query_writeback_scale=0.60,
-        graph_query_writeback_2hop_scale=0.20,
+        graph_query_readout_scale=0.60,
+        graph_query_readout_2hop_scale=0.20,
         personal_query_row_budget=1.0,
         personal_neighbor_row_budget=0.35,
     )
@@ -1115,10 +1276,15 @@ def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
         "graph_identity_residual",
         "personal_delta_scale",
         "personal_warmup_epochs",
+        "personal_include_neighbor_rows",
+        "personal_query_correction_scale",
+        "lambda_personal_kl",
+        "lambda_personal_query_residual",
+        "personal_query_residual_margin",
         "lambda_alpha_min",
         "alpha_min_target",
-        "graph_query_writeback_scale",
-        "graph_query_writeback_2hop_scale",
+        "graph_query_readout_scale",
+        "graph_query_readout_2hop_scale",
         "personal_query_row_budget",
         "personal_neighbor_row_budget",
     ):
@@ -1397,10 +1563,11 @@ def _check_junyi_like_personal_graph_stays_finite() -> None:
         personal_alpha_base_init=0.04,
         personal_alpha_bias_scale=0.0,
         personal_disable_student_global_context=True,
+        personal_include_neighbor_rows=False,
         personal_query_row_budget=1.3,
         personal_neighbor_row_budget=0.20,
-        graph_query_writeback_scale=0.40,
-        graph_query_writeback_2hop_scale=0.10,
+        graph_query_readout_scale=0.40,
+        graph_query_readout_2hop_scale=0.10,
     )
     model.eval()
 
@@ -1621,6 +1788,9 @@ def main() -> None:
     _check_personal_graph_is_support_preserving_and_local()
     _check_personal_graph_uses_sparse_runtime_spec()
     _check_query_readout_injects_graph_signal()
+    _check_e_query_only_active_rows()
+    _check_e_readout_only_does_not_change_backbone()
+    _check_posterior_equal_global_gives_zero_personal_query_correction()
     _check_split_hygiene_uses_train_only_maps_and_q_matrix()
     _check_runtime_ablation_guardrails_cover_no_a_and_no_e()
     _check_generator_state_adapter_is_live()
@@ -1636,11 +1806,13 @@ def main() -> None:
     _check_junyi_like_personal_graph_stays_finite()
     _check_trainer_monitors_are_aligned()
     _check_summary_classification_regression()
+    _check_summary_prefers_matched_no_e()
     _check_invalid_ablation_rows_are_filtered_from_summary()
     _check_failure_reason_is_collected()
     _check_junyi_e_on_jobs_use_oom_safe_batch_size()
     _check_runner_env_enables_expandable_segments()
     _check_matched_no_e_job_can_be_enabled()
+    _check_module_activity_brief_uses_live_risk()
     print("OK: AE rescue regression smoke checks passed.")
 
 

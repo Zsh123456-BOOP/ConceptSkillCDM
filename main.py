@@ -29,6 +29,18 @@ def _normalize_bool(value, default=False):
     return bool(value)
 
 
+def _read_compat_value(source, *keys, default=None):
+    for key in keys:
+        if isinstance(source, dict):
+            if key in source and source.get(key) is not None:
+                return source.get(key)
+        else:
+            value = getattr(source, key, None)
+            if value is not None:
+                return value
+    return default
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Cognitive Diagnosis Model Training and Testing")
     bool_action = argparse.BooleanOptionalAction
@@ -135,31 +147,31 @@ def parse_args():
         help="Teleport strength for APPNP-style concept propagation.",
     )
     parser.add_argument(
+        "--graph_query_readout_scale",
+        "--graph_query_writeback_scale",
         "--graph_readout_1hop_scale",
+        dest="graph_query_readout_scale",
         type=float,
         default=0.35,
-        help="1-hop query-local graph readout scale before the fixed diagnosis head.",
+        help="Canonical 1-hop query-local global graph readout scale before the fixed diagnosis head.",
     )
     parser.add_argument(
+        "--graph_query_readout_2hop_scale",
+        "--graph_query_writeback_2hop_scale",
         "--graph_readout_2hop_scale",
+        dest="graph_query_readout_2hop_scale",
         type=float,
         default=0.15,
-        help="2-hop query-local graph readout scale before the fixed diagnosis head.",
-    )
-    parser.add_argument(
-        "--graph_query_writeback_scale",
-        type=float,
-        default=None,
-        help="1-hop query-row graph writeback scale before the fixed diagnosis head. Default follows graph_readout_1hop_scale.",
-    )
-    parser.add_argument(
-        "--graph_query_writeback_2hop_scale",
-        type=float,
-        default=None,
-        help="2-hop query-row graph writeback scale before the fixed diagnosis head. Default follows graph_readout_2hop_scale.",
+        help="Canonical 2-hop query-local global graph readout scale before the fixed diagnosis head.",
     )
     parser.add_argument("--lambda_sparse_personal", type=float, default=0.0)
     parser.add_argument("--lambda_alpha", type=float, default=0.0)
+    parser.add_argument("--lambda_personal_kl", type=float, default=0.0,
+                        help="KL penalty between personalized posterior and global support distribution on query rows.")
+    parser.add_argument("--lambda_personal_query_residual", type=float, default=0.0,
+                        help="Penalty for overly large personal query correction magnitude.")
+    parser.add_argument("--personal_query_residual_margin", type=float, default=0.0,
+                        help="Margin before personal query residual penalty activates.")
 
     # scheduler / early stop
     parser.add_argument("--patience", type=int, default=5)
@@ -270,12 +282,16 @@ def parse_args():
                         help="Use state-primary personal context without raw student_global direct concatenation.")
     parser.add_argument("--personal_local_hops", type=int, default=1,
                         help="Number of support hops around current item concepts used for local personalization.")
+    parser.add_argument("--personal_include_neighbor_rows", action=bool_action, default=None,
+                        help="Whether E should personalize 1-hop local neighbor rows in addition to query rows.")
     parser.add_argument("--personal_query_row_budget", type=float, default=1.0,
                         help="Relative personalization budget assigned to queried concept rows.")
     parser.add_argument("--personal_neighbor_row_budget", type=float, default=0.30,
                         help="Relative personalization budget assigned to 1-hop local neighbor rows.")
     parser.add_argument("--personal_support_only", action=bool_action, default=None,
                         help="Restrict personal residual edges to the support of global graph A when A is enabled.")
+    parser.add_argument("--personal_query_correction_scale", type=float, default=0.15,
+                        help="Scale for injecting E's query-time message correction into query rows only.")
     parser.add_argument("--share_concept_embeddings", action=bool_action, default=None,
                         help="Share concept embeddings between relation learning and knowledge encoder.")
     parser.add_argument("--personal_state_lr_mult", type=float, default=1.0,
@@ -317,12 +333,12 @@ def main():
     explicit_dests = collect_explicit_arg_dests(raw_argv, parser)
     args = apply_dataset_defaults(args, parser, explicit_dests=explicit_dests)
 
-    if getattr(args, "graph_query_writeback_scale", None) is None:
-        args.graph_query_writeback_scale = getattr(args, "graph_readout_1hop_scale", 0.35)
-    if getattr(args, "graph_query_writeback_2hop_scale", None) is None:
-        args.graph_query_writeback_2hop_scale = getattr(args, "graph_readout_2hop_scale", 0.15)
-    args.graph_readout_1hop_scale = float(args.graph_query_writeback_scale)
-    args.graph_readout_2hop_scale = float(args.graph_query_writeback_2hop_scale)
+    args.graph_query_readout_scale = float(getattr(args, "graph_query_readout_scale", 0.35))
+    args.graph_query_readout_2hop_scale = float(getattr(args, "graph_query_readout_2hop_scale", 0.15))
+    args.graph_readout_1hop_scale = float(args.graph_query_readout_scale)
+    args.graph_readout_2hop_scale = float(args.graph_query_readout_2hop_scale)
+    args.graph_query_writeback_scale = float(args.graph_query_readout_scale)
+    args.graph_query_writeback_2hop_scale = float(args.graph_query_readout_2hop_scale)
 
     # =========================================================
     # -1) main  launcher 
@@ -503,19 +519,19 @@ def main():
                 graph_propagation_alpha=loaded_args.get(
                     "graph_propagation_alpha", getattr(args, "graph_propagation_alpha", 0.20)
                 ),
-                graph_query_writeback_scale=loaded_args.get(
+                graph_query_readout_scale=_read_compat_value(
+                    loaded_args,
+                    "graph_query_readout_scale",
                     "graph_query_writeback_scale",
-                    getattr(args, "graph_query_writeback_scale", getattr(args, "graph_readout_1hop_scale", 0.35)),
+                    "graph_readout_1hop_scale",
+                    default=_read_compat_value(args, "graph_query_readout_scale", "graph_query_writeback_scale", "graph_readout_1hop_scale", default=0.35),
                 ),
-                graph_query_writeback_2hop_scale=loaded_args.get(
+                graph_query_readout_2hop_scale=_read_compat_value(
+                    loaded_args,
+                    "graph_query_readout_2hop_scale",
                     "graph_query_writeback_2hop_scale",
-                    getattr(args, "graph_query_writeback_2hop_scale", getattr(args, "graph_readout_2hop_scale", 0.15)),
-                ),
-                graph_readout_1hop_scale=loaded_args.get(
-                    "graph_readout_1hop_scale", getattr(args, "graph_readout_1hop_scale", 0.35)
-                ),
-                graph_readout_2hop_scale=loaded_args.get(
-                    "graph_readout_2hop_scale", getattr(args, "graph_readout_2hop_scale", 0.15)
+                    "graph_readout_2hop_scale",
+                    default=_read_compat_value(args, "graph_query_readout_2hop_scale", "graph_query_writeback_2hop_scale", "graph_readout_2hop_scale", default=0.15),
                 ),
                 lambda_graph_entropy=loaded_args.get("lambda_sparse", getattr(args, "lambda_sparse", 0.01)),
                 graph_entropy_min=loaded_args.get("graph_entropy_min", getattr(args, "graph_entropy_min", 0.15)),
@@ -537,6 +553,13 @@ def main():
                     "lambda_sparse_personal", getattr(args, "lambda_sparse_personal", 0.0)
                 ),
                 lambda_alpha=loaded_args.get("lambda_alpha", getattr(args, "lambda_alpha", 0.0)),
+                lambda_personal_kl=loaded_args.get("lambda_personal_kl", getattr(args, "lambda_personal_kl", 0.0)),
+                lambda_personal_query_residual=loaded_args.get(
+                    "lambda_personal_query_residual", getattr(args, "lambda_personal_query_residual", 0.0)
+                ),
+                personal_query_residual_margin=loaded_args.get(
+                    "personal_query_residual_margin", getattr(args, "personal_query_residual_margin", 0.0)
+                ),
                 prediction_l2_lambda=loaded_args.get(
                     "prediction_l2_lambda", getattr(args, "prediction_l2_lambda", 5e-5)
                 ),
@@ -581,6 +604,9 @@ def main():
                 personal_local_hops=loaded_args.get(
                     "personal_local_hops", getattr(args, "personal_local_hops", 1)
                 ),
+                personal_include_neighbor_rows=loaded_args.get(
+                    "personal_include_neighbor_rows", getattr(args, "personal_include_neighbor_rows", False)
+                ),
                 personal_query_row_budget=loaded_args.get(
                     "personal_query_row_budget", getattr(args, "personal_query_row_budget", 1.0)
                 ),
@@ -589,6 +615,9 @@ def main():
                 ),
                 personal_support_only=loaded_args.get(
                     "personal_support_only", getattr(args, "personal_support_only", True)
+                ),
+                personal_query_correction_scale=loaded_args.get(
+                    "personal_query_correction_scale", getattr(args, "personal_query_correction_scale", 0.15)
                 ),
                 share_concept_embeddings=loaded_args.get(
                     "share_concept_embeddings", getattr(args, "share_concept_embeddings", False)

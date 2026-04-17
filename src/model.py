@@ -5,7 +5,7 @@ Cognitive Diagnosis Model
 模块 1：概念结构建模（A + E）
   A) 全局概念图学习（Multi-head adjacency, row-stochastic）
   E) 个性化概念图（Personal graph）生成与混合（可选）
-  输出：relation_matrices（全局）/ relation_used（全局或个性化混合）与 knowledge_state
+  输出：relation_matrices（全局）/ personal_relation_spec（query-time 个性化 posterior 规格）与 knowledge_state
 
 预测头：固定 2PL-IRT
   theta_c -> Q-masked pooling -> theta_e -> irt_logit = a*(theta_e - b)
@@ -235,10 +235,41 @@ def _apply_sparse_local_posterior(
         global_outs.append(torch.matmul(A, states))
     global_out = torch.stack(global_outs, dim=1)  # (B,H,C,D)
 
+    local_messages = _compute_sparse_local_messages(expanded_states, relation_spec)
+    active_row_index = local_messages["active_row_index"]
+    active_row_valid_mask = local_messages["active_row_valid_mask"]
+    if active_row_index is None or active_row_valid_mask is None or active_row_index.numel() == 0:
+        return global_out.mean(dim=1) if reduce_heads else global_out
+
+    mixed_local = local_messages["mixed_local"]
+    out = global_out.clone()
+    batch_idx = torch.arange(B, device=states.device, dtype=torch.long).unsqueeze(1).expand_as(active_row_index)
+    valid = active_row_valid_mask
+    row_index = active_row_index.clamp(min=0)
+    for h in range(H):
+        out[:, h][batch_idx[valid], row_index[valid]] = mixed_local[:, h][valid]
+    return out.mean(dim=1) if reduce_heads else out
+
+
+def _compute_sparse_local_messages(
+    expanded_states: torch.Tensor,
+    relation_spec: Dict[str, torch.Tensor],
+) -> Dict[str, torch.Tensor]:
+    global_matrices = relation_spec["global_matrices"]
     active_row_index = relation_spec.get("active_row_index")
     active_row_valid_mask = relation_spec.get("active_row_valid_mask")
     if active_row_index is None or active_row_valid_mask is None or active_row_index.numel() == 0:
-        return global_out.mean(dim=1) if reduce_heads else global_out
+        empty_shape = (expanded_states.size(0), expanded_states.size(1), 0, expanded_states.size(-1))
+        return {
+            "active_row_index": active_row_index,
+            "active_row_valid_mask": active_row_valid_mask,
+            "query_row_active_mask": relation_spec.get("query_row_active_mask"),
+            "neighbor_row_active_mask": relation_spec.get("neighbor_row_active_mask"),
+            "global_local": expanded_states.new_zeros(empty_shape),
+            "post_local": expanded_states.new_zeros(empty_shape),
+            "message_delta": expanded_states.new_zeros(empty_shape),
+            "mixed_local": expanded_states.new_zeros(empty_shape),
+        }
 
     support_col_index = relation_spec["support_col_index"]
     support_valid_mask = relation_spec["support_valid_mask"]
@@ -246,20 +277,21 @@ def _apply_sparse_local_posterior(
     posterior_prob = relation_spec["posterior_prob"]
     gate_alpha = relation_spec["gate_alpha"]
 
-    row_features = _gather_head_rows(expanded_states, active_row_index, active_row_valid_mask)
     support_features = _gather_head_support_features(expanded_states, support_col_index, support_valid_mask)
-    del row_features  # row features are not needed in the operator itself; keep gather path symmetrical.
-
     global_local = (global_support_prob.unsqueeze(-1) * support_features).sum(dim=-2)
     post_local = (posterior_prob.unsqueeze(-1) * support_features).sum(dim=-2)
-    mixed_local = global_local + gate_alpha.unsqueeze(-1).unsqueeze(-1) * (post_local - global_local)
-
-    out = global_out.clone()
-    batch_idx = torch.arange(B, device=states.device, dtype=torch.long).unsqueeze(1).expand_as(active_row_index)
-    valid = active_row_valid_mask
-    for h in range(H):
-        out[:, h][batch_idx[valid], active_row_index.clamp(min=0)[valid]] = mixed_local[:, h][valid]
-    return out.mean(dim=1) if reduce_heads else out
+    message_delta = gate_alpha.unsqueeze(-1).unsqueeze(-1) * (post_local - global_local)
+    mixed_local = global_local + message_delta
+    return {
+        "active_row_index": active_row_index,
+        "active_row_valid_mask": active_row_valid_mask,
+        "query_row_active_mask": relation_spec.get("query_row_active_mask"),
+        "neighbor_row_active_mask": relation_spec.get("neighbor_row_active_mask"),
+        "global_local": global_local,
+        "post_local": post_local,
+        "message_delta": message_delta,
+        "mixed_local": mixed_local,
+    }
 
 
 # ======================================================
@@ -923,6 +955,7 @@ class ConceptStructureModeling(nn.Module):
         personal_alpha_bias_scale: float,
         personal_disable_student_global_context: bool,
         personal_local_hops: int,
+        personal_include_neighbor_rows: bool,
         personal_query_row_budget: float,
         personal_neighbor_row_budget: float,
         personal_support_only: bool,
@@ -951,6 +984,7 @@ class ConceptStructureModeling(nn.Module):
         self.personal_alpha_bias_scale = max(0.0, float(personal_alpha_bias_scale))
         self.personal_disable_student_global_context = bool(personal_disable_student_global_context)
         self.personal_local_hops = max(0, int(personal_local_hops))
+        self.personal_include_neighbor_rows = bool(personal_include_neighbor_rows)
         self.personal_query_row_budget = max(0.0, float(personal_query_row_budget))
         self.personal_neighbor_row_budget = max(0.0, float(personal_neighbor_row_budget))
         self.personal_support_only = bool(personal_support_only)
@@ -1127,10 +1161,11 @@ class ConceptStructureModeling(nn.Module):
             query_rows = (concept_mask > 0).float()
         local_rows = query_rows if local_row_mask is None else (local_row_mask > 0).float()
         neighbor_rows = torch.clamp(local_rows - query_rows, min=0.0)
-        row_budget_mask = (
-            self.personal_query_row_budget * query_rows
-            + self.personal_neighbor_row_budget * neighbor_rows
-        )
+        if not self.personal_include_neighbor_rows:
+            neighbor_rows = torch.zeros_like(neighbor_rows)
+        row_budget_mask = self.personal_query_row_budget * query_rows
+        if self.personal_include_neighbor_rows:
+            row_budget_mask = row_budget_mask + self.personal_neighbor_row_budget * neighbor_rows
         return row_budget_mask, query_rows, neighbor_rows
 
     def _build_personal_prior_logits(
@@ -1206,8 +1241,7 @@ class ConceptStructureModeling(nn.Module):
         knowledge_state = self.knowledge_encoder(student_ids, relation_matrices)  # (B,C,D)
         student_repr = knowledge_state.mean(dim=1)                                # (B,D)
 
-        # 3) 个性化图（E，可选）：生成并混合，再编码第二遍
-        #    优化：避免创建 (B,H,C,C) 4D 张量，改用逐 head 计算
+        # 3) 个性化图（E，可选）：仅生成 query-time sparse posterior spec
         gate_alpha = None
         gate_alpha_logit = None
         gate_alpha_bias = None
@@ -1242,6 +1276,8 @@ class ConceptStructureModeling(nn.Module):
         alpha_saturation_ratio = None
         query_row_personal_delta = None
         neighbor_row_personal_delta = None
+        query_row_posterior_delta_abs = None
+        query_row_posterior_kl = None
         personal_row_budget_mean = None
         personal_query_row_std = None
         active_row_index = None
@@ -1250,7 +1286,10 @@ class ConceptStructureModeling(nn.Module):
         support_valid_mask = None
         global_support_prob = None
         posterior_prob = None
+        query_row_active_mask = None
+        neighbor_row_active_mask = None
         relation_used = relation_matrices
+        personal_relation_spec = None
         initial_state = self.knowledge_encoder.compose_initial_state(student_ids)
         knowledge_state_pre_personal = knowledge_state
         relation_identity_delta = (relation_matrices - identity_relations).pow(2).mean().sqrt()
@@ -1313,13 +1352,27 @@ class ConceptStructureModeling(nn.Module):
                 concept_mask,
                 local_row_mask,
             )
-            active_row_index, active_row_valid_mask = _pack_active_row_index(local_row_mask.bool() if local_row_mask is not None else None)
+            active_source_mask = None if row_budget_mask is None else (row_budget_mask > 0)
+            if active_source_mask is None and local_row_mask is not None:
+                active_source_mask = local_row_mask.bool()
+            active_row_index, active_row_valid_mask = _pack_active_row_index(active_source_mask)
             if row_budget_mask is not None and active_row_index is not None:
                 row_budget_values = torch.gather(row_budget_mask, 1, active_row_index.clamp(min=0))
                 row_budget_values = row_budget_values * active_row_valid_mask.to(dtype=row_budget_values.dtype)
                 personal_row_budget_mean = row_budget_values.sum() / active_row_valid_mask.float().sum().clamp(min=1.0)
             else:
                 row_budget_values = None
+            if active_row_index is not None and active_row_valid_mask is not None:
+                if query_row_mask is not None:
+                    query_row_active_mask = (
+                        torch.gather(query_row_mask.bool(), 1, active_row_index.clamp(min=0))
+                        & active_row_valid_mask
+                    )
+                if neighbor_row_mask is not None:
+                    neighbor_row_active_mask = (
+                        torch.gather(neighbor_row_mask.bool(), 1, active_row_index.clamp(min=0))
+                        & active_row_valid_mask
+                    )
             allow_full_support = (not self.use_concept_graph) or (not self.personal_support_only)
             support_cache = _build_support_cache(relation_matrices, allow_full_support=allow_full_support)
             if active_row_index is not None and active_row_valid_mask is not None:
@@ -1409,20 +1462,23 @@ class ConceptStructureModeling(nn.Module):
                 personal_delta_student_std = (posterior_delta * valid_float).std(dim=0, unbiased=False).mean()
                 alpha_head_std = gate_alpha_effective.squeeze(-1).squeeze(-1).std(dim=1, unbiased=False).mean()
 
-                if query_row_mask is not None and active_row_index is not None:
-                    query_active = torch.gather(query_row_mask.float(), 1, active_row_index.clamp(min=0))
-                    query_active = query_active * active_row_valid_mask.float()
-                    query_mask_sparse = query_active.unsqueeze(1).unsqueeze(-1) * valid_float
+                if query_row_active_mask is not None:
+                    query_mask_sparse = query_row_active_mask.float().unsqueeze(1).unsqueeze(-1) * valid_float
                     query_count = query_mask_sparse.sum(dim=(1, 2, 3)).clamp(min=1.0)
-                    query_delta_per_sample = (
+                    query_delta_abs_per_sample = (
                         posterior_delta.abs() * query_mask_sparse
                     ).sum(dim=(1, 2, 3)) / query_count
-                    query_row_personal_delta = query_delta_per_sample.mean()
-                    personal_query_row_std = query_delta_per_sample.std(unbiased=False)
-                if neighbor_row_mask is not None and active_row_index is not None:
-                    neighbor_active = torch.gather(neighbor_row_mask.float(), 1, active_row_index.clamp(min=0))
-                    neighbor_active = neighbor_active * active_row_valid_mask.float()
-                    neighbor_mask_sparse = neighbor_active.unsqueeze(1).unsqueeze(-1) * valid_float
+                    query_row_personal_delta = query_delta_abs_per_sample.mean()
+                    query_row_posterior_delta_abs = query_delta_abs_per_sample.mean()
+                    personal_query_row_std = query_delta_abs_per_sample.std(unbiased=False)
+                    posterior_kl = posterior_prob.clamp(min=1e-8) * (
+                        posterior_prob.clamp(min=1e-8).log()
+                        - global_support_prob.clamp(min=1e-8).log()
+                    )
+                    query_row_posterior_kl = (posterior_kl * query_mask_sparse).sum(dim=(1, 2, 3)) / query_count
+                    query_row_posterior_kl = query_row_posterior_kl.mean()
+                if neighbor_row_active_mask is not None:
+                    neighbor_mask_sparse = neighbor_row_active_mask.float().unsqueeze(1).unsqueeze(-1) * valid_float
                     neighbor_count = neighbor_mask_sparse.sum(dim=(1, 2, 3)).clamp(min=1.0)
                     neighbor_delta_per_sample = (
                         posterior_delta.abs() * neighbor_mask_sparse
@@ -1433,20 +1489,21 @@ class ConceptStructureModeling(nn.Module):
                     "global_matrices": relation_matrices,
                     "active_row_index": active_row_index,
                     "active_row_valid_mask": active_row_valid_mask,
+                    "query_row_active_mask": query_row_active_mask,
+                    "neighbor_row_active_mask": neighbor_row_active_mask,
                     "support_col_index": support_col_index,
                     "support_valid_mask": support_valid_mask,
                     "global_support_prob": global_support_prob,
                     "posterior_prob": posterior_prob,
                     "gate_alpha": gate_alpha_effective.squeeze(-1).squeeze(-1),
                 }
+                personal_relation_spec = relation_used
                 personal_matrices = None
-            knowledge_state = self.knowledge_encoder(student_ids, relation_used)
-            student_repr = knowledge_state.mean(dim=1)
-            knowledge_state_personal_delta = (knowledge_state - knowledge_state_pre_personal).pow(2).mean().sqrt()
 
         return {
             "relation_matrices": relation_matrices,
             "relation_used": relation_used,
+            "personal_relation_spec": personal_relation_spec,
             "knowledge_state": knowledge_state,
             "student_repr": student_repr,
             "relation_identity_delta": relation_identity_delta,
@@ -1478,10 +1535,14 @@ class ConceptStructureModeling(nn.Module):
             "alpha_head_std": alpha_head_std,
             "query_row_personal_delta": query_row_personal_delta,
             "neighbor_row_personal_delta": neighbor_row_personal_delta,
+            "query_row_posterior_delta_abs": query_row_posterior_delta_abs,
+            "query_row_posterior_kl": query_row_posterior_kl,
             "personal_row_budget_mean": personal_row_budget_mean,
             "personal_query_row_std": personal_query_row_std,
             "active_row_index": active_row_index,
             "active_row_valid_mask": active_row_valid_mask,
+            "query_row_active_mask": query_row_active_mask,
+            "neighbor_row_active_mask": neighbor_row_active_mask,
             "support_col_index": support_col_index,
             "support_valid_mask": support_valid_mask,
             "global_support_prob": global_support_prob,
@@ -1557,8 +1618,10 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_dropout: Optional[float] = None,
         graph_tau_init: float = 1.0,
         graph_propagation_alpha: float = 0.20,
-        graph_readout_1hop_scale: float = 0.35,
-        graph_readout_2hop_scale: float = 0.15,
+        graph_query_readout_scale: float = 0.35,
+        graph_query_readout_2hop_scale: float = 0.15,
+        graph_readout_1hop_scale: Optional[float] = None,
+        graph_readout_2hop_scale: Optional[float] = None,
         graph_query_writeback_scale: Optional[float] = None,
         graph_query_writeback_2hop_scale: Optional[float] = None,
         prediction_l2_lambda: float = 5e-5,
@@ -1576,9 +1639,14 @@ class CognitiveDiagnosisModel(nn.Module):
         personal_alpha_bias_scale: float = 1.0,
         personal_disable_student_global_context: bool = False,
         personal_local_hops: int = 1,
+        personal_include_neighbor_rows: bool = False,
         personal_query_row_budget: float = 1.0,
         personal_neighbor_row_budget: float = 0.30,
         personal_support_only: bool = True,
+        personal_query_correction_scale: float = 0.15,
+        lambda_personal_kl: float = 0.0,
+        lambda_personal_query_residual: float = 0.0,
+        personal_query_residual_margin: float = 0.0,
         share_concept_embeddings: bool = False,
     ):
         super().__init__()
@@ -1610,18 +1678,22 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_tau_init = float(graph_tau_init)
         self.graph_identity_residual = max(0.0, min(1.0, float(graph_identity_residual)))
         self.graph_propagation_alpha = max(0.0, min(1.0, float(graph_propagation_alpha)))
-        self.graph_readout_1hop_scale = max(0.0, float(graph_readout_1hop_scale))
-        self.graph_readout_2hop_scale = max(0.0, float(graph_readout_2hop_scale))
-        self.graph_query_writeback_scale = max(
-            0.0,
-            float(self.graph_readout_1hop_scale if graph_query_writeback_scale is None else graph_query_writeback_scale),
+        resolved_graph_query_1hop = (
+            graph_query_readout_scale
+            if graph_readout_1hop_scale is None and graph_query_writeback_scale is None
+            else (graph_readout_1hop_scale if graph_readout_1hop_scale is not None else graph_query_writeback_scale)
         )
-        self.graph_query_writeback_2hop_scale = max(
-            0.0,
-            float(self.graph_readout_2hop_scale if graph_query_writeback_2hop_scale is None else graph_query_writeback_2hop_scale),
+        resolved_graph_query_2hop = (
+            graph_query_readout_2hop_scale
+            if graph_readout_2hop_scale is None and graph_query_writeback_2hop_scale is None
+            else (graph_readout_2hop_scale if graph_readout_2hop_scale is not None else graph_query_writeback_2hop_scale)
         )
-        self.graph_readout_1hop_scale = self.graph_query_writeback_scale
-        self.graph_readout_2hop_scale = self.graph_query_writeback_2hop_scale
+        self.graph_query_readout_scale = max(0.0, float(resolved_graph_query_1hop))
+        self.graph_query_readout_2hop_scale = max(0.0, float(resolved_graph_query_2hop))
+        self.graph_readout_1hop_scale = self.graph_query_readout_scale
+        self.graph_readout_2hop_scale = self.graph_query_readout_2hop_scale
+        self.graph_query_writeback_scale = self.graph_query_readout_scale
+        self.graph_query_writeback_2hop_scale = self.graph_query_readout_2hop_scale
         self._current_epoch = 1
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
@@ -1643,9 +1715,14 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_alpha_bias_scale = max(0.0, float(personal_alpha_bias_scale))
         self.personal_disable_student_global_context = bool(personal_disable_student_global_context)
         self.personal_local_hops = max(0, int(personal_local_hops))
+        self.personal_include_neighbor_rows = bool(personal_include_neighbor_rows)
         self.personal_query_row_budget = max(0.0, float(personal_query_row_budget))
         self.personal_neighbor_row_budget = max(0.0, float(personal_neighbor_row_budget))
         self.personal_support_only = bool(personal_support_only)
+        self.personal_query_correction_scale = max(0.0, float(personal_query_correction_scale))
+        self.lambda_personal_kl = max(0.0, float(lambda_personal_kl))
+        self.lambda_personal_query_residual = max(0.0, float(lambda_personal_query_residual))
+        self.personal_query_residual_margin = max(0.0, float(personal_query_residual_margin))
         self.share_concept_embeddings = bool(share_concept_embeddings)
 
         self.register_buffer("q_matrix", q_matrix)
@@ -1681,6 +1758,7 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_alpha_bias_scale=self.personal_alpha_bias_scale,
             personal_disable_student_global_context=self.personal_disable_student_global_context,
             personal_local_hops=self.personal_local_hops,
+            personal_include_neighbor_rows=self.personal_include_neighbor_rows,
             personal_query_row_budget=self.personal_query_row_budget,
             personal_neighbor_row_budget=self.personal_neighbor_row_budget,
             personal_support_only=self.personal_support_only,
@@ -1722,40 +1800,107 @@ class CognitiveDiagnosisModel(nn.Module):
             return torch.bmm(A, states)
         raise ValueError(f"Unsupported relation_matrices shape for aggregation: {tuple(relation_matrices.shape)}")
 
-    def _build_query_enhanced_state(
+    @staticmethod
+    def _masked_query_rms(tensor: torch.Tensor, concept_mask: Optional[torch.Tensor]) -> torch.Tensor:
+        if concept_mask is None:
+            return tensor.new_tensor(0.0)
+        query_weight = concept_mask.float().unsqueeze(-1)
+        denom = (query_weight.sum() * float(tensor.size(-1))).clamp(min=1.0)
+        return ((tensor.pow(2) * query_weight).sum() / denom).sqrt()
+
+    def _build_global_query_readout(
         self,
         knowledge_state: torch.Tensor,
-        relation_used: torch.Tensor,
+        relation_matrices: torch.Tensor,
         concept_mask: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        if (
-            (self.graph_query_writeback_scale <= 0 and self.graph_query_writeback_2hop_scale <= 0)
-            or not self.enable_module1
-        ):
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if ((self.graph_query_readout_scale <= 0 and self.graph_query_readout_2hop_scale <= 0) or not self.enable_module1):
             zero = knowledge_state.new_tensor(0.0)
-            return knowledge_state, zero, zero, zero
+            return torch.zeros_like(knowledge_state), zero, zero
 
-        hop1 = self._aggregate_with_relation(knowledge_state, relation_used)
-        hop2 = self._aggregate_with_relation(hop1, relation_used)
+        hop1 = self._aggregate_with_relation(knowledge_state, relation_matrices)
+        hop2 = self._aggregate_with_relation(hop1, relation_matrices)
         query_mask = concept_mask.float()
         query_rows = query_mask.unsqueeze(-1).bool()
-        graph_delta = (
-            self.graph_query_writeback_scale * (hop1 - knowledge_state)
-            + self.graph_query_writeback_2hop_scale * (hop2 - hop1)
+        global_context = (
+            self.graph_query_readout_scale * (hop1 - knowledge_state)
+            + self.graph_query_readout_2hop_scale * (hop2 - hop1)
         )
-        enhanced = torch.where(query_rows, knowledge_state + graph_delta, knowledge_state)
-        delta = (enhanced - knowledge_state).pow(2).mean().sqrt()
-
-        query_weight = query_mask.unsqueeze(-1)
-        query_denom = (query_weight.sum() * float(knowledge_state.size(-1))).clamp(min=1.0)
-        query_row_graph_delta = (
-            ((enhanced - knowledge_state).pow(2) * query_weight).sum() / query_denom
-        ).sqrt()
+        global_context = torch.where(query_rows, global_context, torch.zeros_like(global_context))
+        query_row_graph_delta = self._masked_query_rms(global_context, concept_mask)
 
         query_seed = query_mask / query_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
-        query_support = self._aggregate_with_relation(query_seed.unsqueeze(-1), relation_used).squeeze(-1)
-        readout_query_support_mass = (query_support * (1.0 - query_mask)).sum(dim=1).mean()
-        return enhanced, delta, query_row_graph_delta, readout_query_support_mass
+        query_support = self._aggregate_with_relation(query_seed.unsqueeze(-1), relation_matrices).squeeze(-1)
+        query_row_global_support_mass = (query_support * (1.0 - query_mask)).sum(dim=1).mean()
+        return global_context, query_row_graph_delta, query_row_global_support_mass
+
+    def _build_personal_query_correction(
+        self,
+        knowledge_state: torch.Tensor,
+        relation_spec: Optional[Dict[str, torch.Tensor]],
+        concept_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        zero_scalar = knowledge_state.new_tensor(0.0)
+        zero_tensor = torch.zeros_like(knowledge_state)
+        if not isinstance(relation_spec, dict):
+            return zero_tensor, zero_scalar, zero_scalar, zero_scalar, zero_scalar
+
+        active_row_index = relation_spec.get("active_row_index")
+        active_row_valid_mask = relation_spec.get("active_row_valid_mask")
+        if active_row_index is None or active_row_valid_mask is None or active_row_index.numel() == 0:
+            return zero_tensor, zero_scalar, zero_scalar, zero_scalar, zero_scalar
+
+        expanded_states = knowledge_state.unsqueeze(1).expand(
+            -1,
+            relation_spec["global_matrices"].size(0),
+            -1,
+            -1,
+        )
+        local_messages = _compute_sparse_local_messages(expanded_states, relation_spec)
+        query_row_active_mask = relation_spec.get("query_row_active_mask")
+        if query_row_active_mask is None:
+            query_row_active_mask = active_row_valid_mask
+        valid_query_rows = active_row_valid_mask & query_row_active_mask
+        if not bool(valid_query_rows.any()):
+            return zero_tensor, zero_scalar, zero_scalar, zero_scalar, zero_scalar
+
+        message_delta = local_messages["message_delta"].mean(dim=1)
+        correction = torch.zeros_like(knowledge_state)
+        row_index = active_row_index.clamp(min=0)
+        batch_idx = torch.arange(knowledge_state.size(0), device=knowledge_state.device, dtype=torch.long).unsqueeze(1).expand_as(row_index)
+        correction[batch_idx[valid_query_rows], row_index[valid_query_rows]] = message_delta[valid_query_rows]
+        query_row_personal_message_delta = self._masked_query_rms(correction, concept_mask)
+
+        support_valid_mask = relation_spec["support_valid_mask"].bool()
+        global_support_prob = relation_spec["global_support_prob"]
+        posterior_prob = relation_spec["posterior_prob"]
+        query_mask_sparse = valid_query_rows.float().unsqueeze(1).unsqueeze(-1) * support_valid_mask.float()
+        query_count = query_mask_sparse.sum(dim=(1, 2, 3)).clamp(min=1.0)
+        posterior_delta_abs = (
+            ((posterior_prob - global_support_prob).abs() * query_mask_sparse).sum(dim=(1, 2, 3)) / query_count
+        ).mean()
+        posterior_kl = (
+            (
+                posterior_prob.clamp(min=1e-8)
+                * (
+                    posterior_prob.clamp(min=1e-8).log()
+                    - global_support_prob.clamp(min=1e-8).log()
+                )
+                * query_mask_sparse
+            ).sum(dim=(1, 2, 3)) / query_count
+        ).mean()
+
+        query_mask = concept_mask.float()
+        query_seed = query_mask / query_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+        personal_support = self._aggregate_with_relation(query_seed.unsqueeze(-1), relation_spec).squeeze(-1)
+        query_row_personal_support_mass = (personal_support * (1.0 - query_mask)).sum(dim=1).mean()
+        return (
+            correction,
+            query_row_personal_message_delta,
+            posterior_delta_abs,
+            posterior_kl,
+            query_row_personal_support_mass,
+        )
 
     # ------------------------------
     # Fix #1：行熵稀疏度（用于 personal graph 正则）
@@ -1812,15 +1957,26 @@ class CognitiveDiagnosisModel(nn.Module):
         )
         relation_matrices = s_out["relation_matrices"]
         relation_used = s_out["relation_used"]
+        personal_relation_spec = s_out.get("personal_relation_spec")
         knowledge_state = s_out["knowledge_state"]
         student_repr = s_out["student_repr"]
         gate_alpha = s_out["alpha"]
         personal_matrices = s_out["personal_matrices"]
-        prediction_state, readout_query_delta, query_row_graph_delta, readout_query_support_mass = self._build_query_enhanced_state(
+        global_query_context, query_row_global_readout_delta, query_row_global_support_mass = self._build_global_query_readout(
             knowledge_state=knowledge_state,
-            relation_used=relation_used,
+            relation_matrices=relation_matrices,
             concept_mask=q_vector,
         )
+        personal_query_correction, query_row_personal_message_delta, query_row_posterior_delta_abs, query_row_posterior_kl, query_row_personal_support_mass = self._build_personal_query_correction(
+            knowledge_state=knowledge_state,
+            relation_spec=personal_relation_spec,
+            concept_mask=q_vector,
+        )
+        query_rows = q_vector.float().unsqueeze(-1).bool()
+        total_query_correction = global_query_context + self.personal_query_correction_scale * personal_query_correction
+        prediction_state = torch.where(query_rows, knowledge_state + total_query_correction, knowledge_state)
+        readout_query_delta = self._masked_query_rms(total_query_correction, q_vector)
+        personal_to_graph_query_ratio = query_row_personal_message_delta / query_row_global_readout_delta.clamp(min=1e-8)
 
         # ========== 2) 固定预测头 D ==========
         b, a = self.exercise_encoder(exercise_ids)
@@ -1858,6 +2014,7 @@ class CognitiveDiagnosisModel(nn.Module):
             "share_concept_embeddings": torch.tensor(int(self.share_concept_embeddings), device=device),
             "relation_matrices": relation_matrices,
             "relation_used": relation_used,
+            "personal_relation_spec": personal_relation_spec,
             "knowledge_state": knowledge_state,
             "prediction_state": prediction_state,
             "student_repr": student_repr,
@@ -1870,8 +2027,16 @@ class CognitiveDiagnosisModel(nn.Module):
             "knowledge_state_graph_delta": s_out["knowledge_state_graph_delta"].detach(),
             "knowledge_state_personal_delta": s_out["knowledge_state_personal_delta"].detach(),
             "readout_query_delta": readout_query_delta.detach(),
-            "query_row_graph_delta": query_row_graph_delta.detach(),
-            "readout_query_support_mass": readout_query_support_mass.detach(),
+            "query_row_graph_delta": query_row_global_readout_delta.detach(),
+            "query_row_personal_delta": query_row_posterior_delta_abs.detach(),
+            "readout_query_support_mass": query_row_global_support_mass.detach(),
+            "query_row_global_readout_delta": query_row_global_readout_delta.detach(),
+            "query_row_personal_message_delta": query_row_personal_message_delta,
+            "query_row_posterior_delta_abs": query_row_posterior_delta_abs.detach(),
+            "query_row_posterior_kl": query_row_posterior_kl.detach(),
+            "personal_to_graph_query_ratio": personal_to_graph_query_ratio.detach(),
+            "query_row_global_support_mass": query_row_global_support_mass.detach(),
+            "query_row_personal_support_mass": query_row_personal_support_mass.detach(),
         }
         details["irt_logit_for_reg"] = irt_logit
         details["readout_local_row_ratio"] = q_vector.float().mean().detach()
@@ -1917,11 +2082,15 @@ class CognitiveDiagnosisModel(nn.Module):
                 "query_state_norm",
                 "query_row_personal_delta",
                 "neighbor_row_personal_delta",
+                "query_row_posterior_delta_abs",
+                "query_row_posterior_kl",
                 "personal_row_budget_mean",
                 "personal_query_row_std",
                 "local_row_mask",
                 "active_row_index",
                 "active_row_valid_mask",
+                "query_row_active_mask",
+                "neighbor_row_active_mask",
                 "support_col_index",
                 "support_valid_mask",
                 "global_support_prob",
@@ -1974,6 +2143,8 @@ class CognitiveDiagnosisModel(nn.Module):
             "graph_reg_scale": torch.tensor(1.0, device=device),
             "prediction_l2": torch.tensor(0.0, device=device),
             "personal_sparse": torch.tensor(0.0, device=device),
+            "personal_kl": torch.tensor(0.0, device=device),
+            "personal_query_residual": torch.tensor(0.0, device=device),
             "alpha_var": torch.tensor(0.0, device=device),
             "alpha_collapse": torch.tensor(0.0, device=device),
         }
@@ -2123,12 +2294,53 @@ class CognitiveDiagnosisModel(nn.Module):
                 details["alpha_std_runtime"] = alpha_std.detach()
                 details["alpha_collapse_pen"] = alpha_pen.detach()
 
+            posterior_prob = details.get("posterior_prob")
+            global_support_prob = details.get("global_support_prob")
+            support_valid_mask = details.get("support_valid_mask")
+            query_row_active_mask = details.get("query_row_active_mask")
+            if (
+                posterior_prob is not None
+                and global_support_prob is not None
+                and support_valid_mask is not None
+                and query_row_active_mask is not None
+                and self.lambda_personal_kl > 0
+            ):
+                query_mask_sparse = (
+                    query_row_active_mask.float().unsqueeze(1).unsqueeze(-1)
+                    * support_valid_mask.bool().float()
+                )
+                query_count = query_mask_sparse.sum(dim=(1, 2, 3)).clamp(min=1.0)
+                posterior_kl = (
+                    (
+                        posterior_prob.clamp(min=1e-8)
+                        * (
+                            posterior_prob.clamp(min=1e-8).log()
+                            - global_support_prob.clamp(min=1e-8).log()
+                        )
+                        * query_mask_sparse
+                    ).sum(dim=(1, 2, 3)) / query_count
+                ).mean()
+                terms["personal_kl"] = self.lambda_personal_kl * posterior_kl * personal_reg_ramp_t
+                details["personal_kl_runtime"] = posterior_kl.detach()
+
+            if self.lambda_personal_query_residual > 0 and details.get("query_row_personal_message_delta") is not None:
+                residual = details["query_row_personal_message_delta"]
+                residual_margin = relation_matrices.new_tensor(self.personal_query_residual_margin)
+                residual_pen = F.relu(residual - residual_margin)
+                terms["personal_query_residual"] = (
+                    self.lambda_personal_query_residual * residual_pen * personal_reg_ramp_t
+                )
+                details["personal_query_residual_runtime"] = residual.detach()
+                details["personal_query_residual_pen"] = residual_pen.detach()
+
         total = (
             terms["graph_entropy"]
             + terms["graph_diag"]
             + terms["graph_uniform"]
             + terms["prediction_l2"]
             + terms["personal_sparse"]
+            + terms["personal_kl"]
+            + terms["personal_query_residual"]
             + terms["alpha_var"]
             + terms["alpha_collapse"]
         )

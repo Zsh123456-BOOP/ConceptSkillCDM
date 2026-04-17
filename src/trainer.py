@@ -47,19 +47,22 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "personal_reg_warmup_epochs",
     "personal_disable_student_global_context",
     "personal_local_hops",
+    "personal_include_neighbor_rows",
     "personal_query_row_budget",
     "personal_neighbor_row_budget",
     "personal_support_only",
+    "personal_query_correction_scale",
     "use_personal_graph",
     "use_concept_graph",
     "graph_identity_residual",
     "graph_propagation_alpha",
-    "graph_query_writeback_scale",
-    "graph_query_writeback_2hop_scale",
-    "graph_readout_1hop_scale",
-    "graph_readout_2hop_scale",
+    "graph_query_readout_scale",
+    "graph_query_readout_2hop_scale",
     "personal_delta_scale",
     "personal_warmup_epochs",
+    "lambda_personal_kl",
+    "lambda_personal_query_residual",
+    "personal_query_residual_margin",
     "lambda_alpha_min",
     "alpha_min_target",
     "personal_state_lr_mult",
@@ -116,6 +119,18 @@ def _resolve_optional_graph_dropout(value: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return None if val < 0 else val
+
+
+def _read_config_value(source: Any, *keys: str, default: Any = None) -> Any:
+    for key in keys:
+        if isinstance(source, dict):
+            if key in source and source.get(key) is not None:
+                return source.get(key)
+        else:
+            value = getattr(source, key, None)
+            if value is not None:
+                return value
+    return default
 
 
 def _default_monitor_config() -> Dict[str, str]:
@@ -695,6 +710,8 @@ _REG_COMPONENT_KEYS: Tuple[str, ...] = (
     "graph_reg_scale",
     "prediction_l2",
     "personal_sparse",
+    "personal_kl",
+    "personal_query_residual",
     "alpha_var",
     "alpha_collapse",
 )
@@ -742,11 +759,18 @@ def _collect_debug_forward_stats(
     personal_support_density_vals: List[float] = []
     readout_query_delta_vals: List[float] = []
     query_row_graph_delta_vals: List[float] = []
+    query_row_global_readout_delta_vals: List[float] = []
     query_row_personal_delta_vals: List[float] = []
+    query_row_personal_message_delta_vals: List[float] = []
+    query_row_posterior_delta_abs_vals: List[float] = []
+    query_row_posterior_kl_vals: List[float] = []
+    personal_to_graph_query_ratio_vals: List[float] = []
     neighbor_row_personal_delta_vals: List[float] = []
     personal_row_budget_mean_vals: List[float] = []
     personal_query_row_std_vals: List[float] = []
     readout_query_support_mass_vals: List[float] = []
+    query_row_global_support_mass_vals: List[float] = []
+    query_row_personal_support_mass_vals: List[float] = []
 
     graph_row_entropy_mean = 0.0
     graph_entropy_ratio = 0.0
@@ -841,6 +865,10 @@ def _collect_debug_forward_stats(
                 ("local_row_ratio", local_row_ratio_vals),
                 ("personal_support_density", personal_support_density_vals),
                 ("query_row_personal_delta", query_row_personal_delta_vals),
+                ("query_row_personal_message_delta", query_row_personal_message_delta_vals),
+                ("query_row_posterior_delta_abs", query_row_posterior_delta_abs_vals),
+                ("query_row_posterior_kl", query_row_posterior_kl_vals),
+                ("personal_to_graph_query_ratio", personal_to_graph_query_ratio_vals),
                 ("neighbor_row_personal_delta", neighbor_row_personal_delta_vals),
                 ("personal_row_budget_mean", personal_row_budget_mean_vals),
                 ("personal_query_row_std", personal_query_row_std_vals),
@@ -855,7 +883,10 @@ def _collect_debug_forward_stats(
                 ("knowledge_state_personal_delta", knowledge_state_personal_delta_vals),
                 ("readout_query_delta", readout_query_delta_vals),
                 ("query_row_graph_delta", query_row_graph_delta_vals),
+                ("query_row_global_readout_delta", query_row_global_readout_delta_vals),
                 ("readout_query_support_mass", readout_query_support_mass_vals),
+                ("query_row_global_support_mass", query_row_global_support_mass_vals),
+                ("query_row_personal_support_mass", query_row_personal_support_mass_vals),
             ):
                 val = details.get(detail_key)
                 if val is not None:
@@ -912,11 +943,18 @@ def _collect_debug_forward_stats(
     personal_support_density_mean, _ = _safe_mean_std(personal_support_density_vals)
     readout_query_delta_mean, _ = _safe_mean_std(readout_query_delta_vals)
     query_row_graph_delta_mean, _ = _safe_mean_std(query_row_graph_delta_vals)
+    query_row_global_readout_delta_mean, _ = _safe_mean_std(query_row_global_readout_delta_vals)
     query_row_personal_delta_mean, _ = _safe_mean_std(query_row_personal_delta_vals)
+    query_row_personal_message_delta_mean, _ = _safe_mean_std(query_row_personal_message_delta_vals)
+    query_row_posterior_delta_abs_mean, _ = _safe_mean_std(query_row_posterior_delta_abs_vals)
+    query_row_posterior_kl_mean, _ = _safe_mean_std(query_row_posterior_kl_vals)
+    personal_to_graph_query_ratio_mean, _ = _safe_mean_std(personal_to_graph_query_ratio_vals)
     neighbor_row_personal_delta_mean, _ = _safe_mean_std(neighbor_row_personal_delta_vals)
     personal_row_budget_mean, _ = _safe_mean_std(personal_row_budget_mean_vals)
     personal_query_row_std_mean, _ = _safe_mean_std(personal_query_row_std_vals)
     readout_query_support_mass_mean, _ = _safe_mean_std(readout_query_support_mass_vals)
+    query_row_global_support_mass_mean, _ = _safe_mean_std(query_row_global_support_mass_vals)
+    query_row_personal_support_mass_mean, _ = _safe_mean_std(query_row_personal_support_mass_vals)
 
     return {
         "irt_abs_mean": irt_abs_mean,
@@ -956,11 +994,18 @@ def _collect_debug_forward_stats(
         "personal_support_density": personal_support_density_mean,
         "readout_query_delta": readout_query_delta_mean,
         "query_row_graph_delta": query_row_graph_delta_mean,
+        "query_row_global_readout_delta": query_row_global_readout_delta_mean,
         "query_row_personal_delta": query_row_personal_delta_mean,
+        "query_row_personal_message_delta": query_row_personal_message_delta_mean,
+        "query_row_posterior_delta_abs": query_row_posterior_delta_abs_mean,
+        "query_row_posterior_kl": query_row_posterior_kl_mean,
+        "personal_to_graph_query_ratio": personal_to_graph_query_ratio_mean,
         "neighbor_row_personal_delta": neighbor_row_personal_delta_mean,
         "personal_row_budget_mean": personal_row_budget_mean,
         "personal_query_row_std": personal_query_row_std_mean,
         "readout_query_support_mass": readout_query_support_mass_mean,
+        "query_row_global_support_mass": query_row_global_support_mass_mean,
+        "query_row_personal_support_mass": query_row_personal_support_mass_mean,
         "personal_warmup_scale": personal_warmup_scale,
         "share_concept_embeddings": share_concept_embeddings,
     }
@@ -1069,7 +1114,15 @@ def _collect_diag_warning_tags(diag: Dict[str, float]) -> List[str]:
         tags.append("gate-saturated")
     if diag.get("personal_matrix_delta", 0.0) > 1e-5 and diag.get("personal_matrix_student_std", 0.0) < 5e-4:
         tags.append("personalization-flat")
-    if diag.get("readout_query_delta", 0.0) > 0.10 and diag.get("personal_matrix_delta", 0.0) < 0.002:
+    if diag.get("query_row_personal_message_delta", 0.0) > max(1.25 * diag.get("query_row_global_readout_delta", 0.0), 0.05):
+        tags.append("E-active-but-overrides-global")
+    if diag.get("query_row_personal_message_delta", 0.0) < 0.002 and diag.get("query_row_posterior_delta_abs", 0.0) < 0.002:
+        tags.append("E-flat-at-query")
+    if diag.get("query_row_global_readout_delta", 0.0) < 0.01 and diag.get("knowledge_state_graph_delta", 0.0) > 0.02:
+        tags.append("A-readout-washed-out")
+    if diag.get("query_row_posterior_kl", 0.0) > 0.25 and diag.get("query_row_personal_message_delta", 0.0) < 0.01:
+        tags.append("query-posterior-too-diffuse")
+    if diag.get("readout_query_delta", 0.0) > 0.10 and diag.get("query_row_personal_message_delta", 0.0) < 0.002:
         tags.append("query-readout-overamplified")
     return tags
 
@@ -1290,13 +1343,15 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     logger.info("%s Loading datasets...", run_tag)
     logger.info(
         "%s Regularization: graph_entropy(lambda_sparse)=%.6f, graph_diag=%.6f, graph_uniform=%.6f, "
-        "personal_sparse=%.6f, alpha_penalty=%.6f, "
+        "personal_sparse=%.6f, personal_kl=%.6f, personal_query_residual=%.6f, alpha_penalty=%.6f, "
         "alpha_min=%.6f, prediction_l2=%.6f",
         run_tag,
         args.lambda_sparse,
         getattr(args, "lambda_graph_diag", 0.10),
         getattr(args, "lambda_graph_uniform", 0.04),
         args.lambda_sparse_personal,
+        getattr(args, "lambda_personal_kl", 0.0),
+        getattr(args, "lambda_personal_query_residual", 0.0),
         args.lambda_alpha,
         getattr(args, "lambda_alpha_min", 0.0),
         getattr(args, "prediction_l2_lambda", 5e-5),
@@ -1314,10 +1369,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     )
     logger.info(
         "%s Personal controls: personal_max_alpha=%.3f, personal_delta_scale=%.3f, personal_warmup_epochs=%d, "
-        "personal_student_dim=%s, alpha_min_target=%.4f, personal_local_hops=%s, personal_support_only=%s, "
+        "personal_student_dim=%s, alpha_min_target=%.4f, personal_local_hops=%s, include_neighbor_rows=%s, personal_support_only=%s, "
         "personal_alpha_temperature=%.3f, personal_alpha_budget=%.3f, personal_query_row_budget=%.3f, "
-        "personal_neighbor_row_budget=%.3f, personal_state_lr_mult=%.3f, personal_id_lr_mult=%.3f, "
-        "graph_propagation_alpha=%.3f, graph_query_writeback_scale=%.3f, graph_query_writeback_2hop_scale=%.3f",
+        "personal_neighbor_row_budget=%.3f, personal_query_correction_scale=%.3f, personal_state_lr_mult=%.3f, personal_id_lr_mult=%.3f, "
+        "graph_propagation_alpha=%.3f, graph_query_readout_scale=%.3f, graph_query_readout_2hop_scale=%.3f",
         run_tag,
         float(getattr(args, "personal_max_alpha", 0.35)),
         float(getattr(args, "personal_delta_scale", 1.0)),
@@ -1325,16 +1380,18 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         getattr(args, "personal_student_dim", None),
         float(getattr(args, "alpha_min_target", 0.0)),
         getattr(args, "personal_local_hops", None),
+        getattr(args, "personal_include_neighbor_rows", None),
         getattr(args, "personal_support_only", None),
         float(getattr(args, "personal_alpha_temperature", 2.0)),
         float(getattr(args, "personal_alpha_budget", 0.10)),
         float(getattr(args, "personal_query_row_budget", 1.0)),
         float(getattr(args, "personal_neighbor_row_budget", 0.30)),
+        float(getattr(args, "personal_query_correction_scale", 0.15)),
         float(getattr(args, "personal_state_lr_mult", 1.0)),
         float(getattr(args, "personal_id_lr_mult", 0.5)),
         float(getattr(args, "graph_propagation_alpha", 0.20)),
-        float(getattr(args, "graph_query_writeback_scale", getattr(args, "graph_readout_1hop_scale", 0.35))),
-        float(getattr(args, "graph_query_writeback_2hop_scale", getattr(args, "graph_readout_2hop_scale", 0.15))),
+        float(_read_config_value(args, "graph_query_readout_scale", "graph_query_writeback_scale", "graph_readout_1hop_scale", default=0.35)),
+        float(_read_config_value(args, "graph_query_readout_2hop_scale", "graph_query_writeback_2hop_scale", "graph_readout_2hop_scale", default=0.15)),
     )
 
     data_dir = args.data_dir
@@ -1408,17 +1465,18 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         graph_dropout=_resolve_optional_graph_dropout(getattr(args, "graph_dropout", -1.0)),
         graph_tau_init=getattr(args, "graph_tau_init", 1.0),
         graph_propagation_alpha=getattr(args, "graph_propagation_alpha", 0.20),
-        graph_query_writeback_scale=getattr(
-            args, "graph_query_writeback_scale", getattr(args, "graph_readout_1hop_scale", 0.35)
+        graph_query_readout_scale=_read_config_value(
+            args, "graph_query_readout_scale", "graph_query_writeback_scale", "graph_readout_1hop_scale", default=0.35
         ),
-        graph_query_writeback_2hop_scale=getattr(
-            args, "graph_query_writeback_2hop_scale", getattr(args, "graph_readout_2hop_scale", 0.15)
+        graph_query_readout_2hop_scale=_read_config_value(
+            args, "graph_query_readout_2hop_scale", "graph_query_writeback_2hop_scale", "graph_readout_2hop_scale", default=0.15
         ),
-        graph_readout_1hop_scale=getattr(args, "graph_readout_1hop_scale", 0.35),
-        graph_readout_2hop_scale=getattr(args, "graph_readout_2hop_scale", 0.15),
         personal_rank=getattr(args, "personal_rank", 4),
         lambda_sparse_personal=args.lambda_sparse_personal,
         lambda_alpha=args.lambda_alpha,
+        lambda_personal_kl=getattr(args, "lambda_personal_kl", 0.0),
+        lambda_personal_query_residual=getattr(args, "lambda_personal_query_residual", 0.0),
+        personal_query_residual_margin=getattr(args, "personal_query_residual_margin", 0.0),
         lambda_graph_entropy=args.lambda_sparse,
         graph_entropy_min=getattr(args, "graph_entropy_min", 0.15),
         graph_entropy_max=getattr(args, "graph_entropy_max", 0.85),
@@ -1445,9 +1503,11 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             args, "personal_disable_student_global_context", False
         ),
         personal_local_hops=getattr(args, "personal_local_hops", 1),
+        personal_include_neighbor_rows=getattr(args, "personal_include_neighbor_rows", False),
         personal_query_row_budget=getattr(args, "personal_query_row_budget", 1.0),
         personal_neighbor_row_budget=getattr(args, "personal_neighbor_row_budget", 0.30),
         personal_support_only=getattr(args, "personal_support_only", True),
+        personal_query_correction_scale=getattr(args, "personal_query_correction_scale", 0.15),
         share_concept_embeddings=getattr(args, "share_concept_embeddings", False),
     ).to(device)
 
@@ -1604,7 +1664,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "alpha_state_path=%.4f, alpha_id_path=%.4f, alpha_bias_path=%.4f, head_bias_path=%.4f, "
                 "personal_row_entropy=%.4f, personal_matrix_delta=%.4f, personal_matrix_student_std=%.4f, "
                 "personal_delta_pre_softmax_norm=%.4f, personal_delta_student_std=%.4f, alpha_head_std=%.4f, "
-                "query_row_graph_delta=%.4f, query_row_personal_delta=%.4f, neighbor_row_personal_delta=%.4f, "
+                "query_row_global_readout_delta=%.4f, query_row_personal_message_delta=%.4f, "
+                "query_row_posterior_delta_abs=%.4f, query_row_posterior_kl=%.4f, "
+                "personal_to_graph_query_ratio=%.4f, query_row_global_support_mass=%.4f, "
+                "query_row_personal_support_mass=%.4f, query_row_personal_delta=%.4f, neighbor_row_personal_delta=%.4f, "
                 "personal_row_budget_mean=%.4f, personal_query_row_std=%.4f, readout_query_support_mass=%.4f, "
                 "personal_student_mix=%.4f, personal_student_adapter=%.4f, "
                 "local_row_ratio=%.4f, support_density=%.4f, readout_query_delta=%.4f, "
@@ -1632,7 +1695,13 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["personal_delta_pre_softmax_norm"],
                 diag["personal_delta_student_std"],
                 diag["alpha_head_std"],
-                diag["query_row_graph_delta"],
+                diag["query_row_global_readout_delta"],
+                diag["query_row_personal_message_delta"],
+                diag["query_row_posterior_delta_abs"],
+                diag["query_row_posterior_kl"],
+                diag["personal_to_graph_query_ratio"],
+                diag["query_row_global_support_mass"],
+                diag["query_row_personal_support_mass"],
                 diag["query_row_personal_delta"],
                 diag["neighbor_row_personal_delta"],
                 diag["personal_row_budget_mean"],
@@ -1732,6 +1801,36 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                         diag.get("readout_query_delta", 0.0),
                         diag.get("query_row_graph_delta", 0.0),
                         diag.get("personal_matrix_delta", 0.0),
+                    )
+                if "E-active-but-overrides-global" in warning_tags:
+                    logger.warning(
+                        "%s [Diag Warning][E] E-active-but-overrides-global: personal_message=%.6f, global_readout=%.6f, ratio=%.6f",
+                        run_tag,
+                        diag.get("query_row_personal_message_delta", 0.0),
+                        diag.get("query_row_global_readout_delta", 0.0),
+                        diag.get("personal_to_graph_query_ratio", 0.0),
+                    )
+                if "E-flat-at-query" in warning_tags:
+                    logger.warning(
+                        "%s [Diag Warning][E] E-flat-at-query: personal_message=%.6f, posterior_delta=%.6f, posterior_kl=%.6f",
+                        run_tag,
+                        diag.get("query_row_personal_message_delta", 0.0),
+                        diag.get("query_row_posterior_delta_abs", 0.0),
+                        diag.get("query_row_posterior_kl", 0.0),
+                    )
+                if "A-readout-washed-out" in warning_tags:
+                    logger.warning(
+                        "%s [Diag Warning][A] A-readout-washed-out: knowledge_state_graph_delta=%.6f, query_row_global_readout_delta=%.6f",
+                        run_tag,
+                        diag.get("knowledge_state_graph_delta", 0.0),
+                        diag.get("query_row_global_readout_delta", 0.0),
+                    )
+                if "query-posterior-too-diffuse" in warning_tags:
+                    logger.warning(
+                        "%s [Diag Warning][E] query-posterior-too-diffuse: posterior_kl=%.6f, personal_message=%.6f",
+                        run_tag,
+                        diag.get("query_row_posterior_kl", 0.0),
+                        diag.get("query_row_personal_message_delta", 0.0),
                     )
             if diag["graph_entropy_ratio"] > 0.98:
                 graph_uniform_streak += 1
@@ -2084,19 +2183,19 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         graph_propagation_alpha=loaded_args.get(
             "graph_propagation_alpha", getattr(args, "graph_propagation_alpha", 0.20)
         ),
-        graph_query_writeback_scale=loaded_args.get(
+        graph_query_readout_scale=_read_config_value(
+            loaded_args,
+            "graph_query_readout_scale",
             "graph_query_writeback_scale",
-            getattr(args, "graph_query_writeback_scale", getattr(args, "graph_readout_1hop_scale", 0.35)),
+            "graph_readout_1hop_scale",
+            default=_read_config_value(args, "graph_query_readout_scale", "graph_query_writeback_scale", "graph_readout_1hop_scale", default=0.35),
         ),
-        graph_query_writeback_2hop_scale=loaded_args.get(
+        graph_query_readout_2hop_scale=_read_config_value(
+            loaded_args,
+            "graph_query_readout_2hop_scale",
             "graph_query_writeback_2hop_scale",
-            getattr(args, "graph_query_writeback_2hop_scale", getattr(args, "graph_readout_2hop_scale", 0.15)),
-        ),
-        graph_readout_1hop_scale=loaded_args.get(
-            "graph_readout_1hop_scale", getattr(args, "graph_readout_1hop_scale", 0.35)
-        ),
-        graph_readout_2hop_scale=loaded_args.get(
-            "graph_readout_2hop_scale", getattr(args, "graph_readout_2hop_scale", 0.15)
+            "graph_readout_2hop_scale",
+            default=_read_config_value(args, "graph_query_readout_2hop_scale", "graph_query_writeback_2hop_scale", "graph_readout_2hop_scale", default=0.15),
         ),
         prediction_l2_lambda=loaded_args.get(
             "prediction_l2_lambda",
@@ -2140,6 +2239,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         personal_local_hops=loaded_args.get(
             "personal_local_hops", getattr(args, "personal_local_hops", 1)
         ),
+        personal_include_neighbor_rows=loaded_args.get(
+            "personal_include_neighbor_rows", getattr(args, "personal_include_neighbor_rows", False)
+        ),
         personal_query_row_budget=loaded_args.get(
             "personal_query_row_budget", getattr(args, "personal_query_row_budget", 1.0)
         ),
@@ -2148,6 +2250,18 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         personal_support_only=loaded_args.get(
             "personal_support_only", getattr(args, "personal_support_only", True)
+        ),
+        personal_query_correction_scale=loaded_args.get(
+            "personal_query_correction_scale", getattr(args, "personal_query_correction_scale", 0.15)
+        ),
+        lambda_personal_kl=loaded_args.get(
+            "lambda_personal_kl", getattr(args, "lambda_personal_kl", 0.0)
+        ),
+        lambda_personal_query_residual=loaded_args.get(
+            "lambda_personal_query_residual", getattr(args, "lambda_personal_query_residual", 0.0)
+        ),
+        personal_query_residual_margin=loaded_args.get(
+            "personal_query_residual_margin", getattr(args, "personal_query_residual_margin", 0.0)
         ),
         share_concept_embeddings=loaded_args.get(
             "share_concept_embeddings", getattr(args, "share_concept_embeddings", False)

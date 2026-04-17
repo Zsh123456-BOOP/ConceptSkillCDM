@@ -2,8 +2,8 @@
 模块活跃度检测工具：只评估论文主线中的 A/E 两部分是否真正工作。
 
 用于：
-1. 训练中输出简报，快速判断全局概念图 A 是否学到非平凡结构
-2. 训练结束输出完整报告，判断个性化概念图 E 是否真的产生学生差异
+1. 训练中输出简报，快速判断全局概念图 A 是否真的进入 queried concept 读出
+2. 训练结束输出完整报告，判断个性化概念图 E 是否在 query stage 产生有效且不过度的修正
 """
 
 from typing import Dict, Any, List
@@ -44,6 +44,11 @@ def compute_module_activity(
     alpha_biases: List[float] = []
     personal_matrix_deltas: List[float] = []
     personal_matrix_student_stds: List[float] = []
+    query_row_global_readout_deltas: List[float] = []
+    query_row_personal_message_deltas: List[float] = []
+    query_row_posterior_kls: List[float] = []
+    personal_query_row_stds: List[float] = []
+    personal_to_graph_query_ratios: List[float] = []
 
     sample_count = 0
 
@@ -77,6 +82,21 @@ def compute_module_activity(
             pm_student_std = details.get("personal_matrix_student_std")
             if pm_student_std is not None:
                 personal_matrix_student_stds.append(float(pm_student_std.detach().item()))
+            q_graph = details.get("query_row_global_readout_delta")
+            if q_graph is not None:
+                query_row_global_readout_deltas.extend(q_graph.reshape(-1).detach().cpu().numpy().tolist())
+            q_personal = details.get("query_row_personal_message_delta")
+            if q_personal is not None:
+                query_row_personal_message_deltas.extend(q_personal.reshape(-1).detach().cpu().numpy().tolist())
+            q_kl = details.get("query_row_posterior_kl")
+            if q_kl is not None:
+                query_row_posterior_kls.extend(q_kl.reshape(-1).detach().cpu().numpy().tolist())
+            q_std = details.get("personal_query_row_std")
+            if q_std is not None:
+                personal_query_row_stds.extend(q_std.reshape(-1).detach().cpu().numpy().tolist())
+            q_ratio = details.get("personal_to_graph_query_ratio")
+            if q_ratio is not None:
+                personal_to_graph_query_ratios.extend(q_ratio.reshape(-1).detach().cpu().numpy().tolist())
 
             sample_count += len(student_ids)
 
@@ -97,7 +117,9 @@ def compute_module_activity(
         results["graph_entropy_ratio"] = float(entropy_ratio)
         results["graph_trivial"] = bool(entropy_ratio > 0.95)
         results["graph_over_sparse"] = bool(entropy_ratio < 0.05)
-        results["graph_active"] = bool(0.05 < entropy_ratio < 0.95)
+        query_graph_delta = float(np.mean(query_row_global_readout_deltas)) if query_row_global_readout_deltas else 0.0
+        results["query_row_global_readout_delta"] = query_graph_delta
+        results["graph_active"] = bool(0.05 < entropy_ratio < 0.95 and query_graph_delta > 1e-3)
     else:
         results["graph_enabled"] = False
         results["graph_active"] = False
@@ -107,6 +129,10 @@ def compute_module_activity(
         bias_std = float(np.asarray(alpha_biases, dtype=np.float64).std()) if alpha_biases else 0.0
         matrix_delta = float(np.mean(personal_matrix_deltas)) if personal_matrix_deltas else 0.0
         matrix_student_std = float(np.mean(personal_matrix_student_stds)) if personal_matrix_student_stds else 0.0
+        query_personal_delta = float(np.mean(query_row_personal_message_deltas)) if query_row_personal_message_deltas else 0.0
+        query_posterior_kl = float(np.mean(query_row_posterior_kls)) if query_row_posterior_kls else 0.0
+        query_personal_std = float(np.mean(personal_query_row_stds)) if personal_query_row_stds else 0.0
+        query_ratio = float(np.mean(personal_to_graph_query_ratios)) if personal_to_graph_query_ratios else 0.0
 
         results["personal_graph_enabled"] = True
         results["personal_gate_mean"] = float(alpha_arr.mean())
@@ -114,16 +140,30 @@ def compute_module_activity(
         results["personal_alpha_bias_std"] = bias_std
         results["personal_matrix_delta"] = matrix_delta
         results["personal_matrix_student_std"] = matrix_student_std
-        results["personal_graph_trivial"] = bool(alpha_arr.mean() < 0.05 or matrix_delta < 0.005)
+        results["query_row_personal_message_delta"] = query_personal_delta
+        results["query_row_posterior_kl"] = query_posterior_kl
+        results["personal_query_row_std"] = query_personal_std
+        results["personal_to_graph_query_ratio"] = query_ratio
+        results["personal_graph_trivial"] = bool(query_personal_delta < 0.002 and query_posterior_kl < 0.002)
         results["personal_graph_active"] = bool(
-            alpha_arr.mean() > 0.1
-            and alpha_arr.std() > 0.01
-            and matrix_delta > 0.01
-            and (bias_std > 0.01 or matrix_student_std > 0.001)
+            query_personal_delta > 0.002
+            and query_posterior_kl > 1e-4
+            and query_personal_std > 1e-4
+        )
+        results["personal_graph_risk"] = bool(
+            results["personal_graph_active"]
+            and (
+                query_ratio > 1.0
+                or (
+                    results.get("query_row_global_readout_delta", 0.0) > 1e-6
+                    and query_personal_delta > 1.2 * results.get("query_row_global_readout_delta", 0.0)
+                )
+            )
         )
     else:
         results["personal_graph_enabled"] = False
         results["personal_graph_active"] = False
+        results["personal_graph_risk"] = False
 
     if was_training:
         model.train()
@@ -149,11 +189,14 @@ def format_activity_brief(activity: Dict[str, Any]) -> str:
     parts = []
 
     if activity.get("graph_enabled"):
-        status = "[OK]" if activity.get("graph_active") else "[X]"
+        status = "[LIVE]" if activity.get("graph_active") else "[X]"
         parts.append(f"Graph{status}")
 
     if activity.get("personal_graph_enabled"):
-        status = "[OK]" if activity.get("personal_graph_active") else "[X]"
+        if activity.get("personal_graph_risk"):
+            status = "[RISK]"
+        else:
+            status = "[LIVE]" if activity.get("personal_graph_active") else "[X]"
         parts.append(f"Personal{status}")
 
     if not parts:
@@ -180,9 +223,10 @@ def format_activity_report(
     lines.append("1. Concept Graph Module (A):")
     if activity.get("graph_enabled"):
         entropy_ratio = activity.get("graph_entropy_ratio", 0.0)
+        query_graph_delta = activity.get("query_row_global_readout_delta", 0.0)
 
         if activity.get("graph_active"):
-            status = "ACTIVE (learning meaningful structure)"
+            status = "LIVE (global graph is entering queried concept readout)"
             advice = ""
         elif activity.get("graph_over_sparse"):
             status = "OVER-SPARSE (degenerated to near-identity)"
@@ -199,6 +243,7 @@ def format_activity_report(
             f"{activity.get('graph_max_row_entropy', 0):.3f}"
         )
         lines.append(f"   - Entropy ratio: {entropy_ratio:.1%}")
+        lines.append(f"   - Query readout delta: {query_graph_delta:.4f}")
         lines.append(f"   - Status: {status}")
         if advice:
             lines.append(advice)
@@ -214,13 +259,20 @@ def format_activity_report(
         alpha_bias_std = activity.get("personal_alpha_bias_std", 0.0)
         matrix_delta = activity.get("personal_matrix_delta", 0.0)
         matrix_student_std = activity.get("personal_matrix_student_std", 0.0)
+        query_personal_delta = activity.get("query_row_personal_message_delta", 0.0)
+        query_posterior_kl = activity.get("query_row_posterior_kl", 0.0)
+        personal_query_row_std = activity.get("personal_query_row_std", 0.0)
+        query_ratio = activity.get("personal_to_graph_query_ratio", 0.0)
 
-        if activity.get("personal_graph_active"):
-            status = "ACTIVE (student-specific personalization is visible)"
+        if activity.get("personal_graph_risk"):
+            status = "RISK (personal correction is active but may be overriding global query readout)"
+            advice = "   -> Consider: increase lambda_personal_kl / lambda_personal_query_residual or reduce personal_query_correction_scale"
+        elif activity.get("personal_graph_active"):
+            status = "LIVE (state-driven personalization is visible at query stage)"
             advice = ""
         elif activity.get("personal_graph_trivial"):
-            status = "INACTIVE (personal graph barely deviates from global graph)"
-            advice = "   -> Consider: strengthen personal delta or alpha anti-collapse regularization"
+            status = "INACTIVE (personal query correction is effectively flat)"
+            advice = "   -> Consider: improve query-conditioned posterior signal instead of simply enlarging alpha"
         else:
             status = "MARGINAL (some movement, but personalization is weak)"
             advice = ""
@@ -230,6 +282,10 @@ def format_activity_report(
         lines.append(f"   - Alpha bias std: {alpha_bias_std:.3f}")
         lines.append(f"   - Personal/global delta: {matrix_delta:.4f}")
         lines.append(f"   - Inter-student matrix std: {matrix_student_std:.4f}")
+        lines.append(f"   - Query personal message delta: {query_personal_delta:.4f}")
+        lines.append(f"   - Query posterior KL: {query_posterior_kl:.4f}")
+        lines.append(f"   - Query personal std: {personal_query_row_std:.4f}")
+        lines.append(f"   - Personal/global query ratio: {query_ratio:.4f}")
         lines.append(f"   - Status: {status}")
         if advice:
             lines.append(advice)

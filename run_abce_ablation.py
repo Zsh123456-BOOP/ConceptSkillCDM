@@ -39,11 +39,12 @@ SUMMARY_CSV = Path("results") / "abce_ablation_summary.csv"
 MEAN_SUMMARY_CSV = Path("results") / "abce_ablation_summary_mean.csv"
 NUM_RE = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
 ROW_START_RE = re.compile(
-    r"(?<![\r\n])(?=(assist_09|assist_17|junyi),\d+,(best|ae_dominant),(full|no_A|no_E),)"
+    r"(?<![\r\n])(?=(assist_09|assist_17|junyi),\d+,(best|ae_dominant),(full|no_A|no_E|no_E_bs64),)"
 )
 BOOLEAN_OPTIONAL_KEYS = {
     "use_personal_graph",
     "personal_disable_student_global_context",
+    "personal_include_neighbor_rows",
     "personal_support_only",
     "share_concept_embeddings",
 }
@@ -56,19 +57,22 @@ STRUCTURAL_SWITCH_KEYS = (
     "personal_reg_warmup_epochs",
     "personal_disable_student_global_context",
     "personal_local_hops",
+    "personal_include_neighbor_rows",
     "personal_query_row_budget",
     "personal_neighbor_row_budget",
     "personal_support_only",
+    "personal_query_correction_scale",
     "use_personal_graph",
     "use_concept_graph",
     "graph_identity_residual",
     "graph_propagation_alpha",
-    "graph_query_writeback_scale",
-    "graph_query_writeback_2hop_scale",
-    "graph_readout_1hop_scale",
-    "graph_readout_2hop_scale",
+    "graph_query_readout_scale",
+    "graph_query_readout_2hop_scale",
     "personal_delta_scale",
     "personal_warmup_epochs",
+    "lambda_personal_kl",
+    "lambda_personal_query_residual",
+    "personal_query_residual_margin",
     "lambda_alpha_min",
     "alpha_min_target",
     "personal_state_lr_mult",
@@ -218,6 +222,13 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
         "local_row_ratio": None,
         "personal_support_density": None,
         "readout_query_delta": None,
+        "query_row_global_readout_delta": None,
+        "query_row_personal_message_delta": None,
+        "query_row_posterior_delta_abs": None,
+        "query_row_posterior_kl": None,
+        "personal_to_graph_query_ratio": None,
+        "query_row_global_support_mass": None,
+        "query_row_personal_support_mass": None,
         "warn_graph_uniform_count": 0,
         "warn_alpha_collapse_count": 0,
         "warn_personal_count": 0,
@@ -261,7 +272,14 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
                     "support_density",
                     "readout_query_delta",
                     "query_row_graph_delta",
+                    "query_row_global_readout_delta",
                     "query_row_personal_delta",
+                    "query_row_personal_message_delta",
+                    "query_row_posterior_delta_abs",
+                    "query_row_posterior_kl",
+                    "personal_to_graph_query_ratio",
+                    "query_row_global_support_mass",
+                    "query_row_personal_support_mass",
                     "neighbor_row_personal_delta",
                     "personal_row_budget_mean",
                     "personal_query_row_std",
@@ -534,7 +552,14 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "personal_support_density",
         "readout_query_delta",
         "query_row_graph_delta",
+        "query_row_global_readout_delta",
         "query_row_personal_delta",
+        "query_row_personal_message_delta",
+        "query_row_posterior_delta_abs",
+        "query_row_posterior_kl",
+        "personal_to_graph_query_ratio",
+        "query_row_global_support_mass",
+        "query_row_personal_support_mass",
         "neighbor_row_personal_delta",
         "personal_row_budget_mean",
         "personal_query_row_std",
@@ -547,14 +572,17 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "personal_reg_warmup_epochs",
         "personal_disable_student_global_context",
         "personal_local_hops",
+        "personal_include_neighbor_rows",
         "personal_query_row_budget",
         "personal_neighbor_row_budget",
         "personal_support_only",
+        "personal_query_correction_scale",
         "graph_propagation_alpha",
-        "graph_query_writeback_scale",
-        "graph_query_writeback_2hop_scale",
-        "graph_readout_1hop_scale",
-        "graph_readout_2hop_scale",
+        "graph_query_readout_scale",
+        "graph_query_readout_2hop_scale",
+        "lambda_personal_kl",
+        "lambda_personal_query_residual",
+        "personal_query_residual_margin",
         "personal_state_lr_mult",
         "personal_id_lr_mult",
         "scheduler_monitor",
@@ -675,7 +703,11 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
     personal_delta_pre_softmax_norm = try_float(full_row.get("personal_delta_pre_softmax_norm"))
     personal_delta_student_std = try_float(full_row.get("personal_delta_student_std"))
     alpha_head_std = try_float(full_row.get("alpha_head_std"))
-    query_row_personal_delta = try_float(full_row.get("query_row_personal_delta"))
+    query_row_graph_delta = try_float(full_row.get("query_row_global_readout_delta", full_row.get("query_row_graph_delta")))
+    query_row_personal_delta = try_float(full_row.get("query_row_personal_message_delta", full_row.get("query_row_personal_delta")))
+    query_row_posterior_delta_abs = try_float(full_row.get("query_row_posterior_delta_abs", full_row.get("query_row_personal_delta")))
+    query_row_posterior_kl = try_float(full_row.get("query_row_posterior_kl"))
+    personal_to_graph_query_ratio = try_float(full_row.get("personal_to_graph_query_ratio"))
     personal_query_row_std = try_float(full_row.get("personal_query_row_std"))
     readout_query_delta = try_float(full_row.get("readout_query_delta"))
     relation_identity_delta = try_float(full_row.get("relation_identity_delta"))
@@ -700,11 +732,19 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
         reasons.append("personal-delta-student-flat")
     if alpha_head_std is not None and alpha_head_std < 0.001:
         reasons.append("alpha-head-collapse")
-    if query_row_personal_delta is not None and personal_query_row_std is not None:
-        if query_row_personal_delta < 0.002 or personal_query_row_std < 5e-4:
+    if query_row_personal_delta is not None and personal_query_row_std is not None and query_row_posterior_kl is not None:
+        if query_row_personal_delta < 0.002 and query_row_posterior_kl < 0.002:
+            reasons.append("E-flat-at-query")
+        elif personal_query_row_std < 5e-4:
             reasons.append("query-personal-flat")
-    if readout_query_delta is not None and personal_matrix_delta is not None:
-        if readout_query_delta > 0.10 and personal_matrix_delta < 0.002:
+    if personal_to_graph_query_ratio is not None and query_row_personal_delta is not None and query_row_graph_delta is not None:
+        if personal_to_graph_query_ratio > 1.0 and query_row_personal_delta > max(query_row_graph_delta, 1e-6):
+            reasons.append("E-overrides-query-readout")
+    if query_row_posterior_kl is not None and query_row_personal_delta is not None:
+        if query_row_posterior_kl > 0.25 and query_row_personal_delta < 0.01:
+            reasons.append("query-posterior-too-diffuse")
+    if readout_query_delta is not None and query_row_personal_delta is not None:
+        if readout_query_delta > 0.10 and query_row_personal_delta < 0.002:
             reasons.append("query-readout-overamplified")
     if alpha_state_path is not None and alpha_id_path is not None and alpha_id_path > max(alpha_state_path, 1e-6):
         reasons.append("alpha-id-dominant")
@@ -712,10 +752,18 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
         reasons.append("A-near-identity")
     if knowledge_state_graph_delta is not None and knowledge_state_graph_delta < 0.02:
         reasons.append("A-state-delta-low")
+    if query_row_graph_delta is not None and knowledge_state_graph_delta is not None:
+        if knowledge_state_graph_delta > 0.02 and query_row_graph_delta < 0.01:
+            reasons.append("A-readout-washed-out")
+        if relation_identity_delta is not None and relation_identity_delta > 0.02 and query_row_graph_delta < 0.005:
+            reasons.append("A-present-but-not-queried")
     if delta_a is not None and abs(delta_a) < 0.002:
         reasons.append("A-delta-small")
-    if delta_e is not None and abs(delta_e) < 0.002:
-        reasons.append("E-delta-small")
+    if delta_e is not None:
+        if delta_e < 0 and query_row_personal_delta is not None and query_row_personal_delta > 0.002:
+            reasons.append("E-active-but-harmful")
+        elif abs(delta_e) < 0.002:
+            reasons.append("E-delta-small")
     return ";".join(reasons)
 
 
@@ -744,19 +792,26 @@ def write_summary(
         full_auc = try_float(full.get("test_auc"))
         no_a_auc = try_float(mp.get("no_A", {}).get("test_auc"))
         no_e_auc = try_float(mp.get("no_E", {}).get("test_auc"))
+        no_e_matched_auc = try_float(mp.get("no_E_bs64", {}).get("test_auc"))
 
         delta_a = (full_auc - no_a_auc) if (full_auc is not None and no_a_auc is not None) else None
         delta_e = (full_auc - no_e_auc) if (full_auc is not None and no_e_auc is not None) else None
+        delta_e_matched = (
+            (full_auc - no_e_matched_auc)
+            if (full_auc is not None and no_e_matched_auc is not None)
+            else None
+        )
+        effective_delta_e = delta_e_matched if delta_e_matched is not None else delta_e
 
-        diagnosis_reason = diagnose_reason(full, delta_a, delta_e)
+        diagnosis_reason = diagnose_reason(full, delta_a, effective_delta_e)
         comp_state = {
             "A": classify_delta(delta_a, threshold),
-            "E": classify_delta(delta_e, threshold),
+            "E": classify_delta(effective_delta_e, threshold),
         }
         if comp_state["A"] == "non_positive" and any(tag in diagnosis_reason for tag in ("graph-uniform-risk", "A-near-identity", "A-state-delta-low")):
             comp_state["A"] = "harmful_or_unstable"
         if comp_state["E"] == "non_positive" and any(
-            tag in diagnosis_reason for tag in ("gate-saturated", "query-personal-flat", "query-readout-overamplified", "personal-alpha-collapse")
+            tag in diagnosis_reason for tag in ("gate-saturated", "E-overrides-query-readout", "E-flat-at-query", "E-active-but-harmful", "query-readout-overamplified", "personal-alpha-collapse")
         ):
             comp_state["E"] = "harmful_or_unstable"
         keep = [key for key, value in comp_state.items() if value == "useful"]
@@ -770,8 +825,10 @@ def write_summary(
             "full_auc": full_auc,
             "no_A_auc": no_a_auc,
             "no_E_auc": no_e_auc,
+            "no_E_matched_auc": no_e_matched_auc,
             "delta_A_full_minus_noA": delta_a,
             "delta_E_full_minus_noE": delta_e,
+            "delta_E_full_minus_noE_matched": delta_e_matched,
             "full_effective_use_concept_graph": full.get("effective_use_concept_graph"),
             "full_effective_use_personal_graph": full.get("effective_use_personal_graph"),
             "full_clean_baseline": full.get("clean_baseline"),
@@ -787,14 +844,17 @@ def write_summary(
             "full_personal_reg_warmup_epochs": try_float(full.get("personal_reg_warmup_epochs")),
             "full_personal_disable_student_global_context": full.get("personal_disable_student_global_context"),
             "full_personal_local_hops": try_float(full.get("personal_local_hops")),
+            "full_personal_include_neighbor_rows": full.get("personal_include_neighbor_rows"),
             "full_personal_query_row_budget": try_float(full.get("personal_query_row_budget")),
             "full_personal_neighbor_row_budget": try_float(full.get("personal_neighbor_row_budget")),
             "full_personal_support_only": full.get("personal_support_only"),
+            "full_personal_query_correction_scale": try_float(full.get("personal_query_correction_scale")),
             "full_graph_propagation_alpha": try_float(full.get("graph_propagation_alpha")),
-            "full_graph_query_writeback_scale": try_float(full.get("graph_query_writeback_scale")),
-            "full_graph_query_writeback_2hop_scale": try_float(full.get("graph_query_writeback_2hop_scale")),
-            "full_graph_readout_1hop_scale": try_float(full.get("graph_readout_1hop_scale")),
-            "full_graph_readout_2hop_scale": try_float(full.get("graph_readout_2hop_scale")),
+            "full_graph_query_readout_scale": try_float(full.get("graph_query_readout_scale")),
+            "full_graph_query_readout_2hop_scale": try_float(full.get("graph_query_readout_2hop_scale")),
+            "full_lambda_personal_kl": try_float(full.get("lambda_personal_kl")),
+            "full_lambda_personal_query_residual": try_float(full.get("lambda_personal_query_residual")),
+            "full_personal_query_residual_margin": try_float(full.get("personal_query_residual_margin")),
             "full_ablation_valid": full.get("ablation_valid"),
             "full_graph_entropy_ratio": try_float(full.get("graph_entropy_ratio")),
             "full_alpha_std": try_float(full.get("alpha_std")),
@@ -809,8 +869,13 @@ def write_summary(
             "full_personal_delta_pre_softmax_norm": try_float(full.get("personal_delta_pre_softmax_norm")),
             "full_personal_delta_student_std": try_float(full.get("personal_delta_student_std")),
             "full_alpha_head_std": try_float(full.get("alpha_head_std")),
-            "full_query_row_graph_delta": try_float(full.get("query_row_graph_delta")),
-            "full_query_row_personal_delta": try_float(full.get("query_row_personal_delta")),
+            "full_query_row_global_readout_delta": try_float(full.get("query_row_global_readout_delta", full.get("query_row_graph_delta"))),
+            "full_query_row_personal_message_delta": try_float(full.get("query_row_personal_message_delta")),
+            "full_query_row_posterior_delta_abs": try_float(full.get("query_row_posterior_delta_abs", full.get("query_row_personal_delta"))),
+            "full_query_row_posterior_kl": try_float(full.get("query_row_posterior_kl")),
+            "full_personal_to_graph_query_ratio": try_float(full.get("personal_to_graph_query_ratio")),
+            "full_query_row_global_support_mass": try_float(full.get("query_row_global_support_mass", full.get("readout_query_support_mass"))),
+            "full_query_row_personal_support_mass": try_float(full.get("query_row_personal_support_mass")),
             "full_personal_query_row_std": try_float(full.get("personal_query_row_std")),
             "full_relation_identity_delta": try_float(full.get("relation_identity_delta")),
             "full_knowledge_state_graph_delta": try_float(full.get("knowledge_state_graph_delta")),
@@ -835,8 +900,10 @@ def write_summary(
         "full_auc",
         "no_A_auc",
         "no_E_auc",
+        "no_E_matched_auc",
         "delta_A_full_minus_noA",
         "delta_E_full_minus_noE",
+        "delta_E_full_minus_noE_matched",
         "full_effective_use_concept_graph",
         "full_effective_use_personal_graph",
         "full_clean_baseline",
@@ -852,14 +919,17 @@ def write_summary(
         "full_personal_reg_warmup_epochs",
         "full_personal_disable_student_global_context",
         "full_personal_local_hops",
+        "full_personal_include_neighbor_rows",
         "full_personal_query_row_budget",
         "full_personal_neighbor_row_budget",
         "full_personal_support_only",
+        "full_personal_query_correction_scale",
         "full_graph_propagation_alpha",
-        "full_graph_query_writeback_scale",
-        "full_graph_query_writeback_2hop_scale",
-        "full_graph_readout_1hop_scale",
-        "full_graph_readout_2hop_scale",
+        "full_graph_query_readout_scale",
+        "full_graph_query_readout_2hop_scale",
+        "full_lambda_personal_kl",
+        "full_lambda_personal_query_residual",
+        "full_personal_query_residual_margin",
         "full_ablation_valid",
         "full_graph_entropy_ratio",
         "full_alpha_std",
@@ -874,8 +944,13 @@ def write_summary(
         "full_personal_delta_pre_softmax_norm",
         "full_personal_delta_student_std",
         "full_alpha_head_std",
-        "full_query_row_graph_delta",
-        "full_query_row_personal_delta",
+        "full_query_row_global_readout_delta",
+        "full_query_row_personal_message_delta",
+        "full_query_row_posterior_delta_abs",
+        "full_query_row_posterior_kl",
+        "full_personal_to_graph_query_ratio",
+        "full_query_row_global_support_mass",
+        "full_query_row_personal_support_mass",
         "full_personal_query_row_std",
         "full_relation_identity_delta",
         "full_knowledge_state_graph_delta",
@@ -905,7 +980,12 @@ def write_summary(
 
     for (dataset, profile), grp in sorted(mean_group.items()):
         deltas_a = [try_float(x.get("delta_A_full_minus_noA")) for x in grp]
-        deltas_e = [try_float(x.get("delta_E_full_minus_noE")) for x in grp]
+        deltas_e = [
+            try_float(x.get("delta_E_full_minus_noE_matched"))
+            if try_float(x.get("delta_E_full_minus_noE_matched")) is not None
+            else try_float(x.get("delta_E_full_minus_noE"))
+            for x in grp
+        ]
         full_aucs = [try_float(x.get("full_auc")) for x in grp]
 
         def mean_valid(values: List[Optional[float]]) -> Optional[float]:
@@ -1005,25 +1085,29 @@ def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> 
             return {
                 "graph_identity_residual": 0.05,
                 "graph_propagation_alpha": 0.26,
-                "graph_query_writeback_scale": 0.65,
-                "graph_query_writeback_2hop_scale": 0.22,
-                "graph_readout_1hop_scale": 0.65,
-                "graph_readout_2hop_scale": 0.22,
+                "graph_query_readout_scale": 0.72,
+                "graph_query_readout_2hop_scale": 0.25,
                 "personal_warmup_epochs": 6,
                 "personal_reg_warmup_epochs": 6,
                 "personal_max_alpha": 0.30,
                 "personal_delta_scale": 4.8,
+                "lambda_alpha": 0.0,
                 "lambda_alpha_min": 0.10,
                 "alpha_min_target": 0.05,
+                "lambda_personal_kl": 0.03,
+                "lambda_personal_query_residual": 0.06,
+                "personal_query_residual_margin": 0.08,
                 "personal_alpha_temperature": 2.4,
                 "personal_alpha_budget": 0.12,
                 "personal_alpha_base_init": 0.05,
                 "personal_alpha_bias_scale": 0.0,
                 "personal_disable_student_global_context": True,
                 "personal_local_hops": 1,
+                "personal_include_neighbor_rows": False,
                 "personal_query_row_budget": 1.0,
                 "personal_neighbor_row_budget": 0.40,
                 "personal_support_only": True,
+                "personal_query_correction_scale": 0.12,
                 "personal_state_lr_mult": 1.0,
                 "personal_id_lr_mult": 0.5,
                 "share_concept_embeddings": True,
@@ -1031,25 +1115,29 @@ def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> 
         return {
             "graph_identity_residual": 0.05,
             "graph_propagation_alpha": 0.28,
-            "graph_query_writeback_scale": 0.45,
-            "graph_query_writeback_2hop_scale": 0.12,
-            "graph_readout_1hop_scale": 0.45,
-            "graph_readout_2hop_scale": 0.12,
+            "graph_query_readout_scale": 0.48,
+            "graph_query_readout_2hop_scale": 0.14,
             "personal_warmup_epochs": 4,
             "personal_reg_warmup_epochs": 4,
             "personal_max_alpha": 0.28,
             "personal_delta_scale": 5.0,
+            "lambda_alpha": 0.0,
             "lambda_alpha_min": 0.08,
             "alpha_min_target": 0.04,
+            "lambda_personal_kl": 0.04,
+            "lambda_personal_query_residual": 0.09,
+            "personal_query_residual_margin": 0.05,
             "personal_alpha_temperature": 1.7,
             "personal_alpha_budget": 0.10,
             "personal_alpha_base_init": 0.04,
             "personal_alpha_bias_scale": 0.0,
             "personal_disable_student_global_context": True,
             "personal_local_hops": 1,
+            "personal_include_neighbor_rows": False,
             "personal_query_row_budget": 1.5,
             "personal_neighbor_row_budget": 0.25,
             "personal_support_only": True,
+            "personal_query_correction_scale": 0.06,
             "personal_state_lr_mult": 1.5,
             "personal_id_lr_mult": 0.25,
             "share_concept_embeddings": True,
