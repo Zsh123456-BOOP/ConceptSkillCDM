@@ -47,6 +47,7 @@ def compute_module_activity(
     query_row_global_readout_deltas: List[float] = []
     query_row_personal_message_deltas: List[float] = []
     query_row_posterior_kls: List[float] = []
+    query_row_message_projection_gains: List[float] = []
     personal_query_row_stds: List[float] = []
     personal_to_graph_query_ratios: List[float] = []
     personal_bad_row_rate_active_vals: List[float] = []
@@ -93,6 +94,9 @@ def compute_module_activity(
             q_kl = details.get("query_row_posterior_kl")
             if q_kl is not None:
                 query_row_posterior_kls.extend(q_kl.reshape(-1).detach().cpu().numpy().tolist())
+            q_gain = details.get("query_row_message_projection_gain")
+            if q_gain is not None:
+                query_row_message_projection_gains.extend(q_gain.reshape(-1).detach().cpu().numpy().tolist())
             q_std = details.get("personal_query_row_std")
             if q_std is not None:
                 personal_query_row_stds.extend(q_std.reshape(-1).detach().cpu().numpy().tolist())
@@ -143,6 +147,7 @@ def compute_module_activity(
         matrix_student_std = float(np.mean(personal_matrix_student_stds)) if personal_matrix_student_stds else 0.0
         query_personal_delta = float(np.mean(query_row_personal_message_deltas)) if query_row_personal_message_deltas else 0.0
         query_posterior_kl = float(np.mean(query_row_posterior_kls)) if query_row_posterior_kls else 0.0
+        query_message_gain = float(np.mean(query_row_message_projection_gains)) if query_row_message_projection_gains else 0.0
         query_personal_std = float(np.mean(personal_query_row_stds)) if personal_query_row_stds else 0.0
         query_ratio = float(np.mean(personal_to_graph_query_ratios)) if personal_to_graph_query_ratios else 0.0
         bad_row_rate_active = (
@@ -160,15 +165,21 @@ def compute_module_activity(
         results["personal_matrix_student_std"] = matrix_student_std
         results["query_row_personal_message_delta"] = query_personal_delta
         results["query_row_posterior_kl"] = query_posterior_kl
+        results["query_row_message_projection_gain"] = query_message_gain
         results["personal_query_row_std"] = query_personal_std
         results["personal_to_graph_query_ratio"] = query_ratio
         results["personal_bad_row_rate_active"] = bad_row_rate_active
         results["personal_query_trust_scale_mean"] = trust_scale_mean
         results["personal_graph_trivial"] = bool(query_personal_delta < 0.002 and query_posterior_kl < 0.002)
+        results["personal_graph_weak"] = bool(
+            query_posterior_kl > 1e-4
+            and (query_personal_delta <= 0.002 or query_message_gain < 0.05)
+        )
         results["personal_graph_active"] = bool(
             query_personal_delta > 0.002
             and query_posterior_kl > 1e-4
             and query_personal_std > 1e-4
+            and query_message_gain >= 0.05
         )
         results["personal_graph_risk"] = bool(
             results["personal_graph_active"]
@@ -217,6 +228,8 @@ def format_activity_brief(activity: Dict[str, Any]) -> str:
     if activity.get("personal_graph_enabled"):
         if activity.get("personal_graph_risk"):
             status = "[RISK]"
+        elif activity.get("personal_graph_weak"):
+            status = "[WEAK]"
         else:
             status = "[LIVE]" if activity.get("personal_graph_active") else "[X]"
         parts.append(f"Personal{status}")
@@ -292,6 +305,9 @@ def format_activity_report(
         elif activity.get("personal_graph_active"):
             status = "LIVE (state-driven personalization is visible at query stage)"
             advice = ""
+        elif activity.get("personal_graph_weak"):
+            status = "WEAK (posterior is moving, but message-space correction is still too small)"
+            advice = "   -> Consider: widen message basis or improve message projection leverage before enlarging posterior amplitude"
         elif activity.get("personal_graph_trivial"):
             status = "INACTIVE (personal query correction is effectively flat)"
             advice = "   -> Consider: improve query-conditioned posterior signal instead of simply enlarging alpha"
@@ -306,6 +322,7 @@ def format_activity_report(
         lines.append(f"   - Inter-student matrix std: {matrix_student_std:.4f}")
         lines.append(f"   - Query personal message delta: {query_personal_delta:.4f}")
         lines.append(f"   - Query posterior KL: {query_posterior_kl:.4f}")
+        lines.append(f"   - Query message projection gain: {activity.get('query_row_message_projection_gain', 0.0):.4f}")
         lines.append(f"   - Query personal std: {personal_query_row_std:.4f}")
         lines.append(f"   - Personal/global query ratio: {query_ratio:.4f}")
         lines.append(f"   - Status: {status}")

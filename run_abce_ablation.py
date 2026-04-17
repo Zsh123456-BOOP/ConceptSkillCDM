@@ -60,7 +60,9 @@ STRUCTURAL_SWITCH_KEYS = (
     "personal_include_neighbor_rows",
     "personal_query_row_budget",
     "personal_neighbor_row_budget",
+    "personal_query_support_hops",
     "personal_support_only",
+    "personal_query_message_gain",
     "personal_query_correction_scale",
     "personal_query_correction_max_ratio",
     "personal_query_correction_min_graph_anchor",
@@ -573,6 +575,8 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "query_row_personal_message_delta",
         "query_row_posterior_delta_abs",
         "query_row_posterior_kl",
+        "query_row_delta_local_rms_raw",
+        "query_row_message_projection_gain",
         "personal_to_graph_query_ratio",
         "personal_query_trust_scale_mean",
         "query_row_global_support_mass",
@@ -592,7 +596,9 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "personal_include_neighbor_rows",
         "personal_query_row_budget",
         "personal_neighbor_row_budget",
+        "personal_query_support_hops",
         "personal_support_only",
+        "personal_query_message_gain",
         "personal_query_correction_scale",
         "personal_query_correction_max_ratio",
         "personal_query_correction_min_graph_anchor",
@@ -694,6 +700,8 @@ def classify_delta(delta: Optional[float], threshold: float = 0.003) -> str:
         return "useful"
     if delta < 0:
         return "non_positive"
+    if delta > 0:
+        return "neutral_tiny_positive"
     return "neutral"
 
 
@@ -732,6 +740,8 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
     if query_row_posterior_delta_abs is None:
         query_row_posterior_delta_abs = try_float(full_row.get("query_row_personal_delta"))
     query_row_posterior_kl = try_float(full_row.get("query_row_posterior_kl"))
+    query_row_delta_local_rms_raw = try_float(full_row.get("query_row_delta_local_rms_raw"))
+    query_row_message_projection_gain = try_float(full_row.get("query_row_message_projection_gain"))
     personal_to_graph_query_ratio = try_float(full_row.get("personal_to_graph_query_ratio"))
     personal_query_row_std = try_float(full_row.get("personal_query_row_std"))
     readout_query_delta = try_float(full_row.get("readout_query_delta"))
@@ -785,6 +795,9 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
     if query_row_posterior_kl is not None and query_row_personal_message_delta is not None:
         if query_row_posterior_kl > 0.25 and query_row_personal_message_delta < 0.01:
             reasons.append("query-posterior-too-diffuse")
+    if query_row_posterior_kl is not None and query_row_message_projection_gain is not None:
+        if query_row_posterior_kl > 0.01 and query_row_message_projection_gain < 0.05:
+            reasons.append("E-posterior-changes-but-message-cancelled")
     if readout_query_delta is not None and query_row_personal_message_delta is not None:
         if readout_query_delta > 0.10 and query_row_personal_message_delta < 0.002:
             reasons.append("query-readout-overamplified")
@@ -815,6 +828,12 @@ def write_summary(
     rows: List[Dict[str, Any]],
     threshold: float = 0.003,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    grouped_all: Dict[Tuple[str, str, str], Dict[str, Dict[str, Any]]] = {}
+    for row in rows:
+        key = (str(row.get("dataset", "")), str(row.get("seed", "")), str(row.get("profile", "")))
+        grouped_all.setdefault(key, {})
+        grouped_all[key][str(row.get("ablation", ""))] = row
+
     grouped: Dict[Tuple[str, str, str], Dict[str, Dict[str, Any]]] = {}
     for row in rows:
         if str(row.get("status", "")).lower() not in {"ok", "metrics_ok"}:
@@ -827,6 +846,7 @@ def write_summary(
 
     summary_rows: List[Dict[str, Any]] = []
     for (dataset, seed, profile), mp in sorted(grouped.items()):
+        all_mp = grouped_all.get((dataset, seed, profile), {})
         full = mp.get("full")
         if full is None:
             continue
@@ -835,8 +855,15 @@ def write_summary(
         no_a_auc = try_float(mp.get("no_A", {}).get("test_auc"))
         no_e_auc = try_float(mp.get("no_E", {}).get("test_auc"))
         no_e_matched_auc = try_float(mp.get("no_E_bs64", {}).get("test_auc"))
+        no_a_any = all_mp.get("no_A", {})
+        no_a_failed = bool(
+            no_a_any
+            and str(no_a_any.get("status", "")).lower() not in {"ok", "metrics_ok"}
+            and str(no_a_any.get("ablation_valid", "")).lower() != "false"
+        )
+        no_a_failure_reason = str(no_a_any.get("failure_reason", "")) if no_a_failed else ""
 
-        delta_a = (full_auc - no_a_auc) if (full_auc is not None and no_a_auc is not None) else None
+        delta_a = None if no_a_failed else ((full_auc - no_a_auc) if (full_auc is not None and no_a_auc is not None) else None)
         delta_e = (full_auc - no_e_auc) if (full_auc is not None and no_e_auc is not None) else None
         delta_e_matched = (
             (full_auc - no_e_matched_auc)
@@ -847,7 +874,7 @@ def write_summary(
 
         diagnosis_reason = diagnose_reason(full, delta_a, effective_delta_e)
         comp_state = {
-            "A": classify_delta(delta_a, threshold),
+            "A": "untested_failed" if no_a_failed else classify_delta(delta_a, threshold),
             "E": classify_delta(effective_delta_e, threshold),
         }
         if comp_state["A"] == "non_positive" and any(tag in diagnosis_reason for tag in ("graph-uniform-risk", "A-near-identity", "A-state-delta-low")):
@@ -875,6 +902,8 @@ def write_summary(
             "profile": profile,
             "full_auc": full_auc,
             "no_A_auc": no_a_auc,
+            "no_A_failed": no_a_failed,
+            "no_A_failure_reason": no_a_failure_reason,
             "no_E_auc": no_e_auc,
             "no_E_matched_auc": no_e_matched_auc,
             "delta_A_full_minus_noA": delta_a,
@@ -898,7 +927,9 @@ def write_summary(
             "full_personal_include_neighbor_rows": full.get("personal_include_neighbor_rows"),
             "full_personal_query_row_budget": try_float(full.get("personal_query_row_budget")),
             "full_personal_neighbor_row_budget": try_float(full.get("personal_neighbor_row_budget")),
+            "full_personal_query_support_hops": try_float(full.get("personal_query_support_hops")),
             "full_personal_support_only": full.get("personal_support_only"),
+            "full_personal_query_message_gain": try_float(full.get("personal_query_message_gain")),
             "full_personal_query_correction_scale": try_float(full.get("personal_query_correction_scale")),
             "full_personal_query_correction_max_ratio": try_float(full.get("personal_query_correction_max_ratio")),
             "full_personal_query_correction_min_graph_anchor": try_float(full.get("personal_query_correction_min_graph_anchor")),
@@ -931,6 +962,8 @@ def write_summary(
             "full_query_row_personal_message_delta": try_float(full.get("query_row_personal_message_delta")),
             "full_query_row_posterior_delta_abs": try_float(full.get("query_row_posterior_delta_abs", full.get("query_row_personal_delta"))),
             "full_query_row_posterior_kl": try_float(full.get("query_row_posterior_kl")),
+            "full_query_row_delta_local_rms_raw": try_float(full.get("query_row_delta_local_rms_raw")),
+            "full_query_row_message_projection_gain": try_float(full.get("query_row_message_projection_gain")),
             "full_personal_to_graph_query_ratio": try_float(full.get("personal_to_graph_query_ratio")),
             "full_query_row_global_support_mass": try_float(full.get("query_row_global_support_mass", full.get("readout_query_support_mass"))),
             "full_query_row_personal_support_mass": try_float(full.get("query_row_personal_support_mass")),
@@ -957,6 +990,8 @@ def write_summary(
         "profile",
         "full_auc",
         "no_A_auc",
+        "no_A_failed",
+        "no_A_failure_reason",
         "no_E_auc",
         "no_E_matched_auc",
         "delta_A_full_minus_noA",
@@ -980,7 +1015,9 @@ def write_summary(
         "full_personal_include_neighbor_rows",
         "full_personal_query_row_budget",
         "full_personal_neighbor_row_budget",
+        "full_personal_query_support_hops",
         "full_personal_support_only",
+        "full_personal_query_message_gain",
         "full_personal_query_correction_scale",
         "full_personal_query_correction_max_ratio",
         "full_personal_query_correction_min_graph_anchor",
@@ -1013,6 +1050,8 @@ def write_summary(
         "full_query_row_personal_message_delta",
         "full_query_row_posterior_delta_abs",
         "full_query_row_posterior_kl",
+        "full_query_row_delta_local_rms_raw",
+        "full_query_row_message_projection_gain",
         "full_personal_to_graph_query_ratio",
         "full_query_row_global_support_mass",
         "full_query_row_personal_support_mass",

@@ -288,8 +288,12 @@ def parse_args():
                         help="Relative personalization budget assigned to queried concept rows.")
     parser.add_argument("--personal_neighbor_row_budget", type=float, default=0.30,
                         help="Relative personalization budget assigned to 1-hop local neighbor rows.")
+    parser.add_argument("--personal_query_support_hops", type=int, default=0,
+                        help="Additional global-graph hops used to widen E's query-time message basis without widening active rows.")
     parser.add_argument("--personal_support_only", action=bool_action, default=None,
                         help="Restrict personal residual edges to the support of global graph A when A is enabled.")
+    parser.add_argument("--personal_query_message_gain", type=float, default=1.0,
+                        help="Bounded gain applied after E's query-message projection normalization.")
     parser.add_argument("--personal_query_correction_scale", type=float, default=0.15,
                         help="Scale for injecting E's query-time message correction into query rows only.")
     parser.add_argument("--personal_query_correction_max_ratio", type=float, default=0.20,
@@ -455,6 +459,10 @@ def main():
         extra = {}
         if hasattr(exc, "to_failure_dict"):
             extra = getattr(exc, "to_failure_dict")()
+        if extra.get("reason") == "nonfinite_alpha" and extra.get("payload") is not None:
+            alpha_debug_path = os.path.join(args.save_dir, "alpha_failure_debug.json")
+            with open(alpha_debug_path, "w", encoding="utf-8") as f:
+                json.dump(extra.get("payload"), f, indent=4, ensure_ascii=False)
         extra["traceback"] = traceback.format_exc()
         _write_failure(
             reason=extra.get("reason", "runtime_exception"),
@@ -617,8 +625,14 @@ def main():
                 personal_neighbor_row_budget=loaded_args.get(
                     "personal_neighbor_row_budget", getattr(args, "personal_neighbor_row_budget", 0.30)
                 ),
+                personal_query_support_hops=loaded_args.get(
+                    "personal_query_support_hops", getattr(args, "personal_query_support_hops", 0)
+                ),
                 personal_support_only=loaded_args.get(
                     "personal_support_only", getattr(args, "personal_support_only", True)
+                ),
+                personal_query_message_gain=loaded_args.get(
+                    "personal_query_message_gain", getattr(args, "personal_query_message_gain", 1.0)
                 ),
                 personal_query_correction_scale=loaded_args.get(
                     "personal_query_correction_scale", getattr(args, "personal_query_correction_scale", 0.15)

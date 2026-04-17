@@ -107,6 +107,72 @@ def _build_support_cache(
     }
 
 
+def _build_no_a_query_support_cache(
+    query_row_mask: torch.Tensor,
+    num_concepts: int,
+    include_neighbor_rows: bool = False,
+    local_hops: int = 0,
+    *,
+    num_heads: int,
+    active_row_index: Optional[torch.Tensor],
+    active_row_valid_mask: Optional[torch.Tensor],
+    dtype: torch.dtype,
+) -> Dict[str, torch.Tensor]:
+    del include_neighbor_rows  # no_A 下仅保留 query-local support，不再默默扩成 full-support
+    device = query_row_mask.device
+    query_row_mask = query_row_mask.bool()
+    if active_row_index is None or active_row_valid_mask is None:
+        active_row_index, active_row_valid_mask = _pack_active_row_index(query_row_mask)
+    if active_row_index is None or active_row_valid_mask is None:
+        empty_index = torch.empty((query_row_mask.size(0), num_heads, 0, 0), device=device, dtype=torch.long)
+        empty_mask = torch.empty((query_row_mask.size(0), num_heads, 0, 0), device=device, dtype=torch.bool)
+        empty_prob = torch.empty((query_row_mask.size(0), num_heads, 0, 0), device=device, dtype=dtype)
+        return {
+            "support_col_index": empty_index,
+            "support_valid_mask": empty_mask,
+            "global_support_prob": empty_prob,
+            "global_support_logprob": empty_prob,
+        }
+
+    B = query_row_mask.size(0)
+    R = active_row_index.size(1)
+    if query_row_mask.numel() == 0:
+        k_max = 1
+    else:
+        k_max = int(max(1, query_row_mask.sum(dim=1).max().item()))
+
+    support_col_index = torch.zeros((B, num_heads, R, k_max), device=device, dtype=torch.long)
+    support_valid_mask = torch.zeros((B, num_heads, R, k_max), device=device, dtype=torch.bool)
+    global_support_prob = torch.zeros((B, num_heads, R, k_max), device=device, dtype=dtype)
+
+    for b in range(B):
+        query_cols = torch.nonzero(query_row_mask[b], as_tuple=False).reshape(-1)
+        for r in range(R):
+            if not bool(active_row_valid_mask[b, r]):
+                continue
+            row = int(active_row_index[b, r].item())
+            if query_cols.numel() > 0:
+                cols = query_cols
+            else:
+                cols = torch.tensor([row], device=device, dtype=torch.long)
+            k = int(cols.numel())
+            support_col_index[b, :, r, :k] = cols.view(1, -1).expand(num_heads, -1)
+            support_valid_mask[b, :, r, :k] = True
+            global_support_prob[b, :, r, :k] = 1.0 / float(max(1, k))
+
+    global_support_logprob = torch.where(
+        support_valid_mask,
+        global_support_prob.clamp(min=1e-8).log(),
+        torch.full_like(global_support_prob, -30.0),
+    )
+    return {
+        "support_col_index": support_col_index,
+        "support_valid_mask": support_valid_mask,
+        "global_support_prob": global_support_prob,
+        "global_support_logprob": global_support_logprob,
+    }
+
+
 def _gather_row_support(
     support_cache: Dict[str, torch.Tensor],
     active_row_index: torch.Tensor,
@@ -193,7 +259,12 @@ def _normalize_sparse_scores(
     return torch.nan_to_num(centered, nan=0.0, posinf=1.0, neginf=-1.0)
 
 
-def _masked_support_softmax(logits: torch.Tensor, support_valid_mask: torch.Tensor) -> torch.Tensor:
+def _masked_support_softmax(
+    logits: torch.Tensor,
+    support_valid_mask: torch.Tensor,
+    fallback_prob: Optional[torch.Tensor] = None,
+    active_row_valid_mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
     masked_logits = torch.where(
         support_valid_mask,
         logits,
@@ -202,9 +273,23 @@ def _masked_support_softmax(logits: torch.Tensor, support_valid_mask: torch.Tens
     probs = F.softmax(masked_logits, dim=-1)
     probs = probs * support_valid_mask.to(dtype=probs.dtype)
     denom = probs.sum(dim=-1, keepdim=True).clamp(min=1e-12)
-    fallback = support_valid_mask.to(dtype=probs.dtype)
-    fallback = fallback / fallback.sum(dim=-1, keepdim=True).clamp(min=1.0)
-    return torch.where(support_valid_mask.any(dim=-1, keepdim=True), probs / denom, fallback)
+    row_has_support = support_valid_mask.any(dim=-1)
+    normalized = torch.where(row_has_support.unsqueeze(-1), probs / denom, torch.zeros_like(probs))
+    if fallback_prob is None:
+        fallback = support_valid_mask.to(dtype=probs.dtype)
+        fallback = fallback / fallback.sum(dim=-1, keepdim=True).clamp(min=1.0)
+    else:
+        fallback = torch.nan_to_num(fallback_prob.to(dtype=probs.dtype), nan=0.0, posinf=0.0, neginf=0.0)
+        fallback = fallback / fallback.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+    if active_row_valid_mask is None:
+        active_rows = torch.ones_like(row_has_support, dtype=torch.bool)
+    else:
+        active_rows = active_row_valid_mask.bool()
+        if active_rows.dim() == 2:
+            active_rows = active_rows.unsqueeze(1).expand(-1, logits.size(1), -1)
+    missing_active = active_rows & (~row_has_support)
+    out = torch.where(missing_active.unsqueeze(-1), fallback, normalized)
+    return out * active_rows.unsqueeze(-1).to(dtype=out.dtype)
 
 
 def _masked_sparse_row_entropy(probs: torch.Tensor, support_valid_mask: torch.Tensor) -> torch.Tensor:
@@ -228,6 +313,11 @@ def _masked_absmax_or_zero(tensor: torch.Tensor, mask: torch.Tensor) -> torch.Te
         neginf=-30.0,
     )
     return values.abs().max() if values.numel() > 0 else tensor.new_tensor(0.0)
+
+
+def _safe_zero_preserving_sqrt(tensor: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    safe = torch.sqrt(tensor.clamp(min=eps))
+    return torch.where(tensor > 0, safe, torch.zeros_like(safe))
 
 
 def _apply_sparse_local_posterior(
@@ -731,6 +821,24 @@ class AdaptiveGate(nn.Module):
             "alpha_delta_absmean": alpha_delta.abs().mean(),
             "alpha_saturation_ratio": saturation_ratio,
             "effective_id_scale": alpha.new_tensor(float(torch.as_tensor(effective_id_scale).item())),
+            "state_embedding_nonfinite_count": state_embedding.new_tensor(
+                int((~torch.isfinite(state_embedding)).sum().item()), dtype=torch.long
+            ),
+            "context_repr_nonfinite_count": context_repr.new_tensor(
+                int((~torch.isfinite(context_repr)).sum().item()), dtype=torch.long
+            ),
+            "state_logit_nonfinite_count": state_logit.new_tensor(
+                int((~torch.isfinite(state_logit)).sum().item()), dtype=torch.long
+            ),
+            "id_logit_nonfinite_count": id_logit.new_tensor(
+                int((~torch.isfinite(id_logit)).sum().item()), dtype=torch.long
+            ),
+            "alpha_base_nonfinite_count": alpha_base.new_tensor(
+                int((~torch.isfinite(alpha_base)).sum().item()), dtype=torch.long
+            ),
+            "alpha_preclamp_nonfinite_count": alpha_preclamp.new_tensor(
+                int((~torch.isfinite(alpha_preclamp)).sum().item()), dtype=torch.long
+            ),
             "alpha_logit_nonfinite_count": alpha_preclamp.new_tensor(
                 int((~torch.isfinite(alpha_preclamp)).sum().item()), dtype=torch.long
             ),
@@ -871,13 +979,7 @@ class PersonalRelationGenerator(nn.Module):
             )
             active_row_index, active_row_valid_mask = _pack_active_row_index(full_row_mask)
         if support_row_cache is None:
-            fallback_cache = _build_support_cache(
-                torch.eye(self.num_concepts, device=knowledge_state.device, dtype=knowledge_state.dtype)
-                .unsqueeze(0)
-                .expand(self.num_heads, -1, -1),
-                allow_full_support=True,
-            )
-            support_row_cache = _gather_row_support(fallback_cache, active_row_index, active_row_valid_mask)
+            raise ValueError("support_row_cache is required for PersonalRelationGenerator.forward")
 
         q_rows = _gather_head_rows(state_q, active_row_index, active_row_valid_mask)
         q_rows_adapter = _gather_head_rows(state_q + adapter_q, active_row_index, active_row_valid_mask)
@@ -973,6 +1075,7 @@ class ConceptStructureModeling(nn.Module):
         personal_include_neighbor_rows: bool,
         personal_query_row_budget: float,
         personal_neighbor_row_budget: float,
+        personal_query_support_hops: int,
         personal_support_only: bool,
         # 完全消融开关
         enable_module: bool = True,
@@ -1002,6 +1105,7 @@ class ConceptStructureModeling(nn.Module):
         self.personal_include_neighbor_rows = bool(personal_include_neighbor_rows)
         self.personal_query_row_budget = max(0.0, float(personal_query_row_budget))
         self.personal_neighbor_row_budget = max(0.0, float(personal_neighbor_row_budget))
+        self.personal_query_support_hops = max(0, int(personal_query_support_hops))
         self.personal_support_only = bool(personal_support_only)
         self._current_epoch = 1
 
@@ -1295,12 +1399,19 @@ class ConceptStructureModeling(nn.Module):
         alpha_base_mean = None
         alpha_delta_absmean = None
         alpha_saturation_ratio = None
+        state_embedding_nonfinite_count = None
+        context_repr_nonfinite_count = None
+        state_logit_nonfinite_count = None
+        id_logit_nonfinite_count = None
+        alpha_base_nonfinite_count = None
+        alpha_preclamp_nonfinite_count = None
         query_row_posterior_logit_delta_abs = None
         neighbor_row_posterior_logit_delta_abs = None
         query_row_posterior_delta_abs = None
         query_row_posterior_kl = None
         personal_row_budget_mean = None
         personal_query_row_std = None
+        used_no_a_support_fallback_mode = None
         active_row_index = None
         active_row_valid_mask = None
         support_col_index = None
@@ -1394,142 +1505,185 @@ class ConceptStructureModeling(nn.Module):
                         torch.gather(neighbor_row_mask.bool(), 1, active_row_index.clamp(min=0))
                         & active_row_valid_mask
                     )
-            allow_full_support = (not self.use_concept_graph) or (not self.personal_support_only)
-            support_cache = _build_support_cache(relation_matrices, allow_full_support=allow_full_support)
+            support_row_cache = None
             if active_row_index is not None and active_row_valid_mask is not None:
-                support_row_cache = _gather_row_support(support_cache, active_row_index, active_row_valid_mask)
+                if not self.use_concept_graph:
+                    if query_row_mask is not None:
+                        query_support_mask = query_row_mask.bool()
+                    elif active_source_mask is not None:
+                        query_support_mask = active_source_mask.bool()
+                    else:
+                        query_support_mask = torch.zeros(
+                            (knowledge_state.size(0), self.num_concepts),
+                            device=knowledge_state.device,
+                            dtype=torch.bool,
+                        )
+                    support_row_cache = _build_no_a_query_support_cache(
+                        query_support_mask,
+                        self.num_concepts,
+                        include_neighbor_rows=self.personal_include_neighbor_rows,
+                        local_hops=self.personal_query_support_hops,
+                        num_heads=self.num_relation_heads,
+                        active_row_index=active_row_index,
+                        active_row_valid_mask=active_row_valid_mask,
+                        dtype=knowledge_state.dtype,
+                    )
+                    used_no_a_support_fallback_mode = relation_matrices.new_tensor(1, dtype=torch.long)
+                else:
+                    support_cache = _build_support_cache(
+                        relation_matrices,
+                        allow_full_support=not self.personal_support_only,
+                    )
+                    support_row_cache = _gather_row_support(support_cache, active_row_index, active_row_valid_mask)
+                    used_no_a_support_fallback_mode = relation_matrices.new_tensor(0, dtype=torch.long)
+            if support_row_cache is not None:
                 support_col_index = support_row_cache["support_col_index"]
                 support_valid_mask = support_row_cache["support_valid_mask"]
                 global_support_prob = support_row_cache["global_support_prob"]
-            else:
-                support_row_cache = None
-            gate_alpha_bias = None
-            if self.personal_alpha_bias is not None:
-                gate_alpha_bias = self.personal_alpha_bias_scale * torch.tanh(
-                    self.personal_alpha_bias(student_ids)
-                )
-            personal_warmup_scale = self._get_personal_warmup_scale()
-            gate_out = self.adaptive_gate(
-                gate_state_repr,
-                context_repr,
-                gate_id_embedding,
-                id_adapter_scale=gate_id_scale,
-                extra_bias=gate_alpha_bias,
-                warmup_scale=personal_warmup_scale,
-                return_diagnostics=True,
+            has_personal_active_rows = (
+                support_row_cache is not None
+                and active_row_valid_mask is not None
+                and bool(active_row_valid_mask.any())
             )
-            gate_alpha, gate_alpha_logit, gate_diag = gate_out
-            alpha_state_path_absmean = gate_diag["state_path_absmean"]
-            alpha_id_path_absmean = gate_diag["id_path_absmean"]
-            alpha_bias_path_absmean = gate_diag["bias_path_absmean"]
-            head_bias_path_absmean = gate_diag["head_bias_path_absmean"]
-            alpha_base_mean = gate_diag["alpha_base_mean"]
-            alpha_delta_absmean = gate_diag["alpha_delta_absmean"]
-            alpha_saturation_ratio = gate_diag["alpha_saturation_ratio"]
-            alpha_id_adapter_scale = gate_diag["effective_id_scale"]
-            gate_alpha_effective = gate_alpha
-            personal_out = self.personal_generator(
-                generator_state_repr,
-                context_repr,
-                knowledge_state,
-                student_id_embedding=generator_id_embedding,
-                id_adapter_scale=generator_id_scale,
-                active_row_index=active_row_index,
-                active_row_valid_mask=active_row_valid_mask,
-                support_row_cache=support_row_cache,
-                row_budget_values=row_budget_values,
-                return_diagnostics=True,
-            )  # (B,H,R,K)
-            personal_delta, personal_diag = personal_out
-            personal_state_mix = personal_diag["state_mix"]
-            personal_student_mix = personal_diag["student_mix"]
-            personal_student_adapter_scale = personal_diag["student_adapter_scale"]
-            personal_context_adapter_scale = personal_diag["context_adapter_scale"]
-            personal_delta_nonfinite_count = personal_diag["scores_nonfinite_count"]
-            personal_delta_absmax = personal_diag["scores_absmax"]
-            personal_delta = torch.nan_to_num(personal_delta, nan=0.0, posinf=1.0, neginf=-1.0)
-            personal_support_density = support_valid_mask.float().mean() if support_valid_mask is not None else relation_matrices.new_tensor(0.0)
-            posterior_delta = self.personal_delta_scale * personal_delta
-            global_logprob = support_row_cache["global_support_logprob"] if support_row_cache is not None else None
-            if global_logprob is not None:
-                posterior_logits = torch.where(
-                    support_valid_mask,
-                    global_logprob + posterior_delta,
-                    torch.full_like(posterior_delta, -30.0),
-                )
-                posterior_prob = _masked_support_softmax(posterior_logits, support_valid_mask)
-                personal_logits_nonfinite_count = posterior_logits.new_tensor(
-                    int((~torch.isfinite(posterior_logits)).sum().item()), dtype=torch.long
-                )
-                personal_logits_absmax = torch.nan_to_num(
-                    posterior_logits, nan=0.0, posinf=20.0, neginf=-20.0
-                ).abs().max()
-                personal_matrix_nonfinite_count = posterior_prob.new_tensor(
-                    int((~torch.isfinite(posterior_prob)).sum().item()), dtype=torch.long
-                )
-                row_has_support = support_valid_mask.any(dim=-1)
-                row_is_valid = active_row_valid_mask.unsqueeze(1).expand(-1, support_valid_mask.size(1), -1)
-                bad_rows_legacy = ~row_has_support
-                bad_rows_active = row_is_valid & (~row_has_support)
-                padded_rows = ~row_is_valid
-                active_row_count = row_is_valid.float().sum().clamp(min=1.0)
-                personal_bad_row_count = posterior_prob.new_tensor(int(bad_rows_legacy.sum().item()), dtype=torch.long)
-                personal_fallback_row_count = personal_bad_row_count.clone()
-                personal_padded_row_count = posterior_prob.new_tensor(int(padded_rows.sum().item()), dtype=torch.long)
-                personal_bad_row_count_active = posterior_prob.new_tensor(int(bad_rows_active.sum().item()), dtype=torch.long)
-                personal_fallback_row_count_active = personal_bad_row_count_active.clone()
-                personal_bad_row_rate_active = bad_rows_active.float().sum() / active_row_count
-                personal_logits_support_absmax = _masked_absmax_or_zero(posterior_logits, support_valid_mask)
-                personal_logits_masked_sentinel_absmax = _masked_absmax_or_zero(posterior_logits, ~support_valid_mask)
-
-                valid_float = support_valid_mask.float()
-                delta_denom = valid_float.sum(dim=(1, 2, 3)).clamp(min=1.0)
-                personal_matrix_delta = (
-                    (posterior_prob - global_support_prob).abs() * valid_float
-                ).sum(dim=(1, 2, 3)) / delta_denom
-                personal_matrix_student_std = posterior_prob.std(dim=0, unbiased=False).mean()
-                personal_delta_pre_softmax_norm = (
-                    (posterior_delta.pow(2) * valid_float).sum() / valid_float.sum().clamp(min=1.0)
-                ).sqrt()
-                personal_delta_student_std = (posterior_delta * valid_float).std(dim=0, unbiased=False).mean()
-                alpha_head_std = gate_alpha_effective.squeeze(-1).squeeze(-1).std(dim=1, unbiased=False).mean()
-
-                if query_row_active_mask is not None:
-                    query_mask_sparse = query_row_active_mask.float().unsqueeze(1).unsqueeze(-1) * valid_float
-                    query_count = query_mask_sparse.sum(dim=(1, 2, 3)).clamp(min=1.0)
-                    query_delta_abs_per_sample = (
-                        posterior_delta.abs() * query_mask_sparse
-                    ).sum(dim=(1, 2, 3)) / query_count
-                    query_row_posterior_logit_delta_abs = query_delta_abs_per_sample.mean()
-                    personal_query_row_std = query_delta_abs_per_sample.std(unbiased=False)
-                    posterior_kl = posterior_prob.clamp(min=1e-8) * (
-                        posterior_prob.clamp(min=1e-8).log()
-                        - global_support_prob.clamp(min=1e-8).log()
+            if has_personal_active_rows:
+                gate_alpha_bias = None
+                if self.personal_alpha_bias is not None:
+                    gate_alpha_bias = self.personal_alpha_bias_scale * torch.tanh(
+                        self.personal_alpha_bias(student_ids)
                     )
-                    query_row_posterior_kl = (posterior_kl * query_mask_sparse).sum(dim=(1, 2, 3)) / query_count
-                    query_row_posterior_kl = query_row_posterior_kl.mean()
-                if neighbor_row_active_mask is not None:
-                    neighbor_mask_sparse = neighbor_row_active_mask.float().unsqueeze(1).unsqueeze(-1) * valid_float
-                    neighbor_count = neighbor_mask_sparse.sum(dim=(1, 2, 3)).clamp(min=1.0)
-                    neighbor_delta_per_sample = (
-                        posterior_delta.abs() * neighbor_mask_sparse
-                    ).sum(dim=(1, 2, 3)) / neighbor_count
-                    neighbor_row_posterior_logit_delta_abs = neighbor_delta_per_sample.mean()
+                personal_warmup_scale = self._get_personal_warmup_scale()
+                gate_out = self.adaptive_gate(
+                    gate_state_repr,
+                    context_repr,
+                    gate_id_embedding,
+                    id_adapter_scale=gate_id_scale,
+                    extra_bias=gate_alpha_bias,
+                    warmup_scale=personal_warmup_scale,
+                    return_diagnostics=True,
+                )
+                gate_alpha, gate_alpha_logit, gate_diag = gate_out
+                alpha_state_path_absmean = gate_diag["state_path_absmean"]
+                alpha_id_path_absmean = gate_diag["id_path_absmean"]
+                alpha_bias_path_absmean = gate_diag["bias_path_absmean"]
+                head_bias_path_absmean = gate_diag["head_bias_path_absmean"]
+                alpha_base_mean = gate_diag["alpha_base_mean"]
+                alpha_delta_absmean = gate_diag["alpha_delta_absmean"]
+                alpha_saturation_ratio = gate_diag["alpha_saturation_ratio"]
+                alpha_id_adapter_scale = gate_diag["effective_id_scale"]
+                state_embedding_nonfinite_count = gate_diag["state_embedding_nonfinite_count"]
+                context_repr_nonfinite_count = gate_diag["context_repr_nonfinite_count"]
+                state_logit_nonfinite_count = gate_diag["state_logit_nonfinite_count"]
+                id_logit_nonfinite_count = gate_diag["id_logit_nonfinite_count"]
+                alpha_base_nonfinite_count = gate_diag["alpha_base_nonfinite_count"]
+                alpha_preclamp_nonfinite_count = gate_diag["alpha_preclamp_nonfinite_count"]
+                gate_alpha_effective = gate_alpha
+                personal_out = self.personal_generator(
+                    generator_state_repr,
+                    context_repr,
+                    knowledge_state,
+                    student_id_embedding=generator_id_embedding,
+                    id_adapter_scale=generator_id_scale,
+                    active_row_index=active_row_index,
+                    active_row_valid_mask=active_row_valid_mask,
+                    support_row_cache=support_row_cache,
+                    row_budget_values=row_budget_values,
+                    return_diagnostics=True,
+                )  # (B,H,R,K)
+                personal_delta, personal_diag = personal_out
+                personal_state_mix = personal_diag["state_mix"]
+                personal_student_mix = personal_diag["student_mix"]
+                personal_student_adapter_scale = personal_diag["student_adapter_scale"]
+                personal_context_adapter_scale = personal_diag["context_adapter_scale"]
+                personal_delta_nonfinite_count = personal_diag["scores_nonfinite_count"]
+                personal_delta_absmax = personal_diag["scores_absmax"]
+                personal_delta = torch.nan_to_num(personal_delta, nan=0.0, posinf=1.0, neginf=-1.0)
+                personal_support_density = support_valid_mask.float().mean() if support_valid_mask is not None else relation_matrices.new_tensor(0.0)
+                posterior_delta = self.personal_delta_scale * personal_delta
+                global_logprob = support_row_cache["global_support_logprob"] if support_row_cache is not None else None
+                if global_logprob is not None:
+                    posterior_logits = torch.where(
+                        support_valid_mask,
+                        global_logprob + posterior_delta,
+                        torch.full_like(posterior_delta, -30.0),
+                    )
+                    posterior_prob = _masked_support_softmax(
+                        posterior_logits,
+                        support_valid_mask,
+                        fallback_prob=global_support_prob,
+                        active_row_valid_mask=active_row_valid_mask,
+                    )
+                    personal_logits_nonfinite_count = posterior_logits.new_tensor(
+                        int((~torch.isfinite(posterior_logits)).sum().item()), dtype=torch.long
+                    )
+                    personal_logits_absmax = torch.nan_to_num(
+                        posterior_logits, nan=0.0, posinf=20.0, neginf=-20.0
+                    ).abs().max()
+                    personal_matrix_nonfinite_count = posterior_prob.new_tensor(
+                        int((~torch.isfinite(posterior_prob)).sum().item()), dtype=torch.long
+                    )
+                    row_has_support = support_valid_mask.any(dim=-1)
+                    row_is_valid = active_row_valid_mask.unsqueeze(1).expand(-1, support_valid_mask.size(1), -1)
+                    bad_rows_legacy = ~row_has_support
+                    bad_rows_active = row_is_valid & (~row_has_support)
+                    padded_rows = ~row_is_valid
+                    active_row_count = row_is_valid.float().sum().clamp(min=1.0)
+                    personal_bad_row_count = posterior_prob.new_tensor(int(bad_rows_legacy.sum().item()), dtype=torch.long)
+                    personal_fallback_row_count = personal_bad_row_count.clone()
+                    personal_padded_row_count = posterior_prob.new_tensor(int(padded_rows.sum().item()), dtype=torch.long)
+                    personal_bad_row_count_active = posterior_prob.new_tensor(int(bad_rows_active.sum().item()), dtype=torch.long)
+                    personal_fallback_row_count_active = personal_bad_row_count_active.clone()
+                    personal_bad_row_rate_active = bad_rows_active.float().sum() / active_row_count
+                    personal_logits_support_absmax = _masked_absmax_or_zero(posterior_logits, support_valid_mask)
+                    personal_logits_masked_sentinel_absmax = _masked_absmax_or_zero(posterior_logits, ~support_valid_mask)
 
-                relation_used = {
-                    "global_matrices": relation_matrices,
-                    "active_row_index": active_row_index,
-                    "active_row_valid_mask": active_row_valid_mask,
-                    "query_row_active_mask": query_row_active_mask,
-                    "neighbor_row_active_mask": neighbor_row_active_mask,
-                    "support_col_index": support_col_index,
-                    "support_valid_mask": support_valid_mask,
-                    "global_support_prob": global_support_prob,
-                    "posterior_prob": posterior_prob,
-                    "gate_alpha": gate_alpha_effective.squeeze(-1).squeeze(-1),
-                }
-                personal_relation_spec = relation_used
-                personal_matrices = None
+                    valid_float = support_valid_mask.float()
+                    delta_denom = valid_float.sum(dim=(1, 2, 3)).clamp(min=1.0)
+                    personal_matrix_delta = (
+                        (posterior_prob - global_support_prob).abs() * valid_float
+                    ).sum(dim=(1, 2, 3)) / delta_denom
+                    personal_matrix_student_std = posterior_prob.std(dim=0, unbiased=False).mean()
+                    personal_delta_pre_softmax_norm = _safe_zero_preserving_sqrt(
+                        (posterior_delta.pow(2) * valid_float).sum() / valid_float.sum().clamp(min=1.0)
+                    )
+                    personal_delta_student_std = (posterior_delta * valid_float).std(dim=0, unbiased=False).mean()
+                    alpha_head_std = gate_alpha_effective.squeeze(-1).squeeze(-1).std(dim=1, unbiased=False).mean()
+
+                    if query_row_active_mask is not None:
+                        query_mask_sparse = query_row_active_mask.float().unsqueeze(1).unsqueeze(-1) * valid_float
+                        query_count = query_mask_sparse.sum(dim=(1, 2, 3)).clamp(min=1.0)
+                        query_delta_abs_per_sample = (
+                            posterior_delta.abs() * query_mask_sparse
+                        ).sum(dim=(1, 2, 3)) / query_count
+                        query_row_posterior_logit_delta_abs = query_delta_abs_per_sample.mean()
+                        personal_query_row_std = query_delta_abs_per_sample.std(unbiased=False)
+                        posterior_kl = posterior_prob.clamp(min=1e-8) * (
+                            posterior_prob.clamp(min=1e-8).log()
+                            - global_support_prob.clamp(min=1e-8).log()
+                        )
+                        query_row_posterior_kl = (posterior_kl * query_mask_sparse).sum(dim=(1, 2, 3)) / query_count
+                        query_row_posterior_kl = query_row_posterior_kl.mean()
+                    if neighbor_row_active_mask is not None:
+                        neighbor_mask_sparse = neighbor_row_active_mask.float().unsqueeze(1).unsqueeze(-1) * valid_float
+                        neighbor_count = neighbor_mask_sparse.sum(dim=(1, 2, 3)).clamp(min=1.0)
+                        neighbor_delta_per_sample = (
+                            posterior_delta.abs() * neighbor_mask_sparse
+                        ).sum(dim=(1, 2, 3)) / neighbor_count
+                        neighbor_row_posterior_logit_delta_abs = neighbor_delta_per_sample.mean()
+
+                    relation_used = {
+                        "global_matrices": relation_matrices,
+                        "active_row_index": active_row_index,
+                        "active_row_valid_mask": active_row_valid_mask,
+                        "query_row_active_mask": query_row_active_mask,
+                        "neighbor_row_active_mask": neighbor_row_active_mask,
+                        "support_col_index": support_col_index,
+                        "support_valid_mask": support_valid_mask,
+                        "global_support_prob": global_support_prob,
+                        "posterior_prob": posterior_prob,
+                        "gate_alpha": gate_alpha_effective.squeeze(-1).squeeze(-1),
+                    }
+                    personal_relation_spec = relation_used
+                    personal_matrices = None
 
         return {
             "relation_matrices": relation_matrices,
@@ -1552,6 +1706,12 @@ class ConceptStructureModeling(nn.Module):
             "alpha_delta_absmean": alpha_delta_absmean,
             "alpha_saturation_ratio": alpha_saturation_ratio,
             "alpha_id_adapter_scale": alpha_id_adapter_scale,
+            "state_embedding_nonfinite_count": state_embedding_nonfinite_count,
+            "context_repr_nonfinite_count": context_repr_nonfinite_count,
+            "state_logit_nonfinite_count": state_logit_nonfinite_count,
+            "id_logit_nonfinite_count": id_logit_nonfinite_count,
+            "alpha_base_nonfinite_count": alpha_base_nonfinite_count,
+            "alpha_preclamp_nonfinite_count": alpha_preclamp_nonfinite_count,
             "personal_gate_id_scale": None
             if self.personal_gate_id_logit is None
             else torch.sigmoid(self.personal_gate_id_logit).to(device=device, dtype=dtype),
@@ -1570,6 +1730,7 @@ class ConceptStructureModeling(nn.Module):
             "query_row_posterior_kl": query_row_posterior_kl,
             "personal_row_budget_mean": personal_row_budget_mean,
             "personal_query_row_std": personal_query_row_std,
+            "used_no_a_support_fallback_mode": used_no_a_support_fallback_mode,
             "active_row_index": active_row_index,
             "active_row_valid_mask": active_row_valid_mask,
             "query_row_active_mask": query_row_active_mask,
@@ -1679,10 +1840,12 @@ class CognitiveDiagnosisModel(nn.Module):
         personal_include_neighbor_rows: bool = False,
         personal_query_row_budget: float = 1.0,
         personal_neighbor_row_budget: float = 0.30,
+        personal_query_support_hops: int = 0,
         personal_support_only: bool = True,
         personal_query_correction_scale: float = 0.15,
         personal_query_correction_max_ratio: float = 0.20,
         personal_query_correction_min_graph_anchor: float = 0.01,
+        personal_query_message_gain: float = 1.0,
         lambda_personal_kl: float = 0.0,
         lambda_personal_query_residual: float = 0.0,
         personal_query_residual_margin: float = 0.0,
@@ -1757,10 +1920,12 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_include_neighbor_rows = bool(personal_include_neighbor_rows)
         self.personal_query_row_budget = max(0.0, float(personal_query_row_budget))
         self.personal_neighbor_row_budget = max(0.0, float(personal_neighbor_row_budget))
+        self.personal_query_support_hops = max(0, int(personal_query_support_hops))
         self.personal_support_only = bool(personal_support_only)
         self.personal_query_correction_scale = max(0.0, float(personal_query_correction_scale))
         self.personal_query_correction_max_ratio = max(0.0, float(personal_query_correction_max_ratio))
         self.personal_query_correction_min_graph_anchor = max(0.0, float(personal_query_correction_min_graph_anchor))
+        self.personal_query_message_gain = max(0.0, float(personal_query_message_gain))
         self.lambda_personal_kl = max(0.0, float(lambda_personal_kl))
         self.lambda_personal_query_residual = max(0.0, float(lambda_personal_query_residual))
         self.personal_query_residual_margin = max(0.0, float(personal_query_residual_margin))
@@ -1802,6 +1967,7 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_include_neighbor_rows=self.personal_include_neighbor_rows,
             personal_query_row_budget=self.personal_query_row_budget,
             personal_neighbor_row_budget=self.personal_neighbor_row_budget,
+            personal_query_support_hops=self.personal_query_support_hops,
             personal_support_only=self.personal_support_only,
             enable_module=self.enable_module1,
         )
@@ -1847,7 +2013,8 @@ class CognitiveDiagnosisModel(nn.Module):
             return tensor.new_tensor(0.0)
         query_weight = concept_mask.float().unsqueeze(-1)
         denom = (query_weight.sum() * float(tensor.size(-1))).clamp(min=1.0)
-        return ((tensor.pow(2) * query_weight).sum() / denom).sqrt()
+        mean_sq = (tensor.pow(2) * query_weight).sum() / denom
+        return _safe_zero_preserving_sqrt(mean_sq)
 
     @staticmethod
     def _masked_query_rms_per_sample(tensor: torch.Tensor, concept_mask: Optional[torch.Tensor]) -> torch.Tensor:
@@ -1855,7 +2022,8 @@ class CognitiveDiagnosisModel(nn.Module):
             return tensor.new_zeros((tensor.size(0),))
         query_weight = concept_mask.float().unsqueeze(-1)
         denom = (query_weight.sum(dim=(1, 2)) * float(tensor.size(-1))).clamp(min=1.0)
-        return ((tensor.pow(2) * query_weight).sum(dim=(1, 2)) / denom).sqrt()
+        mean_sq = (tensor.pow(2) * query_weight).sum(dim=(1, 2)) / denom
+        return _safe_zero_preserving_sqrt(mean_sq)
 
     def _apply_personal_query_trust_region(
         self,
@@ -1902,23 +2070,41 @@ class CognitiveDiagnosisModel(nn.Module):
         query_row_global_support_mass = (query_support * (1.0 - query_mask)).sum(dim=1).mean()
         return global_context, query_row_graph_delta, query_row_global_support_mass
 
+    def _build_personal_message_basis(
+        self,
+        knowledge_state: torch.Tensor,
+        relation_spec: Optional[Dict[str, torch.Tensor]],
+    ) -> torch.Tensor:
+        if not isinstance(relation_spec, dict) or self.personal_query_support_hops <= 0:
+            return knowledge_state
+        global_relation = relation_spec.get("global_matrices")
+        if global_relation is None:
+            return knowledge_state
+        agg = knowledge_state
+        accum = knowledge_state
+        for _ in range(self.personal_query_support_hops):
+            agg = self._aggregate_with_relation(agg, global_relation)
+            accum = accum + agg
+        return accum / float(self.personal_query_support_hops + 1)
+
     def _build_personal_query_correction(
         self,
         knowledge_state: torch.Tensor,
         relation_spec: Optional[Dict[str, torch.Tensor]],
         concept_mask: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         zero_scalar = knowledge_state.new_tensor(0.0)
         zero_tensor = torch.zeros_like(knowledge_state)
         if not isinstance(relation_spec, dict):
-            return zero_tensor, zero_scalar, zero_scalar, zero_scalar, zero_scalar
+            return zero_tensor, zero_scalar, zero_scalar, zero_scalar, zero_scalar, zero_scalar, zero_scalar, zero_scalar, zero_scalar
 
         active_row_index = relation_spec.get("active_row_index")
         active_row_valid_mask = relation_spec.get("active_row_valid_mask")
         if active_row_index is None or active_row_valid_mask is None or active_row_index.numel() == 0:
-            return zero_tensor, zero_scalar, zero_scalar, zero_scalar, zero_scalar
+            return zero_tensor, zero_scalar, zero_scalar, zero_scalar, zero_scalar, zero_scalar, zero_scalar, zero_scalar, zero_scalar
 
-        expanded_states = knowledge_state.unsqueeze(1).expand(
+        message_basis = self._build_personal_message_basis(knowledge_state, relation_spec)
+        expanded_states = message_basis.unsqueeze(1).expand(
             -1,
             relation_spec["global_matrices"].size(0),
             -1,
@@ -1930,14 +2116,34 @@ class CognitiveDiagnosisModel(nn.Module):
             query_row_active_mask = active_row_valid_mask
         valid_query_rows = active_row_valid_mask & query_row_active_mask
         if not bool(valid_query_rows.any()):
-            return zero_tensor, zero_scalar, zero_scalar, zero_scalar, zero_scalar
+            return zero_tensor, zero_scalar, zero_scalar, zero_scalar, zero_scalar, zero_scalar, zero_scalar, zero_scalar, zero_scalar
 
-        message_delta = local_messages["message_delta"].mean(dim=1)
+        global_local = local_messages["global_local"].mean(dim=1)
+        post_local = local_messages["post_local"].mean(dim=1)
+        message_delta_raw = local_messages["message_delta"].mean(dim=1)
+        delta_rms = _safe_zero_preserving_sqrt(
+            message_delta_raw.pow(2).mean(dim=-1, keepdim=True)
+        ).clamp(min=1e-4)
+        effective_delta_local = (
+            message_delta_raw / delta_rms
+        ) * delta_rms.detach() * self.personal_query_message_gain
+
         correction = torch.zeros_like(knowledge_state)
+        global_local_full = torch.zeros_like(knowledge_state)
+        post_local_full = torch.zeros_like(knowledge_state)
+        message_delta_raw_full = torch.zeros_like(knowledge_state)
         row_index = active_row_index.clamp(min=0)
         batch_idx = torch.arange(knowledge_state.size(0), device=knowledge_state.device, dtype=torch.long).unsqueeze(1).expand_as(row_index)
-        correction[batch_idx[valid_query_rows], row_index[valid_query_rows]] = message_delta[valid_query_rows]
+        correction[batch_idx[valid_query_rows], row_index[valid_query_rows]] = effective_delta_local[valid_query_rows]
+        global_local_full[batch_idx[valid_query_rows], row_index[valid_query_rows]] = global_local[valid_query_rows]
+        post_local_full[batch_idx[valid_query_rows], row_index[valid_query_rows]] = post_local[valid_query_rows]
+        message_delta_raw_full[batch_idx[valid_query_rows], row_index[valid_query_rows]] = message_delta_raw[valid_query_rows]
         query_row_personal_message_delta = self._masked_query_rms(correction, concept_mask)
+        query_row_global_local_rms = self._masked_query_rms(global_local_full, concept_mask)
+        query_row_post_local_rms = self._masked_query_rms(post_local_full, concept_mask)
+        query_row_delta_local_rms_raw = self._masked_query_rms(message_delta_raw_full, concept_mask)
+        projection_anchor = 0.5 * (query_row_global_local_rms + query_row_post_local_rms)
+        query_row_message_projection_gain = query_row_delta_local_rms_raw / projection_anchor.clamp(min=1e-6)
 
         support_valid_mask = relation_spec["support_valid_mask"].bool()
         global_support_prob = relation_spec["global_support_prob"]
@@ -1968,6 +2174,10 @@ class CognitiveDiagnosisModel(nn.Module):
             posterior_delta_abs,
             posterior_kl,
             query_row_personal_support_mass,
+            query_row_global_local_rms,
+            query_row_post_local_rms,
+            query_row_delta_local_rms_raw,
+            query_row_message_projection_gain,
         )
 
     # ------------------------------
@@ -2035,7 +2245,17 @@ class CognitiveDiagnosisModel(nn.Module):
             relation_matrices=relation_matrices,
             concept_mask=q_vector,
         )
-        personal_query_correction_raw, query_row_personal_message_delta_raw, query_row_posterior_delta_abs, query_row_posterior_kl, query_row_personal_support_mass = self._build_personal_query_correction(
+        (
+            personal_query_correction_raw,
+            query_row_personal_message_delta_raw,
+            query_row_posterior_delta_abs,
+            query_row_posterior_kl,
+            query_row_personal_support_mass,
+            query_row_global_local_rms,
+            query_row_post_local_rms,
+            query_row_delta_local_rms_raw,
+            query_row_message_projection_gain,
+        ) = self._build_personal_query_correction(
             knowledge_state=knowledge_state,
             relation_spec=personal_relation_spec,
             concept_mask=q_vector,
@@ -2121,6 +2341,10 @@ class CognitiveDiagnosisModel(nn.Module):
             "query_row_personal_message_delta_capped": query_row_personal_message_delta.detach(),
             "query_row_posterior_delta_abs": query_row_posterior_delta_abs.detach(),
             "query_row_posterior_kl": query_row_posterior_kl.detach(),
+            "query_row_global_local_rms": query_row_global_local_rms.detach(),
+            "query_row_post_local_rms": query_row_post_local_rms.detach(),
+            "query_row_delta_local_rms_raw": query_row_delta_local_rms_raw.detach(),
+            "query_row_message_projection_gain": query_row_message_projection_gain.detach(),
             "personal_to_graph_query_ratio": personal_to_graph_query_ratio.detach(),
             "personal_to_graph_query_ratio_effective": personal_to_graph_query_ratio_effective,
             "has_graph_query_signal": has_graph_query_signal,
@@ -2128,6 +2352,8 @@ class CognitiveDiagnosisModel(nn.Module):
             "personal_query_trust_scale_min": personal_query_trust_scale_min.detach(),
             "query_row_global_support_mass": query_row_global_support_mass.detach(),
             "query_row_personal_support_mass": query_row_personal_support_mass.detach(),
+            "personal_query_support_hops": torch.tensor(self.personal_query_support_hops, device=device, dtype=torch.long),
+            "personal_query_message_gain": torch.tensor(self.personal_query_message_gain, device=device, dtype=knowledge_state.dtype),
         }
         details["irt_logit_for_reg"] = irt_logit
         details["readout_local_row_ratio"] = q_vector.float().mean().detach()
@@ -2157,6 +2383,12 @@ class CognitiveDiagnosisModel(nn.Module):
                 "alpha_bias_path_absmean",
                 "head_bias_path_absmean",
                 "alpha_id_adapter_scale",
+                "state_embedding_nonfinite_count",
+                "context_repr_nonfinite_count",
+                "state_logit_nonfinite_count",
+                "id_logit_nonfinite_count",
+                "alpha_base_nonfinite_count",
+                "alpha_preclamp_nonfinite_count",
                 "personal_state_mix",
                 "personal_student_mix",
                 "personal_student_adapter_scale",
@@ -2181,6 +2413,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 "neighbor_row_posterior_logit_delta_abs",
                 "personal_row_budget_mean",
                 "personal_query_row_std",
+                "used_no_a_support_fallback_mode",
                 "local_row_mask",
                 "active_row_index",
                 "active_row_valid_mask",

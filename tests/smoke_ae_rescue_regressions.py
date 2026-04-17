@@ -87,6 +87,48 @@ def _materialize_relation_used_dense(details: dict) -> torch.Tensor:
     return dense
 
 
+def _build_test_sparse_support_cache(
+    batch_size: int,
+    num_heads: int,
+    active_row_index: torch.Tensor,
+    active_row_valid_mask: torch.Tensor,
+    support_columns: torch.Tensor | None = None,
+) -> dict:
+    device = active_row_index.device
+    dtype = torch.float32
+    row_count = active_row_index.size(1)
+    if support_columns is None:
+        support_columns = active_row_index.clamp(min=0)
+    else:
+        support_columns = support_columns.to(device=device, dtype=torch.long).clamp(min=0)
+        _assert(
+            support_columns.size(0) == batch_size,
+            "support_columns 的 batch 维度必须与 active_row_index 一致。",
+        )
+    support_width = support_columns.size(1)
+    support_col_index = torch.zeros((batch_size, num_heads, row_count, support_width), device=device, dtype=torch.long)
+    support_valid_mask = torch.zeros((batch_size, num_heads, row_count, support_width), device=device, dtype=torch.bool)
+    global_support_prob = torch.zeros((batch_size, num_heads, row_count, support_width), device=device, dtype=dtype)
+    for b in range(batch_size):
+        cols = support_columns[b]
+        if cols.numel() == 0:
+            cols = torch.tensor([0], device=device, dtype=torch.long)
+        k = int(cols.numel())
+        support_col_index[b, :, :, :k] = cols.view(1, 1, -1).expand(num_heads, row_count, -1)
+        support_valid_mask[b, :, :, :k] = active_row_valid_mask[b].view(1, row_count, 1).expand(num_heads, row_count, k)
+        global_support_prob[b, :, :, :k] = support_valid_mask[b, :, :, :k].to(dtype=dtype) / float(max(1, k))
+    return {
+        "support_col_index": support_col_index,
+        "support_valid_mask": support_valid_mask,
+        "global_support_prob": global_support_prob,
+        "global_support_logprob": torch.where(
+            support_valid_mask,
+            torch.zeros_like(global_support_prob),
+            torch.full_like(global_support_prob, -30.0),
+        ),
+    }
+
+
 def _check_no_a_keeps_gnn_layers() -> None:
     from src.trainer import _hard_ablation_effective_hparams
 
@@ -122,6 +164,8 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "lambda_personal_query_residual",
         "personal_state_lr_mult",
         "personal_id_lr_mult",
+        "personal_query_support_hops",
+        "personal_query_message_gain",
     )
     for dataset in ("assist_09", "junyi"):
         cfg = BEST_CFG[dataset]
@@ -171,6 +215,14 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         _assert(
             bool(cfg["personal_include_neighbor_rows"]) is False,
             f"{dataset} 当前默认实验应切到 query rows only，neighbor rows 只保留为可选消融。",
+        )
+        _assert(
+            int(cfg["personal_query_support_hops"]) >= 1,
+            f"{dataset} 默认实验应显式启用更宽的 query message support basis。",
+        )
+        _assert(
+            float(cfg["personal_query_message_gain"]) > 0.0,
+            f"{dataset} 默认实验应显式启用 personal_query_message_gain。",
         )
         _assert(
             bool(cfg["personal_support_only"]) is True,
@@ -320,6 +372,46 @@ def _check_no_a_personal_graph_is_not_identity_locked() -> None:
         matrix_delta > 0.05,
         f"no_A 下的 E 不应被 identity prior 钉死；当前 personal matrix delta 只有 {matrix_delta:.6f}。",
     )
+
+
+def _check_no_a_support_semantics_regression() -> None:
+    model = _build_tiny_ae_model(
+        use_concept_graph=False,
+        use_personal_graph=True,
+        personal_support_only=True,
+        personal_include_neighbor_rows=False,
+    )
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0, 1], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    support_valid_mask = details["support_valid_mask"].bool()
+    support_col_index = details["support_col_index"]
+    active_row_index = details["active_row_index"]
+    active_row_valid_mask = details["active_row_valid_mask"].bool()
+    support_counts = support_valid_mask.sum(dim=-1)
+
+    _assert(
+        int(support_counts.max().item()) < model.num_concepts,
+        "no_A 不应继续退化成 full-support uniform prior；support 必须保持 query-local sparse。",
+    )
+    for b in range(active_row_index.size(0)):
+        for r in range(active_row_index.size(1)):
+            if not bool(active_row_valid_mask[b, r]):
+                continue
+            row = int(active_row_index[b, r].item())
+            for h in range(support_col_index.size(1)):
+                cols = support_col_index[b, h, r][support_valid_mask[b, h, r]].tolist()
+                _assert(
+                    row in cols,
+                    f"no_A 的 query-local support 至少必须包含 query row 的 self-loop，缺失 row={row}, cols={cols}",
+                )
 
 
 def _check_personal_branch_is_state_primary_with_small_id_adapter() -> None:
@@ -799,7 +891,17 @@ def _check_posterior_equal_global_gives_zero_personal_query_correction() -> None
         relation_spec = details["personal_relation_spec"]
         relation_spec = dict(relation_spec)
         relation_spec["posterior_prob"] = relation_spec["global_support_prob"].clone()
-        correction, msg_delta, post_abs, post_kl, _ = model._build_personal_query_correction(
+        (
+            correction,
+            msg_delta,
+            post_abs,
+            post_kl,
+            _,
+            _query_row_global_local_rms,
+            _query_row_post_local_rms,
+            _query_row_delta_local_rms_raw,
+            _query_row_message_projection_gain,
+        ) = model._build_personal_query_correction(
             details["knowledge_state"],
             relation_spec,
             details["q_vector"],
@@ -1062,11 +1164,44 @@ def _check_generator_state_adapter_is_live() -> None:
           [-0.1, 0.2, -0.3, 0.4, -0.5, 0.6]]],
         dtype=torch.float32,
     )
+    active_row_index = torch.tensor([[0, 2]], dtype=torch.long)
+    active_row_valid_mask = torch.tensor([[True, True]], dtype=torch.bool)
+    support_cache = _build_test_sparse_support_cache(
+        batch_size=1,
+        num_heads=2,
+        active_row_index=active_row_index,
+        active_row_valid_mask=active_row_valid_mask,
+        support_columns=torch.tensor([[0, 1, 2]], dtype=torch.long),
+    )
 
     with torch.no_grad():
-        base_scores = generator(student_state_a, context, knowledge_state, student_id_embedding=student_id_a)
-        state_scores = generator(student_state_b, context, knowledge_state, student_id_embedding=student_id_a)
-        id_scores = generator(student_state_a, context, knowledge_state, student_id_embedding=student_id_b)
+        base_scores = generator(
+            student_state_a,
+            context,
+            knowledge_state,
+            student_id_embedding=student_id_a,
+            active_row_index=active_row_index,
+            active_row_valid_mask=active_row_valid_mask,
+            support_row_cache=support_cache,
+        )
+        state_scores = generator(
+            student_state_b,
+            context,
+            knowledge_state,
+            student_id_embedding=student_id_a,
+            active_row_index=active_row_index,
+            active_row_valid_mask=active_row_valid_mask,
+            support_row_cache=support_cache,
+        )
+        id_scores = generator(
+            student_state_a,
+            context,
+            knowledge_state,
+            student_id_embedding=student_id_b,
+            active_row_index=active_row_index,
+            active_row_valid_mask=active_row_valid_mask,
+            support_row_cache=support_cache,
+        )
 
     state_delta = float((state_scores - base_scores).abs().max().item())
     id_delta = float((id_scores - base_scores).abs().mean().item())
@@ -1548,6 +1683,135 @@ def _check_personal_query_trust_region_caps_effective_correction() -> None:
     _assert(trust_mean < 0.999, "该极端配置下 trust-region 应真实触发，而不是形同虚设。")
 
 
+def _check_masked_support_softmax_active_fallback_semantics() -> None:
+    from src.model import _masked_support_softmax
+
+    logits = torch.tensor([[[[1.2, -0.7, 0.3], [0.0, 0.0, 0.0]]]], dtype=torch.float32)
+    support_valid_mask = torch.tensor([[[[True, False, False], [False, False, False]]]], dtype=torch.bool)
+    fallback_prob = torch.tensor([[[[1.0, 0.0, 0.0], [0.2, 0.5, 0.3]]]], dtype=torch.float32)
+    active_row_valid_mask = torch.tensor([[[True, False]]], dtype=torch.bool)
+
+    probs = _masked_support_softmax(
+        logits,
+        support_valid_mask,
+        fallback_prob=fallback_prob,
+        active_row_valid_mask=active_row_valid_mask,
+    )
+
+    _assert(
+        torch.allclose(probs[0, 0, 0], torch.tensor([1.0, 0.0, 0.0])),
+        "有 support 的 active row 应保持 masked softmax 后的有效概率分布。",
+    )
+    _assert(
+        torch.allclose(probs[0, 0, 1], torch.zeros(3)),
+        "padded inactive rows 应保持全 0 占位，不应被误当成 fallback active row。",
+    )
+
+
+def _check_no_a_finite_alpha_smoke() -> None:
+    configs = [
+        _build_tiny_ae_model(
+            use_concept_graph=False,
+            use_personal_graph=True,
+            personal_support_only=True,
+        ),
+        _build_tiny_ae_model(
+            use_concept_graph=False,
+            use_personal_graph=True,
+            knowledge_dim=16,
+            num_relation_heads=2,
+            personal_student_dim=16,
+            personal_support_only=True,
+        ),
+    ]
+    student_ids = torch.tensor([0, 1], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 2], dtype=torch.long)
+
+    for model in configs:
+        model.train()
+        logits, details = model(
+            student_ids=student_ids,
+            exercise_ids=exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+        loss = logits.mean()
+        loss.backward()
+        _assert(torch.isfinite(details["alpha"]).all(), "no_A 下 alpha 必须保持 finite。")
+        _assert(torch.isfinite(logits).all(), "no_A 下 logits 必须保持 finite。")
+
+
+def _check_student_diagnosis_queryless_path() -> None:
+    model = _build_tiny_ae_model(
+        use_concept_graph=True,
+        use_personal_graph=True,
+    )
+    model.eval()
+
+    with torch.no_grad():
+        diagnosis = model.get_student_diagnosis(0)
+
+    _assert("knowledge_mastery" in diagnosis, "student diagnosis 应返回 knowledge_mastery。")
+    _assert(torch.isfinite(diagnosis["knowledge_mastery"]).all(), "queryless diagnosis 不应因 E 缺少 support 而失败。")
+    _assert(torch.isfinite(diagnosis["student_repr"]).all(), "queryless diagnosis 的 student_repr 必须保持 finite。")
+
+
+def _check_zero_personal_query_rms_backward_is_finite() -> None:
+    model = _build_tiny_ae_model(
+        use_concept_graph=False,
+        use_personal_graph=True,
+    )
+    model.train()
+    global_query_context = torch.randn(2, model.num_concepts, model.knowledge_dim, requires_grad=True)
+    personal_query_correction = torch.zeros_like(global_query_context, requires_grad=True)
+    concept_mask = torch.zeros((2, model.num_concepts), dtype=torch.float32)
+    concept_mask[0, 0] = 1.0
+    concept_mask[0, min(1, model.num_concepts - 1)] = 1.0
+    concept_mask[1, min(1, model.num_concepts - 1)] = 1.0
+    concept_mask[1, model.num_concepts - 1] = 1.0
+
+    capped, trust_scale, global_rms, personal_rms = model._apply_personal_query_trust_region(
+        global_query_context=global_query_context,
+        personal_query_correction=personal_query_correction,
+        concept_mask=concept_mask,
+    )
+    loss = capped.sum() + trust_scale.sum() + global_rms.sum() + personal_rms.sum()
+    loss.backward()
+
+    _assert(
+        personal_query_correction.grad is not None and torch.isfinite(personal_query_correction.grad).all(),
+        "zero personal query correction 经过 trust-region backward 后，梯度必须保持 finite。",
+    )
+
+
+def _check_message_projection_gain_regression() -> None:
+    model = _build_tiny_ae_model(
+        personal_query_support_hops=1,
+        personal_query_message_gain=1.0,
+    )
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0, 1], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    for key in (
+        "query_row_global_local_rms",
+        "query_row_post_local_rms",
+        "query_row_delta_local_rms_raw",
+        "query_row_message_projection_gain",
+    ):
+        _assert(key in details, f"message projection regression 缺少 diagnostics 字段: {key}")
+    _assert(
+        float(details["query_row_message_projection_gain"].item()) >= 0.0,
+        "query_row_message_projection_gain 至少应为非负值。",
+    )
+
+
 def _check_result_schema_regression() -> None:
     from run_abce_ablation import write_summary
 
@@ -1603,23 +1867,71 @@ def _check_result_schema_regression() -> None:
         "delta_E_full_minus_noE_matched",
         "full_graph_query_readout_scale",
         "full_query_row_global_readout_delta",
-        "full_query_row_personal_message_delta",
-        "full_query_row_posterior_delta_abs",
-        "full_personal_bad_row_count_active",
-        "full_personal_bad_row_rate_active",
-        "full_personal_padded_row_count",
-        "full_personal_logits_support_absmax",
-        "full_personal_query_trust_scale_mean",
-        "full_personal_query_correction_max_ratio",
-        "full_personal_query_correction_min_graph_anchor",
-    ):
-        _assert(field in header, f"summary schema 必须包含新字段: {field}")
+            "full_query_row_personal_message_delta",
+            "full_query_row_posterior_delta_abs",
+            "full_query_row_delta_local_rms_raw",
+            "full_query_row_message_projection_gain",
+            "full_personal_bad_row_count_active",
+            "full_personal_bad_row_rate_active",
+            "full_personal_padded_row_count",
+            "full_personal_logits_support_absmax",
+            "full_personal_query_trust_scale_mean",
+            "full_personal_query_correction_max_ratio",
+            "full_personal_query_correction_min_graph_anchor",
+            "full_personal_query_support_hops",
+            "full_personal_query_message_gain",
+        ):
+            _assert(field in header, f"summary schema 必须包含新字段: {field}")
     for field in (
         "full_graph_query_writeback_scale",
         "full_graph_readout_1hop_scale",
         "full_query_row_graph_delta",
     ):
         _assert(field not in header, f"summary schema 不应再包含旧主字段: {field}")
+
+
+def _check_summary_no_a_failed_semantics() -> None:
+    from run_abce_ablation import write_summary
+
+    rows = [
+        {
+            "dataset": "assist_09",
+            "seed": "42",
+            "profile": "best",
+            "ablation": "full",
+            "status": "ok",
+            "ablation_valid": "True",
+            "test_auc": "0.7601",
+        },
+        {
+            "dataset": "assist_09",
+            "seed": "42",
+            "profile": "best",
+            "ablation": "no_A",
+            "status": "failed",
+            "ablation_valid": "True",
+            "failure_reason": "nonfinite_alpha",
+        },
+        {
+            "dataset": "assist_09",
+            "seed": "42",
+            "profile": "best",
+            "ablation": "no_E",
+            "status": "ok",
+            "ablation_valid": "True",
+            "test_auc": "0.7590",
+        },
+    ]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        summary_rows, _ = write_summary(Path(tmpdir) / "summary.csv", Path(tmpdir) / "mean.csv", rows)
+
+    _assert(len(summary_rows) == 1, "no_A failed 语义回归测试应仍生成 full/no_E 的 summary 行。")
+    row = summary_rows[0]
+    _assert(str(row.get("no_A_failed")) in {"True", "true", "1"}, "no_A 失败后 summary 必须显式写入 no_A_failed。")
+    _assert(row.get("no_A_failure_reason") == "nonfinite_alpha", "no_A_failure_reason 应保留真实失败原因。")
+    _assert(row.get("state_A") == "untested_failed", "no_A 失败后 state_A 不应再被写成 neutral/untested。")
+    _assert(row.get("delta_A_full_minus_noA") in {"", None}, "no_A 失败后 summary 不应继续写入 delta_A。")
 
 
 def _check_train_validate_use_processed_batch_count() -> None:
@@ -1739,10 +2051,32 @@ def _check_personal_generator_is_state_aware_and_bounded() -> None:
     knowledge_state_a = torch.randn(2, 4, 8) * 50.0
     knowledge_state_b = knowledge_state_a.clone()
     knowledge_state_b[1] = knowledge_state_b[1].flip(0)
+    active_row_index = torch.tensor([[0, 1], [2, 3]], dtype=torch.long)
+    active_row_valid_mask = torch.tensor([[True, True], [True, True]], dtype=torch.bool)
+    support_cache = _build_test_sparse_support_cache(
+        batch_size=2,
+        num_heads=2,
+        active_row_index=active_row_index,
+        active_row_valid_mask=active_row_valid_mask,
+    )
 
     with torch.no_grad():
-        out_a = generator(student_embedding, context_repr, knowledge_state_a)
-        out_b = generator(student_embedding, context_repr, knowledge_state_b)
+        out_a = generator(
+            student_embedding,
+            context_repr,
+            knowledge_state_a,
+            active_row_index=active_row_index,
+            active_row_valid_mask=active_row_valid_mask,
+            support_row_cache=support_cache,
+        )
+        out_b = generator(
+            student_embedding,
+            context_repr,
+            knowledge_state_b,
+            active_row_index=active_row_index,
+            active_row_valid_mask=active_row_valid_mask,
+            support_row_cache=support_cache,
+        )
 
     _assert(torch.isfinite(out_a).all(), "state-aware personal generator 的输出不应出现 NaN/Inf。")
     _assert(
@@ -2004,6 +2338,7 @@ def main() -> None:
     _check_best_configs_enable_e_rescue_knobs()
     _check_dataset_defaults_respect_explicit_zero_overrides()
     _check_no_a_personal_graph_is_not_identity_locked()
+    _check_no_a_support_semantics_regression()
     _check_personal_branch_is_state_primary_with_small_id_adapter()
     _check_adaptive_gate_is_state_primary()
     _check_gate_saturation_regression()
@@ -2013,6 +2348,8 @@ def main() -> None:
     _check_query_readout_injects_graph_signal()
     _check_e_query_only_active_rows()
     _check_e_readout_only_does_not_change_backbone()
+    _check_student_diagnosis_queryless_path()
+    _check_zero_personal_query_rms_backward_is_finite()
     _check_posterior_equal_global_gives_zero_personal_query_correction()
     _check_split_hygiene_uses_train_only_maps_and_q_matrix()
     _check_runtime_ablation_guardrails_cover_no_a_and_no_e()
@@ -2026,8 +2363,12 @@ def main() -> None:
     _check_active_row_diagnostics_ignore_padding_artifact()
     _check_no_a_query_ratio_is_guarded()
     _check_personal_query_trust_region_caps_effective_correction()
+    _check_masked_support_softmax_active_fallback_semantics()
+    _check_no_a_finite_alpha_smoke()
+    _check_message_projection_gain_regression()
     _check_component_analysis_uses_real_q_conditioned_path()
     _check_result_schema_regression()
+    _check_summary_no_a_failed_semantics()
     _check_train_validate_use_processed_batch_count()
     _check_concept_embedding_sharing_uses_same_storage()
     _check_personal_generator_is_state_aware_and_bounded()
