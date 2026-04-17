@@ -285,10 +285,18 @@ def _build_nonfinite_payload(
             "personal_matrix_student_std": _to_float(details.get("personal_matrix_student_std")),
             "personal_bad_row_count": _to_int(details.get("personal_bad_row_count")),
             "personal_fallback_row_count": _to_int(details.get("personal_fallback_row_count")),
+            "personal_bad_row_count_active": _to_int(details.get("personal_bad_row_count_active")),
+            "personal_fallback_row_count_active": _to_int(details.get("personal_fallback_row_count_active")),
+            "personal_bad_row_rate_active": _to_float(details.get("personal_bad_row_rate_active")),
+            "personal_padded_row_count": _to_int(details.get("personal_padded_row_count")),
             "personal_state_mix": _to_float(details.get("personal_state_mix")),
             "personal_student_mix": _to_float(details.get("personal_student_mix")),
             "personal_student_adapter_scale": _to_float(details.get("personal_student_adapter_scale")),
             "personal_context_adapter_scale": _to_float(details.get("personal_context_adapter_scale")),
+            "personal_logits_support_absmax": _to_float(details.get("personal_logits_support_absmax")),
+            "personal_query_trust_scale_mean": _to_float(details.get("personal_query_trust_scale_mean")),
+            "query_row_delta_local_rms_raw": _to_float(details.get("query_row_delta_local_rms_raw")),
+            "query_row_message_projection_gain": _to_float(details.get("query_row_message_projection_gain")),
             "relation_identity_delta": _to_float(details.get("relation_identity_delta")),
             "knowledge_state_graph_delta": _to_float(details.get("knowledge_state_graph_delta")),
             "knowledge_state_personal_delta": _to_float(details.get("knowledge_state_personal_delta")),
@@ -2529,6 +2537,57 @@ def _materialize_personal_dense_preview(details: Dict[str, Any]) -> Optional[np.
     return dense.cpu().numpy()
 
 
+def _append_sample_slices(
+    storage: Dict[str, List[np.ndarray]],
+    key: str,
+    tensor: Optional[torch.Tensor],
+    take: int,
+) -> None:
+    if tensor is None or take <= 0:
+        return
+    array = tensor[:take].detach().cpu().numpy()
+    for sample in array:
+        storage.setdefault(key, []).append(np.array(sample, copy=True))
+
+
+def _finalize_sample_list(
+    storage: Dict[str, Any],
+    key: str,
+    *,
+    limit: int,
+    ragged: bool,
+) -> None:
+    values = storage.get(key)
+    if not values:
+        return
+    clipped = values[:limit]
+    if ragged:
+        obj = np.empty((len(clipped),), dtype=object)
+        for idx, value in enumerate(clipped):
+            obj[idx] = value
+        storage[key] = obj
+    else:
+        storage[key] = np.stack(clipped, axis=0)
+
+
+def _append_scalar_or_vector_samples(
+    collector: List[np.ndarray],
+    value: torch.Tensor,
+    take: int,
+) -> None:
+    if value is None or take <= 0:
+        return
+    det = value.detach().cpu()
+    if det.ndim == 0:
+        collector.append(np.repeat(np.asarray([float(det.item())], dtype=np.float32), take))
+        return
+    arr = det.numpy()
+    if arr.shape[0] >= take:
+        collector.append(arr[:take].copy())
+    else:
+        collector.append(np.repeat(arr.reshape(1, -1), take, axis=0).reshape(take, -1).squeeze(-1))
+
+
 def save_component_analysis_data(
     model: CognitiveDiagnosisModel,
     train_loader: DataLoader,
@@ -2566,6 +2625,10 @@ def save_component_analysis_data(
             local_row_masks = []
             q_vectors = []
             exercise_id_samples = []
+            query_row_global_readout_deltas = []
+            query_row_personal_message_deltas = []
+            query_row_posterior_delta_abs_vals = []
+            query_row_posterior_kl_vals = []
             sample_count = 0
             
             for batch in train_loader:
@@ -2607,26 +2670,23 @@ def save_component_analysis_data(
                 if details.get("q_vector") is not None:
                     q_vectors.append(details["q_vector"][:take].detach().cpu().numpy())
                 exercise_id_samples.append(exercise_ids[:take].detach().cpu().numpy())
+                for detail_key, collector in (
+                    ("query_row_global_readout_delta", query_row_global_readout_deltas),
+                    ("query_row_personal_message_delta", query_row_personal_message_deltas),
+                    ("query_row_posterior_delta_abs", query_row_posterior_delta_abs_vals),
+                    ("query_row_posterior_kl", query_row_posterior_kl_vals),
+                ):
+                    value = details.get(detail_key)
+                    if value is not None:
+                        _append_scalar_or_vector_samples(collector, value, take)
                 if isinstance(details.get("relation_used"), dict):
                     spec = details["relation_used"]
-                    analysis_data.setdefault("active_row_index_samples", []).append(
-                        spec["active_row_index"][:take].detach().cpu().numpy()
-                    )
-                    analysis_data.setdefault("active_row_valid_mask_samples", []).append(
-                        spec["active_row_valid_mask"][:take].detach().cpu().numpy()
-                    )
-                    analysis_data.setdefault("support_col_index_samples", []).append(
-                        spec["support_col_index"][:take].detach().cpu().numpy()
-                    )
-                    analysis_data.setdefault("support_valid_mask_samples", []).append(
-                        spec["support_valid_mask"][:take].detach().cpu().numpy()
-                    )
-                    analysis_data.setdefault("posterior_prob_samples", []).append(
-                        spec["posterior_prob"][:take].detach().cpu().numpy()
-                    )
-                    analysis_data.setdefault("gate_alpha_samples", []).append(
-                        spec["gate_alpha"][:take].detach().cpu().numpy()
-                    )
+                    _append_sample_slices(analysis_data, "active_row_index_samples", spec.get("active_row_index"), take)
+                    _append_sample_slices(analysis_data, "active_row_valid_mask_samples", spec.get("active_row_valid_mask"), take)
+                    _append_sample_slices(analysis_data, "support_col_index_samples", spec.get("support_col_index"), take)
+                    _append_sample_slices(analysis_data, "support_valid_mask_samples", spec.get("support_valid_mask"), take)
+                    _append_sample_slices(analysis_data, "posterior_prob_samples", spec.get("posterior_prob"), take)
+                    _append_sample_slices(analysis_data, "gate_alpha_samples", spec.get("gate_alpha"), take)
 
                 sample_count += take
             
@@ -2651,6 +2711,22 @@ def save_component_analysis_data(
             if exercise_id_samples:
                 exercise_arr = np.concatenate(exercise_id_samples, axis=0)[:num_samples]
                 analysis_data["exercise_ids_samples"] = exercise_arr
+            if query_row_global_readout_deltas:
+                analysis_data["query_row_global_readout_delta_samples"] = np.concatenate(
+                    query_row_global_readout_deltas, axis=0
+                )[:num_samples]
+            if query_row_personal_message_deltas:
+                analysis_data["query_row_personal_message_delta_samples"] = np.concatenate(
+                    query_row_personal_message_deltas, axis=0
+                )[:num_samples]
+            if query_row_posterior_delta_abs_vals:
+                analysis_data["query_row_posterior_delta_abs_samples"] = np.concatenate(
+                    query_row_posterior_delta_abs_vals, axis=0
+                )[:num_samples]
+            if query_row_posterior_kl_vals:
+                analysis_data["query_row_posterior_kl_samples"] = np.concatenate(
+                    query_row_posterior_kl_vals, axis=0
+                )[:num_samples]
             for key in (
                 "active_row_index_samples",
                 "active_row_valid_mask_samples",
@@ -2659,8 +2735,12 @@ def save_component_analysis_data(
                 "posterior_prob_samples",
                 "gate_alpha_samples",
             ):
-                if key in analysis_data and analysis_data[key]:
-                    analysis_data[key] = np.concatenate(analysis_data[key], axis=0)[:min(10, num_samples)]
+                _finalize_sample_list(
+                    analysis_data,
+                    key,
+                    limit=min(10, num_samples),
+                    ragged=(key != "gate_alpha_samples"),
+                )
 
     # ========== 保存数据 ==========
     analysis_path = os.path.join(save_dir, "component_analysis_data.npz")

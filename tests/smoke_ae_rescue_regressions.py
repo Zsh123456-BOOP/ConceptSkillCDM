@@ -1526,6 +1526,10 @@ def _check_component_analysis_uses_real_q_conditioned_path() -> None:
         "support_col_index_samples",
         "support_valid_mask_samples",
         "posterior_prob_samples",
+        "query_row_global_readout_delta_samples",
+        "query_row_personal_message_delta_samples",
+        "query_row_posterior_delta_abs_samples",
+        "query_row_posterior_kl_samples",
     ):
         _assert(key in analysis, f"component analysis 必须保存 {key}，否则分析图不是走真实推理路径。")
     _assert(
@@ -1544,6 +1548,77 @@ def _check_component_analysis_uses_real_q_conditioned_path() -> None:
         torch.allclose(q_vectors.float(), model.q_matrix[exercise_ids].cpu().float()),
         "component analysis 保存的 q_vector 应与真实 exercise_ids 对应的题目概念向量一致。",
     )
+
+
+def _check_component_analysis_handles_ragged_sparse_samples() -> None:
+    from src.trainer import save_component_analysis_data
+
+    torch.manual_seed(0)
+    q_matrix = torch.tensor(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0, 0.0],
+            [0.0, 1.0, 1.0, 0.0],
+            [1.0, 1.0, 1.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    from src.model import CognitiveDiagnosisModel
+
+    model = CognitiveDiagnosisModel(
+        num_students=6,
+        num_exercises=4,
+        num_concepts=4,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+        use_concept_graph=True,
+        use_personal_graph=True,
+        share_concept_embeddings=True,
+        personal_rank=4,
+        personal_max_alpha=0.35,
+        personal_delta_scale=4.0,
+        personal_warmup_epochs=0,
+        personal_reg_warmup_epochs=0,
+        personal_student_dim=8,
+        personal_include_neighbor_rows=False,
+        personal_support_only=True,
+    )
+    loader = DataLoader(
+        TensorDataset(
+            torch.tensor([0, 1, 2, 3], dtype=torch.long),
+            torch.tensor([0, 1, 2, 3], dtype=torch.long),
+            torch.tensor([1.0, 0.0, 1.0, 0.0], dtype=torch.float32),
+        ),
+        batch_size=2,
+        shuffle=False,
+    )
+    logger = logging.getLogger("smoke_component_analysis_ragged")
+    if not logger.handlers:
+        logger.addHandler(logging.NullHandler())
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        analysis = save_component_analysis_data(
+            model=model,
+            train_loader=loader,
+            device=torch.device("cpu"),
+            save_dir=tmpdir,
+            logger=logger,
+            num_samples=4,
+            materialize_dense_preview=False,
+        )
+        npz_path = Path(tmpdir) / "component_analysis_data.npz"
+        _assert(npz_path.exists(), "ragged sparse analysis 也必须成功写出 component_analysis_data.npz。")
+
+    sparse_samples = analysis["active_row_index_samples"]
+    _assert(
+        len(sparse_samples) == 4,
+        f"ragged sparse analysis 应按样本保存 active_row_index，而不是 batch 级强行拼接；当前样本数={len(sparse_samples)}",
+    )
+    ragged_widths = {int(sample.shape[-1]) for sample in sparse_samples}
+    _assert(len(ragged_widths) >= 2, "回归测试前提失败：需要至少两种不同的 active row 宽度。")
 
 
 def _check_details_override_regression() -> None:
@@ -2367,6 +2442,7 @@ def main() -> None:
     _check_no_a_finite_alpha_smoke()
     _check_message_projection_gain_regression()
     _check_component_analysis_uses_real_q_conditioned_path()
+    _check_component_analysis_handles_ragged_sparse_samples()
     _check_result_schema_regression()
     _check_summary_no_a_failed_semantics()
     _check_train_validate_use_processed_batch_count()

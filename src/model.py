@@ -372,6 +372,7 @@ def _compute_sparse_local_messages(
             "neighbor_row_active_mask": relation_spec.get("neighbor_row_active_mask"),
             "global_local": expanded_states.new_zeros(empty_shape),
             "post_local": expanded_states.new_zeros(empty_shape),
+            "delta_local_raw": expanded_states.new_zeros(empty_shape),
             "message_delta": expanded_states.new_zeros(empty_shape),
             "mixed_local": expanded_states.new_zeros(empty_shape),
         }
@@ -385,7 +386,8 @@ def _compute_sparse_local_messages(
     support_features = _gather_head_support_features(expanded_states, support_col_index, support_valid_mask)
     global_local = (global_support_prob.unsqueeze(-1) * support_features).sum(dim=-2)
     post_local = (posterior_prob.unsqueeze(-1) * support_features).sum(dim=-2)
-    message_delta = gate_alpha.unsqueeze(-1).unsqueeze(-1) * (post_local - global_local)
+    delta_local_raw = post_local - global_local
+    message_delta = gate_alpha.unsqueeze(-1).unsqueeze(-1) * delta_local_raw
     mixed_local = global_local + message_delta
     return {
         "active_row_index": active_row_index,
@@ -394,6 +396,7 @@ def _compute_sparse_local_messages(
         "neighbor_row_active_mask": relation_spec.get("neighbor_row_active_mask"),
         "global_local": global_local,
         "post_local": post_local,
+        "delta_local_raw": delta_local_raw,
         "message_delta": message_delta,
         "mixed_local": mixed_local,
     }
@@ -2120,30 +2123,31 @@ class CognitiveDiagnosisModel(nn.Module):
 
         global_local = local_messages["global_local"].mean(dim=1)
         post_local = local_messages["post_local"].mean(dim=1)
-        message_delta_raw = local_messages["message_delta"].mean(dim=1)
+        delta_local_raw = local_messages["delta_local_raw"]
+        delta_local_raw_mean = delta_local_raw.mean(dim=1)
         delta_rms = _safe_zero_preserving_sqrt(
-            message_delta_raw.pow(2).mean(dim=-1, keepdim=True)
+            delta_local_raw.pow(2).mean(dim=-1, keepdim=True)
         ).clamp(min=1e-4)
         effective_delta_local = (
-            message_delta_raw / delta_rms
+            delta_local_raw / delta_rms
         ) * delta_rms.detach() * self.personal_query_message_gain
+        gate_alpha = relation_spec["gate_alpha"].unsqueeze(-1).unsqueeze(-1)
+        message_delta_effective = gate_alpha * effective_delta_local
 
         correction = torch.zeros_like(knowledge_state)
         global_local_full = torch.zeros_like(knowledge_state)
         post_local_full = torch.zeros_like(knowledge_state)
-        message_delta_raw_full = torch.zeros_like(knowledge_state)
+        delta_local_raw_full = torch.zeros_like(knowledge_state)
         row_index = active_row_index.clamp(min=0)
         batch_idx = torch.arange(knowledge_state.size(0), device=knowledge_state.device, dtype=torch.long).unsqueeze(1).expand_as(row_index)
-        correction[batch_idx[valid_query_rows], row_index[valid_query_rows]] = effective_delta_local[valid_query_rows]
         global_local_full[batch_idx[valid_query_rows], row_index[valid_query_rows]] = global_local[valid_query_rows]
         post_local_full[batch_idx[valid_query_rows], row_index[valid_query_rows]] = post_local[valid_query_rows]
-        message_delta_raw_full[batch_idx[valid_query_rows], row_index[valid_query_rows]] = message_delta_raw[valid_query_rows]
+        delta_local_raw_full[batch_idx[valid_query_rows], row_index[valid_query_rows]] = delta_local_raw_mean[valid_query_rows]
+        correction[batch_idx[valid_query_rows], row_index[valid_query_rows]] = message_delta_effective.mean(dim=1)[valid_query_rows]
         query_row_personal_message_delta = self._masked_query_rms(correction, concept_mask)
         query_row_global_local_rms = self._masked_query_rms(global_local_full, concept_mask)
         query_row_post_local_rms = self._masked_query_rms(post_local_full, concept_mask)
-        query_row_delta_local_rms_raw = self._masked_query_rms(message_delta_raw_full, concept_mask)
-        projection_anchor = 0.5 * (query_row_global_local_rms + query_row_post_local_rms)
-        query_row_message_projection_gain = query_row_delta_local_rms_raw / projection_anchor.clamp(min=1e-6)
+        query_row_delta_local_rms_raw = self._masked_query_rms(delta_local_raw_full, concept_mask)
 
         support_valid_mask = relation_spec["support_valid_mask"].bool()
         global_support_prob = relation_spec["global_support_prob"]
@@ -2163,6 +2167,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 * query_mask_sparse
             ).sum(dim=(1, 2, 3)) / query_count
         ).mean()
+        query_row_message_projection_gain = query_row_delta_local_rms_raw / posterior_delta_abs.clamp(min=1e-6)
 
         query_mask = concept_mask.float()
         query_seed = query_mask / query_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
