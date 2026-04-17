@@ -292,6 +292,10 @@ def parse_args():
                         help="Restrict personal residual edges to the support of global graph A when A is enabled.")
     parser.add_argument("--personal_query_correction_scale", type=float, default=0.15,
                         help="Scale for injecting E's query-time message correction into query rows only.")
+    parser.add_argument("--personal_query_correction_max_ratio", type=float, default=0.20,
+                        help="Hard trust-region cap: max allowed personal query correction RMS as a ratio of graph query RMS.")
+    parser.add_argument("--personal_query_correction_min_graph_anchor", type=float, default=0.01,
+                        help="Minimum graph anchor used by the personal query trust-region when graph query RMS is tiny.")
     parser.add_argument("--share_concept_embeddings", action=bool_action, default=None,
                         help="Share concept embeddings between relation learning and knowledge encoder.")
     parser.add_argument("--personal_state_lr_mult", type=float, default=1.0,
@@ -618,6 +622,14 @@ def main():
                 ),
                 personal_query_correction_scale=loaded_args.get(
                     "personal_query_correction_scale", getattr(args, "personal_query_correction_scale", 0.15)
+                ),
+                personal_query_correction_max_ratio=loaded_args.get(
+                    "personal_query_correction_max_ratio",
+                    getattr(args, "personal_query_correction_max_ratio", 0.20),
+                ),
+                personal_query_correction_min_graph_anchor=loaded_args.get(
+                    "personal_query_correction_min_graph_anchor",
+                    getattr(args, "personal_query_correction_min_graph_anchor", 0.01),
                 ),
                 share_concept_embeddings=loaded_args.get(
                     "share_concept_embeddings", getattr(args, "share_concept_embeddings", False)

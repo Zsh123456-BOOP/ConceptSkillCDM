@@ -62,6 +62,8 @@ STRUCTURAL_SWITCH_KEYS = (
     "personal_neighbor_row_budget",
     "personal_support_only",
     "personal_query_correction_scale",
+    "personal_query_correction_max_ratio",
+    "personal_query_correction_min_graph_anchor",
     "use_personal_graph",
     "use_concept_graph",
     "graph_identity_residual",
@@ -214,9 +216,14 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
         "knowledge_state_personal_delta": None,
         "personal_bad_row_count": None,
         "personal_fallback_row_count": None,
+        "personal_bad_row_count_active": None,
+        "personal_fallback_row_count_active": None,
+        "personal_bad_row_rate_active": None,
+        "personal_padded_row_count": None,
         "personal_student_mix": None,
         "personal_student_adapter_scale": None,
         "personal_logits_absmax": None,
+        "personal_logits_support_absmax": None,
         "local_row_ratio": None,
         "personal_support_density": None,
         "readout_query_delta": None,
@@ -225,6 +232,7 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
         "query_row_posterior_delta_abs": None,
         "query_row_posterior_kl": None,
         "personal_to_graph_query_ratio": None,
+        "personal_query_trust_scale_mean": None,
         "query_row_global_support_mass": None,
         "query_row_personal_support_mass": None,
         "warn_graph_uniform_count": 0,
@@ -266,6 +274,7 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
                     "personal_student_mix",
                     "personal_student_adapter",
                     "personal_logits_absmax",
+                    "personal_logits_support_absmax",
                     "local_row_ratio",
                     "support_density",
                     "readout_query_delta",
@@ -280,6 +289,11 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
                     "personal_row_budget_mean",
                     "personal_query_row_std",
                     "readout_query_support_mass",
+                    "personal_bad_rows_active",
+                    "personal_fallback_rows_active",
+                    "personal_bad_row_rate_active",
+                    "personal_padded_rows",
+                    "personal_query_trust_scale_mean",
                 ):
                     v = extract_float(line, key)
                     if v is not None:
@@ -290,6 +304,9 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
                             "head_bias_path": "head_bias_path_absmean",
                             "personal_bad_rows": "personal_bad_row_count",
                             "personal_fallback_rows": "personal_fallback_row_count",
+                            "personal_bad_rows_active": "personal_bad_row_count_active",
+                            "personal_fallback_rows_active": "personal_fallback_row_count_active",
+                            "personal_padded_rows": "personal_padded_row_count",
                             "personal_student_adapter": "personal_student_adapter_scale",
                             "support_density": "personal_support_density",
                         }.get(key, key)
@@ -541,9 +558,14 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "knowledge_state_personal_delta",
         "personal_bad_row_count",
         "personal_fallback_row_count",
+        "personal_bad_row_count_active",
+        "personal_fallback_row_count_active",
+        "personal_bad_row_rate_active",
+        "personal_padded_row_count",
         "personal_student_mix",
         "personal_student_adapter_scale",
         "personal_logits_absmax",
+        "personal_logits_support_absmax",
         "local_row_ratio",
         "personal_support_density",
         "readout_query_delta",
@@ -552,6 +574,7 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "query_row_posterior_delta_abs",
         "query_row_posterior_kl",
         "personal_to_graph_query_ratio",
+        "personal_query_trust_scale_mean",
         "query_row_global_support_mass",
         "query_row_personal_support_mass",
         "neighbor_row_personal_delta",
@@ -571,6 +594,8 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "personal_neighbor_row_budget",
         "personal_support_only",
         "personal_query_correction_scale",
+        "personal_query_correction_max_ratio",
+        "personal_query_correction_min_graph_anchor",
         "graph_propagation_alpha",
         "graph_query_readout_scale",
         "graph_query_readout_2hop_scale",
@@ -713,6 +738,11 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
     relation_identity_delta = try_float(full_row.get("relation_identity_delta"))
     knowledge_state_graph_delta = try_float(full_row.get("knowledge_state_graph_delta"))
     alpha_bias_scale = try_float(full_row.get("personal_alpha_bias_scale"))
+    personal_bad_row_count_active = try_float(full_row.get("personal_bad_row_count_active"))
+    personal_bad_row_rate_active = try_float(full_row.get("personal_bad_row_rate_active"))
+    personal_padded_row_count = try_float(full_row.get("personal_padded_row_count"))
+    personal_query_trust_scale_mean = try_float(full_row.get("personal_query_trust_scale_mean"))
+    personal_logits_support_absmax = try_float(full_row.get("personal_logits_support_absmax"))
 
     if ger is not None and ger > 0.98:
         reasons.append("graph-uniform-risk")
@@ -730,6 +760,14 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
         reasons.append("personal-delta-norm-low")
     if personal_delta_student_std is not None and personal_delta_student_std < 0.001:
         reasons.append("personal-delta-student-flat")
+    if personal_bad_row_rate_active is not None and personal_bad_row_rate_active > 0.10:
+        reasons.append("E-fallback-heavy-active-rows")
+    if personal_padded_row_count is not None and personal_padded_row_count > 0 and (personal_bad_row_rate_active or 0.0) < 1e-6:
+        reasons.append("E-padded-row-artifact")
+    if personal_query_trust_scale_mean is not None and personal_query_trust_scale_mean < 0.98:
+        reasons.append("E-query-correction-capped")
+    if personal_logits_support_absmax is not None and personal_logits_support_absmax >= 25.0 and (personal_bad_row_rate_active or 0.0) > 0.0:
+        reasons.append("E-support-logits-extreme")
     if alpha_head_std is not None and alpha_head_std < 0.001:
         reasons.append("alpha-head-collapse")
     if query_row_personal_message_delta is not None and personal_query_row_std is not None and query_row_posterior_kl is not None:
@@ -815,7 +853,16 @@ def write_summary(
         if comp_state["A"] == "non_positive" and any(tag in diagnosis_reason for tag in ("graph-uniform-risk", "A-near-identity", "A-state-delta-low")):
             comp_state["A"] = "harmful_or_unstable"
         if comp_state["E"] == "non_positive" and any(
-            tag in diagnosis_reason for tag in ("gate-saturated", "E-overrides-query-readout", "E-flat-at-query", "E-active-but-harmful", "query-readout-overamplified", "personal-alpha-collapse")
+            tag in diagnosis_reason for tag in (
+                "gate-saturated",
+                "E-overrides-query-readout",
+                "E-flat-at-query",
+                "E-active-but-harmful",
+                "query-readout-overamplified",
+                "personal-alpha-collapse",
+                "E-fallback-heavy-active-rows",
+                "E-query-correction-capped",
+            )
         ):
             comp_state["E"] = "harmful_or_unstable"
         keep = [key for key, value in comp_state.items() if value == "useful"]
@@ -853,6 +900,8 @@ def write_summary(
             "full_personal_neighbor_row_budget": try_float(full.get("personal_neighbor_row_budget")),
             "full_personal_support_only": full.get("personal_support_only"),
             "full_personal_query_correction_scale": try_float(full.get("personal_query_correction_scale")),
+            "full_personal_query_correction_max_ratio": try_float(full.get("personal_query_correction_max_ratio")),
+            "full_personal_query_correction_min_graph_anchor": try_float(full.get("personal_query_correction_min_graph_anchor")),
             "full_graph_propagation_alpha": try_float(full.get("graph_propagation_alpha")),
             "full_graph_query_readout_scale": try_float(full.get("graph_query_readout_scale")),
             "full_graph_query_readout_2hop_scale": try_float(full.get("graph_query_readout_2hop_scale")),
@@ -873,6 +922,11 @@ def write_summary(
             "full_personal_delta_pre_softmax_norm": try_float(full.get("personal_delta_pre_softmax_norm")),
             "full_personal_delta_student_std": try_float(full.get("personal_delta_student_std")),
             "full_alpha_head_std": try_float(full.get("alpha_head_std")),
+            "full_personal_bad_row_count_active": try_float(full.get("personal_bad_row_count_active")),
+            "full_personal_bad_row_rate_active": try_float(full.get("personal_bad_row_rate_active")),
+            "full_personal_padded_row_count": try_float(full.get("personal_padded_row_count")),
+            "full_personal_logits_support_absmax": try_float(full.get("personal_logits_support_absmax")),
+            "full_personal_query_trust_scale_mean": try_float(full.get("personal_query_trust_scale_mean")),
             "full_query_row_global_readout_delta": try_float(full.get("query_row_global_readout_delta", full.get("query_row_graph_delta"))),
             "full_query_row_personal_message_delta": try_float(full.get("query_row_personal_message_delta")),
             "full_query_row_posterior_delta_abs": try_float(full.get("query_row_posterior_delta_abs", full.get("query_row_personal_delta"))),
@@ -928,6 +982,8 @@ def write_summary(
         "full_personal_neighbor_row_budget",
         "full_personal_support_only",
         "full_personal_query_correction_scale",
+        "full_personal_query_correction_max_ratio",
+        "full_personal_query_correction_min_graph_anchor",
         "full_graph_propagation_alpha",
         "full_graph_query_readout_scale",
         "full_graph_query_readout_2hop_scale",
@@ -948,6 +1004,11 @@ def write_summary(
         "full_personal_delta_pre_softmax_norm",
         "full_personal_delta_student_std",
         "full_alpha_head_std",
+        "full_personal_bad_row_count_active",
+        "full_personal_bad_row_rate_active",
+        "full_personal_padded_row_count",
+        "full_personal_logits_support_absmax",
+        "full_personal_query_trust_scale_mean",
         "full_query_row_global_readout_delta",
         "full_query_row_personal_message_delta",
         "full_query_row_posterior_delta_abs",
@@ -1111,7 +1172,9 @@ def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> 
                 "personal_query_row_budget": 1.0,
                 "personal_neighbor_row_budget": 0.40,
                 "personal_support_only": True,
-                "personal_query_correction_scale": 0.12,
+                "personal_query_correction_scale": 0.10,
+                "personal_query_correction_max_ratio": 0.18,
+                "personal_query_correction_min_graph_anchor": 0.02,
                 "personal_state_lr_mult": 1.0,
                 "personal_id_lr_mult": 0.5,
                 "share_concept_embeddings": True,
@@ -1142,6 +1205,8 @@ def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> 
             "personal_neighbor_row_budget": 0.25,
             "personal_support_only": True,
             "personal_query_correction_scale": 0.06,
+            "personal_query_correction_max_ratio": 0.22,
+            "personal_query_correction_min_graph_anchor": 0.01,
             "personal_state_lr_mult": 1.5,
             "personal_id_lr_mult": 0.25,
             "share_concept_embeddings": True,

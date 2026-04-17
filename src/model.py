@@ -215,6 +215,21 @@ def _masked_sparse_row_entropy(probs: torch.Tensor, support_valid_mask: torch.Te
     return (row_entropy * (denom > 0).to(dtype=probs.dtype)).sum() / (denom > 0).to(dtype=probs.dtype).sum().clamp(min=1.0)
 
 
+def _masked_absmax_or_zero(tensor: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    if tensor.numel() == 0 or mask.numel() == 0:
+        return tensor.new_tensor(0.0)
+    valid = mask.bool()
+    if not bool(valid.any()):
+        return tensor.new_tensor(0.0)
+    values = torch.nan_to_num(
+        tensor.masked_select(valid),
+        nan=0.0,
+        posinf=30.0,
+        neginf=-30.0,
+    )
+    return values.abs().max() if values.numel() > 0 else tensor.new_tensor(0.0)
+
+
 def _apply_sparse_local_posterior(
     states: torch.Tensor,
     relation_spec: Dict[str, torch.Tensor],
@@ -1267,6 +1282,12 @@ class ConceptStructureModeling(nn.Module):
         personal_bad_row_count = None
         personal_fallback_row_count = None
         personal_logits_absmax = None
+        personal_padded_row_count = None
+        personal_bad_row_count_active = None
+        personal_fallback_row_count_active = None
+        personal_bad_row_rate_active = None
+        personal_logits_support_absmax = None
+        personal_logits_masked_sentinel_absmax = None
         personal_delta_absmax = None
         local_row_ratio = None
         personal_support_density = None
@@ -1446,9 +1467,20 @@ class ConceptStructureModeling(nn.Module):
                 personal_matrix_nonfinite_count = posterior_prob.new_tensor(
                     int((~torch.isfinite(posterior_prob)).sum().item()), dtype=torch.long
                 )
-                bad_rows = ~support_valid_mask.any(dim=-1)
-                personal_bad_row_count = posterior_prob.new_tensor(int(bad_rows.sum().item()), dtype=torch.long)
+                row_has_support = support_valid_mask.any(dim=-1)
+                row_is_valid = active_row_valid_mask.unsqueeze(1).expand(-1, support_valid_mask.size(1), -1)
+                bad_rows_legacy = ~row_has_support
+                bad_rows_active = row_is_valid & (~row_has_support)
+                padded_rows = ~row_is_valid
+                active_row_count = row_is_valid.float().sum().clamp(min=1.0)
+                personal_bad_row_count = posterior_prob.new_tensor(int(bad_rows_legacy.sum().item()), dtype=torch.long)
                 personal_fallback_row_count = personal_bad_row_count.clone()
+                personal_padded_row_count = posterior_prob.new_tensor(int(padded_rows.sum().item()), dtype=torch.long)
+                personal_bad_row_count_active = posterior_prob.new_tensor(int(bad_rows_active.sum().item()), dtype=torch.long)
+                personal_fallback_row_count_active = personal_bad_row_count_active.clone()
+                personal_bad_row_rate_active = bad_rows_active.float().sum() / active_row_count
+                personal_logits_support_absmax = _masked_absmax_or_zero(posterior_logits, support_valid_mask)
+                personal_logits_masked_sentinel_absmax = _masked_absmax_or_zero(posterior_logits, ~support_valid_mask)
 
                 valid_float = support_valid_mask.float()
                 delta_denom = valid_float.sum(dim=(1, 2, 3)).clamp(min=1.0)
@@ -1556,6 +1588,12 @@ class ConceptStructureModeling(nn.Module):
             "personal_bad_row_count": personal_bad_row_count,
             "personal_fallback_row_count": personal_fallback_row_count,
             "personal_logits_absmax": personal_logits_absmax,
+            "personal_padded_row_count": personal_padded_row_count,
+            "personal_bad_row_count_active": personal_bad_row_count_active,
+            "personal_fallback_row_count_active": personal_fallback_row_count_active,
+            "personal_bad_row_rate_active": personal_bad_row_rate_active,
+            "personal_logits_support_absmax": personal_logits_support_absmax,
+            "personal_logits_masked_sentinel_absmax": personal_logits_masked_sentinel_absmax,
             "personal_delta_absmax": personal_delta_absmax,
             "local_row_ratio": local_row_ratio,
             "personal_support_density": personal_support_density,
@@ -1643,6 +1681,8 @@ class CognitiveDiagnosisModel(nn.Module):
         personal_neighbor_row_budget: float = 0.30,
         personal_support_only: bool = True,
         personal_query_correction_scale: float = 0.15,
+        personal_query_correction_max_ratio: float = 0.20,
+        personal_query_correction_min_graph_anchor: float = 0.01,
         lambda_personal_kl: float = 0.0,
         lambda_personal_query_residual: float = 0.0,
         personal_query_residual_margin: float = 0.0,
@@ -1719,6 +1759,8 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_neighbor_row_budget = max(0.0, float(personal_neighbor_row_budget))
         self.personal_support_only = bool(personal_support_only)
         self.personal_query_correction_scale = max(0.0, float(personal_query_correction_scale))
+        self.personal_query_correction_max_ratio = max(0.0, float(personal_query_correction_max_ratio))
+        self.personal_query_correction_min_graph_anchor = max(0.0, float(personal_query_correction_min_graph_anchor))
         self.lambda_personal_kl = max(0.0, float(lambda_personal_kl))
         self.lambda_personal_query_residual = max(0.0, float(lambda_personal_query_residual))
         self.personal_query_residual_margin = max(0.0, float(personal_query_residual_margin))
@@ -1806,6 +1848,33 @@ class CognitiveDiagnosisModel(nn.Module):
         query_weight = concept_mask.float().unsqueeze(-1)
         denom = (query_weight.sum() * float(tensor.size(-1))).clamp(min=1.0)
         return ((tensor.pow(2) * query_weight).sum() / denom).sqrt()
+
+    @staticmethod
+    def _masked_query_rms_per_sample(tensor: torch.Tensor, concept_mask: Optional[torch.Tensor]) -> torch.Tensor:
+        if concept_mask is None:
+            return tensor.new_zeros((tensor.size(0),))
+        query_weight = concept_mask.float().unsqueeze(-1)
+        denom = (query_weight.sum(dim=(1, 2)) * float(tensor.size(-1))).clamp(min=1.0)
+        return ((tensor.pow(2) * query_weight).sum(dim=(1, 2)) / denom).sqrt()
+
+    def _apply_personal_query_trust_region(
+        self,
+        *,
+        global_query_context: torch.Tensor,
+        personal_query_correction: torch.Tensor,
+        concept_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        global_query_rms = self._masked_query_rms_per_sample(global_query_context, concept_mask)
+        personal_query_rms = self._masked_query_rms_per_sample(personal_query_correction, concept_mask)
+        min_anchor = personal_query_correction.new_tensor(self.personal_query_correction_min_graph_anchor)
+        max_ratio = personal_query_correction.new_tensor(self.personal_query_correction_max_ratio)
+        max_allowed = max_ratio * torch.maximum(global_query_rms, min_anchor)
+        trust_scale = torch.minimum(
+            torch.ones_like(max_allowed),
+            max_allowed / personal_query_rms.clamp(min=1e-8),
+        )
+        capped_correction = personal_query_correction * trust_scale.view(-1, 1, 1)
+        return capped_correction, trust_scale, global_query_rms, personal_query_rms
 
     def _build_global_query_readout(
         self,
@@ -1966,16 +2035,32 @@ class CognitiveDiagnosisModel(nn.Module):
             relation_matrices=relation_matrices,
             concept_mask=q_vector,
         )
-        personal_query_correction, query_row_personal_message_delta, query_row_posterior_delta_abs, query_row_posterior_kl, query_row_personal_support_mass = self._build_personal_query_correction(
+        personal_query_correction_raw, query_row_personal_message_delta_raw, query_row_posterior_delta_abs, query_row_posterior_kl, query_row_personal_support_mass = self._build_personal_query_correction(
             knowledge_state=knowledge_state,
             relation_spec=personal_relation_spec,
             concept_mask=q_vector,
         )
+        scaled_personal_query_correction = self.personal_query_correction_scale * personal_query_correction_raw
+        personal_query_correction, personal_query_trust_scale, query_row_global_readout_delta_per_sample, query_row_personal_message_delta_raw_per_sample = self._apply_personal_query_trust_region(
+            global_query_context=global_query_context,
+            personal_query_correction=scaled_personal_query_correction,
+            concept_mask=q_vector,
+        )
         query_rows = q_vector.float().unsqueeze(-1).bool()
-        total_query_correction = global_query_context + self.personal_query_correction_scale * personal_query_correction
+        total_query_correction = global_query_context + personal_query_correction
         prediction_state = torch.where(query_rows, knowledge_state + total_query_correction, knowledge_state)
         readout_query_delta = self._masked_query_rms(total_query_correction, q_vector)
-        personal_to_graph_query_ratio = query_row_personal_message_delta / query_row_global_readout_delta.clamp(min=1e-8)
+        query_row_personal_message_delta_raw = self._masked_query_rms(scaled_personal_query_correction, q_vector)
+        query_row_personal_message_delta = self._masked_query_rms(personal_query_correction, q_vector)
+        has_graph_query_signal_bool = bool(query_row_global_readout_delta.detach().item() >= 1e-8)
+        has_graph_query_signal = torch.tensor(int(has_graph_query_signal_bool), device=device, dtype=torch.long)
+        if has_graph_query_signal_bool:
+            personal_to_graph_query_ratio = query_row_personal_message_delta / query_row_global_readout_delta.clamp(min=1e-8)
+        else:
+            personal_to_graph_query_ratio = query_row_personal_message_delta.new_tensor(0.0)
+        personal_to_graph_query_ratio_effective = personal_to_graph_query_ratio.detach()
+        personal_query_trust_scale_mean = personal_query_trust_scale.mean()
+        personal_query_trust_scale_min = personal_query_trust_scale.min()
 
         # ========== 2) 固定预测头 D ==========
         b, a = self.exercise_encoder(exercise_ids)
@@ -2029,11 +2114,18 @@ class CognitiveDiagnosisModel(nn.Module):
             "query_row_graph_delta": query_row_global_readout_delta.detach(),
             "query_row_personal_delta": query_row_posterior_delta_abs.detach(),
             "readout_query_support_mass": query_row_global_support_mass.detach(),
+            "query_row_global_readout_delta_raw": query_row_global_readout_delta.detach(),
             "query_row_global_readout_delta": query_row_global_readout_delta.detach(),
             "query_row_personal_message_delta": query_row_personal_message_delta,
+            "query_row_personal_message_delta_raw": query_row_personal_message_delta_raw.detach(),
+            "query_row_personal_message_delta_capped": query_row_personal_message_delta.detach(),
             "query_row_posterior_delta_abs": query_row_posterior_delta_abs.detach(),
             "query_row_posterior_kl": query_row_posterior_kl.detach(),
             "personal_to_graph_query_ratio": personal_to_graph_query_ratio.detach(),
+            "personal_to_graph_query_ratio_effective": personal_to_graph_query_ratio_effective,
+            "has_graph_query_signal": has_graph_query_signal,
+            "personal_query_trust_scale_mean": personal_query_trust_scale_mean.detach(),
+            "personal_query_trust_scale_min": personal_query_trust_scale_min.detach(),
             "query_row_global_support_mass": query_row_global_support_mass.detach(),
             "query_row_personal_support_mass": query_row_personal_support_mass.detach(),
         }
@@ -2074,7 +2166,13 @@ class CognitiveDiagnosisModel(nn.Module):
                 "personal_matrix_nonfinite_count",
                 "personal_bad_row_count",
                 "personal_fallback_row_count",
+                "personal_padded_row_count",
+                "personal_bad_row_count_active",
+                "personal_fallback_row_count_active",
+                "personal_bad_row_rate_active",
                 "personal_logits_absmax",
+                "personal_logits_support_absmax",
+                "personal_logits_masked_sentinel_absmax",
                 "personal_delta_absmax",
                 "local_row_ratio",
                 "personal_support_density",

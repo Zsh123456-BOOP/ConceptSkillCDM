@@ -182,6 +182,8 @@ def _build_config_hash(args) -> str:
         "personal_neighbor_row_budget",
         "personal_support_only",
         "personal_query_correction_scale",
+        "personal_query_correction_max_ratio",
+        "personal_query_correction_min_graph_anchor",
         "personal_alpha_temperature",
         "personal_alpha_budget",
         "personal_alpha_base_init",

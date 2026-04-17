@@ -49,6 +49,8 @@ def compute_module_activity(
     query_row_posterior_kls: List[float] = []
     personal_query_row_stds: List[float] = []
     personal_to_graph_query_ratios: List[float] = []
+    personal_bad_row_rate_active_vals: List[float] = []
+    personal_query_trust_scale_vals: List[float] = []
 
     sample_count = 0
 
@@ -94,9 +96,19 @@ def compute_module_activity(
             q_std = details.get("personal_query_row_std")
             if q_std is not None:
                 personal_query_row_stds.extend(q_std.reshape(-1).detach().cpu().numpy().tolist())
-            q_ratio = details.get("personal_to_graph_query_ratio")
+            q_ratio = details.get("personal_to_graph_query_ratio_effective")
             if q_ratio is not None:
                 personal_to_graph_query_ratios.extend(q_ratio.reshape(-1).detach().cpu().numpy().tolist())
+            bad_row_rate_active = details.get("personal_bad_row_rate_active")
+            if bad_row_rate_active is not None:
+                personal_bad_row_rate_active_vals.extend(
+                    bad_row_rate_active.reshape(-1).detach().cpu().numpy().tolist()
+                )
+            trust_scale = details.get("personal_query_trust_scale_mean")
+            if trust_scale is not None:
+                personal_query_trust_scale_vals.extend(
+                    trust_scale.reshape(-1).detach().cpu().numpy().tolist()
+                )
 
             sample_count += len(student_ids)
 
@@ -133,6 +145,12 @@ def compute_module_activity(
         query_posterior_kl = float(np.mean(query_row_posterior_kls)) if query_row_posterior_kls else 0.0
         query_personal_std = float(np.mean(personal_query_row_stds)) if personal_query_row_stds else 0.0
         query_ratio = float(np.mean(personal_to_graph_query_ratios)) if personal_to_graph_query_ratios else 0.0
+        bad_row_rate_active = (
+            float(np.mean(personal_bad_row_rate_active_vals)) if personal_bad_row_rate_active_vals else 0.0
+        )
+        trust_scale_mean = (
+            float(np.mean(personal_query_trust_scale_vals)) if personal_query_trust_scale_vals else 1.0
+        )
 
         results["personal_graph_enabled"] = True
         results["personal_gate_mean"] = float(alpha_arr.mean())
@@ -144,6 +162,8 @@ def compute_module_activity(
         results["query_row_posterior_kl"] = query_posterior_kl
         results["personal_query_row_std"] = query_personal_std
         results["personal_to_graph_query_ratio"] = query_ratio
+        results["personal_bad_row_rate_active"] = bad_row_rate_active
+        results["personal_query_trust_scale_mean"] = trust_scale_mean
         results["personal_graph_trivial"] = bool(query_personal_delta < 0.002 and query_posterior_kl < 0.002)
         results["personal_graph_active"] = bool(
             query_personal_delta > 0.002
@@ -153,7 +173,9 @@ def compute_module_activity(
         results["personal_graph_risk"] = bool(
             results["personal_graph_active"]
             and (
-                query_ratio > 1.0
+                bad_row_rate_active > 0.10
+                or trust_scale_mean < 0.98
+                or query_ratio > 1.0
                 or (
                     results.get("query_row_global_readout_delta", 0.0) > 1e-6
                     and query_personal_delta > 1.2 * results.get("query_row_global_readout_delta", 0.0)

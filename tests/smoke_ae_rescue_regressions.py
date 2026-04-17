@@ -116,6 +116,8 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "personal_query_row_budget",
         "personal_neighbor_row_budget",
         "personal_query_correction_scale",
+        "personal_query_correction_max_ratio",
+        "personal_query_correction_min_graph_anchor",
         "lambda_personal_kl",
         "lambda_personal_query_residual",
         "personal_state_lr_mult",
@@ -1025,6 +1027,8 @@ def _build_tiny_ae_model(**overrides):
         personal_include_neighbor_rows=False,
         graph_query_readout_scale=0.40,
         graph_query_readout_2hop_scale=0.12,
+        personal_query_correction_max_ratio=0.20,
+        personal_query_correction_min_graph_anchor=0.01,
         share_concept_embeddings=True,
     )
     kwargs.update(overrides)
@@ -1446,6 +1450,104 @@ def _check_details_override_regression() -> None:
     )
 
 
+def _check_active_row_diagnostics_ignore_padding_artifact() -> None:
+    model = _build_tiny_ae_model()
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0, 1], dtype=torch.long),
+            exercise_ids=torch.tensor([1, 2], dtype=torch.long),  # 1 row vs 2 rows => force sparse padding
+            return_details=True,
+            return_logits=True,
+        )
+
+    active_row_valid_mask = details["active_row_valid_mask"].bool()
+    support_valid_mask = details["support_valid_mask"].bool()
+    row_is_valid = active_row_valid_mask.unsqueeze(1).expand(-1, support_valid_mask.size(1), -1)
+    expected_padded = int((~row_is_valid).sum().item())
+    expected_bad_active = int((row_is_valid & (~support_valid_mask.any(dim=-1))).sum().item())
+    expected_rate = expected_bad_active / max(1, int(row_is_valid.sum().item()))
+
+    _assert(expected_padded > 0, "测试前提失败：该 batch 必须包含 sparse packed padded rows。")
+    _assert(
+        int(details["personal_padded_row_count"].item()) == expected_padded,
+        "personal_padded_row_count 应只统计 sparse packing 的 padded rows。",
+    )
+    _assert(
+        int(details["personal_bad_row_count_active"].item()) == expected_bad_active,
+        "personal_bad_row_count_active 应只统计真实 active rows 中无 support 的坏行。",
+    )
+    _assert(
+        int(details["personal_fallback_row_count_active"].item()) == expected_bad_active,
+        "personal_fallback_row_count_active 应与 active bad row 判定一致。",
+    )
+    _assert(
+        abs(float(details["personal_bad_row_rate_active"].item()) - expected_rate) < 1e-8,
+        "personal_bad_row_rate_active 应以 active rows 为分母，而不是把 padded rows 混进去。",
+    )
+    _assert(
+        float(details["personal_logits_masked_sentinel_absmax"].item()) >= 29.0,
+        "masked sentinel diagnostics 应能显式暴露 padding/masked 位置的哨兵值。",
+    )
+    _assert(
+        float(details["personal_logits_support_absmax"].item()) < float(details["personal_logits_masked_sentinel_absmax"].item()),
+        "support 上的真实 logits 统计不应再被 masked sentinel=-30 主导。",
+    )
+
+
+def _check_no_a_query_ratio_is_guarded() -> None:
+    model = _build_tiny_ae_model(use_concept_graph=False, use_personal_graph=True)
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0, 1], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    _assert(
+        bool(details["has_graph_query_signal"]) is False,
+        "no_A 下 query graph signal 应显式标记为不存在，而不是继续参与 ratio 计算。",
+    )
+    _assert(
+        abs(float(details["query_row_global_readout_delta_raw"].item())) < 1e-8,
+        "no_A 下 query_row_global_readout_delta_raw 应为 0。",
+    )
+    _assert(
+        abs(float(details["personal_to_graph_query_ratio_effective"].item())) < 1e-8,
+        "no_A 下 personal_to_graph_query_ratio_effective 应归零，不能再出现伪大值。",
+    )
+
+
+def _check_personal_query_trust_region_caps_effective_correction() -> None:
+    model = _build_tiny_ae_model(
+        personal_query_correction_scale=5.0,
+        personal_query_correction_max_ratio=0.01,
+        personal_query_correction_min_graph_anchor=1e-4,
+    )
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0, 1], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    raw_delta = float(details["query_row_personal_message_delta_raw"].item())
+    eff_delta = float(details["query_row_personal_message_delta"].item())
+    trust_mean = float(details["personal_query_trust_scale_mean"].item())
+    trust_min = float(details["personal_query_trust_scale_min"].item())
+
+    _assert(raw_delta >= eff_delta - 1e-8, "trust-region 之后的 effective personal delta 不应大于 raw delta。")
+    _assert(0.0 <= trust_min <= trust_mean <= 1.0, "trust scale 必须是 [0,1] 内的有效缩放。")
+    _assert(trust_mean < 0.999, "该极端配置下 trust-region 应真实触发，而不是形同虚设。")
+
+
 def _check_result_schema_regression() -> None:
     from run_abce_ablation import write_summary
 
@@ -1462,6 +1564,13 @@ def _check_result_schema_regression() -> None:
             "query_row_global_readout_delta": "0.020",
             "query_row_personal_message_delta": "0.006",
             "query_row_posterior_delta_abs": "0.015",
+            "personal_bad_row_count_active": "0",
+            "personal_bad_row_rate_active": "0.0",
+            "personal_padded_row_count": "4",
+            "personal_logits_support_absmax": "2.5",
+            "personal_query_trust_scale_mean": "0.8",
+            "personal_query_correction_max_ratio": "0.15",
+            "personal_query_correction_min_graph_anchor": "0.02",
         },
         {
             "dataset": "junyi",
@@ -1496,6 +1605,13 @@ def _check_result_schema_regression() -> None:
         "full_query_row_global_readout_delta",
         "full_query_row_personal_message_delta",
         "full_query_row_posterior_delta_abs",
+        "full_personal_bad_row_count_active",
+        "full_personal_bad_row_rate_active",
+        "full_personal_padded_row_count",
+        "full_personal_logits_support_absmax",
+        "full_personal_query_trust_scale_mean",
+        "full_personal_query_correction_max_ratio",
+        "full_personal_query_correction_min_graph_anchor",
     ):
         _assert(field in header, f"summary schema 必须包含新字段: {field}")
     for field in (
@@ -1907,6 +2023,9 @@ def main() -> None:
     _check_append_summary_csv_tracks_runtime_structure_fields()
     _check_diagnosis_csv_schema_upgrade()
     _check_details_override_regression()
+    _check_active_row_diagnostics_ignore_padding_artifact()
+    _check_no_a_query_ratio_is_guarded()
+    _check_personal_query_trust_region_caps_effective_correction()
     _check_component_analysis_uses_real_q_conditioned_path()
     _check_result_schema_regression()
     _check_train_validate_use_processed_batch_count()

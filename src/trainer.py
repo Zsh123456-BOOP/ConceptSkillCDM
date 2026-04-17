@@ -52,6 +52,8 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "personal_neighbor_row_budget",
     "personal_support_only",
     "personal_query_correction_scale",
+    "personal_query_correction_max_ratio",
+    "personal_query_correction_min_graph_anchor",
     "use_personal_graph",
     "use_concept_graph",
     "graph_identity_residual",
@@ -752,9 +754,14 @@ def _collect_debug_forward_stats(
     knowledge_state_personal_delta_vals: List[float] = []
     personal_bad_row_vals: List[float] = []
     personal_fallback_row_vals: List[float] = []
+    personal_bad_row_active_vals: List[float] = []
+    personal_fallback_row_active_vals: List[float] = []
+    personal_bad_row_rate_active_vals: List[float] = []
+    personal_padded_row_vals: List[float] = []
     personal_student_mix_vals: List[float] = []
     personal_student_adapter_vals: List[float] = []
     personal_logits_absmax_vals: List[float] = []
+    personal_logits_support_absmax_vals: List[float] = []
     local_row_ratio_vals: List[float] = []
     personal_support_density_vals: List[float] = []
     readout_query_delta_vals: List[float] = []
@@ -764,6 +771,7 @@ def _collect_debug_forward_stats(
     query_row_posterior_delta_abs_vals: List[float] = []
     query_row_posterior_kl_vals: List[float] = []
     personal_to_graph_query_ratio_vals: List[float] = []
+    personal_query_trust_scale_mean_vals: List[float] = []
     neighbor_row_personal_delta_vals: List[float] = []
     personal_row_budget_mean_vals: List[float] = []
     personal_query_row_std_vals: List[float] = []
@@ -858,15 +866,21 @@ def _collect_debug_forward_stats(
                 ("head_bias_path_absmean", head_bias_path_vals),
                 ("personal_bad_row_count", personal_bad_row_vals),
                 ("personal_fallback_row_count", personal_fallback_row_vals),
+                ("personal_bad_row_count_active", personal_bad_row_active_vals),
+                ("personal_fallback_row_count_active", personal_fallback_row_active_vals),
+                ("personal_bad_row_rate_active", personal_bad_row_rate_active_vals),
+                ("personal_padded_row_count", personal_padded_row_vals),
                 ("personal_student_mix", personal_student_mix_vals),
                 ("personal_student_adapter_scale", personal_student_adapter_vals),
                 ("personal_logits_absmax", personal_logits_absmax_vals),
+                ("personal_logits_support_absmax", personal_logits_support_absmax_vals),
                 ("local_row_ratio", local_row_ratio_vals),
                 ("personal_support_density", personal_support_density_vals),
                 ("query_row_personal_message_delta", query_row_personal_message_delta_vals),
                 ("query_row_posterior_delta_abs", query_row_posterior_delta_abs_vals),
                 ("query_row_posterior_kl", query_row_posterior_kl_vals),
-                ("personal_to_graph_query_ratio", personal_to_graph_query_ratio_vals),
+                ("personal_to_graph_query_ratio_effective", personal_to_graph_query_ratio_vals),
+                ("personal_query_trust_scale_mean", personal_query_trust_scale_mean_vals),
                 ("neighbor_row_personal_delta", neighbor_row_personal_delta_vals),
                 ("personal_row_budget_mean", personal_row_budget_mean_vals),
                 ("personal_query_row_std", personal_query_row_std_vals),
@@ -934,9 +948,14 @@ def _collect_debug_forward_stats(
     knowledge_state_personal_delta_mean, _ = _safe_mean_std(knowledge_state_personal_delta_vals)
     personal_bad_row_mean, _ = _safe_mean_std(personal_bad_row_vals)
     personal_fallback_row_mean, _ = _safe_mean_std(personal_fallback_row_vals)
+    personal_bad_row_active_mean, _ = _safe_mean_std(personal_bad_row_active_vals)
+    personal_fallback_row_active_mean, _ = _safe_mean_std(personal_fallback_row_active_vals)
+    personal_bad_row_rate_active_mean, _ = _safe_mean_std(personal_bad_row_rate_active_vals)
+    personal_padded_row_mean, _ = _safe_mean_std(personal_padded_row_vals)
     personal_student_mix_mean, _ = _safe_mean_std(personal_student_mix_vals)
     personal_student_adapter_mean, _ = _safe_mean_std(personal_student_adapter_vals)
     personal_logits_absmax_mean, _ = _safe_mean_std(personal_logits_absmax_vals)
+    personal_logits_support_absmax_mean, _ = _safe_mean_std(personal_logits_support_absmax_vals)
     local_row_ratio_mean, _ = _safe_mean_std(local_row_ratio_vals)
     personal_support_density_mean, _ = _safe_mean_std(personal_support_density_vals)
     readout_query_delta_mean, _ = _safe_mean_std(readout_query_delta_vals)
@@ -946,6 +965,7 @@ def _collect_debug_forward_stats(
     query_row_posterior_delta_abs_mean, _ = _safe_mean_std(query_row_posterior_delta_abs_vals)
     query_row_posterior_kl_mean, _ = _safe_mean_std(query_row_posterior_kl_vals)
     personal_to_graph_query_ratio_mean, _ = _safe_mean_std(personal_to_graph_query_ratio_vals)
+    personal_query_trust_scale_mean, _ = _safe_mean_std(personal_query_trust_scale_mean_vals)
     neighbor_row_personal_delta_mean, _ = _safe_mean_std(neighbor_row_personal_delta_vals)
     personal_row_budget_mean, _ = _safe_mean_std(personal_row_budget_mean_vals)
     personal_query_row_std_mean, _ = _safe_mean_std(personal_query_row_std_vals)
@@ -984,9 +1004,14 @@ def _collect_debug_forward_stats(
         "knowledge_state_personal_delta": knowledge_state_personal_delta_mean,
         "personal_bad_row_count": personal_bad_row_mean,
         "personal_fallback_row_count": personal_fallback_row_mean,
+        "personal_bad_row_count_active": personal_bad_row_active_mean,
+        "personal_fallback_row_count_active": personal_fallback_row_active_mean,
+        "personal_bad_row_rate_active": personal_bad_row_rate_active_mean,
+        "personal_padded_row_count": personal_padded_row_mean,
         "personal_student_mix": personal_student_mix_mean,
         "personal_student_adapter_scale": personal_student_adapter_mean,
         "personal_logits_absmax": personal_logits_absmax_mean,
+        "personal_logits_support_absmax": personal_logits_support_absmax_mean,
         "local_row_ratio": local_row_ratio_mean,
         "personal_support_density": personal_support_density_mean,
         "readout_query_delta": readout_query_delta_mean,
@@ -996,6 +1021,8 @@ def _collect_debug_forward_stats(
         "query_row_posterior_delta_abs": query_row_posterior_delta_abs_mean,
         "query_row_posterior_kl": query_row_posterior_kl_mean,
         "personal_to_graph_query_ratio": personal_to_graph_query_ratio_mean,
+        "personal_to_graph_query_ratio_effective": personal_to_graph_query_ratio_mean,
+        "personal_query_trust_scale_mean": personal_query_trust_scale_mean,
         "neighbor_row_personal_delta": neighbor_row_personal_delta_mean,
         "personal_row_budget_mean": personal_row_budget_mean,
         "personal_query_row_std": personal_query_row_std_mean,
@@ -1120,6 +1147,12 @@ def _collect_diag_warning_tags(diag: Dict[str, float]) -> List[str]:
         tags.append("query-posterior-too-diffuse")
     if diag.get("readout_query_delta", 0.0) > 0.10 and diag.get("query_row_personal_message_delta", 0.0) < 0.002:
         tags.append("query-readout-overamplified")
+    if diag.get("personal_bad_row_rate_active", 0.0) > 0.10:
+        tags.append("E-fallback-heavy-active-rows")
+    if diag.get("personal_padded_row_count", 0.0) > 0 and diag.get("personal_bad_row_rate_active", 0.0) < 1e-6:
+        tags.append("E-padded-row-artifact")
+    if diag.get("personal_query_trust_scale_mean", 1.0) < 0.98:
+        tags.append("E-query-correction-capped")
     return tags
 
 
@@ -1504,6 +1537,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         personal_neighbor_row_budget=getattr(args, "personal_neighbor_row_budget", 0.30),
         personal_support_only=getattr(args, "personal_support_only", True),
         personal_query_correction_scale=getattr(args, "personal_query_correction_scale", 0.15),
+        personal_query_correction_max_ratio=getattr(args, "personal_query_correction_max_ratio", 0.20),
+        personal_query_correction_min_graph_anchor=getattr(args, "personal_query_correction_min_graph_anchor", 0.01),
         share_concept_embeddings=getattr(args, "share_concept_embeddings", False),
     ).to(device)
 
@@ -1667,7 +1702,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "personal_row_budget_mean=%.4f, personal_query_row_std=%.4f, readout_query_support_mass=%.4f, "
                 "personal_student_mix=%.4f, personal_student_adapter=%.4f, "
                 "local_row_ratio=%.4f, support_density=%.4f, readout_query_delta=%.4f, "
-                "personal_bad_rows=%.2f, personal_fallback_rows=%.2f, personal_logits_absmax=%.4f",
+                "personal_bad_rows_active=%.2f, personal_fallback_rows_active=%.2f, "
+                "personal_bad_row_rate_active=%.4f, personal_padded_rows=%.2f, "
+                "personal_logits_support_absmax=%.4f, personal_query_trust_scale_mean=%.4f, "
+                "personal_bad_rows_legacy=%.2f, personal_fallback_rows_legacy=%.2f, personal_logits_absmax_legacy=%.4f",
                 run_tag,
                 epoch,
                 diag["irt_abs_mean"],
@@ -1707,6 +1745,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["local_row_ratio"],
                 diag["personal_support_density"],
                 diag["readout_query_delta"],
+                diag["personal_bad_row_count_active"],
+                diag["personal_fallback_row_count_active"],
+                diag["personal_bad_row_rate_active"],
+                diag["personal_padded_row_count"],
+                diag["personal_logits_support_absmax"],
+                diag["personal_query_trust_scale_mean"],
                 diag["personal_bad_row_count"],
                 diag["personal_fallback_row_count"],
                 diag["personal_logits_absmax"],
@@ -2248,6 +2292,14 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         personal_query_correction_scale=loaded_args.get(
             "personal_query_correction_scale", getattr(args, "personal_query_correction_scale", 0.15)
+        ),
+        personal_query_correction_max_ratio=loaded_args.get(
+            "personal_query_correction_max_ratio",
+            getattr(args, "personal_query_correction_max_ratio", 0.20),
+        ),
+        personal_query_correction_min_graph_anchor=loaded_args.get(
+            "personal_query_correction_min_graph_anchor",
+            getattr(args, "personal_query_correction_min_graph_anchor", 0.01),
         ),
         lambda_personal_kl=loaded_args.get(
             "lambda_personal_kl", getattr(args, "lambda_personal_kl", 0.0)
