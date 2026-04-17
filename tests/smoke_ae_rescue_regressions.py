@@ -1375,16 +1375,24 @@ def _check_component_analysis_uses_real_q_conditioned_path() -> None:
             save_dir=tmpdir,
             logger=logger,
             num_samples=3,
+            materialize_dense_preview=False,
         )
 
     for key in (
-        "relation_used_samples",
         "local_row_mask_samples",
         "q_vector_samples",
         "exercise_ids_samples",
-        "personal_matrices_samples",
+        "active_row_index_samples",
+        "active_row_valid_mask_samples",
+        "support_col_index_samples",
+        "support_valid_mask_samples",
+        "posterior_prob_samples",
     ):
         _assert(key in analysis, f"component analysis 必须保存 {key}，否则分析图不是走真实推理路径。")
+    _assert(
+        "personal_matrices_samples" not in analysis and "relation_used_samples" not in analysis,
+        "默认 sparse-only analysis 不应再保存 dense personal/relation preview。",
+    )
     q_vectors = torch.tensor(analysis["q_vector_samples"])
     local_masks = torch.tensor(analysis["local_row_mask_samples"])
     exercise_ids = torch.tensor(analysis["exercise_ids_samples"])
@@ -1397,6 +1405,105 @@ def _check_component_analysis_uses_real_q_conditioned_path() -> None:
         torch.allclose(q_vectors.float(), model.q_matrix[exercise_ids].cpu().float()),
         "component analysis 保存的 q_vector 应与真实 exercise_ids 对应的题目概念向量一致。",
     )
+
+
+def _check_details_override_regression() -> None:
+    model = _build_tiny_ae_model()
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0, 1], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    posterior_prob = details["posterior_prob"]
+    global_support_prob = details["global_support_prob"]
+    support_valid_mask = details["support_valid_mask"].float()
+    query_row_active_mask = details["query_row_active_mask"].float().unsqueeze(1).unsqueeze(-1)
+    query_mask_sparse = query_row_active_mask * support_valid_mask
+    query_count = query_mask_sparse.sum(dim=(1, 2, 3)).clamp(min=1.0)
+    expected_prob_delta = (
+        ((posterior_prob - global_support_prob).abs() * query_mask_sparse).sum(dim=(1, 2, 3)) / query_count
+    ).mean()
+
+    raw_logit_delta = details["query_row_posterior_logit_delta_abs"]
+    final_prob_delta = details["query_row_posterior_delta_abs"]
+
+    _assert(
+        abs(float(final_prob_delta.item()) - float(expected_prob_delta.item())) < 1e-7,
+        "最终 details['query_row_posterior_delta_abs'] 必须保留 helper 的概率空间语义。",
+    )
+    _assert(
+        abs(float(final_prob_delta.item()) - float(raw_logit_delta.item())) > 1e-6,
+        "details['query_row_posterior_delta_abs'] 不应再被 raw posterior logit delta 覆盖。",
+    )
+    _assert(
+        abs(float(details["query_row_personal_delta"].item()) - float(final_prob_delta.item())) < 1e-7,
+        "旧兼容字段 query_row_personal_delta 只能 mirror 概率空间 posterior delta。",
+    )
+
+
+def _check_result_schema_regression() -> None:
+    from run_abce_ablation import write_summary
+
+    rows = [
+        {
+            "dataset": "junyi",
+            "seed": "42",
+            "profile": "best",
+            "ablation": "full",
+            "status": "ok",
+            "ablation_valid": "True",
+            "test_auc": "0.8281",
+            "graph_query_readout_scale": "0.40",
+            "query_row_global_readout_delta": "0.020",
+            "query_row_personal_message_delta": "0.006",
+            "query_row_posterior_delta_abs": "0.015",
+        },
+        {
+            "dataset": "junyi",
+            "seed": "42",
+            "profile": "best",
+            "ablation": "no_A",
+            "status": "ok",
+            "ablation_valid": "True",
+            "test_auc": "0.8270",
+        },
+        {
+            "dataset": "junyi",
+            "seed": "42",
+            "profile": "best",
+            "ablation": "no_E_bs64",
+            "status": "ok",
+            "ablation_valid": "True",
+            "test_auc": "0.8278",
+        },
+    ]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        summary_path = Path(tmpdir) / "summary.csv"
+        mean_path = Path(tmpdir) / "mean.csv"
+        write_summary(summary_path, mean_path, rows)
+        header = summary_path.read_text(encoding="utf-8").splitlines()[0].split(",")
+
+    for field in (
+        "no_E_matched_auc",
+        "delta_E_full_minus_noE_matched",
+        "full_graph_query_readout_scale",
+        "full_query_row_global_readout_delta",
+        "full_query_row_personal_message_delta",
+        "full_query_row_posterior_delta_abs",
+    ):
+        _assert(field in header, f"summary schema 必须包含新字段: {field}")
+    for field in (
+        "full_graph_query_writeback_scale",
+        "full_graph_readout_1hop_scale",
+        "full_query_row_graph_delta",
+    ):
+        _assert(field not in header, f"summary schema 不应再包含旧主字段: {field}")
 
 
 def _check_train_validate_use_processed_batch_count() -> None:
@@ -1799,7 +1906,9 @@ def main() -> None:
     _check_config_hash_tracks_ae_structure_switches()
     _check_append_summary_csv_tracks_runtime_structure_fields()
     _check_diagnosis_csv_schema_upgrade()
+    _check_details_override_regression()
     _check_component_analysis_uses_real_q_conditioned_path()
+    _check_result_schema_regression()
     _check_train_validate_use_processed_batch_count()
     _check_concept_embedding_sharing_uses_same_storage()
     _check_personal_generator_is_state_aware_and_bounded()

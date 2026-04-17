@@ -1274,8 +1274,8 @@ class ConceptStructureModeling(nn.Module):
         alpha_base_mean = None
         alpha_delta_absmean = None
         alpha_saturation_ratio = None
-        query_row_personal_delta = None
-        neighbor_row_personal_delta = None
+        query_row_posterior_logit_delta_abs = None
+        neighbor_row_posterior_logit_delta_abs = None
         query_row_posterior_delta_abs = None
         query_row_posterior_kl = None
         personal_row_budget_mean = None
@@ -1468,8 +1468,7 @@ class ConceptStructureModeling(nn.Module):
                     query_delta_abs_per_sample = (
                         posterior_delta.abs() * query_mask_sparse
                     ).sum(dim=(1, 2, 3)) / query_count
-                    query_row_personal_delta = query_delta_abs_per_sample.mean()
-                    query_row_posterior_delta_abs = query_delta_abs_per_sample.mean()
+                    query_row_posterior_logit_delta_abs = query_delta_abs_per_sample.mean()
                     personal_query_row_std = query_delta_abs_per_sample.std(unbiased=False)
                     posterior_kl = posterior_prob.clamp(min=1e-8) * (
                         posterior_prob.clamp(min=1e-8).log()
@@ -1483,7 +1482,7 @@ class ConceptStructureModeling(nn.Module):
                     neighbor_delta_per_sample = (
                         posterior_delta.abs() * neighbor_mask_sparse
                     ).sum(dim=(1, 2, 3)) / neighbor_count
-                    neighbor_row_personal_delta = neighbor_delta_per_sample.mean()
+                    neighbor_row_posterior_logit_delta_abs = neighbor_delta_per_sample.mean()
 
                 relation_used = {
                     "global_matrices": relation_matrices,
@@ -1533,8 +1532,8 @@ class ConceptStructureModeling(nn.Module):
             "personal_delta_pre_softmax_norm": personal_delta_pre_softmax_norm,
             "personal_delta_student_std": personal_delta_student_std,
             "alpha_head_std": alpha_head_std,
-            "query_row_personal_delta": query_row_personal_delta,
-            "neighbor_row_personal_delta": neighbor_row_personal_delta,
+            "query_row_posterior_logit_delta_abs": query_row_posterior_logit_delta_abs,
+            "neighbor_row_posterior_logit_delta_abs": neighbor_row_posterior_logit_delta_abs,
             "query_row_posterior_delta_abs": query_row_posterior_delta_abs,
             "query_row_posterior_kl": query_row_posterior_kl,
             "personal_row_budget_mean": personal_row_budget_mean,
@@ -2080,10 +2079,8 @@ class CognitiveDiagnosisModel(nn.Module):
                 "local_row_ratio",
                 "personal_support_density",
                 "query_state_norm",
-                "query_row_personal_delta",
-                "neighbor_row_personal_delta",
-                "query_row_posterior_delta_abs",
-                "query_row_posterior_kl",
+                "query_row_posterior_logit_delta_abs",
+                "neighbor_row_posterior_logit_delta_abs",
                 "personal_row_budget_mean",
                 "personal_query_row_std",
                 "local_row_mask",
@@ -2098,6 +2095,7 @@ class CognitiveDiagnosisModel(nn.Module):
             ):
                 if s_out.get(key) is not None:
                     details[key] = s_out[key].detach()
+            details["query_row_personal_delta"] = details["query_row_posterior_delta_abs"]
             if s_out.get("personal_gate_id_scale") is not None:
                 details["personal_gate_id_scale"] = s_out["personal_gate_id_scale"]
             if s_out.get("personal_generator_id_scale") is not None:

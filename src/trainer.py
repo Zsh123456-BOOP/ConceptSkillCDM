@@ -760,7 +760,6 @@ def _collect_debug_forward_stats(
     readout_query_delta_vals: List[float] = []
     query_row_graph_delta_vals: List[float] = []
     query_row_global_readout_delta_vals: List[float] = []
-    query_row_personal_delta_vals: List[float] = []
     query_row_personal_message_delta_vals: List[float] = []
     query_row_posterior_delta_abs_vals: List[float] = []
     query_row_posterior_kl_vals: List[float] = []
@@ -864,7 +863,6 @@ def _collect_debug_forward_stats(
                 ("personal_logits_absmax", personal_logits_absmax_vals),
                 ("local_row_ratio", local_row_ratio_vals),
                 ("personal_support_density", personal_support_density_vals),
-                ("query_row_personal_delta", query_row_personal_delta_vals),
                 ("query_row_personal_message_delta", query_row_personal_message_delta_vals),
                 ("query_row_posterior_delta_abs", query_row_posterior_delta_abs_vals),
                 ("query_row_posterior_kl", query_row_posterior_kl_vals),
@@ -944,7 +942,6 @@ def _collect_debug_forward_stats(
     readout_query_delta_mean, _ = _safe_mean_std(readout_query_delta_vals)
     query_row_graph_delta_mean, _ = _safe_mean_std(query_row_graph_delta_vals)
     query_row_global_readout_delta_mean, _ = _safe_mean_std(query_row_global_readout_delta_vals)
-    query_row_personal_delta_mean, _ = _safe_mean_std(query_row_personal_delta_vals)
     query_row_personal_message_delta_mean, _ = _safe_mean_std(query_row_personal_message_delta_vals)
     query_row_posterior_delta_abs_mean, _ = _safe_mean_std(query_row_posterior_delta_abs_vals)
     query_row_posterior_kl_mean, _ = _safe_mean_std(query_row_posterior_kl_vals)
@@ -995,7 +992,6 @@ def _collect_debug_forward_stats(
         "readout_query_delta": readout_query_delta_mean,
         "query_row_graph_delta": query_row_graph_delta_mean,
         "query_row_global_readout_delta": query_row_global_readout_delta_mean,
-        "query_row_personal_delta": query_row_personal_delta_mean,
         "query_row_personal_message_delta": query_row_personal_message_delta_mean,
         "query_row_posterior_delta_abs": query_row_posterior_delta_abs_mean,
         "query_row_posterior_kl": query_row_posterior_kl_mean,
@@ -1667,7 +1663,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "query_row_global_readout_delta=%.4f, query_row_personal_message_delta=%.4f, "
                 "query_row_posterior_delta_abs=%.4f, query_row_posterior_kl=%.4f, "
                 "personal_to_graph_query_ratio=%.4f, query_row_global_support_mass=%.4f, "
-                "query_row_personal_support_mass=%.4f, query_row_personal_delta=%.4f, neighbor_row_personal_delta=%.4f, "
+                "query_row_personal_support_mass=%.4f, neighbor_row_personal_delta=%.4f, "
                 "personal_row_budget_mean=%.4f, personal_query_row_std=%.4f, readout_query_support_mass=%.4f, "
                 "personal_student_mix=%.4f, personal_student_adapter=%.4f, "
                 "local_row_ratio=%.4f, support_density=%.4f, readout_query_delta=%.4f, "
@@ -1702,7 +1698,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["personal_to_graph_query_ratio"],
                 diag["query_row_global_support_mass"],
                 diag["query_row_personal_support_mass"],
-                diag["query_row_personal_delta"],
                 diag["neighbor_row_personal_delta"],
                 diag["personal_row_budget_mean"],
                 diag["personal_query_row_std"],
@@ -2439,12 +2434,14 @@ def save_component_analysis_data(
     save_dir: str,
     logger,
     num_samples: int = 100,
+    materialize_dense_preview: bool = False,
 ) -> Dict[str, Any]:
     """
     保存组件可视化分析所需的数据：
     1. 全局概念图 relation_matrices
-    2. 真实推理路径上的 Gate Alpha / personal graph / relation_used 采样
+    2. 真实推理路径上的 sparse personal spec 采样
     3. 与题目相关的 q_vector / local_row_mask / exercise_ids
+    4. 仅在显式 materialize_dense_preview=True 时才额外物化 dense preview
     """
     base_model = _get_base_model(model)
     model.eval()
@@ -2491,10 +2488,11 @@ def save_component_analysis_data(
                 alpha = details.get("alpha_effective", details.get("alpha"))
                 if alpha is not None:
                     gate_alphas.append(alpha[:take].detach().cpu().numpy())
-                dense_preview = _materialize_personal_dense_preview(details)
-                if dense_preview is not None:
-                    personal_graphs.append(dense_preview[:take])
-                if details.get("relation_used") is not None:
+                if materialize_dense_preview:
+                    dense_preview = _materialize_personal_dense_preview(details)
+                    if dense_preview is not None:
+                        personal_graphs.append(dense_preview[:take])
+                if details.get("relation_used") is not None and materialize_dense_preview:
                     relation_used = details["relation_used"]
                     if isinstance(relation_used, dict):
                         dense_relation = _materialize_personal_dense_preview(details)
@@ -2524,6 +2522,9 @@ def save_component_analysis_data(
                     analysis_data.setdefault("posterior_prob_samples", []).append(
                         spec["posterior_prob"][:take].detach().cpu().numpy()
                     )
+                    analysis_data.setdefault("gate_alpha_samples", []).append(
+                        spec["gate_alpha"][:take].detach().cpu().numpy()
+                    )
 
                 sample_count += take
             
@@ -2531,11 +2532,11 @@ def save_component_analysis_data(
                 analysis_data["gate_alpha"] = np.concatenate([g.flatten() for g in gate_alphas])[:num_samples]
                 logger.info(f"[Component Analysis] Gate alpha samples: {len(analysis_data['gate_alpha'])}")
             
-            if personal_graphs:
+            if materialize_dense_preview and personal_graphs:
                 personal_arr = np.concatenate(personal_graphs, axis=0)[:min(10, num_samples)]
                 analysis_data["personal_matrices_samples"] = personal_arr
                 logger.info(f"[Component Analysis] Personal graph samples: {personal_arr.shape}")
-            if relation_used_samples:
+            if materialize_dense_preview and relation_used_samples:
                 relation_arr = np.concatenate(relation_used_samples, axis=0)[:min(10, num_samples)]
                 analysis_data["relation_used_samples"] = relation_arr
                 logger.info(f"[Component Analysis] relation_used samples: {relation_arr.shape}")
@@ -2554,6 +2555,7 @@ def save_component_analysis_data(
                 "support_col_index_samples",
                 "support_valid_mask_samples",
                 "posterior_prob_samples",
+                "gate_alpha_samples",
             ):
                 if key in analysis_data and analysis_data[key]:
                     analysis_data[key] = np.concatenate(analysis_data[key], axis=0)[:min(10, num_samples)]

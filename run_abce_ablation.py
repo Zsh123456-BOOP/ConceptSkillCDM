@@ -205,8 +205,6 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
         "personal_delta_pre_softmax_norm": None,
         "personal_delta_student_std": None,
         "alpha_head_std": None,
-        "query_row_graph_delta": None,
-        "query_row_personal_delta": None,
         "neighbor_row_personal_delta": None,
         "personal_row_budget_mean": None,
         "personal_query_row_std": None,
@@ -271,9 +269,7 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
                     "local_row_ratio",
                     "support_density",
                     "readout_query_delta",
-                    "query_row_graph_delta",
                     "query_row_global_readout_delta",
-                    "query_row_personal_delta",
                     "query_row_personal_message_delta",
                     "query_row_posterior_delta_abs",
                     "query_row_posterior_kl",
@@ -551,9 +547,7 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "local_row_ratio",
         "personal_support_density",
         "readout_query_delta",
-        "query_row_graph_delta",
         "query_row_global_readout_delta",
-        "query_row_personal_delta",
         "query_row_personal_message_delta",
         "query_row_posterior_delta_abs",
         "query_row_posterior_kl",
@@ -703,9 +697,15 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
     personal_delta_pre_softmax_norm = try_float(full_row.get("personal_delta_pre_softmax_norm"))
     personal_delta_student_std = try_float(full_row.get("personal_delta_student_std"))
     alpha_head_std = try_float(full_row.get("alpha_head_std"))
-    query_row_graph_delta = try_float(full_row.get("query_row_global_readout_delta", full_row.get("query_row_graph_delta")))
-    query_row_personal_delta = try_float(full_row.get("query_row_personal_message_delta", full_row.get("query_row_personal_delta")))
-    query_row_posterior_delta_abs = try_float(full_row.get("query_row_posterior_delta_abs", full_row.get("query_row_personal_delta")))
+    query_row_global_readout_delta = try_float(full_row.get("query_row_global_readout_delta"))
+    if query_row_global_readout_delta is None:
+        query_row_global_readout_delta = try_float(full_row.get("query_row_graph_delta"))
+    query_row_personal_message_delta = try_float(full_row.get("query_row_personal_message_delta"))
+    if query_row_personal_message_delta is None:
+        query_row_personal_message_delta = try_float(full_row.get("query_row_personal_delta"))
+    query_row_posterior_delta_abs = try_float(full_row.get("query_row_posterior_delta_abs"))
+    if query_row_posterior_delta_abs is None:
+        query_row_posterior_delta_abs = try_float(full_row.get("query_row_personal_delta"))
     query_row_posterior_kl = try_float(full_row.get("query_row_posterior_kl"))
     personal_to_graph_query_ratio = try_float(full_row.get("personal_to_graph_query_ratio"))
     personal_query_row_std = try_float(full_row.get("personal_query_row_std"))
@@ -732,19 +732,23 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
         reasons.append("personal-delta-student-flat")
     if alpha_head_std is not None and alpha_head_std < 0.001:
         reasons.append("alpha-head-collapse")
-    if query_row_personal_delta is not None and personal_query_row_std is not None and query_row_posterior_kl is not None:
-        if query_row_personal_delta < 0.002 and query_row_posterior_kl < 0.002:
+    if query_row_personal_message_delta is not None and personal_query_row_std is not None and query_row_posterior_kl is not None:
+        if query_row_personal_message_delta < 0.002 and query_row_posterior_kl < 0.002:
             reasons.append("E-flat-at-query")
         elif personal_query_row_std < 5e-4:
             reasons.append("query-personal-flat")
-    if personal_to_graph_query_ratio is not None and query_row_personal_delta is not None and query_row_graph_delta is not None:
-        if personal_to_graph_query_ratio > 1.0 and query_row_personal_delta > max(query_row_graph_delta, 1e-6):
+    if (
+        personal_to_graph_query_ratio is not None
+        and query_row_personal_message_delta is not None
+        and query_row_global_readout_delta is not None
+    ):
+        if personal_to_graph_query_ratio > 1.0 and query_row_personal_message_delta > max(query_row_global_readout_delta, 1e-6):
             reasons.append("E-overrides-query-readout")
-    if query_row_posterior_kl is not None and query_row_personal_delta is not None:
-        if query_row_posterior_kl > 0.25 and query_row_personal_delta < 0.01:
+    if query_row_posterior_kl is not None and query_row_personal_message_delta is not None:
+        if query_row_posterior_kl > 0.25 and query_row_personal_message_delta < 0.01:
             reasons.append("query-posterior-too-diffuse")
-    if readout_query_delta is not None and query_row_personal_delta is not None:
-        if readout_query_delta > 0.10 and query_row_personal_delta < 0.002:
+    if readout_query_delta is not None and query_row_personal_message_delta is not None:
+        if readout_query_delta > 0.10 and query_row_personal_message_delta < 0.002:
             reasons.append("query-readout-overamplified")
     if alpha_state_path is not None and alpha_id_path is not None and alpha_id_path > max(alpha_state_path, 1e-6):
         reasons.append("alpha-id-dominant")
@@ -752,15 +756,15 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
         reasons.append("A-near-identity")
     if knowledge_state_graph_delta is not None and knowledge_state_graph_delta < 0.02:
         reasons.append("A-state-delta-low")
-    if query_row_graph_delta is not None and knowledge_state_graph_delta is not None:
-        if knowledge_state_graph_delta > 0.02 and query_row_graph_delta < 0.01:
+    if query_row_global_readout_delta is not None and knowledge_state_graph_delta is not None:
+        if knowledge_state_graph_delta > 0.02 and query_row_global_readout_delta < 0.01:
             reasons.append("A-readout-washed-out")
-        if relation_identity_delta is not None and relation_identity_delta > 0.02 and query_row_graph_delta < 0.005:
+        if relation_identity_delta is not None and relation_identity_delta > 0.02 and query_row_global_readout_delta < 0.005:
             reasons.append("A-present-but-not-queried")
     if delta_a is not None and abs(delta_a) < 0.002:
         reasons.append("A-delta-small")
     if delta_e is not None:
-        if delta_e < 0 and query_row_personal_delta is not None and query_row_personal_delta > 0.002:
+        if delta_e < 0 and query_row_personal_message_delta is not None and query_row_personal_message_delta > 0.002:
             reasons.append("E-active-but-harmful")
         elif abs(delta_e) < 0.002:
             reasons.append("E-delta-small")
