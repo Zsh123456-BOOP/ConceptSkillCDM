@@ -1,0 +1,141 @@
+2026-04-17 08:48:48,942 - INFO - Arguments:
+2026-04-17 08:48:48,943 - INFO -   ablate_concept_graph: True
+2026-04-17 08:48:48,943 - INFO -   ablate_module1: False
+2026-04-17 08:48:48,943 - INFO -   allow_self_loop: True
+2026-04-17 08:48:48,943 - INFO -   alpha_min_target: 0.05
+2026-04-17 08:48:48,944 - INFO -   batch_size: 128
+2026-04-17 08:48:48,944 - INFO -   data_dir: ./data/assist_09
+2026-04-17 08:48:48,944 - INFO -   dataset_name: assist_09
+2026-04-17 08:48:48,944 - INFO -   debug_graph_diag: True
+2026-04-17 08:48:48,944 - INFO -   diag_batches: 1
+2026-04-17 08:48:48,944 - INFO -   disable_self_loop: False
+2026-04-17 08:48:48,944 - INFO -   dropout: 0.2
+2026-04-17 08:48:48,944 - INFO -   early_stop_patience: 3
+2026-04-17 08:48:48,944 - INFO -   enable_module1: True
+2026-04-17 08:48:48,944 - INFO -   epochs: 100
+2026-04-17 08:48:48,944 - INFO -   generate_diagnosis: True
+2026-04-17 08:48:48,944 - INFO -   gnn_residual_weight: 0.5
+2026-04-17 08:48:48,944 - INFO -   gpu_candidates: None
+2026-04-17 08:48:48,944 - INFO -   gpu_ids: None
+2026-04-17 08:48:48,944 - INFO -   gpu_memory_threshold: 2000
+2026-04-17 08:48:48,944 - INFO -   gpus: None
+2026-04-17 08:48:48,944 - INFO -   graph_dropout: 0.0
+2026-04-17 08:48:48,944 - INFO -   graph_entropy_max: 0.75
+2026-04-17 08:48:48,944 - INFO -   graph_entropy_min: 0.25
+2026-04-17 08:48:48,944 - INFO -   graph_identity_residual: 0.05
+2026-04-17 08:48:48,945 - INFO -   graph_propagation_alpha: 0.24
+2026-04-17 08:48:48,945 - INFO -   graph_query_readout_2hop_scale: 0.24
+2026-04-17 08:48:48,945 - INFO -   graph_query_readout_scale: 0.7
+2026-04-17 08:48:48,945 - INFO -   graph_query_writeback_2hop_scale: 0.24
+2026-04-17 08:48:48,945 - INFO -   graph_query_writeback_scale: 0.7
+2026-04-17 08:48:48,945 - INFO -   graph_readout_1hop_scale: 0.7
+2026-04-17 08:48:48,945 - INFO -   graph_readout_2hop_scale: 0.24
+2026-04-17 08:48:48,945 - INFO -   graph_reg_cap_ratio: 6.0
+2026-04-17 08:48:48,945 - INFO -   graph_reg_warmup_epochs: 4
+2026-04-17 08:48:48,945 - INFO -   graph_tau_init: 0.55
+2026-04-17 08:48:48,945 - INFO -   graph_topk: 12
+2026-04-17 08:48:48,945 - INFO -   graph_uniform_margin: 0.1
+2026-04-17 08:48:48,945 - INFO -   knowledge_dim: 64
+2026-04-17 08:48:48,945 - INFO -   lambda_alpha: 0.0
+2026-04-17 08:48:48,945 - INFO -   lambda_alpha_min: 0.08
+2026-04-17 08:48:48,945 - INFO -   lambda_graph_diag: 0.1
+2026-04-17 08:48:48,945 - INFO -   lambda_graph_uniform: 0.04
+2026-04-17 08:48:48,945 - INFO -   lambda_personal_kl: 0.04
+2026-04-17 08:48:48,945 - INFO -   lambda_personal_query_residual: 0.08
+2026-04-17 08:48:48,945 - INFO -   lambda_sparse: 0.8
+2026-04-17 08:48:48,945 - INFO -   lambda_sparse_personal: 0.0005
+2026-04-17 08:48:48,946 - INFO -   learning_rate: 0.0003
+2026-04-17 08:48:48,946 - INFO -   log_dir: logs/abce_diag/remote_trust_diag_20260417_709083f/assist_09/seed42/best_no_A
+2026-04-17 08:48:48,946 - INFO -   max_test_batches: None
+2026-04-17 08:48:48,946 - INFO -   max_train_batches: None
+2026-04-17 08:48:48,946 - INFO -   max_val_batches: None
+2026-04-17 08:48:48,946 - INFO -   min_exer_interactions: 0
+2026-04-17 08:48:48,946 - INFO -   min_poison_count: 0
+2026-04-17 08:48:48,946 - INFO -   min_stu_interactions: 15
+2026-04-17 08:48:48,946 - INFO -   model_variant: assist_09_abce_best_no_A
+2026-04-17 08:48:48,946 - INFO -   multi_gpu: False
+2026-04-17 08:48:48,946 - INFO -   no_cuda: False
+2026-04-17 08:48:48,946 - INFO -   num_gnn_layers: 2
+2026-04-17 08:48:48,946 - INFO -   num_gpus: 1
+2026-04-17 08:48:48,946 - INFO -   num_relation_heads: 2
+2026-04-17 08:48:48,946 - INFO -   num_workers: 4
+2026-04-17 08:48:48,946 - INFO -   patience: 5
+2026-04-17 08:48:48,946 - INFO -   personal_alpha_base_init: 0.05
+2026-04-17 08:48:48,946 - INFO -   personal_alpha_bias_scale: 0.0
+2026-04-17 08:48:48,946 - INFO -   personal_alpha_budget: 0.1
+2026-04-17 08:48:48,946 - INFO -   personal_alpha_temperature: 2.2
+2026-04-17 08:48:48,947 - INFO -   personal_delta_scale: 4.0
+2026-04-17 08:48:48,947 - INFO -   personal_disable_student_global_context: True
+2026-04-17 08:48:48,947 - INFO -   personal_id_lr_mult: 0.5
+2026-04-17 08:48:48,947 - INFO -   personal_include_neighbor_rows: False
+2026-04-17 08:48:48,947 - INFO -   personal_local_hops: 1
+2026-04-17 08:48:48,947 - INFO -   personal_max_alpha: 0.28
+2026-04-17 08:48:48,947 - INFO -   personal_neighbor_row_budget: 0.35
+2026-04-17 08:48:48,947 - INFO -   personal_query_correction_max_ratio: 0.15
+2026-04-17 08:48:48,947 - INFO -   personal_query_correction_min_graph_anchor: 0.02
+2026-04-17 08:48:48,947 - INFO -   personal_query_correction_scale: 0.08
+2026-04-17 08:48:48,947 - INFO -   personal_query_residual_margin: 0.08
+2026-04-17 08:48:48,947 - INFO -   personal_query_row_budget: 1.0
+2026-04-17 08:48:48,947 - INFO -   personal_rank: 8
+2026-04-17 08:48:48,947 - INFO -   personal_reg_warmup_epochs: 8
+2026-04-17 08:48:48,947 - INFO -   personal_state_lr_mult: 1.0
+2026-04-17 08:48:48,947 - INFO -   personal_student_dim: 32
+2026-04-17 08:48:48,947 - INFO -   personal_support_only: True
+2026-04-17 08:48:48,947 - INFO -   personal_warmup_epochs: 8
+2026-04-17 08:48:48,947 - INFO -   prediction_l2_lambda: 1e-05
+2026-04-17 08:48:48,947 - INFO -   save_dir: checkpoints/abce_diag/remote_trust_diag_20260417_709083f/assist_09/seed42/best_no_A
+2026-04-17 08:48:48,947 - INFO -   save_interval: 10
+2026-04-17 08:48:48,948 - INFO -   seed: 42
+2026-04-17 08:48:48,948 - INFO -   share_concept_embeddings: True
+2026-04-17 08:48:48,948 - INFO -   use_concept_graph: False
+2026-04-17 08:48:48,948 - INFO -   use_exercise_graph: False
+2026-04-17 08:48:48,948 - INFO -   use_personal_graph: True
+2026-04-17 08:48:48,948 - INFO -   weight_decay: 1e-05
+2026-04-17 08:48:49,034 - INFO - Using device: cuda:0 (physical gpu 3)
+2026-04-17 08:48:49,034 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Loading datasets...
+2026-04-17 08:48:49,034 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Regularization: graph_entropy(lambda_sparse)=0.800000, graph_diag=0.100000, graph_uniform=0.040000, personal_sparse=0.000500, personal_kl=0.040000, personal_query_residual=0.080000, alpha_penalty=0.000000, alpha_min=0.080000, prediction_l2=0.000010
+2026-04-17 08:48:49,034 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Graph controls: entropy_band=[0.25, 0.75], uniform_margin=0.10, warmup_epochs=4, cap_ratio=6.00, graph_dropout=0.000, graph_tau_init=0.550
+2026-04-17 08:48:49,034 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Personal controls: personal_max_alpha=0.280, personal_delta_scale=4.000, personal_warmup_epochs=8, personal_student_dim=32, alpha_min_target=0.0500, personal_local_hops=1, include_neighbor_rows=False, personal_support_only=True, personal_alpha_temperature=2.200, personal_alpha_budget=0.100, personal_query_row_budget=1.000, personal_neighbor_row_budget=0.350, personal_query_correction_scale=0.080, personal_state_lr_mult=1.000, personal_id_lr_mult=0.500, graph_propagation_alpha=0.240, graph_query_readout_scale=0.700, graph_query_readout_2hop_scale=0.240
+2026-04-17 08:48:49,129 - INFO - [assist_09] [数据清洗] 学生交互次数 < 15 次的学生：共移除 313 个学生（仅统计用户数）
+2026-04-17 08:48:49,143 - INFO - [assist_09] [数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 5118 条记录。
+2026-04-17 08:48:49,143 - INFO - [assist_09] [数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。
+2026-04-17 08:48:49,143 - INFO - [assist_09] [数据清洗] 跳过毒题清洗（min_poison_count <= 0）。
+2026-04-17 08:48:49,143 - INFO - [assist_09] 正在构建ID映射...
+2026-04-17 08:48:49,400 - INFO - [assist_09] 正在构建Q矩阵...
+2026-04-17 08:48:55,795 - INFO - [assist_09] [数据清洗] Valid train-seen 过滤：before=20072, after=19875, dropped=197, coverage=99.02%
+2026-04-17 08:48:55,801 - INFO - [assist_09] [数据清洗] Test train-seen 过滤：before=51610, after=51090, dropped=520, coverage=98.99%
+2026-04-17 08:48:55,802 - INFO - [assist_09] [统计] 开始统计清洗后每道题的概念数量分布...
+2026-04-17 08:48:55,808 - INFO - [assist_09] [Train] 概念数统计：题目数=17057, 平均概念数=1.1995, min=1, max=4, 1概念=14129 (82.83%), ≥2概念=2928 (17.17%)
+2026-04-17 08:48:55,808 - INFO - [assist_09] [Train] 概念数直方图（概念数: 题目数量）: {1: 14129, 2: 2533, 3: 315, 4: 80}
+2026-04-17 08:48:55,811 - INFO - [assist_09] [Valid] 概念数统计：题目数=9034, 平均概念数=1.1996, min=1, max=4, 1概念=7500 (83.02%), ≥2概念=1534 (16.98%)
+2026-04-17 08:48:55,811 - INFO - [assist_09] [Valid] 概念数直方图（概念数: 题目数量）: {1: 7500, 2: 1314, 3: 171, 4: 49}
+2026-04-17 08:48:55,815 - INFO - [assist_09] [Test] 概念数统计：题目数=12825, 平均概念数=1.1994, min=1, max=4, 1概念=10661 (83.13%), ≥2概念=2164 (16.87%)
+2026-04-17 08:48:55,815 - INFO - [assist_09] [Test] 概念数直方图（概念数: 题目数量）: {1: 10661, 2: 1836, 3: 263, 4: 65}
+2026-04-17 08:48:55,815 - INFO - [assist_09] [统计] 概念数量统计完成。
+2026-04-17 08:48:55,815 - INFO - [assist_09] 正在加载数据集...
+2026-04-17 08:48:55,890 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Train samples: 190623, Val samples: 19875
+2026-04-17 08:48:55,890 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Number of students: 2180
+2026-04-17 08:48:55,890 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Number of exercises: 17057
+2026-04-17 08:48:55,890 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Number of concepts: 123
+2026-04-17 08:48:55,890 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Creating model...
+2026-04-17 08:48:55,890 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Ablation switches: ablate_module1=False | enable_module1=True | use_concept_graph=False | effective(num_gnn_layers=2)
+2026-04-17 08:48:56,020 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Ablation runtime check: args(ablate_module1=False) | expect(use_concept_graph=False,use_personal_graph=True) | model(enable_module1=True,use_concept_graph=False,use_personal_graph=True) | physical(has_knowledge_encoder=True,has_relation_learning=False,has_adaptive_gate=True,has_personal_generator=True)
+2026-04-17 08:48:56,020 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Debug diagnostics enabled: diag_batches=1
+2026-04-17 08:48:56,020 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Graph Init] graph_tau_mean=0.0000, graph_tau_std=0.0000, graph_dropout=0.000, use_personal_graph=True
+2026-04-17 08:48:56,020 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Total parameters: 910,297
+2026-04-17 08:48:56,020 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Trainable parameters: 910,297
+2026-04-17 08:48:56,996 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Optimizer param groups: backbone@lr=0.0003, personal_state@lr=0.0003, personal_id@lr=0.00015
+2026-04-17 08:48:56,996 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Monitor config: scheduler=val_auc(max), best_checkpoint=val_auc(max), early_stop=val_auc(max)
+2026-04-17 08:48:56,996 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Starting training...
+2026-04-17 08:48:57,559 - ERROR - Run failed with exception: nonfinite_alpha at train epoch=1 batch=1
+2026-04-17 08:48:57,559 - ERROR - Traceback (most recent call last):
+  File "/home/zsh/ConceptSkillCDM/main.py", line 452, in main
+    best_val_auc, best_epoch = train_one_experiment(args, logger)
+  File "/home/zsh/ConceptSkillCDM/src/trainer.py", line 1620, in train_one_experiment
+    train_metrics = train_epoch(
+  File "/home/zsh/ConceptSkillCDM/src/trainer.py", line 1212, in train_epoch
+    _raise_if_nonfinite(
+  File "/home/zsh/ConceptSkillCDM/src/trainer.py", line 304, in _raise_if_nonfinite
+    raise NonFiniteTrainingError(
+src.trainer.NonFiniteTrainingError: nonfinite_alpha at train epoch=1 batch=1
+
