@@ -1732,6 +1732,127 @@ def _check_no_a_query_ratio_is_guarded() -> None:
     )
 
 
+def _check_a_diag_zero_when_graph_disabled() -> None:
+    model = _build_tiny_ae_model(use_concept_graph=False, use_personal_graph=True)
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0, 1], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    _assert(
+        abs(float(details["knowledge_state_graph_delta"].item())) < 1e-8,
+        "use_concept_graph=False 时，knowledge_state_graph_delta 必须被语义抑制为 0。",
+    )
+    _assert(
+        abs(float(details["relation_identity_delta"].item())) < 1e-8,
+        "use_concept_graph=False 时，relation_identity_delta 也必须为 0，避免 no_A 继续触发 A 告警。",
+    )
+    _assert(
+        abs(float(details["query_row_global_readout_delta"].item())) < 1e-8,
+        "use_concept_graph=False 时，query_row_global_readout_delta 必须为 0。",
+    )
+    _assert(
+        float(details["a_diag_semantic_ok"].item()) == 1.0,
+        "no_A 路径应显式打上 a_diag_semantic_ok=1，说明 A 诊断已按禁用语义抑制。",
+    )
+
+
+def _check_graph_query_gate_diagnostics_exist() -> None:
+    model = _build_tiny_ae_model(use_concept_graph=True, use_personal_graph=False, graph_query_readout_scale=0.6)
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0, 1], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    for key in (
+        "query_row_global_readout_pre_gate_delta",
+        "query_row_global_readout_gate_mean",
+        "query_row_global_readout_post_gate_delta",
+    ):
+        _assert(key in details, f"A query gate diagnostics 缺少字段: {key}")
+    gate_mean = float(details["query_row_global_readout_gate_mean"].item())
+    pre_delta = float(details["query_row_global_readout_pre_gate_delta"].item())
+    post_delta = float(details["query_row_global_readout_post_gate_delta"].item())
+    _assert(0.0 <= gate_mean <= 1.0, f"graph query gate 必须是 [0,1] 内的门值，当前={gate_mean:.6f}")
+    _assert(
+        post_delta <= pre_delta + 1e-6,
+        f"post-gate delta 不应系统性大于 pre-gate delta，当前 pre={pre_delta:.6f}, post={post_delta:.6f}",
+    )
+
+
+def _check_query_conditioned_support_value_projection_is_live() -> None:
+    model = _build_tiny_ae_model(use_concept_graph=True, use_personal_graph=True, personal_query_support_hops=2)
+    model.eval()
+    structure = model.structure_module
+    _assert(
+        hasattr(structure, "personal_support_value_proj") and hasattr(structure, "personal_query_value_context_proj"),
+        "ConceptStructureModeling 必须显式持有 support-value projection 两个层。",
+    )
+
+    with torch.no_grad():
+        structure.personal_support_value_proj.weight.copy_(torch.eye(model.knowledge_dim))
+        structure.personal_query_value_context_proj.weight.zero_()
+        _, details_base = model(
+            student_ids=torch.tensor([0, 1], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+        structure.personal_query_value_context_proj.weight.fill_(0.05)
+        _, details_ctx = model(
+            student_ids=torch.tensor([0, 1], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    delta = float(
+        (
+            details_ctx["query_row_personal_message_delta_raw"]
+            - details_base["query_row_personal_message_delta_raw"]
+        ).abs().item()
+    )
+    _assert(
+        delta > 1e-6,
+        f"query-conditioned support value projection 改变后，query personal message 应变化；当前 delta={delta:.6f}",
+    )
+
+
+def _check_personal_projection_gap_diagnostics_exist() -> None:
+    model = _build_tiny_ae_model(use_concept_graph=True, use_personal_graph=True)
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0, 1], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    for key in (
+        "personal_message_projection_gap",
+        "personal_message_delta_pre_trust",
+        "personal_message_delta_post_trust",
+    ):
+        _assert(key in details, f"E projection diagnostics 缺少字段: {key}")
+    _assert(
+        float(details["personal_message_projection_gap"].item()) >= 0.0,
+        "personal_message_projection_gap 必须为非负值。",
+    )
+
+
 def _check_personal_query_trust_region_caps_effective_correction() -> None:
     model = _build_tiny_ae_model(
         personal_query_correction_scale=5.0,
@@ -2437,6 +2558,10 @@ def main() -> None:
     _check_details_override_regression()
     _check_active_row_diagnostics_ignore_padding_artifact()
     _check_no_a_query_ratio_is_guarded()
+    _check_a_diag_zero_when_graph_disabled()
+    _check_graph_query_gate_diagnostics_exist()
+    _check_query_conditioned_support_value_projection_is_live()
+    _check_personal_projection_gap_diagnostics_exist()
     _check_personal_query_trust_region_caps_effective_correction()
     _check_masked_support_softmax_active_fallback_semantics()
     _check_no_a_finite_alpha_smoke()

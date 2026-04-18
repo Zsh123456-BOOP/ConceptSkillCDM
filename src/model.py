@@ -24,7 +24,7 @@ Cognitive Diagnosis Model
 """
 
 import math
-from typing import Tuple, Optional, Dict, Union, Any
+from typing import Tuple, Optional, Dict, Union, Any, Callable
 
 import torch
 import torch.nn as nn
@@ -359,6 +359,7 @@ def _apply_sparse_local_posterior(
 def _compute_sparse_local_messages(
     expanded_states: torch.Tensor,
     relation_spec: Dict[str, torch.Tensor],
+    support_value_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
 ) -> Dict[str, torch.Tensor]:
     global_matrices = relation_spec["global_matrices"]
     active_row_index = relation_spec.get("active_row_index")
@@ -384,8 +385,14 @@ def _compute_sparse_local_messages(
     gate_alpha = relation_spec["gate_alpha"]
 
     support_features = _gather_head_support_features(expanded_states, support_col_index, support_valid_mask)
-    global_local = (global_support_prob.unsqueeze(-1) * support_features).sum(dim=-2)
-    post_local = (posterior_prob.unsqueeze(-1) * support_features).sum(dim=-2)
+    query_rows = _gather_head_rows(expanded_states, active_row_index, active_row_valid_mask)
+    support_values = (
+        support_value_fn(support_features, query_rows)
+        if support_value_fn is not None
+        else support_features
+    )
+    global_local = (global_support_prob.unsqueeze(-1) * support_values).sum(dim=-2)
+    post_local = (posterior_prob.unsqueeze(-1) * support_values).sum(dim=-2)
     delta_local_raw = post_local - global_local
     message_delta = gate_alpha.unsqueeze(-1).unsqueeze(-1) * delta_local_raw
     mixed_local = global_local + message_delta
@@ -394,6 +401,8 @@ def _compute_sparse_local_messages(
         "active_row_valid_mask": active_row_valid_mask,
         "query_row_active_mask": relation_spec.get("query_row_active_mask"),
         "neighbor_row_active_mask": relation_spec.get("neighbor_row_active_mask"),
+        "query_rows": query_rows,
+        "support_values": support_values,
         "global_local": global_local,
         "post_local": post_local,
         "delta_local_raw": delta_local_raw,
@@ -1080,6 +1089,7 @@ class ConceptStructureModeling(nn.Module):
         personal_neighbor_row_budget: float,
         personal_query_support_hops: int,
         personal_support_only: bool,
+        enable_personal_support_value_proj: bool,
         # 完全消融开关
         enable_module: bool = True,
     ):
@@ -1110,6 +1120,7 @@ class ConceptStructureModeling(nn.Module):
         self.personal_neighbor_row_budget = max(0.0, float(personal_neighbor_row_budget))
         self.personal_query_support_hops = max(0, int(personal_query_support_hops))
         self.personal_support_only = bool(personal_support_only)
+        self.enable_personal_support_value_proj = bool(enable_personal_support_value_proj)
         self._current_epoch = 1
 
         # -------- 完全消融：不创建任何可训练参数 --------
@@ -1127,6 +1138,8 @@ class ConceptStructureModeling(nn.Module):
             self.personal_generator_from_state = None
             self.personal_gate_id_logit = None
             self.personal_generator_id_logit = None
+            self.personal_support_value_proj = None
+            self.personal_query_value_context_proj = None
             return
 
         # -------- 正常启用：A/E 可选 --------
@@ -1201,6 +1214,14 @@ class ConceptStructureModeling(nn.Module):
                 personal_rank,
                 hidden_dim=personal_hidden_dim,
             )
+            if self.enable_personal_support_value_proj:
+                self.personal_support_value_proj = nn.Linear(knowledge_dim, knowledge_dim, bias=False)
+                self.personal_query_value_context_proj = nn.Linear(knowledge_dim, knowledge_dim, bias=False)
+                nn.init.eye_(self.personal_support_value_proj.weight)
+                nn.init.zeros_(self.personal_query_value_context_proj.weight)
+            else:
+                self.personal_support_value_proj = None
+                self.personal_query_value_context_proj = None
         else:
             self.adaptive_gate = None
             self.personal_generator = None
@@ -1211,6 +1232,8 @@ class ConceptStructureModeling(nn.Module):
             self.personal_generator_from_state = None
             self.personal_gate_id_logit = None
             self.personal_generator_id_logit = None
+            self.personal_support_value_proj = None
+            self.personal_query_value_context_proj = None
 
     def set_epoch(self, epoch: int) -> None:
         self._current_epoch = max(1, int(epoch))
@@ -1242,6 +1265,21 @@ class ConceptStructureModeling(nn.Module):
         centered = (states - pooled.unsqueeze(1)).pow(2)
         var = (centered * weights.unsqueeze(-1)).sum(dim=1) / denom
         return torch.sqrt(var + 1e-12)
+
+    def project_personal_support_values(
+        self,
+        support_features: torch.Tensor,
+        query_rows: torch.Tensor,
+    ) -> torch.Tensor:
+        if (
+            not self.enable_personal_support_value_proj
+            or self.personal_support_value_proj is None
+            or self.personal_query_value_context_proj is None
+        ):
+            return support_features
+        query_context = self.personal_query_value_context_proj(query_rows).unsqueeze(-2)
+        projected_support = self.personal_support_value_proj(support_features)
+        return torch.tanh(projected_support + query_context)
 
     def _build_local_row_mask(
         self,
@@ -1427,8 +1465,14 @@ class ConceptStructureModeling(nn.Module):
         personal_relation_spec = None
         initial_state = self.knowledge_encoder.compose_initial_state(student_ids)
         knowledge_state_pre_personal = knowledge_state
-        relation_identity_delta = (relation_matrices - identity_relations).pow(2).mean().sqrt()
-        knowledge_state_graph_delta = (knowledge_state_pre_personal - initial_state).pow(2).mean().sqrt()
+        knowledge_state_backbone_delta = (knowledge_state_pre_personal - initial_state).pow(2).mean().sqrt()
+        if self.use_concept_graph and self.relation_learning is not None:
+            relation_identity_delta = (relation_matrices - identity_relations).pow(2).mean().sqrt()
+            knowledge_state_graph_delta = knowledge_state_backbone_delta
+        else:
+            relation_identity_delta = relation_matrices.new_tensor(0.0)
+            knowledge_state_graph_delta = relation_matrices.new_tensor(0.0)
+        a_diag_semantic_ok = relation_matrices.new_tensor(1.0)
         knowledge_state_personal_delta = relation_matrices.new_tensor(0.0)
         local_row_mask = self._build_local_row_mask(
             concept_mask,
@@ -1695,8 +1739,10 @@ class ConceptStructureModeling(nn.Module):
             "knowledge_state": knowledge_state,
             "student_repr": student_repr,
             "relation_identity_delta": relation_identity_delta,
+            "knowledge_state_backbone_delta": knowledge_state_backbone_delta,
             "knowledge_state_graph_delta": knowledge_state_graph_delta,
             "knowledge_state_personal_delta": knowledge_state_personal_delta,
+            "a_diag_semantic_ok": a_diag_semantic_ok,
             "alpha": gate_alpha,
             "alpha_logit": gate_alpha_logit,
             "alpha_student_bias": gate_alpha_bias,
@@ -1852,6 +1898,8 @@ class CognitiveDiagnosisModel(nn.Module):
         lambda_personal_kl: float = 0.0,
         lambda_personal_query_residual: float = 0.0,
         personal_query_residual_margin: float = 0.0,
+        enable_personal_support_value_proj: bool = True,
+        graph_query_gate_init_bias: float = 2.0,
         share_concept_embeddings: bool = False,
     ):
         super().__init__()
@@ -1929,6 +1977,8 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_query_correction_max_ratio = max(0.0, float(personal_query_correction_max_ratio))
         self.personal_query_correction_min_graph_anchor = max(0.0, float(personal_query_correction_min_graph_anchor))
         self.personal_query_message_gain = max(0.0, float(personal_query_message_gain))
+        self.enable_personal_support_value_proj = bool(enable_personal_support_value_proj)
+        self.graph_query_gate_init_bias = float(graph_query_gate_init_bias)
         self.lambda_personal_kl = max(0.0, float(lambda_personal_kl))
         self.lambda_personal_query_residual = max(0.0, float(lambda_personal_query_residual))
         self.personal_query_residual_margin = max(0.0, float(personal_query_residual_margin))
@@ -1972,8 +2022,12 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_neighbor_row_budget=self.personal_neighbor_row_budget,
             personal_query_support_hops=self.personal_query_support_hops,
             personal_support_only=self.personal_support_only,
+            enable_personal_support_value_proj=self.enable_personal_support_value_proj,
             enable_module=self.enable_module1,
         )
+        self.graph_query_gate = nn.Linear(knowledge_dim, 1)
+        nn.init.zeros_(self.graph_query_gate.weight)
+        nn.init.constant_(self.graph_query_gate.bias, self.graph_query_gate_init_bias)
 
         if self.share_concept_embeddings:
             self._tie_concept_embeddings()
@@ -2052,26 +2106,37 @@ class CognitiveDiagnosisModel(nn.Module):
         knowledge_state: torch.Tensor,
         relation_matrices: torch.Tensor,
         concept_mask: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if ((self.graph_query_readout_scale <= 0 and self.graph_query_readout_2hop_scale <= 0) or not self.enable_module1):
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if (
+            (self.graph_query_readout_scale <= 0 and self.graph_query_readout_2hop_scale <= 0)
+            or not self.enable_module1
+            or not self.use_concept_graph
+        ):
             zero = knowledge_state.new_tensor(0.0)
-            return torch.zeros_like(knowledge_state), zero, zero
+            return torch.zeros_like(knowledge_state), zero, zero, zero, zero
 
         hop1 = self._aggregate_with_relation(knowledge_state, relation_matrices)
         hop2 = self._aggregate_with_relation(hop1, relation_matrices)
         query_mask = concept_mask.float()
         query_rows = query_mask.unsqueeze(-1).bool()
-        global_context = (
+        global_context_pre = (
             self.graph_query_readout_scale * (hop1 - knowledge_state)
             + self.graph_query_readout_2hop_scale * (hop2 - hop1)
         )
-        global_context = torch.where(query_rows, global_context, torch.zeros_like(global_context))
-        query_row_graph_delta = self._masked_query_rms(global_context, concept_mask)
+        global_context_pre = torch.where(query_rows, global_context_pre, torch.zeros_like(global_context_pre))
+        query_state_gate = torch.sigmoid(self.graph_query_gate(knowledge_state))
+        query_state_gate = torch.where(query_rows, query_state_gate, torch.zeros_like(query_state_gate))
+        global_context = global_context_pre * query_state_gate
+        query_row_graph_delta_pre = self._masked_query_rms(global_context_pre, concept_mask)
+        query_row_graph_delta_post = self._masked_query_rms(global_context, concept_mask)
+        gate_mean = (
+            (query_state_gate.squeeze(-1) * query_mask).sum() / query_mask.sum().clamp(min=1.0)
+        )
 
         query_seed = query_mask / query_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
         query_support = self._aggregate_with_relation(query_seed.unsqueeze(-1), relation_matrices).squeeze(-1)
         query_row_global_support_mass = (query_support * (1.0 - query_mask)).sum(dim=1).mean()
-        return global_context, query_row_graph_delta, query_row_global_support_mass
+        return global_context, query_row_graph_delta_pre, gate_mean, query_row_graph_delta_post, query_row_global_support_mass
 
     def _build_personal_message_basis(
         self,
@@ -2113,7 +2178,11 @@ class CognitiveDiagnosisModel(nn.Module):
             -1,
             -1,
         )
-        local_messages = _compute_sparse_local_messages(expanded_states, relation_spec)
+        local_messages = _compute_sparse_local_messages(
+            expanded_states,
+            relation_spec,
+            support_value_fn=self.structure_module.project_personal_support_values,
+        )
         query_row_active_mask = relation_spec.get("query_row_active_mask")
         if query_row_active_mask is None:
             query_row_active_mask = active_row_valid_mask
@@ -2245,7 +2314,13 @@ class CognitiveDiagnosisModel(nn.Module):
         student_repr = s_out["student_repr"]
         gate_alpha = s_out["alpha"]
         personal_matrices = s_out["personal_matrices"]
-        global_query_context, query_row_global_readout_delta, query_row_global_support_mass = self._build_global_query_readout(
+        (
+            global_query_context,
+            query_row_global_readout_pre_gate_delta,
+            query_row_global_readout_gate_mean,
+            query_row_global_readout_delta,
+            query_row_global_support_mass,
+        ) = self._build_global_query_readout(
             knowledge_state=knowledge_state,
             relation_matrices=relation_matrices,
             concept_mask=q_vector,
@@ -2277,6 +2352,7 @@ class CognitiveDiagnosisModel(nn.Module):
         readout_query_delta = self._masked_query_rms(total_query_correction, q_vector)
         query_row_personal_message_delta_raw = self._masked_query_rms(scaled_personal_query_correction, q_vector)
         query_row_personal_message_delta = self._masked_query_rms(personal_query_correction, q_vector)
+        personal_message_projection_gap = query_row_posterior_delta_abs / query_row_personal_message_delta.clamp(min=1e-8)
         has_graph_query_signal_bool = bool(query_row_global_readout_delta.detach().item() >= 1e-8)
         has_graph_query_signal = torch.tensor(int(has_graph_query_signal_bool), device=device, dtype=torch.long)
         if has_graph_query_signal_bool:
@@ -2333,17 +2409,25 @@ class CognitiveDiagnosisModel(nn.Module):
             "irt_logit": irt_logit.detach(),
             "logits": total_logit.detach(),
             "relation_identity_delta": s_out["relation_identity_delta"].detach(),
+            "knowledge_state_backbone_delta": s_out["knowledge_state_backbone_delta"].detach(),
             "knowledge_state_graph_delta": s_out["knowledge_state_graph_delta"].detach(),
             "knowledge_state_personal_delta": s_out["knowledge_state_personal_delta"].detach(),
+            "a_diag_semantic_ok": s_out["a_diag_semantic_ok"].detach(),
             "readout_query_delta": readout_query_delta.detach(),
             "query_row_graph_delta": query_row_global_readout_delta.detach(),
             "query_row_personal_delta": query_row_posterior_delta_abs.detach(),
             "readout_query_support_mass": query_row_global_support_mass.detach(),
-            "query_row_global_readout_delta_raw": query_row_global_readout_delta.detach(),
+            "query_row_global_readout_delta_raw": query_row_global_readout_pre_gate_delta.detach(),
+            "query_row_global_readout_pre_gate_delta": query_row_global_readout_pre_gate_delta.detach(),
+            "query_row_global_readout_gate_mean": query_row_global_readout_gate_mean.detach(),
+            "query_row_global_readout_post_gate_delta": query_row_global_readout_delta.detach(),
             "query_row_global_readout_delta": query_row_global_readout_delta.detach(),
             "query_row_personal_message_delta": query_row_personal_message_delta,
             "query_row_personal_message_delta_raw": query_row_personal_message_delta_raw.detach(),
             "query_row_personal_message_delta_capped": query_row_personal_message_delta.detach(),
+            "personal_message_delta_pre_trust": query_row_personal_message_delta_raw.detach(),
+            "personal_message_delta_post_trust": query_row_personal_message_delta.detach(),
+            "personal_message_projection_gap": personal_message_projection_gap.detach(),
             "query_row_posterior_delta_abs": query_row_posterior_delta_abs.detach(),
             "query_row_posterior_kl": query_row_posterior_kl.detach(),
             "query_row_global_local_rms": query_row_global_local_rms.detach(),
