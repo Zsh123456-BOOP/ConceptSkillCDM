@@ -48,6 +48,9 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "personal_disable_student_global_context",
     "personal_local_hops",
     "personal_include_neighbor_rows",
+    "personal_support_include_query_self",
+    "personal_support_include_graph",
+    "personal_support_include_neighbors",
     "personal_query_row_budget",
     "personal_neighbor_row_budget",
     "personal_query_support_hops",
@@ -56,12 +59,18 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "personal_query_correction_max_ratio",
     "personal_query_correction_min_graph_anchor",
     "personal_query_message_gain",
+    "personal_value_use_global_basis",
+    "personal_message_alignment_gate",
+    "personal_projection_hidden_factor",
     "use_personal_graph",
     "use_concept_graph",
     "graph_identity_residual",
     "graph_propagation_alpha",
     "graph_query_readout_scale",
     "graph_query_readout_2hop_scale",
+    "graph_headwise_query_gate",
+    "graph_edge_bias_rank",
+    "graph_query_adapter_enable",
     "personal_delta_scale",
     "personal_warmup_epochs",
     "lambda_personal_kl",
@@ -182,6 +191,32 @@ def _fmt_diag_value(value: Optional[float], fmt: str = ".4f") -> str:
     if value is None:
         return "NA"
     return format(float(value), fmt)
+
+
+def _to_jsonable(obj: Any) -> Any:
+    if isinstance(obj, torch.Tensor):
+        if obj.numel() == 0:
+            return []
+        if obj.numel() == 1:
+            return float(obj.detach().item())
+        return obj.detach().cpu().tolist()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, dict):
+        return {str(k): _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(v) for v in obj]
+    return obj
+
+
+def _write_diag_json(save_dir: str, filename: str, payload: Dict[str, Any]) -> None:
+    path = os.path.join(save_dir, filename)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(_to_jsonable(payload), f, indent=2, ensure_ascii=False)
 
 
 def _tensor_stats(name: str, tensor: Optional[torch.Tensor]) -> Dict[str, Any]:
@@ -415,6 +450,8 @@ def _build_optimizer(model: nn.Module, args) -> optim.Optimizer:
         for module in (
             getattr(structure_module, "personal_gate_from_state", None),
             getattr(structure_module, "personal_generator_from_state", None),
+            getattr(structure_module, "personal_support_value_proj", None),
+            getattr(structure_module, "personal_query_value_context_proj", None),
         ):
             if module is not None:
                 state_params.extend(list(module.parameters()))
@@ -489,6 +526,15 @@ def _build_optimizer(model: nn.Module, args) -> optim.Optimizer:
 
     state_params = _dedupe_params(state_params)
     id_params = _dedupe_params(id_params)
+    for module in (
+        getattr(base_model, "personal_value_proj_local", None),
+        getattr(base_model, "personal_value_proj_global", None),
+        getattr(base_model, "personal_query_writer", None),
+        getattr(base_model, "personal_align_gate", None),
+    ):
+        if module is not None:
+            state_params.extend(list(module.parameters()))
+    state_params = _dedupe_params(state_params)
     grouped_ids = {id(p) for p in state_params + id_params}
     backbone_params = _dedupe_params([p for p in base_model.parameters() if id(p) not in grouped_ids])
 
@@ -802,6 +848,13 @@ def _collect_debug_forward_stats(
     query_row_post_local_rms_vals: List[float] = []
     query_row_delta_local_rms_raw_vals: List[float] = []
     query_row_message_projection_gain_vals: List[float] = []
+    query_row_message_alignment_vals: List[float] = []
+    query_row_self_support_mass_vals: List[float] = []
+    query_row_graph_support_mass_vals: List[float] = []
+    query_row_global_head_var_vals: List[float] = []
+    query_row_global_head_margin_vals: List[float] = []
+    personal_query_writeback_delta_vals: List[float] = []
+    graph_query_adapter_gain_vals: List[float] = []
     neighbor_row_personal_delta_vals: List[float] = []
     personal_row_budget_mean_vals: List[float] = []
     personal_query_row_std_vals: List[float] = []
@@ -915,6 +968,13 @@ def _collect_debug_forward_stats(
                 ("query_row_post_local_rms", query_row_post_local_rms_vals),
                 ("query_row_delta_local_rms_raw", query_row_delta_local_rms_raw_vals),
                 ("query_row_message_projection_gain", query_row_message_projection_gain_vals),
+                ("query_row_message_alignment", query_row_message_alignment_vals),
+                ("query_row_self_support_mass", query_row_self_support_mass_vals),
+                ("query_row_graph_support_mass", query_row_graph_support_mass_vals),
+                ("query_row_global_head_var", query_row_global_head_var_vals),
+                ("query_row_global_head_margin", query_row_global_head_margin_vals),
+                ("personal_query_writeback_delta", personal_query_writeback_delta_vals),
+                ("graph_query_adapter_gain", graph_query_adapter_gain_vals),
                 ("neighbor_row_personal_delta", neighbor_row_personal_delta_vals),
                 ("personal_row_budget_mean", personal_row_budget_mean_vals),
                 ("personal_query_row_std", personal_query_row_std_vals),
@@ -1004,6 +1064,13 @@ def _collect_debug_forward_stats(
     query_row_post_local_rms_mean, _ = _safe_mean_std(query_row_post_local_rms_vals)
     query_row_delta_local_rms_raw_mean, _ = _safe_mean_std(query_row_delta_local_rms_raw_vals)
     query_row_message_projection_gain_mean, _ = _safe_mean_std(query_row_message_projection_gain_vals)
+    query_row_message_alignment_mean, _ = _safe_mean_std(query_row_message_alignment_vals)
+    query_row_self_support_mass_mean, _ = _safe_mean_std(query_row_self_support_mass_vals)
+    query_row_graph_support_mass_mean, _ = _safe_mean_std(query_row_graph_support_mass_vals)
+    query_row_global_head_var_mean, _ = _safe_mean_std(query_row_global_head_var_vals)
+    query_row_global_head_margin_mean, _ = _safe_mean_std(query_row_global_head_margin_vals)
+    personal_query_writeback_delta_mean, _ = _safe_mean_std(personal_query_writeback_delta_vals)
+    graph_query_adapter_gain_mean, _ = _safe_mean_std(graph_query_adapter_gain_vals)
     neighbor_row_personal_delta_mean, _ = _safe_mean_std(neighbor_row_personal_delta_vals)
     personal_row_budget_mean, _ = _safe_mean_std(personal_row_budget_mean_vals)
     personal_query_row_std_mean, _ = _safe_mean_std(personal_query_row_std_vals)
@@ -1065,6 +1132,13 @@ def _collect_debug_forward_stats(
         "query_row_post_local_rms": query_row_post_local_rms_mean,
         "query_row_delta_local_rms_raw": query_row_delta_local_rms_raw_mean,
         "query_row_message_projection_gain": query_row_message_projection_gain_mean,
+        "query_row_message_alignment": query_row_message_alignment_mean,
+        "query_row_self_support_mass": query_row_self_support_mass_mean,
+        "query_row_graph_support_mass": query_row_graph_support_mass_mean,
+        "query_row_global_head_var": query_row_global_head_var_mean,
+        "query_row_global_head_margin": query_row_global_head_margin_mean,
+        "personal_query_writeback_delta": personal_query_writeback_delta_mean,
+        "graph_query_adapter_gain": graph_query_adapter_gain_mean,
         "neighbor_row_personal_delta": neighbor_row_personal_delta_mean,
         "personal_row_budget_mean": personal_row_budget_mean,
         "personal_query_row_std": personal_query_row_std_mean,
@@ -1098,6 +1172,8 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
 
     relation_emb = getattr(relation_learning, "concept_embeddings", None) if relation_learning is not None else None
     relation_tau = getattr(relation_learning, "tau_raw", None) if relation_learning is not None else None
+    relation_edge_bias_u = getattr(relation_learning, "graph_edge_bias_u", None) if relation_learning is not None else None
+    relation_edge_bias_v = getattr(relation_learning, "graph_edge_bias_v", None) if relation_learning is not None else None
     relation_wq = None
     relation_wk = None
     if relation_learning is not None:
@@ -1139,6 +1215,7 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
         "relation_tau": _grad_norm_or_zero(relation_tau),
         "relation_wq": relation_wq if relation_wq is not None else 0.0,
         "relation_wk": relation_wk if relation_wk is not None else 0.0,
+        "graph_edge_bias": 0.5 * (_grad_norm_or_zero(relation_edge_bias_u) + _grad_norm_or_zero(relation_edge_bias_v)),
         "personal_u": _grad_norm_or_zero(personal_u),
         "personal_v": _grad_norm_or_zero(personal_v),
         "personal_alpha_bias": _grad_norm_or_zero(getattr(personal_alpha_bias, "weight", None)),
@@ -1195,8 +1272,17 @@ def _collect_diag_warning_tags(diag: Dict[str, float]) -> List[str]:
         tags.append("E-padded-row-artifact")
     if diag.get("personal_query_trust_scale_mean", 1.0) < 0.98:
         tags.append("E-query-correction-capped")
+    if diag.get("query_row_self_support_mass", 0.0) <= 1e-8 and diag.get("query_row_graph_support_mass", 0.0) <= 1e-8:
+        tags.append("E-support-empty")
     if diag.get("query_row_posterior_kl", 0.0) > 0.01 and diag.get("query_row_message_projection_gain", 1.0) < 0.05:
+        tags.append("E-projection-collapse")
         tags.append("E-posterior-changes-but-message-cancelled")
+    if diag.get("query_row_message_alignment", 0.0) < 0.0 and diag.get("personal_query_trust_scale_mean", 1.0) < 0.90:
+        tags.append("E-misaligned-trust-clipped")
+    if (
+        diag.get("relation_wq_grad_norm", 1.0) + diag.get("relation_wk_grad_norm", 1.0)
+    ) < 1e-8:
+        tags.append("A-adjacency-frozen")
     return tags
 
 
@@ -1580,6 +1666,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         ),
         personal_local_hops=getattr(args, "personal_local_hops", 1),
         personal_include_neighbor_rows=getattr(args, "personal_include_neighbor_rows", False),
+        personal_support_include_query_self=getattr(args, "personal_support_include_query_self", True),
+        personal_support_include_graph=getattr(args, "personal_support_include_graph", True),
+        personal_support_include_neighbors=getattr(args, "personal_support_include_neighbors", False),
         personal_query_row_budget=getattr(args, "personal_query_row_budget", 1.0),
         personal_neighbor_row_budget=getattr(args, "personal_neighbor_row_budget", 0.30),
         personal_query_support_hops=getattr(args, "personal_query_support_hops", 0),
@@ -1588,6 +1677,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         personal_query_correction_max_ratio=getattr(args, "personal_query_correction_max_ratio", 0.20),
         personal_query_correction_min_graph_anchor=getattr(args, "personal_query_correction_min_graph_anchor", 0.01),
         personal_query_message_gain=getattr(args, "personal_query_message_gain", 1.0),
+        personal_value_use_global_basis=getattr(args, "personal_value_use_global_basis", True),
+        personal_message_alignment_gate=getattr(args, "personal_message_alignment_gate", True),
+        personal_projection_hidden_factor=getattr(args, "personal_projection_hidden_factor", 2),
+        graph_headwise_query_gate=getattr(args, "graph_headwise_query_gate", True),
+        graph_edge_bias_rank=getattr(args, "graph_edge_bias_rank", 8),
+        graph_query_adapter_enable=getattr(args, "graph_query_adapter_enable", True),
         share_concept_embeddings=getattr(args, "share_concept_embeddings", False),
     ).to(device)
 
@@ -1734,6 +1829,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 device=device,
                 max_batches=diag_batches,
             )
+            if grad_norms is not None:
+                diag["relation_wq_grad_norm"] = float(grad_norms.get("relation_wq", 0.0))
+                diag["relation_wk_grad_norm"] = float(grad_norms.get("relation_wk", 0.0))
+                diag["relation_tau_grad_norm"] = float(grad_norms.get("relation_tau", 0.0))
+                diag["graph_edge_bias_grad_norm"] = float(grad_norms.get("graph_edge_bias", 0.0))
+            _write_diag_json(args.save_dir, "diag_last.json", diag)
             alpha_bias_std_text = _fmt_diag_value(diag.get("alpha_bias_std"), ".4f")
             logger.info(
                 "%s [Diag][AE] Epoch [%03d] | "
@@ -2085,6 +2186,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 },
                 model_path,
             )
+            _write_diag_json(args.save_dir, "diag_best.json", last_diag)
             logger.info("%s -> New best AUC=%.4f at epoch %d", run_tag, best_val_auc, epoch)
         else:
             patience_counter += 1
@@ -2333,6 +2435,15 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         personal_include_neighbor_rows=loaded_args.get(
             "personal_include_neighbor_rows", getattr(args, "personal_include_neighbor_rows", False)
         ),
+        personal_support_include_query_self=loaded_args.get(
+            "personal_support_include_query_self", getattr(args, "personal_support_include_query_self", True)
+        ),
+        personal_support_include_graph=loaded_args.get(
+            "personal_support_include_graph", getattr(args, "personal_support_include_graph", True)
+        ),
+        personal_support_include_neighbors=loaded_args.get(
+            "personal_support_include_neighbors", getattr(args, "personal_support_include_neighbors", False)
+        ),
         personal_query_row_budget=loaded_args.get(
             "personal_query_row_budget", getattr(args, "personal_query_row_budget", 1.0)
         ),
@@ -2359,6 +2470,15 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         personal_query_message_gain=loaded_args.get(
             "personal_query_message_gain", getattr(args, "personal_query_message_gain", 1.0)
         ),
+        personal_value_use_global_basis=loaded_args.get(
+            "personal_value_use_global_basis", getattr(args, "personal_value_use_global_basis", True)
+        ),
+        personal_message_alignment_gate=loaded_args.get(
+            "personal_message_alignment_gate", getattr(args, "personal_message_alignment_gate", True)
+        ),
+        personal_projection_hidden_factor=loaded_args.get(
+            "personal_projection_hidden_factor", getattr(args, "personal_projection_hidden_factor", 2)
+        ),
         lambda_personal_kl=loaded_args.get(
             "lambda_personal_kl", getattr(args, "lambda_personal_kl", 0.0)
         ),
@@ -2367,6 +2487,15 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         personal_query_residual_margin=loaded_args.get(
             "personal_query_residual_margin", getattr(args, "personal_query_residual_margin", 0.0)
+        ),
+        graph_headwise_query_gate=loaded_args.get(
+            "graph_headwise_query_gate", getattr(args, "graph_headwise_query_gate", True)
+        ),
+        graph_edge_bias_rank=loaded_args.get(
+            "graph_edge_bias_rank", getattr(args, "graph_edge_bias_rank", 8)
+        ),
+        graph_query_adapter_enable=loaded_args.get(
+            "graph_query_adapter_enable", getattr(args, "graph_query_adapter_enable", True)
         ),
         share_concept_embeddings=loaded_args.get(
             "share_concept_embeddings", getattr(args, "share_concept_embeddings", False)

@@ -284,6 +284,12 @@ def parse_args():
                         help="Number of support hops around current item concepts used for local personalization.")
     parser.add_argument("--personal_include_neighbor_rows", action=bool_action, default=None,
                         help="Whether E should personalize 1-hop local neighbor rows in addition to query rows.")
+    parser.add_argument("--personal_support_include_query_self", action=bool_action, default=None,
+                        help="Always keep query-self support available for E, even when graph support is sparse or A is disabled.")
+    parser.add_argument("--personal_support_include_graph", action=bool_action, default=None,
+                        help="Include global graph support as part of E's sparse posterior support.")
+    parser.add_argument("--personal_support_include_neighbors", action=bool_action, default=None,
+                        help="Allow local-neighbor support columns in E's sparse support basis.")
     parser.add_argument("--personal_query_row_budget", type=float, default=1.0,
                         help="Relative personalization budget assigned to queried concept rows.")
     parser.add_argument("--personal_neighbor_row_budget", type=float, default=0.30,
@@ -294,6 +300,12 @@ def parse_args():
                         help="Restrict personal residual edges to the support of global graph A when A is enabled.")
     parser.add_argument("--personal_query_message_gain", type=float, default=1.0,
                         help="Bounded gain applied after E's query-message projection normalization.")
+    parser.add_argument("--personal_value_use_global_basis", action=bool_action, default=None,
+                        help="Build E's value basis from both local state and global graph context.")
+    parser.add_argument("--personal_message_alignment_gate", action=bool_action, default=None,
+                        help="Enable alignment-aware gating before applying E's query writeback.")
+    parser.add_argument("--personal_projection_hidden_factor", type=int, default=2,
+                        help="Hidden expansion factor for E's value writer / alignment gate MLPs.")
     parser.add_argument("--personal_query_correction_scale", type=float, default=0.15,
                         help="Scale for injecting E's query-time message correction into query rows only.")
     parser.add_argument("--personal_query_correction_max_ratio", type=float, default=0.20,
@@ -302,6 +314,12 @@ def parse_args():
                         help="Minimum graph anchor used by the personal query trust-region when graph query RMS is tiny.")
     parser.add_argument("--share_concept_embeddings", action=bool_action, default=None,
                         help="Share concept embeddings between relation learning and knowledge encoder.")
+    parser.add_argument("--graph_headwise_query_gate", action=bool_action, default=None,
+                        help="Use query-discriminative head gating instead of averaging graph heads before query readout.")
+    parser.add_argument("--graph_edge_bias_rank", type=int, default=8,
+                        help="Low-rank edge bias rank added to A's adjacency logits.")
+    parser.add_argument("--graph_query_adapter_enable", action=bool_action, default=None,
+                        help="Enable query adapter on top of graph readout before the fixed diagnosis head.")
     parser.add_argument("--personal_state_lr_mult", type=float, default=1.0,
                         help="Learning-rate multiplier for E state/context adapters.")
     parser.add_argument("--personal_id_lr_mult", type=float, default=0.5,

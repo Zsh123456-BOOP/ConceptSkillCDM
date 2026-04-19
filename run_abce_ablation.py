@@ -58,11 +58,17 @@ STRUCTURAL_SWITCH_KEYS = (
     "personal_disable_student_global_context",
     "personal_local_hops",
     "personal_include_neighbor_rows",
+    "personal_support_include_query_self",
+    "personal_support_include_graph",
+    "personal_support_include_neighbors",
     "personal_query_row_budget",
     "personal_neighbor_row_budget",
     "personal_query_support_hops",
     "personal_support_only",
     "personal_query_message_gain",
+    "personal_value_use_global_basis",
+    "personal_message_alignment_gate",
+    "personal_projection_hidden_factor",
     "personal_query_correction_scale",
     "personal_query_correction_max_ratio",
     "personal_query_correction_min_graph_anchor",
@@ -72,6 +78,9 @@ STRUCTURAL_SWITCH_KEYS = (
     "graph_propagation_alpha",
     "graph_query_readout_scale",
     "graph_query_readout_2hop_scale",
+    "graph_headwise_query_gate",
+    "graph_edge_bias_rank",
+    "graph_query_adapter_enable",
     "personal_delta_scale",
     "personal_warmup_epochs",
     "lambda_personal_kl",
@@ -469,6 +478,7 @@ def collect_result(job: JobSpec, exit_code: int) -> Dict[str, Any]:
     config_switches = test_json.get("config_switches", {}) if isinstance(test_json, dict) else {}
     monitor = test_json.get("monitor", {}) if isinstance(test_json, dict) else {}
     ae_diagnostics = test_json.get("ae_diagnostics", {}) if isinstance(test_json, dict) else {}
+    diag_json = read_json(job.save_dir / "diag_best.json") or read_json(job.save_dir / "diag_last.json") or {}
 
     hist = read_json(job.save_dir / "training_history.json") or {}
     row["best_epoch"] = hist.get("best_epoch") if isinstance(hist, dict) else None
@@ -486,6 +496,9 @@ def collect_result(job: JobSpec, exit_code: int) -> Dict[str, Any]:
     log_file = latest_train_log(job.log_dir)
     row["log_file"] = str(log_file) if log_file else ""
     row.update(parse_log_metrics(log_file))
+    for key, value in diag_json.items():
+        if key not in row or row[key] in ("", None):
+            row[key] = value
     for key, value in ae_diagnostics.items():
         if key in row and row[key] in ("", None):
             row[key] = value
@@ -577,6 +590,13 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "query_row_posterior_kl",
         "query_row_delta_local_rms_raw",
         "query_row_message_projection_gain",
+        "query_row_message_alignment",
+        "query_row_self_support_mass",
+        "query_row_graph_support_mass",
+        "query_row_global_head_var",
+        "query_row_global_head_margin",
+        "personal_query_writeback_delta",
+        "graph_query_adapter_gain",
         "personal_to_graph_query_ratio",
         "personal_query_trust_scale_mean",
         "query_row_global_support_mass",
@@ -594,22 +614,35 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "personal_disable_student_global_context",
         "personal_local_hops",
         "personal_include_neighbor_rows",
+        "personal_support_include_query_self",
+        "personal_support_include_graph",
+        "personal_support_include_neighbors",
         "personal_query_row_budget",
         "personal_neighbor_row_budget",
         "personal_query_support_hops",
         "personal_support_only",
         "personal_query_message_gain",
+        "personal_value_use_global_basis",
+        "personal_message_alignment_gate",
+        "personal_projection_hidden_factor",
         "personal_query_correction_scale",
         "personal_query_correction_max_ratio",
         "personal_query_correction_min_graph_anchor",
         "graph_propagation_alpha",
         "graph_query_readout_scale",
         "graph_query_readout_2hop_scale",
+        "graph_headwise_query_gate",
+        "graph_edge_bias_rank",
+        "graph_query_adapter_enable",
         "lambda_personal_kl",
         "lambda_personal_query_residual",
         "personal_query_residual_margin",
         "personal_state_lr_mult",
         "personal_id_lr_mult",
+        "relation_wq_grad_norm",
+        "relation_wk_grad_norm",
+        "relation_tau_grad_norm",
+        "graph_edge_bias_grad_norm",
         "scheduler_monitor",
         "scheduler_mode",
         "best_monitor",
@@ -742,11 +775,20 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
     query_row_posterior_kl = try_float(full_row.get("query_row_posterior_kl"))
     query_row_delta_local_rms_raw = try_float(full_row.get("query_row_delta_local_rms_raw"))
     query_row_message_projection_gain = try_float(full_row.get("query_row_message_projection_gain"))
+    query_row_message_alignment = try_float(full_row.get("query_row_message_alignment"))
+    query_row_self_support_mass = try_float(full_row.get("query_row_self_support_mass"))
+    query_row_graph_support_mass = try_float(full_row.get("query_row_graph_support_mass"))
+    query_row_global_head_var = try_float(full_row.get("query_row_global_head_var"))
+    query_row_global_head_margin = try_float(full_row.get("query_row_global_head_margin"))
+    personal_query_writeback_delta = try_float(full_row.get("personal_query_writeback_delta"))
+    graph_query_adapter_gain = try_float(full_row.get("graph_query_adapter_gain"))
     personal_to_graph_query_ratio = try_float(full_row.get("personal_to_graph_query_ratio"))
     personal_query_row_std = try_float(full_row.get("personal_query_row_std"))
     readout_query_delta = try_float(full_row.get("readout_query_delta"))
     relation_identity_delta = try_float(full_row.get("relation_identity_delta"))
     knowledge_state_graph_delta = try_float(full_row.get("knowledge_state_graph_delta"))
+    relation_wq_grad_norm = try_float(full_row.get("relation_wq_grad_norm"))
+    relation_wk_grad_norm = try_float(full_row.get("relation_wk_grad_norm"))
     alpha_bias_scale = try_float(full_row.get("personal_alpha_bias_scale"))
     personal_bad_row_count_active = try_float(full_row.get("personal_bad_row_count_active"))
     personal_bad_row_rate_active = try_float(full_row.get("personal_bad_row_rate_active"))
@@ -776,6 +818,13 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
         reasons.append("E-padded-row-artifact")
     if personal_query_trust_scale_mean is not None and personal_query_trust_scale_mean < 0.98:
         reasons.append("E-query-correction-capped")
+    if (
+        query_row_self_support_mass is not None
+        and query_row_graph_support_mass is not None
+        and query_row_self_support_mass <= 1e-8
+        and query_row_graph_support_mass <= 1e-8
+    ):
+        reasons.append("E-support-empty")
     if personal_logits_support_absmax is not None and personal_logits_support_absmax >= 25.0 and (personal_bad_row_rate_active or 0.0) > 0.0:
         reasons.append("E-support-logits-extreme")
     if alpha_head_std is not None and alpha_head_std < 0.001:
@@ -797,7 +846,12 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
             reasons.append("query-posterior-too-diffuse")
     if query_row_posterior_kl is not None and query_row_message_projection_gain is not None:
         if query_row_posterior_kl > 0.01 and query_row_message_projection_gain < 0.05:
+            reasons.append("E-projection-collapse")
             reasons.append("E-posterior-changes-but-message-cancelled")
+    if query_row_message_alignment is not None and query_row_message_alignment < 0.0:
+        reasons.append("E-misaligned")
+        if personal_query_trust_scale_mean is not None and personal_query_trust_scale_mean < 0.98:
+            reasons.append("E-misaligned-trust-clipped")
     if readout_query_delta is not None and query_row_personal_message_delta is not None:
         if readout_query_delta > 0.10 and query_row_personal_message_delta < 0.002:
             reasons.append("query-readout-overamplified")
@@ -812,6 +866,12 @@ def diagnose_reason(full_row: Dict[str, Any], delta_a: Optional[float], delta_e:
             reasons.append("A-readout-washed-out")
         if relation_identity_delta is not None and relation_identity_delta > 0.02 and query_row_global_readout_delta < 0.005:
             reasons.append("A-present-but-not-queried")
+    if query_row_global_readout_delta is not None and query_row_global_head_var is not None:
+        if query_row_global_readout_delta > 0.01 and query_row_global_head_var < 1e-3:
+            reasons.append("A-live-but-collapsed")
+    if relation_wq_grad_norm is not None and relation_wk_grad_norm is not None:
+        if (relation_wq_grad_norm + relation_wk_grad_norm) < 1e-8:
+            reasons.append("A-adjacency-frozen")
     if delta_a is not None and abs(delta_a) < 0.002:
         reasons.append("A-delta-small")
     if delta_e is not None:
@@ -964,6 +1024,13 @@ def write_summary(
             "full_query_row_posterior_kl": try_float(full.get("query_row_posterior_kl")),
             "full_query_row_delta_local_rms_raw": try_float(full.get("query_row_delta_local_rms_raw")),
             "full_query_row_message_projection_gain": try_float(full.get("query_row_message_projection_gain")),
+            "full_query_row_message_alignment": try_float(full.get("query_row_message_alignment")),
+            "full_query_row_self_support_mass": try_float(full.get("query_row_self_support_mass")),
+            "full_query_row_graph_support_mass": try_float(full.get("query_row_graph_support_mass")),
+            "full_query_row_global_head_var": try_float(full.get("query_row_global_head_var")),
+            "full_query_row_global_head_margin": try_float(full.get("query_row_global_head_margin")),
+            "full_personal_query_writeback_delta": try_float(full.get("personal_query_writeback_delta")),
+            "full_graph_query_adapter_gain": try_float(full.get("graph_query_adapter_gain")),
             "full_personal_to_graph_query_ratio": try_float(full.get("personal_to_graph_query_ratio")),
             "full_query_row_global_support_mass": try_float(full.get("query_row_global_support_mass", full.get("readout_query_support_mass"))),
             "full_query_row_personal_support_mass": try_float(full.get("query_row_personal_support_mass")),
@@ -971,6 +1038,10 @@ def write_summary(
             "full_relation_identity_delta": try_float(full.get("relation_identity_delta")),
             "full_knowledge_state_graph_delta": try_float(full.get("knowledge_state_graph_delta")),
             "full_knowledge_state_personal_delta": try_float(full.get("knowledge_state_personal_delta")),
+            "full_relation_wq_grad_norm": try_float(full.get("relation_wq_grad_norm")),
+            "full_relation_wk_grad_norm": try_float(full.get("relation_wk_grad_norm")),
+            "full_relation_tau_grad_norm": try_float(full.get("relation_tau_grad_norm")),
+            "full_graph_edge_bias_grad_norm": try_float(full.get("graph_edge_bias_grad_norm")),
             "full_warn_graph_uniform_count": full.get("warn_graph_uniform_count"),
             "full_warn_alpha_collapse_count": full.get("warn_alpha_collapse_count"),
             "full_warn_personal_count": full.get("warn_personal_count"),
@@ -1052,6 +1123,13 @@ def write_summary(
         "full_query_row_posterior_kl",
         "full_query_row_delta_local_rms_raw",
         "full_query_row_message_projection_gain",
+        "full_query_row_message_alignment",
+        "full_query_row_self_support_mass",
+        "full_query_row_graph_support_mass",
+        "full_query_row_global_head_var",
+        "full_query_row_global_head_margin",
+        "full_personal_query_writeback_delta",
+        "full_graph_query_adapter_gain",
         "full_personal_to_graph_query_ratio",
         "full_query_row_global_support_mass",
         "full_query_row_personal_support_mass",
@@ -1059,6 +1137,10 @@ def write_summary(
         "full_relation_identity_delta",
         "full_knowledge_state_graph_delta",
         "full_knowledge_state_personal_delta",
+        "full_relation_wq_grad_norm",
+        "full_relation_wk_grad_norm",
+        "full_relation_tau_grad_norm",
+        "full_graph_edge_bias_grad_norm",
         "full_warn_graph_uniform_count",
         "full_warn_alpha_collapse_count",
         "full_warn_personal_count",

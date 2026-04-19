@@ -143,7 +143,7 @@ def _check_no_a_keeps_gnn_layers() -> None:
 
 
 def _check_best_configs_enable_e_rescue_knobs() -> None:
-    from best_configs import BEST_CFG
+    from best_configs import BEST_CFG, STRUCT_V2_CFG
 
     required_positive = (
         "personal_delta_scale",
@@ -166,6 +166,13 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "personal_id_lr_mult",
         "personal_query_support_hops",
         "personal_query_message_gain",
+        "personal_support_include_query_self",
+        "personal_support_include_graph",
+        "personal_value_use_global_basis",
+        "personal_message_alignment_gate",
+        "graph_headwise_query_gate",
+        "graph_edge_bias_rank",
+        "graph_query_adapter_enable",
     )
     for dataset in ("assist_09", "junyi"):
         cfg = BEST_CFG[dataset]
@@ -229,6 +236,34 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
             f"{dataset} 应显式启用 support-preserving E，避免 E 再退化为 dense personal graph。",
         )
         _assert(
+            bool(cfg["personal_support_include_query_self"]) is True,
+            f"{dataset} 默认应为 E 保留 query-self support。",
+        )
+        _assert(
+            bool(cfg["personal_support_include_graph"]) is True,
+            f"{dataset} 默认应让 E 使用 A 的图 support。",
+        )
+        _assert(
+            bool(cfg["personal_value_use_global_basis"]) is True,
+            f"{dataset} 默认应让 E 的 value basis 同时使用 global graph context。",
+        )
+        _assert(
+            bool(cfg["personal_message_alignment_gate"]) is True,
+            f"{dataset} 默认应开启 E 的 alignment-aware query writeback gate。",
+        )
+        _assert(
+            bool(cfg["graph_headwise_query_gate"]) is True,
+            f"{dataset} 默认应开启 A 的 head-wise query gate。",
+        )
+        _assert(
+            int(cfg["graph_edge_bias_rank"]) > 0,
+            f"{dataset} 默认应给 A 的邻接 logits 增加 low-rank edge bias。",
+        )
+        _assert(
+            bool(cfg["graph_query_adapter_enable"]) is True,
+            f"{dataset} 默认应开启 A 的 query adapter。",
+        )
+        _assert(
             "graph_query_writeback_scale" not in cfg and "graph_readout_1hop_scale" not in cfg,
             f"{dataset} 的 best config 不应继续存旧 alias 字段；内部应只保留 graph_query_readout_scale。",
         )
@@ -236,6 +271,10 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
             "graph_query_writeback_2hop_scale" not in cfg and "graph_readout_2hop_scale" not in cfg,
             f"{dataset} 的 best config 不应继续存旧 2-hop alias 字段；内部应只保留 graph_query_readout_2hop_scale。",
         )
+    _assert(
+        "assist_09_abce_struct_v2" in STRUCT_V2_CFG and "junyi_abce_struct_v2" in STRUCT_V2_CFG,
+        "best_configs 应显式提供 struct_v2 结构配置别名，避免 runner 继续混用旧结构。"
+    )
 
 
 def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
@@ -897,6 +936,8 @@ def _check_posterior_equal_global_gives_zero_personal_query_correction() -> None
             post_abs,
             post_kl,
             _,
+            _query_row_self_support_mass,
+            _query_row_graph_support_mass,
             _query_row_global_local_rms,
             _query_row_post_local_rms,
             _query_row_delta_local_rms_raw,
@@ -937,14 +978,13 @@ def _check_module_activity_brief_uses_live_risk() -> None:
     brief = format_activity_brief(
         {
             "graph_enabled": True,
-            "graph_active": True,
+            "graph_mode": "LIVE",
             "personal_graph_enabled": True,
-            "personal_graph_active": True,
-            "personal_graph_risk": True,
+            "personal_graph_mode": "MISALIGNED",
         }
     )
     _assert("Graph[LIVE]" in brief, "module_activity 简报不应继续输出 Graph[OK]。")
-    _assert("Personal[RISK]" in brief, "module_activity 简报应能区分 active 但 risky 的 E。")
+    _assert("Personal[MISALIGNED]" in brief, "module_activity 简报应输出新的病因模式，而不是旧的 Personal[RISK]。")
 
 
 def _check_split_hygiene_uses_train_only_maps_and_q_matrix() -> None:
@@ -1127,8 +1167,17 @@ def _build_tiny_ae_model(**overrides):
         personal_neighbor_row_budget=0.30,
         personal_support_only=True,
         personal_include_neighbor_rows=False,
+        personal_support_include_query_self=True,
+        personal_support_include_graph=True,
+        personal_support_include_neighbors=False,
+        personal_value_use_global_basis=True,
+        personal_message_alignment_gate=True,
+        personal_projection_hidden_factor=2,
         graph_query_readout_scale=0.40,
         graph_query_readout_2hop_scale=0.12,
+        graph_headwise_query_gate=True,
+        graph_edge_bias_rank=4,
+        graph_query_adapter_enable=True,
         personal_query_correction_max_ratio=0.20,
         personal_query_correction_min_graph_anchor=0.01,
         share_concept_embeddings=True,
@@ -1778,30 +1827,34 @@ def _check_graph_query_gate_diagnostics_exist() -> None:
         "query_row_global_readout_pre_gate_delta",
         "query_row_global_readout_gate_mean",
         "query_row_global_readout_post_gate_delta",
+        "graph_query_adapter_gain",
     ):
         _assert(key in details, f"A query gate diagnostics 缺少字段: {key}")
     gate_mean = float(details["query_row_global_readout_gate_mean"].item())
     pre_delta = float(details["query_row_global_readout_pre_gate_delta"].item())
     post_delta = float(details["query_row_global_readout_post_gate_delta"].item())
+    adapter_gain = float(details["graph_query_adapter_gain"].item())
     _assert(0.0 <= gate_mean <= 1.0, f"graph query gate 必须是 [0,1] 内的门值，当前={gate_mean:.6f}")
     _assert(
-        post_delta <= pre_delta + 1e-6,
-        f"post-gate delta 不应系统性大于 pre-gate delta，当前 pre={pre_delta:.6f}, post={post_delta:.6f}",
+        pre_delta >= 0.0 and post_delta >= 0.0 and adapter_gain >= 0.0,
+        f"A query readout diagnostics 必须保持非负有限，当前 pre={pre_delta:.6f}, post={post_delta:.6f}, gain={adapter_gain:.6f}",
+    )
+    _assert(
+        abs(post_delta - pre_delta) > 1e-6,
+        f"引入 graph query adapter 后，pre/post delta 应存在可测差异，当前 pre={pre_delta:.6f}, post={post_delta:.6f}",
     )
 
 
 def _check_query_conditioned_support_value_projection_is_live() -> None:
     model = _build_tiny_ae_model(use_concept_graph=True, use_personal_graph=True, personal_query_support_hops=2)
     model.eval()
-    structure = model.structure_module
-    _assert(
-        hasattr(structure, "personal_support_value_proj") and hasattr(structure, "personal_query_value_context_proj"),
-        "ConceptStructureModeling 必须显式持有 support-value projection 两个层。",
-    )
+    _assert(hasattr(model, "personal_value_proj_local"), "CognitiveDiagnosisModel 必须显式持有 E 的 local value projection。")
+    _assert(hasattr(model, "personal_value_proj_global"), "CognitiveDiagnosisModel 必须显式持有 E 的 global value projection。")
+    _assert(hasattr(model, "personal_query_writer"), "CognitiveDiagnosisModel 必须显式持有 E 的 query writer。")
 
     with torch.no_grad():
-        structure.personal_support_value_proj.weight.copy_(torch.eye(model.knowledge_dim))
-        structure.personal_query_value_context_proj.weight.zero_()
+        base_global = model.personal_value_proj_global.weight.detach().clone()
+        base_writer = [param.detach().clone() for param in model.personal_query_writer.parameters()]
         _, details_base = model(
             student_ids=torch.tensor([0, 1], dtype=torch.long),
             exercise_ids=torch.tensor([0, 2], dtype=torch.long),
@@ -1809,13 +1862,19 @@ def _check_query_conditioned_support_value_projection_is_live() -> None:
             return_logits=True,
         )
 
-        structure.personal_query_value_context_proj.weight.fill_(0.05)
+        model.personal_value_proj_global.weight.zero_()
+        for param in model.personal_query_writer.parameters():
+            param.add_(0.05)
         _, details_ctx = model(
             student_ids=torch.tensor([0, 1], dtype=torch.long),
             exercise_ids=torch.tensor([0, 2], dtype=torch.long),
             return_details=True,
             return_logits=True,
         )
+
+        model.personal_value_proj_global.weight.copy_(base_global)
+        for param, old in zip(model.personal_query_writer.parameters(), base_writer):
+            param.copy_(old)
 
     delta = float(
         (

@@ -48,6 +48,11 @@ def compute_module_activity(
     query_row_personal_message_deltas: List[float] = []
     query_row_posterior_kls: List[float] = []
     query_row_message_projection_gains: List[float] = []
+    query_row_message_alignments: List[float] = []
+    query_row_self_support_masses: List[float] = []
+    query_row_graph_support_masses: List[float] = []
+    query_row_global_head_vars: List[float] = []
+    personal_query_writeback_deltas: List[float] = []
     personal_query_row_stds: List[float] = []
     personal_to_graph_query_ratios: List[float] = []
     personal_bad_row_rate_active_vals: List[float] = []
@@ -97,6 +102,21 @@ def compute_module_activity(
             q_gain = details.get("query_row_message_projection_gain")
             if q_gain is not None:
                 query_row_message_projection_gains.extend(q_gain.reshape(-1).detach().cpu().numpy().tolist())
+            q_align = details.get("query_row_message_alignment")
+            if q_align is not None:
+                query_row_message_alignments.extend(q_align.reshape(-1).detach().cpu().numpy().tolist())
+            q_self_support = details.get("query_row_self_support_mass")
+            if q_self_support is not None:
+                query_row_self_support_masses.extend(q_self_support.reshape(-1).detach().cpu().numpy().tolist())
+            q_graph_support = details.get("query_row_graph_support_mass")
+            if q_graph_support is not None:
+                query_row_graph_support_masses.extend(q_graph_support.reshape(-1).detach().cpu().numpy().tolist())
+            q_head_var = details.get("query_row_global_head_var")
+            if q_head_var is not None:
+                query_row_global_head_vars.extend(q_head_var.reshape(-1).detach().cpu().numpy().tolist())
+            q_writeback = details.get("personal_query_writeback_delta")
+            if q_writeback is not None:
+                personal_query_writeback_deltas.extend(q_writeback.reshape(-1).detach().cpu().numpy().tolist())
             q_std = details.get("personal_query_row_std")
             if q_std is not None:
                 personal_query_row_stds.extend(q_std.reshape(-1).detach().cpu().numpy().tolist())
@@ -134,11 +154,24 @@ def compute_module_activity(
         results["graph_trivial"] = bool(entropy_ratio > 0.95)
         results["graph_over_sparse"] = bool(entropy_ratio < 0.05)
         query_graph_delta = float(np.mean(query_row_global_readout_deltas)) if query_row_global_readout_deltas else 0.0
+        query_head_var = float(np.mean(query_row_global_head_vars)) if query_row_global_head_vars else 0.0
         results["query_row_global_readout_delta"] = query_graph_delta
+        results["query_row_global_head_var"] = query_head_var
         results["graph_active"] = bool(0.05 < entropy_ratio < 0.95 and query_graph_delta > 1e-3)
+        if results["graph_active"] and query_head_var < 1e-3:
+            results["graph_mode"] = "LIVE_BUT_COLLAPSED"
+        elif results["graph_active"]:
+            results["graph_mode"] = "LIVE"
+        elif results["graph_over_sparse"]:
+            results["graph_mode"] = "OVER_SPARSE"
+        elif results["graph_trivial"]:
+            results["graph_mode"] = "TRIVIAL"
+        else:
+            results["graph_mode"] = "INACTIVE"
     else:
         results["graph_enabled"] = False
         results["graph_active"] = False
+        results["graph_mode"] = "DISABLED"
 
     if gate_alphas:
         alpha_arr = np.asarray(gate_alphas, dtype=np.float64)
@@ -148,6 +181,10 @@ def compute_module_activity(
         query_personal_delta = float(np.mean(query_row_personal_message_deltas)) if query_row_personal_message_deltas else 0.0
         query_posterior_kl = float(np.mean(query_row_posterior_kls)) if query_row_posterior_kls else 0.0
         query_message_gain = float(np.mean(query_row_message_projection_gains)) if query_row_message_projection_gains else 0.0
+        query_alignment = float(np.mean(query_row_message_alignments)) if query_row_message_alignments else 0.0
+        query_self_support_mass = float(np.mean(query_row_self_support_masses)) if query_row_self_support_masses else 0.0
+        query_graph_support_mass = float(np.mean(query_row_graph_support_masses)) if query_row_graph_support_masses else 0.0
+        query_writeback = float(np.mean(personal_query_writeback_deltas)) if personal_query_writeback_deltas else query_personal_delta
         query_personal_std = float(np.mean(personal_query_row_stds)) if personal_query_row_stds else 0.0
         query_ratio = float(np.mean(personal_to_graph_query_ratios)) if personal_to_graph_query_ratios else 0.0
         bad_row_rate_active = (
@@ -166,6 +203,10 @@ def compute_module_activity(
         results["query_row_personal_message_delta"] = query_personal_delta
         results["query_row_posterior_kl"] = query_posterior_kl
         results["query_row_message_projection_gain"] = query_message_gain
+        results["query_row_message_alignment"] = query_alignment
+        results["query_row_self_support_mass"] = query_self_support_mass
+        results["query_row_graph_support_mass"] = query_graph_support_mass
+        results["personal_query_writeback_delta"] = query_writeback
         results["personal_query_row_std"] = query_personal_std
         results["personal_to_graph_query_ratio"] = query_ratio
         results["personal_bad_row_rate_active"] = bad_row_rate_active
@@ -193,10 +234,25 @@ def compute_module_activity(
                 )
             )
         )
+        if query_self_support_mass <= 1e-8 and query_graph_support_mass <= 1e-8:
+            results["personal_graph_mode"] = "FLAT_SUPPORT"
+        elif query_posterior_kl > 1e-4 and query_message_gain < 0.05:
+            results["personal_graph_mode"] = "PROJ_COLLAPSE"
+        elif query_writeback > 0.002 and query_alignment < 0.0:
+            results["personal_graph_mode"] = "MISALIGNED"
+        elif query_writeback > 0.002 and trust_scale_mean < 0.98:
+            results["personal_graph_mode"] = "TRUST_CLIPPED"
+        elif results["personal_graph_active"]:
+            results["personal_graph_mode"] = "LIVE"
+        elif results["personal_graph_weak"]:
+            results["personal_graph_mode"] = "WEAK"
+        else:
+            results["personal_graph_mode"] = "INACTIVE"
     else:
         results["personal_graph_enabled"] = False
         results["personal_graph_active"] = False
         results["personal_graph_risk"] = False
+        results["personal_graph_mode"] = "DISABLED"
 
     if was_training:
         model.train()
@@ -222,16 +278,13 @@ def format_activity_brief(activity: Dict[str, Any]) -> str:
     parts = []
 
     if activity.get("graph_enabled"):
-        status = "[LIVE]" if activity.get("graph_active") else "[X]"
+        mode = str(activity.get("graph_mode", "LIVE" if activity.get("graph_active") else "X"))
+        status = f"[{mode}]"
         parts.append(f"Graph{status}")
 
     if activity.get("personal_graph_enabled"):
-        if activity.get("personal_graph_risk"):
-            status = "[RISK]"
-        elif activity.get("personal_graph_weak"):
-            status = "[WEAK]"
-        else:
-            status = "[LIVE]" if activity.get("personal_graph_active") else "[X]"
+        mode = str(activity.get("personal_graph_mode", "LIVE" if activity.get("personal_graph_active") else "X"))
+        status = f"[{mode}]"
         parts.append(f"Personal{status}")
 
     if not parts:
@@ -259,10 +312,14 @@ def format_activity_report(
     if activity.get("graph_enabled"):
         entropy_ratio = activity.get("graph_entropy_ratio", 0.0)
         query_graph_delta = activity.get("query_row_global_readout_delta", 0.0)
+        graph_mode = str(activity.get("graph_mode", "INACTIVE"))
 
-        if activity.get("graph_active"):
+        if graph_mode == "LIVE":
             status = "LIVE (global graph is entering queried concept readout)"
             advice = ""
+        elif graph_mode == "LIVE_BUT_COLLAPSED":
+            status = "LIVE_BUT_COLLAPSED (graph enters query rows but head diversity is washed out)"
+            advice = "   -> Consider: strengthen head-wise query gating or graph query adapter leverage"
         elif activity.get("graph_over_sparse"):
             status = "OVER-SPARSE (degenerated to near-identity)"
             advice = "   -> Consider: decrease lambda_sparse"
@@ -279,6 +336,7 @@ def format_activity_report(
         )
         lines.append(f"   - Entropy ratio: {entropy_ratio:.1%}")
         lines.append(f"   - Query readout delta: {query_graph_delta:.4f}")
+        lines.append(f"   - Query head var: {activity.get('query_row_global_head_var', 0.0):.4f}")
         lines.append(f"   - Status: {status}")
         if advice:
             lines.append(advice)
@@ -296,23 +354,30 @@ def format_activity_report(
         matrix_student_std = activity.get("personal_matrix_student_std", 0.0)
         query_personal_delta = activity.get("query_row_personal_message_delta", 0.0)
         query_posterior_kl = activity.get("query_row_posterior_kl", 0.0)
+        query_alignment = activity.get("query_row_message_alignment", 0.0)
         personal_query_row_std = activity.get("personal_query_row_std", 0.0)
         query_ratio = activity.get("personal_to_graph_query_ratio", 0.0)
-
-        if activity.get("personal_graph_risk"):
-            status = "RISK (personal correction is active but may be overriding global query readout)"
-            advice = "   -> Consider: increase lambda_personal_kl / lambda_personal_query_residual or reduce personal_query_correction_scale"
-        elif activity.get("personal_graph_active"):
+        mode = str(activity.get("personal_graph_mode", "INACTIVE"))
+        if mode == "LIVE":
             status = "LIVE (state-driven personalization is visible at query stage)"
             advice = ""
-        elif activity.get("personal_graph_weak"):
-            status = "WEAK (posterior is moving, but message-space correction is still too small)"
-            advice = "   -> Consider: widen message basis or improve message projection leverage before enlarging posterior amplitude"
-        elif activity.get("personal_graph_trivial"):
-            status = "INACTIVE (personal query correction is effectively flat)"
-            advice = "   -> Consider: improve query-conditioned posterior signal instead of simply enlarging alpha"
+        elif mode == "PROJ_COLLAPSE":
+            status = "PROJ_COLLAPSE (posterior moves, but message projection is collapsing)"
+            advice = "   -> Consider: widen message basis or improve value-basis writer before enlarging posterior amplitude"
+        elif mode == "MISALIGNED":
+            status = "MISALIGNED (personalized writeback is anti-aligned with graph query message)"
+            advice = "   -> Consider: tighten alignment gate or improve personal value basis semantics"
+        elif mode == "TRUST_CLIPPED":
+            status = "TRUST_CLIPPED (personal writeback exists but is repeatedly capped for safety)"
+            advice = "   -> Consider: improve alignment before relaxing trust-region"
+        elif mode == "FLAT_SUPPORT":
+            status = "FLAT_SUPPORT (personal support is effectively empty at query stage)"
+            advice = "   -> Consider: keep query-self support available even when A is ablated"
+        elif mode == "WEAK":
+            status = "WEAK (posterior is moving, but effective query correction is still too small)"
+            advice = "   -> Consider: widen message basis or improve message projection leverage"
         else:
-            status = "MARGINAL (some movement, but personalization is weak)"
+            status = "INACTIVE"
             advice = ""
 
         lines.append(f"   - Alpha mean: {gate_mean:.3f}")
@@ -323,6 +388,9 @@ def format_activity_report(
         lines.append(f"   - Query personal message delta: {query_personal_delta:.4f}")
         lines.append(f"   - Query posterior KL: {query_posterior_kl:.4f}")
         lines.append(f"   - Query message projection gain: {activity.get('query_row_message_projection_gain', 0.0):.4f}")
+        lines.append(f"   - Query message alignment: {query_alignment:.4f}")
+        lines.append(f"   - Query self support mass: {activity.get('query_row_self_support_mass', 0.0):.4f}")
+        lines.append(f"   - Query graph support mass: {activity.get('query_row_graph_support_mass', 0.0):.4f}")
         lines.append(f"   - Query personal std: {personal_query_row_std:.4f}")
         lines.append(f"   - Personal/global query ratio: {query_ratio:.4f}")
         lines.append(f"   - Status: {status}")
