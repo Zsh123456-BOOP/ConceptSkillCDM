@@ -451,49 +451,61 @@ class CognitiveDiagnosisModel(nn.Module):
 
         dtype = knowledge_state.dtype
         device = knowledge_state.device
-        a_gate = knowledge_state.new_tensor(1.0 if self.use_concept_graph else 0.0)
-        e_gate = knowledge_state.new_tensor(1.0 if self.use_personal_graph else 0.0)
-        joint_gate = a_gate * e_gate
-
-        graph_rms = self._masked_query_rms_per_sample(global_query_context, concept_mask) * a_gate
-        personal_rms = self._masked_query_rms_per_sample(personal_query_correction, concept_mask) * e_gate
+        a_active = bool(self.use_concept_graph)
+        e_active = bool(self.use_personal_graph)
+        joint_active = a_active and e_active
 
         query_mask = concept_mask.float()
         query_weight = query_mask / query_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
-        if isinstance(relation_matrices, dict):
-            global_relation = relation_matrices["global_matrices"]
-        else:
-            global_relation = relation_matrices
-        A = global_relation.mean(dim=0).to(dtype=query_weight.dtype)
-        A = A / A.sum(dim=-1, keepdim=True).clamp(min=1e-12)
-        graph_query_weight = query_weight.matmul(A)
+        zero_vec = knowledge_state.new_zeros((knowledge_state.size(0),), dtype=dtype)
         student_prior = self.ae_student_prior_logit[student_ids].to(dtype=dtype, device=device)
         exercise_prior = self.ae_exercise_prior_logit[exercise_ids].to(dtype=dtype, device=device)
-        concept_prior = query_weight.matmul(
-            self.ae_concept_prior_logit.to(dtype=query_weight.dtype, device=query_weight.device).unsqueeze(-1)
-        ).squeeze(-1)
-        stat_prior = e_gate * student_prior + a_gate * (0.75 * exercise_prior + 0.75 * concept_prior)
-        student_bias = e_gate * student_logit_bias(student_ids).squeeze(-1)
-        exercise_bias = a_gate * exercise_logit_bias(exercise_ids).squeeze(-1)
-        query_concept_bias = query_weight.matmul(concept_logit_bias.weight).squeeze(-1)
-        graph_concept_bias = graph_query_weight.matmul(concept_logit_bias.weight).squeeze(-1)
-        concept_bias = a_gate * (0.65 * query_concept_bias + 0.35 * graph_concept_bias)
-        query_count = concept_mask.float().sum(dim=1, keepdim=True)
-        query_density = (query_count / float(max(1, self.num_concepts))).squeeze(-1)
-        graph_neighbor_mass = a_gate * (graph_query_weight * (1.0 - query_mask)).sum(dim=1, keepdim=True)
-        graph_neighbor_mass = graph_neighbor_mass.squeeze(-1)
-        scalar_feats = torch.stack(
-            [
-                graph_rms,
-                personal_rms,
-                graph_rms * personal_rms * joint_gate,
-                a_gate * query_density + graph_neighbor_mass,
-            ],
-            dim=1,
-        )
-        feature_weight_t = feature_weight.to(device=device, dtype=dtype)
-        explicit_feature_logit = (scalar_feats.to(dtype=dtype) * feature_weight_t.view(1, -1)).sum(dim=1) * joint_gate
-        interaction_logit = self.ae_interaction_logit_scale * graph_rms * personal_rms * joint_gate
+
+        stat_prior = zero_vec
+        if e_active:
+            stat_prior = stat_prior + student_prior
+        student_bias = student_logit_bias(student_ids).squeeze(-1) if e_active else zero_vec
+
+        exercise_bias = zero_vec
+        concept_bias = zero_vec
+        if a_active:
+            if isinstance(relation_matrices, dict):
+                global_relation = relation_matrices["global_matrices"]
+            else:
+                global_relation = relation_matrices
+            A = global_relation.mean(dim=0).to(dtype=query_weight.dtype)
+            A = A / A.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+            graph_query_weight = query_weight.matmul(A)
+            concept_prior = query_weight.matmul(
+                self.ae_concept_prior_logit.to(dtype=query_weight.dtype, device=query_weight.device).unsqueeze(-1)
+            ).squeeze(-1)
+            stat_prior = stat_prior + 0.75 * exercise_prior + 0.75 * concept_prior
+            exercise_bias = exercise_logit_bias(exercise_ids).squeeze(-1)
+            query_concept_bias = query_weight.matmul(concept_logit_bias.weight).squeeze(-1)
+            graph_concept_bias = graph_query_weight.matmul(concept_logit_bias.weight).squeeze(-1)
+            concept_bias = 0.65 * query_concept_bias + 0.35 * graph_concept_bias
+
+        explicit_feature_logit = zero_vec
+        interaction_logit = zero_vec
+        if joint_active:
+            graph_rms = self._masked_query_rms_per_sample(global_query_context, concept_mask)
+            personal_rms = self._masked_query_rms_per_sample(personal_query_correction, concept_mask)
+            query_count = concept_mask.float().sum(dim=1, keepdim=True)
+            query_density = (query_count / float(max(1, self.num_concepts))).squeeze(-1)
+            graph_neighbor_mass = (graph_query_weight * (1.0 - query_mask)).sum(dim=1, keepdim=True).squeeze(-1)
+            scalar_feats = torch.stack(
+                [
+                    graph_rms,
+                    personal_rms,
+                    graph_rms * personal_rms,
+                    query_density + graph_neighbor_mass,
+                ],
+                dim=1,
+            )
+            feature_weight_t = feature_weight.to(device=device, dtype=dtype)
+            explicit_feature_logit = (scalar_feats.to(dtype=dtype) * feature_weight_t.view(1, -1)).sum(dim=1)
+            interaction_logit = self.ae_interaction_logit_scale * graph_rms * personal_rms
+
         interpretable_bias = 0.20 * (
             student_bias + 0.75 * exercise_bias + 0.75 * concept_bias
         )

@@ -2503,6 +2503,43 @@ def _check_no_a_finite_alpha_smoke() -> None:
         _assert(torch.isfinite(logits).all(), "no_A 下 logits 必须保持 finite。")
 
 
+def _check_no_a_backward_has_no_nonfinite_gradients() -> None:
+    torch.manual_seed(0)
+    model = _build_tiny_ae_model(
+        use_concept_graph=False,
+        use_personal_graph=True,
+        ae_logit_residual_scale=0.5,
+        ae_irt_logit_scale=1.0,
+        ae_interaction_logit_scale=0.25,
+        lambda_personal_kl=0.03,
+        lambda_personal_query_residual=0.06,
+        lambda_sparse_personal=0.0005,
+        lambda_alpha_min=0.05,
+        alpha_min_target=0.04,
+    )
+    model.train()
+    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    labels = torch.tensor([1.0, 0.0, 1.0, 0.0], dtype=torch.float32)
+    logits, details = model(
+        student_ids=student_ids,
+        exercise_ids=exercise_ids,
+        return_details=True,
+        return_logits=True,
+    )
+    bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+    reg = model.get_regularization_components(details["relation_matrices"], details, bce)["total"]
+    loss = bce + reg
+    loss.backward()
+
+    bad = [
+        name
+        for name, param in model.named_parameters()
+        if param.grad is not None and not torch.isfinite(param.grad).all()
+    ]
+    _assert(not bad, f"no_A backward 不应再产生非有限梯度，当前异常参数: {bad[:8]}")
+
+
 def _check_student_diagnosis_queryless_path() -> None:
     model = _build_tiny_ae_model(
         use_concept_graph=True,
@@ -3208,6 +3245,7 @@ def main() -> None:
     _check_personal_query_trust_region_caps_effective_correction()
     _check_masked_support_softmax_active_fallback_semantics()
     _check_no_a_finite_alpha_smoke()
+    _check_no_a_backward_has_no_nonfinite_gradients()
     _check_message_projection_gain_regression()
     _check_component_analysis_uses_real_q_conditioned_path()
     _check_component_analysis_handles_ragged_sparse_samples()

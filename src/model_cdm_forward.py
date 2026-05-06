@@ -145,7 +145,12 @@ def run_cdm_forward(
         irt_logit_scale = 0.0
     else:
         irt_logit_scale = 1.0
-    irt_logit_for_total = irt_logit * irt_logit_scale
+    if irt_logit_scale == 0.0:
+        # Partial ablations use the interpretable AE residual only. Do not keep
+        # the disabled IRT branch in the backward graph through a numeric 0x.
+        irt_logit_for_total = torch.zeros_like(ae_logit_residual)
+    else:
+        irt_logit_for_total = irt_logit * irt_logit_scale
     total_logit = irt_logit_for_total + ae_logit_residual
     out_main = total_logit if return_logits else torch.sigmoid(total_logit)
 
