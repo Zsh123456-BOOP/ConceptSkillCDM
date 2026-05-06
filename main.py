@@ -400,12 +400,6 @@ def main():
 
     # (E) personal graph
     use_personal_graph = bool(getattr(args, "use_personal_graph", False))
-    if not use_concept_graph:
-        use_personal_graph = False
-        args.lambda_sparse_personal = 0.0
-        args.lambda_alpha = 0.0
-        args.lambda_alpha_min = 0.0
-        args.alpha_min_target = 0.0
 
     # ----------  ----------
     if not args.enable_module1:

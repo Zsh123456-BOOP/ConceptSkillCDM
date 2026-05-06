@@ -130,13 +130,7 @@ BASE_SINGLE_ABLATIONS: Tuple[AblationSpec, ...] = (
     AblationSpec(
         name="no_A",
         flags={"ablate_concept_graph": True},
-        overrides={
-            "use_personal_graph": False,
-            "lambda_sparse_personal": 0.0,
-            "lambda_alpha": 0.0,
-            "lambda_alpha_min": 0.0,
-            "alpha_min_target": 0.0,
-        },
+        overrides={},
     ),
     AblationSpec(
         name="no_E",
