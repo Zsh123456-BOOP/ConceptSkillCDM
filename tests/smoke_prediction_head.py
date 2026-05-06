@@ -34,7 +34,11 @@ def _check_prediction_head_module() -> None:
     _assert(tuple(a.shape) == (3,), f"unexpected discrimination shape: {tuple(a.shape)}")
     _assert(float(a.min()) > 0.0, "discrimination should stay positive after softplus")
 
-    head = CognitiveDiagnosisHead(knowledge_dim=8, use_weight_norm=True)
+    head = CognitiveDiagnosisHead(knowledge_dim=8)
+    _assert(
+        not any("parametrizations" in name for name, _ in head.named_parameters()),
+        "prediction head should use a plain interpretable linear theta projection.",
+    )
     logits, details = head(
         knowledge_state=knowledge_state,
         concept_mask=concept_mask,
@@ -45,6 +49,12 @@ def _check_prediction_head_module() -> None:
     _assert(tuple(logits.shape) == (3,), f"unexpected logit shape: {tuple(logits.shape)}")
     for key in ("theta_c", "theta_e", "irt_logit"):
         _assert(key in details, f"missing prediction-head detail: {key}")
+
+    loss = logits.pow(2).mean()
+    loss.backward()
+    for name, param in head.named_parameters():
+        _assert(param.grad is not None, f"missing grad for {name}")
+        _assert(torch.isfinite(param.grad).all().item(), f"non-finite grad in {name}")
 
 
 def main() -> None:

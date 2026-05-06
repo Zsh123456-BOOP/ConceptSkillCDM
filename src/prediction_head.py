@@ -3,7 +3,6 @@ from typing import Dict, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils import parametrizations
 
 
 class ExerciseDifficultyEncoder(nn.Module):
@@ -33,10 +32,11 @@ class CognitiveDiagnosisHead(nn.Module):
     - irt_logit = a * (theta_e - b)
     """
 
-    def __init__(self, knowledge_dim: int, use_weight_norm: bool = True):
+    def __init__(self, knowledge_dim: int):
         super().__init__()
-        base = nn.Linear(knowledge_dim, 1, bias=True)
-        self.theta_proj = parametrizations.weight_norm(base) if use_weight_norm else base
+        self.theta_proj = nn.Linear(knowledge_dim, 1, bias=True)
+        nn.init.normal_(self.theta_proj.weight, mean=0.0, std=0.02)
+        nn.init.zeros_(self.theta_proj.bias)
 
     def forward(
         self,

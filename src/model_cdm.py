@@ -270,10 +270,7 @@ class CognitiveDiagnosisModel(nn.Module):
         if self.share_concept_embeddings:
             self._tie_concept_embeddings()
 
-        self.diagnosis_head = CognitiveDiagnosisHead(
-            knowledge_dim=knowledge_dim,
-            use_weight_norm=self.enable_module1,
-        )
+        self.diagnosis_head = CognitiveDiagnosisHead(knowledge_dim=knowledge_dim)
         self.exercise_encoder = ExerciseDifficultyEncoder(num_exercises=num_exercises)
 
     @staticmethod
