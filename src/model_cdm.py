@@ -102,6 +102,7 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_edge_bias_rank: int = 8,
         graph_query_adapter_enable: bool = True,
         graph_prior_logit_scale: float = 0.0,
+        ae_query_residual_scale: float = 0.0,
         share_concept_embeddings: bool = False,
     ):
         super().__init__()
@@ -194,6 +195,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_edge_bias_rank = max(1, int(graph_edge_bias_rank))
         self.graph_query_adapter_enable = bool(graph_query_adapter_enable)
         self.graph_prior_logit_scale = max(0.0, float(graph_prior_logit_scale))
+        self.ae_query_residual_scale = max(0.0, float(ae_query_residual_scale))
         self.share_concept_embeddings = bool(share_concept_embeddings)
 
         self.register_buffer("q_matrix", q_matrix)
@@ -265,6 +267,17 @@ class CognitiveDiagnosisModel(nn.Module):
             nn.init.zeros_(self.graph_query_adapter[-1].bias)
         else:
             self.graph_query_adapter = None
+        if self.ae_query_residual_scale > 0.0:
+            ae_hidden = max(knowledge_dim, knowledge_dim * self.personal_projection_hidden_factor)
+            self.ae_query_state_adapter = nn.Sequential(
+                nn.Linear(knowledge_dim * 4, ae_hidden),
+                nn.GELU(),
+                nn.Linear(ae_hidden, knowledge_dim),
+            )
+            nn.init.normal_(self.ae_query_state_adapter[-1].weight, mean=0.0, std=0.02)
+            nn.init.zeros_(self.ae_query_state_adapter[-1].bias)
+        else:
+            self.ae_query_state_adapter = None
 
         personal_hidden = max(knowledge_dim, knowledge_dim * self.personal_projection_hidden_factor)
         self.personal_value_proj_local = nn.Linear(knowledge_dim, knowledge_dim, bias=False)
@@ -424,6 +437,33 @@ class CognitiveDiagnosisModel(nn.Module):
         denom = (query_weight.sum(dim=(1, 2)) * float(tensor.size(-1))).clamp(min=1.0)
         mean_sq = (tensor.pow(2) * query_weight).sum(dim=(1, 2)) / denom
         return _safe_zero_preserving_sqrt(mean_sq)
+
+    def _build_ae_query_state_residual(
+        self,
+        *,
+        knowledge_state: torch.Tensor,
+        global_query_context: torch.Tensor,
+        personal_query_correction: torch.Tensor,
+        concept_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.ae_query_state_adapter is None or self.ae_query_residual_scale <= 0.0:
+            zero = knowledge_state.new_tensor(0.0)
+            return torch.zeros_like(knowledge_state), zero
+
+        query_rows = concept_mask.float().unsqueeze(-1).bool()
+        graph_active = global_query_context.pow(2).sum(dim=-1, keepdim=True) > 1e-12
+        features = torch.cat(
+            [
+                knowledge_state,
+                global_query_context,
+                personal_query_correction,
+                global_query_context * personal_query_correction,
+            ],
+            dim=-1,
+        )
+        residual = self.ae_query_state_adapter(features) * self.ae_query_residual_scale
+        residual = torch.where(query_rows & graph_active, residual, torch.zeros_like(residual))
+        return residual, self._masked_query_rms(residual, concept_mask)
 
     def _apply_personal_query_trust_region(
         self,

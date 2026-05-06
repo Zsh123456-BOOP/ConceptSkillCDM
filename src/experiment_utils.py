@@ -203,6 +203,7 @@ def _build_config_hash(args) -> str:
         "graph_headwise_query_gate",
         "graph_edge_bias_rank",
         "graph_prior_logit_scale",
+        "ae_query_residual_scale",
         "graph_query_adapter_enable",
         "lambda_personal_kl",
         "lambda_personal_query_residual",

@@ -320,6 +320,8 @@ def parse_args():
                         help="Low-rank edge bias rank added to A's adjacency logits.")
     parser.add_argument("--graph_prior_logit_scale", type=float, default=0.0,
                         help="Logit scale for the train-Q concept co-occurrence prior injected into A.")
+    parser.add_argument("--ae_query_residual_scale", type=float, default=0.0,
+                        help="Scale for the A/E-only nonlinear query-state residual before the fixed diagnosis head.")
     parser.add_argument("--graph_query_adapter_enable", action=bool_action, default=None,
                         help="Enable query adapter on top of graph readout before the fixed diagnosis head.")
     parser.add_argument("--personal_state_lr_mult", type=float, default=1.0,
@@ -667,6 +669,9 @@ def main():
                 ),
                 graph_prior_logit_scale=loaded_args.get(
                     "graph_prior_logit_scale", getattr(args, "graph_prior_logit_scale", 0.0)
+                ),
+                ae_query_residual_scale=loaded_args.get(
+                    "ae_query_residual_scale", getattr(args, "ae_query_residual_scale", 0.0)
                 ),
                 share_concept_embeddings=loaded_args.get(
                     "share_concept_embeddings", getattr(args, "share_concept_embeddings", False)

@@ -78,8 +78,14 @@ def run_cdm_forward(
         personal_query_correction=aligned_personal_query_correction,
         concept_mask=q_vector,
     )
+    ae_query_state_residual, ae_query_state_residual_delta = model._build_ae_query_state_residual(
+        knowledge_state=knowledge_state,
+        global_query_context=global_query_context,
+        personal_query_correction=personal_query_correction,
+        concept_mask=q_vector,
+    )
     query_rows = q_vector.float().unsqueeze(-1).bool()
-    total_query_correction = global_query_context + personal_query_correction
+    total_query_correction = global_query_context + personal_query_correction + ae_query_state_residual
     prediction_state = torch.where(query_rows, knowledge_state + total_query_correction, knowledge_state)
     readout_query_delta = model._masked_query_rms(total_query_correction, q_vector)
     query_row_personal_message_delta_raw = model._masked_query_rms(scaled_personal_query_correction, q_vector)
@@ -131,6 +137,7 @@ def run_cdm_forward(
         "use_personal_graph": torch.tensor(int(model.use_personal_graph), device=device),
         "share_concept_embeddings": torch.tensor(int(model.share_concept_embeddings), device=device),
         "graph_prior_logit_scale": torch.tensor(float(model.graph_prior_logit_scale), device=device),
+        "ae_query_residual_scale": torch.tensor(float(model.ae_query_residual_scale), device=device),
         "relation_matrices": relation_matrices,
         "relation_used": relation_used,
         "personal_relation_spec": personal_relation_spec,
@@ -174,6 +181,7 @@ def run_cdm_forward(
         "query_row_global_head_var": query_row_global_head_var.detach(),
         "query_row_global_head_margin": query_row_global_head_margin.detach(),
         "personal_query_writeback_delta": personal_query_writeback_delta.detach(),
+        "ae_query_state_residual_delta": ae_query_state_residual_delta.detach(),
         "personal_alignment_gate_mean": personal_alignment_gate_mean.detach(),
         "graph_query_adapter_gain": graph_query_adapter_gain.detach(),
         "personal_to_graph_query_ratio": personal_to_graph_query_ratio.detach(),

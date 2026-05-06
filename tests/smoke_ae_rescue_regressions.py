@@ -173,6 +173,7 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "graph_headwise_query_gate",
         "graph_edge_bias_rank",
         "graph_prior_logit_scale",
+        "ae_query_residual_scale",
         "graph_query_adapter_enable",
     )
     for dataset in ("assist_09", "junyi"):
@@ -422,6 +423,7 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         num_gnn_layers=1,
         dropout=0.0,
         graph_prior_logit_scale=0.7,
+        ae_query_residual_scale=0.5,
         use_concept_graph=True,
         use_personal_graph=False,
     )
@@ -433,6 +435,44 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
     _assert(concept_weight[:, :3].std().item() > 1e-5, "Q-prior should leave a non-flat concept embedding basis.")
     rel = model.structure_module.relation_learning
     _assert(rel is not None and rel.prior_logit_scale > 0.0, "A relation learner should receive graph prior scale.")
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0, 1, 2], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 1, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+    _assert(
+        details["ae_query_state_residual_delta"].item() > 1e-8,
+        "AE query residual should be active when A has graph query context.",
+    )
+
+    no_a_model = CognitiveDiagnosisModel(
+        num_students=4,
+        num_exercises=3,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=1,
+        num_gnn_layers=1,
+        dropout=0.0,
+        graph_prior_logit_scale=0.7,
+        ae_query_residual_scale=0.5,
+        use_concept_graph=False,
+        use_personal_graph=False,
+    )
+    with torch.no_grad():
+        _, no_a_details = no_a_model(
+            student_ids=torch.tensor([0, 1, 2], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 1, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+    _assert(
+        no_a_details["ae_query_state_residual_delta"].item() == 0.0,
+        "AE query residual must stay inactive in no_A because graph query context is absent.",
+    )
 
 
 def _check_no_a_personal_graph_is_not_identity_locked() -> None:
