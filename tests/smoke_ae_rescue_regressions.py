@@ -176,6 +176,7 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "ae_query_residual_scale",
         "ae_logit_residual_scale",
         "ae_logit_residual_clip",
+        "ae_irt_logit_scale",
         "ae_logit_dim",
         "ae_lr_mult",
         "ae_stat_prior_scale",
@@ -526,6 +527,7 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         ae_query_residual_scale=0.0,
         ae_logit_residual_scale=1.0,
         ae_logit_residual_clip=0.0,
+        ae_irt_logit_scale=0.2,
         use_concept_graph=True,
         use_personal_graph=True,
         personal_delta_scale=3.0,
@@ -576,6 +578,104 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         torch.allclose(prior_details["ae_logit_residual"], expected_prior, atol=1e-6),
         "AE logit residual should preserve the fixed E(student)+A(exercise+concept) prior exactly.",
     )
+    _assert(
+        abs(float(prior_details["irt_logit_scale_used"].item()) - 0.2) < 1e-8,
+        "full AE predictor should keep the configured IRT complement scale.",
+    )
+
+    no_a_prior_model = CognitiveDiagnosisModel(
+        num_students=4,
+        num_exercises=3,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=1,
+        num_gnn_layers=1,
+        dropout=0.0,
+        ae_query_residual_scale=0.0,
+        ae_logit_residual_scale=1.0,
+        ae_logit_residual_clip=0.0,
+        ae_irt_logit_scale=0.2,
+        use_concept_graph=False,
+        use_personal_graph=True,
+        personal_delta_scale=3.0,
+    )
+    with torch.no_grad():
+        no_a_prior_model.ae_student_logit_emb.weight.zero_()
+        no_a_prior_model.ae_concept_logit_emb.weight.zero_()
+        for p in no_a_prior_model.ae_logit_adapter.parameters():
+            p.zero_()
+    no_a_prior_model.initialize_ae_logit_priors(
+        student_logits=student_prior,
+        exercise_logits=exercise_prior,
+        concept_logits=concept_prior,
+        scale=1.0,
+    )
+    with torch.no_grad():
+        _, no_a_prior_details = no_a_prior_model(
+            student_ids=prior_student_ids,
+            exercise_ids=prior_exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+    expected_no_a = student_prior[prior_student_ids]
+    _assert(
+        torch.allclose(no_a_prior_details["ae_logit_residual"], expected_no_a, atol=1e-6),
+        "no_A should keep only the E(student) stat-prior component instead of falling back to IRT.",
+    )
+    _assert(
+        no_a_prior_details["irt_logit_scale_used"].item() == 0.0
+        and torch.allclose(no_a_prior_details["logits"], no_a_prior_details["ae_logit_residual"], atol=1e-6),
+        "no_A must suppress the IRT fallback so the ablation measures the remaining E path.",
+    )
+
+    no_e_prior_model = CognitiveDiagnosisModel(
+        num_students=4,
+        num_exercises=3,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=1,
+        num_gnn_layers=1,
+        dropout=0.0,
+        ae_query_residual_scale=0.0,
+        ae_logit_residual_scale=1.0,
+        ae_logit_residual_clip=0.0,
+        ae_irt_logit_scale=0.2,
+        use_concept_graph=True,
+        use_personal_graph=False,
+        personal_delta_scale=3.0,
+    )
+    with torch.no_grad():
+        no_e_prior_model.ae_student_logit_emb.weight.zero_()
+        no_e_prior_model.ae_concept_logit_emb.weight.zero_()
+        for p in no_e_prior_model.ae_logit_adapter.parameters():
+            p.zero_()
+    no_e_prior_model.initialize_ae_logit_priors(
+        student_logits=student_prior,
+        exercise_logits=exercise_prior,
+        concept_logits=concept_prior,
+        scale=1.0,
+    )
+    with torch.no_grad():
+        _, no_e_prior_details = no_e_prior_model(
+            student_ids=prior_student_ids,
+            exercise_ids=prior_exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+    expected_no_e = 0.75 * exercise_prior[prior_exercise_ids] + 0.75 * prior_q_weight.matmul(
+        concept_prior.unsqueeze(-1)
+    ).squeeze(-1)
+    _assert(
+        torch.allclose(no_e_prior_details["ae_logit_residual"], expected_no_e, atol=1e-6),
+        "no_E should keep only the A(exercise+concept) stat-prior component instead of falling back to IRT.",
+    )
+    _assert(
+        no_e_prior_details["irt_logit_scale_used"].item() == 0.0
+        and torch.allclose(no_e_prior_details["logits"], no_e_prior_details["ae_logit_residual"], atol=1e-6),
+        "no_E must suppress the IRT fallback so the ablation measures the remaining A path.",
+    )
 
     no_e_model = CognitiveDiagnosisModel(
         num_students=4,
@@ -601,7 +701,7 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         )
     _assert(
         no_e_details["ae_logit_residual_abs_mean"].item() == 0.0,
-        "AE logit residual must be exactly inactive in no_E.",
+        "A-only AE logit residual should start at zero before train-stat priors are initialized.",
     )
     _assert(
         no_e_details["ae_query_state_residual_delta"].item() == 0.0,
@@ -1629,6 +1729,7 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
         personal_warmup_epochs=8,
         ae_logit_residual_scale=0.65,
         ae_logit_residual_clip=1.2,
+        ae_irt_logit_scale=0.2,
         lambda_personal_kl=0.02,
         lambda_personal_query_residual=0.05,
         personal_query_residual_margin=0.08,
@@ -1644,6 +1745,7 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
     hash_query_readout = _build_config_hash(SimpleNamespace(**{**base, "graph_query_readout_scale": 0.4}))
     hash_query_residual = _build_config_hash(SimpleNamespace(**{**base, "lambda_personal_query_residual": 0.02}))
     hash_ae_logit = _build_config_hash(SimpleNamespace(**{**base, "ae_logit_residual_scale": 0.2}))
+    hash_ae_irt = _build_config_hash(SimpleNamespace(**{**base, "ae_irt_logit_scale": 0.0}))
 
     _assert(hash_base != hash_share, "config hash 必须区分 share_concept_embeddings 的结构差异。")
     _assert(hash_base != hash_alpha_bias, "config hash 必须区分 personal_alpha_bias_scale 的结构差异。")
@@ -1651,6 +1753,7 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
     _assert(hash_base != hash_query_readout, "config hash 必须区分 graph_query_readout_scale 的结构差异。")
     _assert(hash_base != hash_query_residual, "config hash 必须区分 lambda_personal_query_residual 的差异。")
     _assert(hash_base != hash_ae_logit, "config hash 必须区分 ae_logit_residual_scale 的结构差异。")
+    _assert(hash_base != hash_ae_irt, "config hash 必须区分 ae_irt_logit_scale 的结构差异。")
 
 
 def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
@@ -1672,6 +1775,7 @@ def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
         personal_warmup_epochs=8,
         ae_logit_residual_scale=0.65,
         ae_logit_residual_clip=1.2,
+        ae_irt_logit_scale=0.2,
         personal_include_neighbor_rows=False,
         personal_query_correction_scale=0.10,
         lambda_personal_kl=0.02,
@@ -1721,6 +1825,7 @@ def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
         "personal_warmup_epochs",
         "ae_logit_residual_scale",
         "ae_logit_residual_clip",
+        "ae_irt_logit_scale",
         "personal_include_neighbor_rows",
         "personal_query_correction_scale",
         "lambda_personal_kl",
@@ -2368,6 +2473,7 @@ def _check_result_schema_regression() -> None:
             "personal_query_trust_scale_mean": "0.8",
             "personal_query_correction_max_ratio": "0.15",
             "personal_query_correction_min_graph_anchor": "0.02",
+            "ae_irt_logit_scale": "0.2",
         },
         {
             "dataset": "junyi",
@@ -2403,6 +2509,7 @@ def _check_result_schema_regression() -> None:
             "full_query_row_personal_message_delta",
             "full_ae_query_state_residual_delta",
             "full_ae_logit_residual_abs_mean",
+            "full_ae_irt_logit_scale",
             "full_query_row_posterior_delta_abs",
             "full_query_row_delta_local_rms_raw",
             "full_query_row_message_projection_gain",

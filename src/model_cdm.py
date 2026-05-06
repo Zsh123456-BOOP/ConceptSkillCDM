@@ -102,6 +102,7 @@ class CognitiveDiagnosisModel(nn.Module):
         ae_query_residual_scale: float = 0.0,
         ae_logit_residual_scale: float = 0.0,
         ae_logit_residual_clip: float = 1.0,
+        ae_irt_logit_scale: float = 1.0,
         ae_logit_dim: int = 32,
         share_concept_embeddings: bool = False,
     ):
@@ -184,6 +185,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.ae_query_residual_scale = max(0.0, float(ae_query_residual_scale))
         self.ae_logit_residual_scale = max(0.0, float(ae_logit_residual_scale))
         self.ae_logit_residual_clip = max(0.0, float(ae_logit_residual_clip))
+        self.ae_irt_logit_scale = max(0.0, float(ae_irt_logit_scale))
         self.ae_logit_dim = max(1, int(ae_logit_dim))
         self.share_concept_embeddings = bool(share_concept_embeddings)
 
@@ -260,6 +262,7 @@ class CognitiveDiagnosisModel(nn.Module):
         else:
             self.graph_query_adapter = None
         ae_joint_enabled = self.enable_module1 and self.use_concept_graph and self.use_personal_graph
+        ae_partial_enabled = self.enable_module1 and (self.use_concept_graph or self.use_personal_graph)
         if ae_joint_enabled and self.ae_query_residual_scale > 0.0:
             ae_hidden = max(knowledge_dim, knowledge_dim * self.personal_projection_hidden_factor)
             self.ae_query_state_adapter = nn.Sequential(
@@ -271,7 +274,7 @@ class CognitiveDiagnosisModel(nn.Module):
             nn.init.zeros_(self.ae_query_state_adapter[-1].bias)
         else:
             self.ae_query_state_adapter = None
-        if ae_joint_enabled and self.ae_logit_residual_scale > 0.0:
+        if ae_partial_enabled and self.ae_logit_residual_scale > 0.0:
             ae_logit_hidden = max(self.ae_logit_dim * 2, knowledge_dim)
             ae_logit_input_dim = self.ae_logit_dim * 6 + 4
             self.ae_student_logit_emb = nn.Embedding(num_students, self.ae_logit_dim)
@@ -530,18 +533,23 @@ class CognitiveDiagnosisModel(nn.Module):
             or self.ae_personal_state_proj is None
             or self.ae_logit_residual_scale <= 0.0
             or not self.enable_module1
-            or not self.use_concept_graph
-            or not self.use_personal_graph
+            or not (self.use_concept_graph or self.use_personal_graph)
         ):
             return zero_vec, zero_scalar
 
-        graph_rms = self._masked_query_rms_per_sample(global_query_context, concept_mask)
-        personal_rms = self._masked_query_rms_per_sample(personal_query_correction, concept_mask)
+        dtype = knowledge_state.dtype
+        device = knowledge_state.device
+        a_gate = knowledge_state.new_tensor(1.0 if self.use_concept_graph else 0.0)
+        e_gate = knowledge_state.new_tensor(1.0 if self.use_personal_graph else 0.0)
+        joint_gate = a_gate * e_gate
+
+        graph_rms = self._masked_query_rms_per_sample(global_query_context, concept_mask) * a_gate
+        personal_rms = self._masked_query_rms_per_sample(personal_query_correction, concept_mask) * e_gate
 
         query_mask = concept_mask.float()
         query_weight = query_mask / query_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
         concept_emb = self.ae_concept_logit_emb.weight
-        query_self_context = query_weight.matmul(concept_emb)
+        query_self_context = query_weight.matmul(concept_emb) * a_gate
         if isinstance(relation_matrices, dict):
             global_relation = relation_matrices["global_matrices"]
         else:
@@ -549,36 +557,36 @@ class CognitiveDiagnosisModel(nn.Module):
         A = global_relation.mean(dim=0).to(dtype=query_weight.dtype)
         A = A / A.sum(dim=-1, keepdim=True).clamp(min=1e-12)
         graph_query_weight = query_weight.matmul(A)
-        query_graph_context = graph_query_weight.matmul(concept_emb)
-        student_context = self.ae_student_logit_emb(student_ids)
+        query_graph_context = graph_query_weight.matmul(concept_emb) * a_gate
+        student_context = self.ae_student_logit_emb(student_ids) * e_gate
         mixed_concept_context = 0.65 * query_self_context + 0.35 * query_graph_context
         bilinear = (student_context * mixed_concept_context).sum(dim=-1) / math.sqrt(float(self.ae_logit_dim))
-        student_prior = self.ae_student_prior_logit[student_ids].to(dtype=knowledge_state.dtype, device=knowledge_state.device)
-        exercise_prior = self.ae_exercise_prior_logit[exercise_ids].to(dtype=knowledge_state.dtype, device=knowledge_state.device)
+        student_prior = self.ae_student_prior_logit[student_ids].to(dtype=dtype, device=device)
+        exercise_prior = self.ae_exercise_prior_logit[exercise_ids].to(dtype=dtype, device=device)
         concept_prior = query_weight.matmul(
             self.ae_concept_prior_logit.to(dtype=query_weight.dtype, device=query_weight.device).unsqueeze(-1)
         ).squeeze(-1)
-        stat_prior = student_prior + 0.75 * exercise_prior + 0.75 * concept_prior
-        student_bias = self.ae_student_logit_bias(student_ids).squeeze(-1)
-        exercise_bias = self.ae_exercise_logit_bias(exercise_ids).squeeze(-1)
+        stat_prior = e_gate * student_prior + a_gate * (0.75 * exercise_prior + 0.75 * concept_prior)
+        student_bias = e_gate * self.ae_student_logit_bias(student_ids).squeeze(-1)
+        exercise_bias = a_gate * self.ae_exercise_logit_bias(exercise_ids).squeeze(-1)
         query_concept_bias = query_weight.matmul(self.ae_concept_logit_bias.weight).squeeze(-1)
         graph_concept_bias = graph_query_weight.matmul(self.ae_concept_logit_bias.weight).squeeze(-1)
-        concept_bias = 0.65 * query_concept_bias + 0.35 * graph_concept_bias
+        concept_bias = a_gate * (0.65 * query_concept_bias + 0.35 * graph_concept_bias)
         pooled_graph_state = self.ae_graph_state_proj(
             self._masked_query_pool(global_query_context, concept_mask)
-        )
+        ) * a_gate
         pooled_personal_state = self.ae_personal_state_proj(
             self._masked_query_pool(personal_query_correction, concept_mask)
-        )
+        ) * e_gate
         query_count = concept_mask.float().sum(dim=1, keepdim=True)
         query_density = query_count / float(max(1, self.num_concepts))
-        graph_neighbor_mass = (graph_query_weight * (1.0 - query_mask)).sum(dim=1, keepdim=True)
+        graph_neighbor_mass = a_gate * (graph_query_weight * (1.0 - query_mask)).sum(dim=1, keepdim=True)
         scalar_feats = torch.cat(
             [
                 graph_rms.unsqueeze(-1),
                 personal_rms.unsqueeze(-1),
                 (graph_rms * personal_rms).unsqueeze(-1),
-                query_density + graph_neighbor_mass,
+                a_gate * query_density + graph_neighbor_mass,
             ],
             dim=-1,
         )
@@ -598,7 +606,7 @@ class CognitiveDiagnosisModel(nn.Module):
             bilinear
             + 0.20 * (student_bias + 0.75 * exercise_bias + 0.75 * concept_bias)
             + self.ae_logit_adapter(features).squeeze(-1)
-        )
+        ) * joint_gate
         raw = stat_prior + 0.15 * learned_raw
         if self.ae_logit_residual_clip > 0.0:
             clip = self.ae_logit_residual_clip
@@ -621,8 +629,7 @@ class CognitiveDiagnosisModel(nn.Module):
             or self.ae_exercise_logit_bias is None
             or self.ae_concept_logit_bias is None
             or not self.enable_module1
-            or not self.use_concept_graph
-            or not self.use_personal_graph
+            or not (self.use_concept_graph or self.use_personal_graph)
         ):
             return
         scale = max(0.0, float(scale))

@@ -74,6 +74,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "ae_query_residual_scale",
     "ae_logit_residual_scale",
     "ae_logit_residual_clip",
+    "ae_irt_logit_scale",
     "ae_logit_dim",
     "ae_lr_mult",
     "ae_stat_prior_scale",
@@ -676,8 +677,10 @@ def _initialize_ae_stat_priors(
         or getattr(base_model, "ae_student_prior_logit", None) is None
         or getattr(base_model, "ae_exercise_prior_logit", None) is None
         or getattr(base_model, "ae_concept_prior_logit", None) is None
-        or not getattr(base_model, "use_concept_graph", False)
-        or not getattr(base_model, "use_personal_graph", False)
+        or not (
+            getattr(base_model, "use_concept_graph", False)
+            or getattr(base_model, "use_personal_graph", False)
+        )
     ):
         return
 
@@ -1808,6 +1811,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         ae_query_residual_scale=getattr(args, "ae_query_residual_scale", 0.0),
         ae_logit_residual_scale=getattr(args, "ae_logit_residual_scale", 0.0),
         ae_logit_residual_clip=getattr(args, "ae_logit_residual_clip", 1.0),
+        ae_irt_logit_scale=getattr(args, "ae_irt_logit_scale", 1.0),
         ae_logit_dim=getattr(args, "ae_logit_dim", 32),
         graph_query_adapter_enable=getattr(args, "graph_query_adapter_enable", True),
         share_concept_embeddings=getattr(args, "share_concept_embeddings", False),
@@ -2628,6 +2632,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         ae_logit_residual_clip=loaded_args.get(
             "ae_logit_residual_clip", getattr(args, "ae_logit_residual_clip", 1.0)
+        ),
+        ae_irt_logit_scale=loaded_args.get(
+            "ae_irt_logit_scale", getattr(args, "ae_irt_logit_scale", 1.0)
         ),
         ae_logit_dim=loaded_args.get(
             "ae_logit_dim", getattr(args, "ae_logit_dim", 32)

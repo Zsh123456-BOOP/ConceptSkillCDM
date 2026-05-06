@@ -305,9 +305,11 @@ def parse_args():
     parser.add_argument("--ae_query_residual_scale", type=float, default=0.0,
                         help="Scale for the A/E-only nonlinear query-state residual before the fixed diagnosis head.")
     parser.add_argument("--ae_logit_residual_scale", type=float, default=0.0,
-                        help="Scale for the A/E-only query logit residual; disabled whenever A or E is ablated.")
+                        help="Scale for the A/E query logit predictor; no_A/no_E keep the remaining A or E prior component active.")
     parser.add_argument("--ae_logit_residual_clip", type=float, default=1.0,
                         help="Tanh clip magnitude for the A/E-only query logit residual before scaling.")
+    parser.add_argument("--ae_irt_logit_scale", type=float, default=1.0,
+                        help="Scale for the backbone IRT logit when the full A/E logit predictor is active; A-only/E-only ablations suppress IRT.")
     parser.add_argument("--ae_logit_dim", type=int, default=32,
                         help="Embedding width for the A/E joint logit interaction head.")
     parser.add_argument("--ae_lr_mult", type=float, default=1.0,
@@ -664,6 +666,9 @@ def main():
                 ),
                 ae_logit_residual_clip=loaded_args.get(
                     "ae_logit_residual_clip", getattr(args, "ae_logit_residual_clip", 1.0)
+                ),
+                ae_irt_logit_scale=loaded_args.get(
+                    "ae_irt_logit_scale", getattr(args, "ae_irt_logit_scale", 1.0)
                 ),
                 ae_logit_dim=loaded_args.get(
                     "ae_logit_dim", getattr(args, "ae_logit_dim", 32)

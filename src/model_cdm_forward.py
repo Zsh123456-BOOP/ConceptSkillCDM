@@ -134,7 +134,19 @@ def run_cdm_forward(
         personal_query_correction=personal_query_correction,
         concept_mask=q_vector,
     )
-    total_logit = irt_logit + ae_logit_residual
+    ae_predictor_active = (
+        model.enable_module1
+        and model.ae_logit_residual_scale > 0.0
+        and (model.use_concept_graph or model.use_personal_graph)
+    )
+    if ae_predictor_active and model.use_concept_graph and model.use_personal_graph:
+        irt_logit_scale = float(model.ae_irt_logit_scale)
+    elif ae_predictor_active:
+        irt_logit_scale = 0.0
+    else:
+        irt_logit_scale = 1.0
+    irt_logit_for_total = irt_logit * irt_logit_scale
+    total_logit = irt_logit_for_total + ae_logit_residual
     out_main = total_logit if return_logits else torch.sigmoid(total_logit)
 
     if not return_details:
@@ -149,6 +161,8 @@ def run_cdm_forward(
         "ae_query_residual_scale": torch.tensor(float(model.ae_query_residual_scale), device=device),
         "ae_logit_residual_scale": torch.tensor(float(model.ae_logit_residual_scale), device=device),
         "ae_logit_residual_clip": torch.tensor(float(model.ae_logit_residual_clip), device=device),
+        "ae_irt_logit_scale": torch.tensor(float(model.ae_irt_logit_scale), device=device),
+        "irt_logit_scale_used": torch.tensor(float(irt_logit_scale), device=device),
         "ae_logit_dim": torch.tensor(float(model.ae_logit_dim), device=device),
         "relation_matrices": relation_matrices,
         "relation_used": relation_used,
@@ -160,6 +174,7 @@ def run_cdm_forward(
         "irt_b": b.detach(),
         "irt_a": a.detach(),
         "irt_logit": irt_logit.detach(),
+        "irt_logit_for_total": irt_logit_for_total.detach(),
         "ae_logit_residual": ae_logit_residual.detach(),
         "ae_logit_residual_abs_mean": ae_logit_residual_abs_mean.detach(),
         "logits": total_logit.detach(),
