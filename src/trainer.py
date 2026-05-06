@@ -74,6 +74,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "ae_query_residual_scale",
     "ae_logit_residual_scale",
     "ae_logit_residual_clip",
+    "ae_logit_dim",
     "graph_query_adapter_enable",
     "personal_delta_scale",
     "personal_warmup_epochs",
@@ -1654,6 +1655,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         ae_query_residual_scale=getattr(args, "ae_query_residual_scale", 0.0),
         ae_logit_residual_scale=getattr(args, "ae_logit_residual_scale", 0.0),
         ae_logit_residual_clip=getattr(args, "ae_logit_residual_clip", 1.0),
+        ae_logit_dim=getattr(args, "ae_logit_dim", 32),
         graph_query_adapter_enable=getattr(args, "graph_query_adapter_enable", True),
         share_concept_embeddings=getattr(args, "share_concept_embeddings", False),
     ).to(device)
@@ -2472,6 +2474,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         ae_logit_residual_clip=loaded_args.get(
             "ae_logit_residual_clip", getattr(args, "ae_logit_residual_clip", 1.0)
+        ),
+        ae_logit_dim=loaded_args.get(
+            "ae_logit_dim", getattr(args, "ae_logit_dim", 32)
         ),
         graph_query_adapter_enable=loaded_args.get(
             "graph_query_adapter_enable", getattr(args, "graph_query_adapter_enable", True)

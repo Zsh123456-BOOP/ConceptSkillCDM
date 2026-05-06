@@ -101,6 +101,7 @@ class CognitiveDiagnosisModel(nn.Module):
         ae_query_residual_scale: float = 0.0,
         ae_logit_residual_scale: float = 0.0,
         ae_logit_residual_clip: float = 1.0,
+        ae_logit_dim: int = 32,
         share_concept_embeddings: bool = False,
     ):
         super().__init__()
@@ -182,6 +183,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.ae_query_residual_scale = max(0.0, float(ae_query_residual_scale))
         self.ae_logit_residual_scale = max(0.0, float(ae_logit_residual_scale))
         self.ae_logit_residual_clip = max(0.0, float(ae_logit_residual_clip))
+        self.ae_logit_dim = max(1, int(ae_logit_dim))
         self.share_concept_embeddings = bool(share_concept_embeddings)
 
         self.register_buffer("q_matrix", q_matrix)
@@ -266,16 +268,28 @@ class CognitiveDiagnosisModel(nn.Module):
         else:
             self.ae_query_state_adapter = None
         if ae_joint_enabled and self.ae_logit_residual_scale > 0.0:
-            ae_logit_hidden = max(knowledge_dim, knowledge_dim * self.personal_projection_hidden_factor)
-            ae_logit_input_dim = knowledge_dim * 5 + 4
+            ae_logit_hidden = max(self.ae_logit_dim * 2, knowledge_dim)
+            ae_logit_input_dim = self.ae_logit_dim * 6 + 4
+            self.ae_student_logit_emb = nn.Embedding(num_students, self.ae_logit_dim)
+            self.ae_concept_logit_emb = nn.Embedding(num_concepts, self.ae_logit_dim)
+            self.ae_graph_state_proj = nn.Linear(knowledge_dim, self.ae_logit_dim, bias=False)
+            self.ae_personal_state_proj = nn.Linear(knowledge_dim, self.ae_logit_dim, bias=False)
             self.ae_logit_adapter = nn.Sequential(
                 nn.Linear(ae_logit_input_dim, ae_logit_hidden),
                 nn.GELU(),
                 nn.Linear(ae_logit_hidden, 1),
             )
+            nn.init.normal_(self.ae_student_logit_emb.weight, mean=0.0, std=0.05)
+            nn.init.xavier_normal_(self.ae_concept_logit_emb.weight)
+            nn.init.xavier_normal_(self.ae_graph_state_proj.weight)
+            nn.init.xavier_normal_(self.ae_personal_state_proj.weight)
             nn.init.normal_(self.ae_logit_adapter[-1].weight, mean=0.0, std=0.01)
             nn.init.zeros_(self.ae_logit_adapter[-1].bias)
         else:
+            self.ae_student_logit_emb = None
+            self.ae_concept_logit_emb = None
+            self.ae_graph_state_proj = None
+            self.ae_personal_state_proj = None
             self.ae_logit_adapter = None
 
         personal_hidden = max(knowledge_dim, knowledge_dim * self.personal_projection_hidden_factor)
@@ -482,7 +496,9 @@ class CognitiveDiagnosisModel(nn.Module):
     def _build_ae_logit_residual(
         self,
         *,
+        student_ids: torch.Tensor,
         knowledge_state: torch.Tensor,
+        relation_matrices: torch.Tensor,
         global_query_context: torch.Tensor,
         personal_query_correction: torch.Tensor,
         concept_mask: torch.Tensor,
@@ -491,6 +507,10 @@ class CognitiveDiagnosisModel(nn.Module):
         zero_scalar = knowledge_state.new_tensor(0.0)
         if (
             self.ae_logit_adapter is None
+            or self.ae_student_logit_emb is None
+            or self.ae_concept_logit_emb is None
+            or self.ae_graph_state_proj is None
+            or self.ae_personal_state_proj is None
             or self.ae_logit_residual_scale <= 0.0
             or not self.enable_module1
             or not self.use_concept_graph
@@ -502,25 +522,50 @@ class CognitiveDiagnosisModel(nn.Module):
         personal_rms = self._masked_query_rms_per_sample(personal_query_correction, concept_mask)
         active = (graph_rms > 1e-8) & (personal_rms > 1e-8)
 
-        pooled = [
-            self._masked_query_pool(knowledge_state, concept_mask),
-            self._masked_query_pool(global_query_context, concept_mask),
-            self._masked_query_pool(personal_query_correction, concept_mask),
-            self._masked_query_pool(global_query_context * personal_query_correction, concept_mask),
-            self._masked_query_pool((global_query_context - personal_query_correction).abs(), concept_mask),
-        ]
+        query_mask = concept_mask.float()
+        query_weight = query_mask / query_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+        concept_emb = self.ae_concept_logit_emb.weight
+        query_self_context = query_weight.matmul(concept_emb)
+        if isinstance(relation_matrices, dict):
+            global_relation = relation_matrices["global_matrices"]
+        else:
+            global_relation = relation_matrices
+        A = global_relation.mean(dim=0).to(dtype=query_weight.dtype)
+        A = A / A.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+        graph_query_weight = query_weight.matmul(A)
+        query_graph_context = graph_query_weight.matmul(concept_emb)
+        student_context = self.ae_student_logit_emb(student_ids)
+        pooled_graph_state = self.ae_graph_state_proj(
+            self._masked_query_pool(global_query_context, concept_mask)
+        )
+        pooled_personal_state = self.ae_personal_state_proj(
+            self._masked_query_pool(personal_query_correction, concept_mask)
+        )
         query_count = concept_mask.float().sum(dim=1, keepdim=True)
         query_density = query_count / float(max(1, self.num_concepts))
+        graph_neighbor_mass = (graph_query_weight * (1.0 - query_mask)).sum(dim=1, keepdim=True)
         scalar_feats = torch.cat(
             [
                 graph_rms.unsqueeze(-1),
                 personal_rms.unsqueeze(-1),
                 (graph_rms * personal_rms).unsqueeze(-1),
-                query_density,
+                query_density + graph_neighbor_mass,
             ],
             dim=-1,
         )
-        raw = self.ae_logit_adapter(torch.cat([*pooled, scalar_feats], dim=-1)).squeeze(-1)
+        features = torch.cat(
+            [
+                student_context,
+                query_self_context,
+                query_graph_context,
+                student_context * query_graph_context,
+                pooled_graph_state,
+                pooled_personal_state,
+                scalar_feats,
+            ],
+            dim=-1,
+        )
+        raw = self.ae_logit_adapter(features).squeeze(-1)
         if self.ae_logit_residual_clip > 0.0:
             clip = self.ae_logit_residual_clip
             raw = clip * torch.tanh(raw / clip)
