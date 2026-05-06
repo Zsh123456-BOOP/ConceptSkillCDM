@@ -127,6 +127,7 @@ def run_cdm_forward(
 
     ae_logit_residual, ae_logit_residual_abs_mean = model._build_ae_logit_residual(
         student_ids=student_ids,
+        exercise_ids=exercise_ids,
         knowledge_state=knowledge_state,
         relation_matrices=relation_matrices,
         global_query_context=global_query_context,

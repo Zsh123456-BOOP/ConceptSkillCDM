@@ -514,6 +514,69 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         "AE logit residual should be active only when A and E both provide query signals.",
     )
 
+    prior_model = CognitiveDiagnosisModel(
+        num_students=4,
+        num_exercises=3,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=1,
+        num_gnn_layers=1,
+        dropout=0.0,
+        ae_query_residual_scale=0.0,
+        ae_logit_residual_scale=1.0,
+        ae_logit_residual_clip=0.0,
+        use_concept_graph=True,
+        use_personal_graph=True,
+        personal_delta_scale=3.0,
+    )
+    with torch.no_grad():
+        prior_model.ae_student_logit_emb.weight.zero_()
+        prior_model.ae_concept_logit_emb.weight.zero_()
+        for p in prior_model.ae_logit_adapter.parameters():
+            p.zero_()
+    student_prior = torch.tensor([0.10, -0.20, 0.30, -0.40], dtype=torch.float32)
+    exercise_prior = torch.tensor([0.50, -0.10, 0.20], dtype=torch.float32)
+    concept_prior = torch.tensor([0.40, -0.30, 0.10], dtype=torch.float32)
+    prior_model.initialize_ae_logit_priors(
+        student_logits=student_prior,
+        exercise_logits=exercise_prior,
+        concept_logits=concept_prior,
+        scale=1.0,
+    )
+    _assert(
+        not prior_model.ae_student_prior_logit.requires_grad
+        and not prior_model.ae_exercise_prior_logit.requires_grad
+        and not prior_model.ae_concept_prior_logit.requires_grad,
+        "AE stat priors must be fixed buffers, not trainable bias parameters.",
+    )
+    _assert(
+        prior_model.ae_student_logit_bias.weight.abs().max().item() == 0.0
+        and prior_model.ae_exercise_logit_bias.weight.abs().max().item() == 0.0
+        and prior_model.ae_concept_logit_bias.weight.abs().max().item() == 0.0,
+        "AE trainable bias correction must start at zero after stat-prior initialization.",
+    )
+    prior_student_ids = torch.tensor([0, 1, 2], dtype=torch.long)
+    prior_exercise_ids = torch.tensor([0, 1, 2], dtype=torch.long)
+    with torch.no_grad():
+        _, prior_details = prior_model(
+            student_ids=prior_student_ids,
+            exercise_ids=prior_exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+    prior_q = q_matrix[prior_exercise_ids].float()
+    prior_q_weight = prior_q / prior_q.sum(dim=1, keepdim=True).clamp(min=1.0)
+    expected_prior = (
+        student_prior[prior_student_ids]
+        + 0.75 * exercise_prior[prior_exercise_ids]
+        + 0.75 * prior_q_weight.matmul(concept_prior.unsqueeze(-1)).squeeze(-1)
+    )
+    _assert(
+        torch.allclose(prior_details["ae_logit_residual"], expected_prior, atol=1e-6),
+        "AE logit residual should preserve the fixed E(student)+A(exercise+concept) prior exactly.",
+    )
+
     no_e_model = CognitiveDiagnosisModel(
         num_students=4,
         num_exercises=3,

@@ -535,6 +535,7 @@ def _build_optimizer(model: nn.Module, args) -> optim.Optimizer:
         "ae_student_logit_emb",
         "ae_concept_logit_emb",
         "ae_student_logit_bias",
+        "ae_exercise_logit_bias",
         "ae_concept_logit_bias",
         "ae_graph_state_proj",
         "ae_personal_state_proj",
@@ -590,11 +591,14 @@ def _compute_train_stat_logits(
     q_matrix: torch.Tensor,
     *,
     num_students: int,
+    num_exercises: int,
     num_concepts: int,
-) -> Tuple[torch.Tensor, torch.Tensor, float]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
     q_cpu = q_matrix.detach().float().cpu()
     student_count = torch.zeros(num_students, dtype=torch.float32)
     student_correct = torch.zeros(num_students, dtype=torch.float32)
+    exercise_count = torch.zeros(num_exercises, dtype=torch.float32)
+    exercise_correct = torch.zeros(num_exercises, dtype=torch.float32)
     concept_count = torch.zeros(num_concepts, dtype=torch.float32)
     concept_correct = torch.zeros(num_concepts, dtype=torch.float32)
     total_count = 0
@@ -611,6 +615,8 @@ def _compute_train_stat_logits(
         ones = torch.ones_like(y)
         student_count.index_add_(0, student_ids, ones)
         student_correct.index_add_(0, student_ids, y)
+        exercise_count.index_add_(0, exercise_ids, ones)
+        exercise_correct.index_add_(0, exercise_ids, y)
 
         q = q_cpu[exercise_ids]
         concept_count += q.sum(dim=0)
@@ -619,6 +625,7 @@ def _compute_train_stat_logits(
     if total_count <= 0:
         return (
             torch.zeros(num_students, dtype=torch.float32),
+            torch.zeros(num_exercises, dtype=torch.float32),
             torch.zeros(num_concepts, dtype=torch.float32),
             0.5,
         )
@@ -628,19 +635,25 @@ def _compute_train_stat_logits(
     global_logit = _safe_logit(global_rate_t)
 
     student_smoothing = 8.0
+    exercise_smoothing = 5.0
     concept_smoothing = 20.0
     student_rate = (
         student_correct + student_smoothing * global_rate_t
     ) / (student_count + student_smoothing).clamp(min=1.0)
+    exercise_rate = (
+        exercise_correct + exercise_smoothing * global_rate_t
+    ) / (exercise_count + exercise_smoothing).clamp(min=1.0)
     concept_rate = (
         concept_correct + concept_smoothing * global_rate_t
     ) / (concept_count + concept_smoothing).clamp(min=1.0)
 
-    student_logits = (_safe_logit(student_rate) - global_logit).clamp(min=-2.5, max=2.5)
-    concept_logits = (_safe_logit(concept_rate) - global_logit).clamp(min=-2.5, max=2.5)
+    student_logits = (_safe_logit(student_rate) - global_logit).clamp(min=-3.0, max=3.0)
+    exercise_logits = (_safe_logit(exercise_rate) - global_logit).clamp(min=-3.0, max=3.0)
+    concept_logits = (_safe_logit(concept_rate) - global_logit).clamp(min=-3.0, max=3.0)
     student_logits = torch.where(torch.isfinite(student_logits), student_logits, torch.zeros_like(student_logits))
+    exercise_logits = torch.where(torch.isfinite(exercise_logits), exercise_logits, torch.zeros_like(exercise_logits))
     concept_logits = torch.where(torch.isfinite(concept_logits), concept_logits, torch.zeros_like(concept_logits))
-    return student_logits, concept_logits, float(global_rate)
+    return student_logits, exercise_logits, concept_logits, float(global_rate)
 
 
 def _initialize_ae_stat_priors(
@@ -656,29 +669,33 @@ def _initialize_ae_stat_priors(
         return
     base_model = _get_base_model(model)
     if (
-        getattr(base_model, "ae_student_logit_bias", None) is None
-        or getattr(base_model, "ae_concept_logit_bias", None) is None
+        getattr(base_model, "ae_student_prior_logit", None) is None
+        or getattr(base_model, "ae_exercise_prior_logit", None) is None
+        or getattr(base_model, "ae_concept_prior_logit", None) is None
     ):
         return
 
-    student_logits, concept_logits, global_rate = _compute_train_stat_logits(
+    student_logits, exercise_logits, concept_logits, global_rate = _compute_train_stat_logits(
         train_loader,
         info_dict["q_matrix"],
         num_students=info_dict["num_students"],
+        num_exercises=info_dict["num_exercises"],
         num_concepts=info_dict["num_concepts"],
     )
     base_model.initialize_ae_logit_priors(
         student_logits=student_logits,
+        exercise_logits=exercise_logits,
         concept_logits=concept_logits,
         scale=scale,
     )
     logger.info(
         "%s AE stat priors initialized: scale=%.3f, train_global_rate=%.4f, "
-        "student_absmean=%.4f, concept_absmean=%.4f",
+        "student_absmean=%.4f, exercise_absmean=%.4f, concept_absmean=%.4f",
         run_tag,
         scale,
         global_rate,
         float(student_logits.abs().mean().item()),
+        float(exercise_logits.abs().mean().item()),
         float(concept_logits.abs().mean().item()),
     )
 
