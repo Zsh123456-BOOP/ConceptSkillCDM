@@ -72,6 +72,8 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "graph_edge_bias_rank",
     "graph_prior_logit_scale",
     "ae_query_residual_scale",
+    "ae_logit_residual_scale",
+    "ae_logit_residual_clip",
     "graph_query_adapter_enable",
     "personal_delta_scale",
     "personal_warmup_epochs",
@@ -126,7 +128,6 @@ def _ensure_1d(t: torch.Tensor) -> torch.Tensor:
 
 
 def _resolve_optional_graph_dropout(value: Any) -> Optional[float]:
-    """Compatibility: graph_dropout < 0 or invalid means follow global dropout."""
     if value is None:
         return None
     try:
@@ -134,18 +135,6 @@ def _resolve_optional_graph_dropout(value: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return None if val < 0 else val
-
-
-def _read_config_value(source: Any, *keys: str, default: Any = None) -> Any:
-    for key in keys:
-        if isinstance(source, dict):
-            if key in source and source.get(key) is not None:
-                return source.get(key)
-        else:
-            value = getattr(source, key, None)
-            if value is not None:
-                return value
-    return default
 
 
 def _default_monitor_config() -> Dict[str, str]:
@@ -694,33 +683,6 @@ def _log_graph_init_state(model: nn.Module, logger, context: str) -> None:
     )
 
 
-def _convert_legacy_weight_norm_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-    """
-    Compatibility helper:
-    Old torch.nn.utils.weight_norm produced:
-      ...theta_proj.weight_g, ...theta_proj.weight_v
-    New torch.nn.utils.parametrizations.weight_norm produces:
-      ...theta_proj.parametrizations.weight.original0 (g)
-      ...theta_proj.parametrizations.weight.original1 (v)
-    """
-    has_legacy = any(k.endswith("weight_g") or k.endswith("weight_v") for k in state_dict.keys())
-    if not has_legacy:
-        return state_dict
-
-    new_sd = dict(state_dict)
-    keys = list(state_dict.keys())
-    for k in keys:
-        if k.endswith("weight_g"):
-            base = k[:-len("weight_g")]
-            new_k = base + "parametrizations.weight.original0"
-            new_sd[new_k] = new_sd.pop(k)
-        elif k.endswith("weight_v"):
-            base = k[:-len("weight_v")]
-            new_k = base + "parametrizations.weight.original1"
-            new_sd[new_k] = new_sd.pop(k)
-    return new_sd
-
-
 def _strip_module_prefix(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     """
     移除 DataParallel 保存的 state_dict 中的 'module.' 前缀。
@@ -843,6 +805,7 @@ def _collect_debug_forward_stats(
     query_row_global_readout_delta_vals: List[float] = []
     query_row_personal_message_delta_vals: List[float] = []
     ae_query_state_residual_delta_vals: List[float] = []
+    ae_logit_residual_abs_mean_vals: List[float] = []
     query_row_posterior_delta_abs_vals: List[float] = []
     query_row_posterior_kl_vals: List[float] = []
     personal_to_graph_query_ratio_vals: List[float] = []
@@ -964,6 +927,7 @@ def _collect_debug_forward_stats(
                 ("personal_support_density", personal_support_density_vals),
                 ("query_row_personal_message_delta", query_row_personal_message_delta_vals),
                 ("ae_query_state_residual_delta", ae_query_state_residual_delta_vals),
+                ("ae_logit_residual_abs_mean", ae_logit_residual_abs_mean_vals),
                 ("query_row_posterior_delta_abs", query_row_posterior_delta_abs_vals),
                 ("query_row_posterior_kl", query_row_posterior_kl_vals),
                 ("personal_to_graph_query_ratio_effective", personal_to_graph_query_ratio_vals),
@@ -1061,6 +1025,7 @@ def _collect_debug_forward_stats(
     query_row_global_readout_delta_mean, _ = _safe_mean_std(query_row_global_readout_delta_vals)
     query_row_personal_message_delta_mean, _ = _safe_mean_std(query_row_personal_message_delta_vals)
     ae_query_state_residual_delta_mean, _ = _safe_mean_std(ae_query_state_residual_delta_vals)
+    ae_logit_residual_abs_mean, _ = _safe_mean_std(ae_logit_residual_abs_mean_vals)
     query_row_posterior_delta_abs_mean, _ = _safe_mean_std(query_row_posterior_delta_abs_vals)
     query_row_posterior_kl_mean, _ = _safe_mean_std(query_row_posterior_kl_vals)
     personal_to_graph_query_ratio_mean, _ = _safe_mean_std(personal_to_graph_query_ratio_vals)
@@ -1129,6 +1094,7 @@ def _collect_debug_forward_stats(
         "query_row_global_readout_delta": query_row_global_readout_delta_mean,
         "query_row_personal_message_delta": query_row_personal_message_delta_mean,
         "ae_query_state_residual_delta": ae_query_state_residual_delta_mean,
+        "ae_logit_residual_abs_mean": ae_logit_residual_abs_mean,
         "query_row_posterior_delta_abs": query_row_posterior_delta_abs_mean,
         "query_row_posterior_kl": query_row_posterior_kl_mean,
         "personal_to_graph_query_ratio": personal_to_graph_query_ratio_mean,
@@ -1558,8 +1524,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         float(getattr(args, "personal_state_lr_mult", 1.0)),
         float(getattr(args, "personal_id_lr_mult", 0.5)),
         float(getattr(args, "graph_propagation_alpha", 0.20)),
-        float(_read_config_value(args, "graph_query_readout_scale", "graph_query_writeback_scale", "graph_readout_1hop_scale", default=0.35)),
-        float(_read_config_value(args, "graph_query_readout_2hop_scale", "graph_query_writeback_2hop_scale", "graph_readout_2hop_scale", default=0.15)),
+        float(getattr(args, "graph_query_readout_scale", 0.35)),
+        float(getattr(args, "graph_query_readout_2hop_scale", 0.15)),
     )
 
     data_dir = args.data_dir
@@ -1633,12 +1599,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         graph_dropout=_resolve_optional_graph_dropout(getattr(args, "graph_dropout", -1.0)),
         graph_tau_init=getattr(args, "graph_tau_init", 1.0),
         graph_propagation_alpha=getattr(args, "graph_propagation_alpha", 0.20),
-        graph_query_readout_scale=_read_config_value(
-            args, "graph_query_readout_scale", "graph_query_writeback_scale", "graph_readout_1hop_scale", default=0.35
-        ),
-        graph_query_readout_2hop_scale=_read_config_value(
-            args, "graph_query_readout_2hop_scale", "graph_query_writeback_2hop_scale", "graph_readout_2hop_scale", default=0.15
-        ),
+        graph_query_readout_scale=getattr(args, "graph_query_readout_scale", 0.35),
+        graph_query_readout_2hop_scale=getattr(args, "graph_query_readout_2hop_scale", 0.15),
         personal_rank=getattr(args, "personal_rank", 4),
         lambda_sparse_personal=args.lambda_sparse_personal,
         lambda_alpha=args.lambda_alpha,
@@ -1690,6 +1652,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         graph_edge_bias_rank=getattr(args, "graph_edge_bias_rank", 8),
         graph_prior_logit_scale=getattr(args, "graph_prior_logit_scale", 0.0),
         ae_query_residual_scale=getattr(args, "ae_query_residual_scale", 0.0),
+        ae_logit_residual_scale=getattr(args, "ae_logit_residual_scale", 0.0),
+        ae_logit_residual_clip=getattr(args, "ae_logit_residual_clip", 1.0),
         graph_query_adapter_enable=getattr(args, "graph_query_adapter_enable", True),
         share_concept_embeddings=getattr(args, "share_concept_embeddings", False),
     ).to(device)
@@ -1854,7 +1818,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "personal_row_entropy=%.4f, personal_matrix_delta=%.4f, personal_matrix_student_std=%.4f, "
                 "personal_delta_pre_softmax_norm=%.4f, personal_delta_student_std=%.4f, alpha_head_std=%.4f, "
                 "query_row_global_readout_delta=%.4f, query_row_personal_message_delta=%.4f, "
-                "ae_query_state_residual_delta=%.4f, "
+                "ae_query_state_residual_delta=%.4f, ae_logit_residual_abs_mean=%.4f, "
                 "query_row_posterior_delta_abs=%.4f, query_row_posterior_kl=%.4f, "
                 "query_row_delta_local_rms_raw=%.4f, query_row_message_projection_gain=%.4f, "
                 "personal_to_graph_query_ratio=%.4f, query_row_global_support_mass=%.4f, "
@@ -1865,7 +1829,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "personal_bad_rows_active=%.2f, personal_fallback_rows_active=%.2f, "
                 "personal_bad_row_rate_active=%.4f, personal_padded_rows=%.2f, "
                 "personal_logits_support_absmax=%.4f, personal_query_trust_scale_mean=%.4f, "
-                "personal_bad_rows_legacy=%.2f, personal_fallback_rows_legacy=%.2f, personal_logits_absmax_legacy=%.4f",
+                "personal_bad_rows_all=%.2f, personal_fallback_rows_all=%.2f, personal_logits_absmax_all=%.4f",
                 run_tag,
                 epoch,
                 diag["irt_abs_mean"],
@@ -1892,6 +1856,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["query_row_global_readout_delta"],
                 diag["query_row_personal_message_delta"],
                 diag["ae_query_state_residual_delta"],
+                diag["ae_logit_residual_abs_mean"],
                 diag["query_row_posterior_delta_abs"],
                 diag["query_row_posterior_kl"],
                 diag["query_row_delta_local_rms_raw"],
@@ -2386,19 +2351,11 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         graph_propagation_alpha=loaded_args.get(
             "graph_propagation_alpha", getattr(args, "graph_propagation_alpha", 0.20)
         ),
-        graph_query_readout_scale=_read_config_value(
-            loaded_args,
-            "graph_query_readout_scale",
-            "graph_query_writeback_scale",
-            "graph_readout_1hop_scale",
-            default=_read_config_value(args, "graph_query_readout_scale", "graph_query_writeback_scale", "graph_readout_1hop_scale", default=0.35),
+        graph_query_readout_scale=loaded_args.get(
+            "graph_query_readout_scale", getattr(args, "graph_query_readout_scale", 0.35)
         ),
-        graph_query_readout_2hop_scale=_read_config_value(
-            loaded_args,
-            "graph_query_readout_2hop_scale",
-            "graph_query_writeback_2hop_scale",
-            "graph_readout_2hop_scale",
-            default=_read_config_value(args, "graph_query_readout_2hop_scale", "graph_query_writeback_2hop_scale", "graph_readout_2hop_scale", default=0.15),
+        graph_query_readout_2hop_scale=loaded_args.get(
+            "graph_query_readout_2hop_scale", getattr(args, "graph_query_readout_2hop_scale", 0.15)
         ),
         prediction_l2_lambda=loaded_args.get(
             "prediction_l2_lambda",
@@ -2510,6 +2467,12 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ae_query_residual_scale=loaded_args.get(
             "ae_query_residual_scale", getattr(args, "ae_query_residual_scale", 0.0)
         ),
+        ae_logit_residual_scale=loaded_args.get(
+            "ae_logit_residual_scale", getattr(args, "ae_logit_residual_scale", 0.0)
+        ),
+        ae_logit_residual_clip=loaded_args.get(
+            "ae_logit_residual_clip", getattr(args, "ae_logit_residual_clip", 1.0)
+        ),
         graph_query_adapter_enable=loaded_args.get(
             "graph_query_adapter_enable", getattr(args, "graph_query_adapter_enable", True)
         ),
@@ -2530,9 +2493,7 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     )
     _log_graph_init_state(model, logger=logger, context="[Inference]")
 
-    # compatibility for legacy weight_norm checkpoints
     state_dict = checkpoint["model_state_dict"]
-    state_dict = _convert_legacy_weight_norm_keys(state_dict)
     state_dict = _strip_module_prefix(state_dict)  # 处理 DataParallel 的 module. 前缀
 
     incompatible = model.load_state_dict(state_dict, strict=False)

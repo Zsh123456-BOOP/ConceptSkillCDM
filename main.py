@@ -29,18 +29,6 @@ def _normalize_bool(value, default=False):
     return bool(value)
 
 
-def _read_compat_value(source, *keys, default=None):
-    for key in keys:
-        if isinstance(source, dict):
-            if key in source and source.get(key) is not None:
-                return source.get(key)
-        else:
-            value = getattr(source, key, None)
-            if value is not None:
-                return value
-    return default
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Cognitive Diagnosis Model Training and Testing")
     bool_action = argparse.BooleanOptionalAction
@@ -148,18 +136,12 @@ def parse_args():
     )
     parser.add_argument(
         "--graph_query_readout_scale",
-        "--graph_query_writeback_scale",
-        "--graph_readout_1hop_scale",
-        dest="graph_query_readout_scale",
         type=float,
         default=0.35,
         help="Canonical 1-hop query-local global graph readout scale before the fixed diagnosis head.",
     )
     parser.add_argument(
         "--graph_query_readout_2hop_scale",
-        "--graph_query_writeback_2hop_scale",
-        "--graph_readout_2hop_scale",
-        dest="graph_query_readout_2hop_scale",
         type=float,
         default=0.15,
         help="Canonical 2-hop query-local global graph readout scale before the fixed diagnosis head.",
@@ -322,6 +304,10 @@ def parse_args():
                         help="Logit scale for the train-Q concept co-occurrence prior injected into A.")
     parser.add_argument("--ae_query_residual_scale", type=float, default=0.0,
                         help="Scale for the A/E-only nonlinear query-state residual before the fixed diagnosis head.")
+    parser.add_argument("--ae_logit_residual_scale", type=float, default=0.0,
+                        help="Scale for the A/E-only query logit residual; disabled whenever A or E is ablated.")
+    parser.add_argument("--ae_logit_residual_clip", type=float, default=1.0,
+                        help="Tanh clip magnitude for the A/E-only query logit residual before scaling.")
     parser.add_argument("--graph_query_adapter_enable", action=bool_action, default=None,
                         help="Enable query adapter on top of graph readout before the fixed diagnosis head.")
     parser.add_argument("--personal_state_lr_mult", type=float, default=1.0,
@@ -365,10 +351,6 @@ def main():
 
     args.graph_query_readout_scale = float(getattr(args, "graph_query_readout_scale", 0.35))
     args.graph_query_readout_2hop_scale = float(getattr(args, "graph_query_readout_2hop_scale", 0.15))
-    args.graph_readout_1hop_scale = float(args.graph_query_readout_scale)
-    args.graph_readout_2hop_scale = float(args.graph_query_readout_2hop_scale)
-    args.graph_query_writeback_scale = float(args.graph_query_readout_scale)
-    args.graph_query_writeback_2hop_scale = float(args.graph_query_readout_2hop_scale)
 
     # =========================================================
     # -1) main  launcher 
@@ -553,19 +535,11 @@ def main():
                 graph_propagation_alpha=loaded_args.get(
                     "graph_propagation_alpha", getattr(args, "graph_propagation_alpha", 0.20)
                 ),
-                graph_query_readout_scale=_read_compat_value(
-                    loaded_args,
-                    "graph_query_readout_scale",
-                    "graph_query_writeback_scale",
-                    "graph_readout_1hop_scale",
-                    default=_read_compat_value(args, "graph_query_readout_scale", "graph_query_writeback_scale", "graph_readout_1hop_scale", default=0.35),
+                graph_query_readout_scale=loaded_args.get(
+                    "graph_query_readout_scale", getattr(args, "graph_query_readout_scale", 0.35)
                 ),
-                graph_query_readout_2hop_scale=_read_compat_value(
-                    loaded_args,
-                    "graph_query_readout_2hop_scale",
-                    "graph_query_writeback_2hop_scale",
-                    "graph_readout_2hop_scale",
-                    default=_read_compat_value(args, "graph_query_readout_2hop_scale", "graph_query_writeback_2hop_scale", "graph_readout_2hop_scale", default=0.15),
+                graph_query_readout_2hop_scale=loaded_args.get(
+                    "graph_query_readout_2hop_scale", getattr(args, "graph_query_readout_2hop_scale", 0.15)
                 ),
                 lambda_graph_entropy=loaded_args.get("lambda_sparse", getattr(args, "lambda_sparse", 0.01)),
                 graph_entropy_min=loaded_args.get("graph_entropy_min", getattr(args, "graph_entropy_min", 0.15)),
@@ -672,6 +646,12 @@ def main():
                 ),
                 ae_query_residual_scale=loaded_args.get(
                     "ae_query_residual_scale", getattr(args, "ae_query_residual_scale", 0.0)
+                ),
+                ae_logit_residual_scale=loaded_args.get(
+                    "ae_logit_residual_scale", getattr(args, "ae_logit_residual_scale", 0.0)
+                ),
+                ae_logit_residual_clip=loaded_args.get(
+                    "ae_logit_residual_clip", getattr(args, "ae_logit_residual_clip", 1.0)
                 ),
                 share_concept_embeddings=loaded_args.get(
                     "share_concept_embeddings", getattr(args, "share_concept_embeddings", False)

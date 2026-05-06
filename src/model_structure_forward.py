@@ -338,11 +338,11 @@ def run_structure_forward(
                 )
                 row_has_support = support_valid_mask.any(dim=-1)
                 row_is_valid = active_row_valid_mask.unsqueeze(1).expand(-1, support_valid_mask.size(1), -1)
-                bad_rows_legacy = ~row_has_support
+                bad_rows_all = ~row_has_support
                 bad_rows_active = row_is_valid & (~row_has_support)
                 padded_rows = ~row_is_valid
                 active_row_count = row_is_valid.float().sum().clamp(min=1.0)
-                personal_bad_row_count = posterior_prob.new_tensor(int(bad_rows_legacy.sum().item()), dtype=torch.long)
+                personal_bad_row_count = posterior_prob.new_tensor(int(bad_rows_all.sum().item()), dtype=torch.long)
                 personal_fallback_row_count = personal_bad_row_count.clone()
                 personal_padded_row_count = posterior_prob.new_tensor(int(padded_rows.sum().item()), dtype=torch.long)
                 personal_bad_row_count_active = posterior_prob.new_tensor(int(bad_rows_active.sum().item()), dtype=torch.long)

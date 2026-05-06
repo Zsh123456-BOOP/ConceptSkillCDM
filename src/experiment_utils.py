@@ -204,6 +204,8 @@ def _build_config_hash(args) -> str:
         "graph_edge_bias_rank",
         "graph_prior_logit_scale",
         "ae_query_residual_scale",
+        "ae_logit_residual_scale",
+        "ae_logit_residual_clip",
         "graph_query_adapter_enable",
         "lambda_personal_kl",
         "lambda_personal_query_residual",
@@ -297,10 +299,6 @@ def append_summary_csv(
         "data_dir",
         "gpu_candidates",
         "generate_diagnosis",
-        "graph_query_writeback_scale",
-        "graph_query_writeback_2hop_scale",
-        "graph_readout_1hop_scale",
-        "graph_readout_2hop_scale",
     }
 
     for k, v in sorted(vars(args).items()):

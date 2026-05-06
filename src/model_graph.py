@@ -244,7 +244,7 @@ class ConceptGraphConv(nn.Module):
                 A = A / (A.sum(dim=-1, keepdim=True) + 1e-12)
                 out = torch.matmul(A, Wh)  # (C,C) @ (B,C,D) -> (B,C,D)
             else:
-                # 4D 个性化邻接（兼容旧代码）
+                # Dense per-sample adjacency path.
                 A = relation_matrices[:, h, :, :]  # (B, C, C)
                 A = A.to(dtype=Wh.dtype)  # Fix #4
                 A = A / (A.sum(dim=-1, keepdim=True) + 1e-12)

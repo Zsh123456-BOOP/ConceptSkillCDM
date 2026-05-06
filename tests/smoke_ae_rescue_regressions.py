@@ -174,6 +174,8 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "graph_edge_bias_rank",
         "graph_prior_logit_scale",
         "ae_query_residual_scale",
+        "ae_logit_residual_scale",
+        "ae_logit_residual_clip",
         "graph_query_adapter_enable",
     )
     for dataset in ("assist_09", "junyi"):
@@ -444,8 +446,8 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
             return_logits=True,
         )
     _assert(
-        details["ae_query_state_residual_delta"].item() > 1e-8,
-        "AE query residual should be active when A has graph query context.",
+        details["ae_query_state_residual_delta"].item() == 0.0,
+        "AE query residual must stay inactive when E is disabled.",
     )
 
     no_a_model = CognitiveDiagnosisModel(
@@ -472,6 +474,72 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
     _assert(
         no_a_details["ae_query_state_residual_delta"].item() == 0.0,
         "AE query residual must stay inactive in no_A because graph query context is absent.",
+    )
+
+    ae_model = CognitiveDiagnosisModel(
+        num_students=4,
+        num_exercises=3,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=1,
+        num_gnn_layers=1,
+        dropout=0.0,
+        graph_prior_logit_scale=0.7,
+        ae_query_residual_scale=0.5,
+        ae_logit_residual_scale=0.8,
+        use_concept_graph=True,
+        use_personal_graph=True,
+        personal_delta_scale=3.0,
+        personal_query_correction_scale=1.0,
+        personal_query_correction_max_ratio=1.0,
+        personal_query_correction_min_graph_anchor=0.01,
+    )
+    with torch.no_grad():
+        _, ae_details = ae_model(
+            student_ids=torch.tensor([0, 1, 2], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 1, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+    _assert(
+        ae_details["ae_query_state_residual_delta"].item() > 1e-8,
+        "AE query residual should be active only when A and E both provide query signals.",
+    )
+    _assert(
+        ae_details["ae_logit_residual_abs_mean"].item() > 1e-8,
+        "AE logit residual should be active only when A and E both provide query signals.",
+    )
+
+    no_e_model = CognitiveDiagnosisModel(
+        num_students=4,
+        num_exercises=3,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=1,
+        num_gnn_layers=1,
+        dropout=0.0,
+        graph_prior_logit_scale=0.7,
+        ae_query_residual_scale=0.5,
+        ae_logit_residual_scale=0.8,
+        use_concept_graph=True,
+        use_personal_graph=False,
+    )
+    with torch.no_grad():
+        _, no_e_details = no_e_model(
+            student_ids=torch.tensor([0, 1, 2], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 1, 2], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+    _assert(
+        no_e_details["ae_logit_residual_abs_mean"].item() == 0.0,
+        "AE logit residual must be exactly inactive in no_E.",
+    )
+    _assert(
+        no_e_details["ae_query_state_residual_delta"].item() == 0.0,
+        "AE query-state residual must be exactly inactive in no_E.",
     )
 
 
@@ -1493,6 +1561,8 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
         graph_identity_residual=0.1,
         personal_delta_scale=6.0,
         personal_warmup_epochs=8,
+        ae_logit_residual_scale=0.65,
+        ae_logit_residual_clip=1.2,
         lambda_personal_kl=0.02,
         lambda_personal_query_residual=0.05,
         personal_query_residual_margin=0.08,
@@ -1507,12 +1577,14 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
     hash_reg_warmup = _build_config_hash(SimpleNamespace(**{**base, "personal_reg_warmup_epochs": 4}))
     hash_query_readout = _build_config_hash(SimpleNamespace(**{**base, "graph_query_readout_scale": 0.4}))
     hash_query_residual = _build_config_hash(SimpleNamespace(**{**base, "lambda_personal_query_residual": 0.02}))
+    hash_ae_logit = _build_config_hash(SimpleNamespace(**{**base, "ae_logit_residual_scale": 0.2}))
 
     _assert(hash_base != hash_share, "config hash 必须区分 share_concept_embeddings 的结构差异。")
     _assert(hash_base != hash_alpha_bias, "config hash 必须区分 personal_alpha_bias_scale 的结构差异。")
     _assert(hash_base != hash_reg_warmup, "config hash 必须区分 personal_reg_warmup_epochs 的差异。")
     _assert(hash_base != hash_query_readout, "config hash 必须区分 graph_query_readout_scale 的结构差异。")
     _assert(hash_base != hash_query_residual, "config hash 必须区分 lambda_personal_query_residual 的差异。")
+    _assert(hash_base != hash_ae_logit, "config hash 必须区分 ae_logit_residual_scale 的结构差异。")
 
 
 def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
@@ -1532,6 +1604,8 @@ def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
         graph_identity_residual=0.1,
         personal_delta_scale=6.0,
         personal_warmup_epochs=8,
+        ae_logit_residual_scale=0.65,
+        ae_logit_residual_clip=1.2,
         personal_include_neighbor_rows=False,
         personal_query_correction_scale=0.10,
         lambda_personal_kl=0.02,
@@ -1579,6 +1653,8 @@ def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
         "graph_identity_residual",
         "personal_delta_scale",
         "personal_warmup_epochs",
+        "ae_logit_residual_scale",
+        "ae_logit_residual_clip",
         "personal_include_neighbor_rows",
         "personal_query_correction_scale",
         "lambda_personal_kl",
@@ -2260,6 +2336,7 @@ def _check_result_schema_regression() -> None:
             "full_query_row_global_readout_delta",
             "full_query_row_personal_message_delta",
             "full_ae_query_state_residual_delta",
+            "full_ae_logit_residual_abs_mean",
             "full_query_row_posterior_delta_abs",
             "full_query_row_delta_local_rms_raw",
             "full_query_row_message_projection_gain",

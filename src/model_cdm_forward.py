@@ -125,7 +125,13 @@ def run_cdm_forward(
         )
         diag_details = None
 
-    total_logit = irt_logit
+    ae_logit_residual, ae_logit_residual_abs_mean = model._build_ae_logit_residual(
+        knowledge_state=knowledge_state,
+        global_query_context=global_query_context,
+        personal_query_correction=personal_query_correction,
+        concept_mask=q_vector,
+    )
+    total_logit = irt_logit + ae_logit_residual
     out_main = total_logit if return_logits else torch.sigmoid(total_logit)
 
     if not return_details:
@@ -138,6 +144,8 @@ def run_cdm_forward(
         "share_concept_embeddings": torch.tensor(int(model.share_concept_embeddings), device=device),
         "graph_prior_logit_scale": torch.tensor(float(model.graph_prior_logit_scale), device=device),
         "ae_query_residual_scale": torch.tensor(float(model.ae_query_residual_scale), device=device),
+        "ae_logit_residual_scale": torch.tensor(float(model.ae_logit_residual_scale), device=device),
+        "ae_logit_residual_clip": torch.tensor(float(model.ae_logit_residual_clip), device=device),
         "relation_matrices": relation_matrices,
         "relation_used": relation_used,
         "personal_relation_spec": personal_relation_spec,
@@ -148,6 +156,8 @@ def run_cdm_forward(
         "irt_b": b.detach(),
         "irt_a": a.detach(),
         "irt_logit": irt_logit.detach(),
+        "ae_logit_residual": ae_logit_residual.detach(),
+        "ae_logit_residual_abs_mean": ae_logit_residual_abs_mean.detach(),
         "logits": total_logit.detach(),
         "relation_identity_delta": s_out["relation_identity_delta"].detach(),
         "knowledge_state_backbone_delta": s_out["knowledge_state_backbone_delta"].detach(),
