@@ -517,8 +517,8 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
             return_logits=True,
         )
     _assert(
-        ae_details["ae_query_state_residual_delta"].item() > 1e-8,
-        "AE query residual should be active only when A and E both provide query signals.",
+        ae_details["ae_query_state_residual_delta"].item() == 0.0,
+        "可解释 AE 不应再通过 query-state MLP residual 改写知识状态。",
     )
     _assert(
         ae_details["ae_logit_residual_abs_mean"].item() > 1e-8,
@@ -543,10 +543,7 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         personal_delta_scale=3.0,
     )
     with torch.no_grad():
-        prior_model.ae_student_logit_emb.weight.zero_()
-        prior_model.ae_concept_logit_emb.weight.zero_()
-        for p in prior_model.ae_logit_adapter.parameters():
-            p.zero_()
+        prior_model.ae_logit_feature_weight.zero_()
     student_prior = torch.tensor([0.10, -0.20, 0.30, -0.40], dtype=torch.float32)
     exercise_prior = torch.tensor([0.50, -0.10, 0.20], dtype=torch.float32)
     concept_prior = torch.tensor([0.40, -0.30, 0.10], dtype=torch.float32)
@@ -611,10 +608,7 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         personal_delta_scale=3.0,
     )
     with torch.no_grad():
-        no_a_prior_model.ae_student_logit_emb.weight.zero_()
-        no_a_prior_model.ae_concept_logit_emb.weight.zero_()
-        for p in no_a_prior_model.ae_logit_adapter.parameters():
-            p.zero_()
+        no_a_prior_model.ae_logit_feature_weight.zero_()
     no_a_prior_model.initialize_ae_logit_priors(
         student_logits=student_prior,
         exercise_logits=exercise_prior,
@@ -657,10 +651,7 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         personal_delta_scale=3.0,
     )
     with torch.no_grad():
-        no_e_prior_model.ae_student_logit_emb.weight.zero_()
-        no_e_prior_model.ae_concept_logit_emb.weight.zero_()
-        for p in no_e_prior_model.ae_logit_adapter.parameters():
-            p.zero_()
+        no_e_prior_model.ae_logit_feature_weight.zero_()
     no_e_prior_model.initialize_ae_logit_priors(
         student_logits=student_prior,
         exercise_logits=exercise_prior,
@@ -755,19 +746,10 @@ def _check_ae_interaction_logit_is_full_only() -> None:
             personal_delta_scale=3.0,
         )
         with torch.no_grad():
-            model.ae_student_logit_emb.weight.zero_()
-            model.ae_concept_logit_emb.weight.zero_()
             model.ae_student_logit_bias.weight.zero_()
             model.ae_exercise_logit_bias.weight.zero_()
             model.ae_concept_logit_bias.weight.zero_()
-            for p in model.ae_logit_adapter.parameters():
-                p.zero_()
-            model.ae_student_factor.weight.copy_(
-                torch.tensor([[1.0, 0.0], [0.0, 2.0], [1.0, 1.0]], dtype=torch.float32)
-            )
-            model.ae_exercise_factor.weight.copy_(
-                torch.tensor([[3.0, 0.0], [0.0, 4.0], [2.0, -1.0]], dtype=torch.float32)
-            )
+            model.ae_logit_feature_weight.zero_()
         return model
 
     full_model = build_model(use_concept_graph=True, use_personal_graph=True)
@@ -778,10 +760,9 @@ def _check_ae_interaction_logit_is_full_only() -> None:
             return_details=True,
             return_logits=True,
         )
-    expected = torch.tensor([3.0, 8.0, 1.0], dtype=torch.float32) / math.sqrt(2.0) * 2.0
     _assert(
-        torch.allclose(full_details["ae_logit_residual"], expected, atol=1e-6),
-        "full 应直接使用可训练的 A x E student-exercise 交互 logit。",
+        full_details["ae_logit_residual"].abs().mean().item() > 1e-8,
+        "full 应使用显式 A(global query strength) x E(personal query strength) 交互 logit。",
     )
     _assert(
         abs(float(full_details["ae_interaction_logit_scale"].item()) - 2.0) < 1e-8,
@@ -804,7 +785,7 @@ def _check_ae_interaction_logit_is_full_only() -> None:
                 return_logits=True,
             )
         _assert(
-            torch.allclose(details["ae_logit_residual"], torch.zeros_like(expected), atol=1e-8),
+            torch.allclose(details["ae_logit_residual"], torch.zeros_like(details["ae_logit_residual"]), atol=1e-8),
             f"{label} 必须关闭 full-only A x E 交互，否则消融不再是单模块消融。",
         )
 
@@ -902,7 +883,7 @@ def _check_no_a_support_semantics_regression() -> None:
                 )
 
 
-def _check_personal_branch_is_state_primary_with_small_id_adapter() -> None:
+def _check_personal_branch_removes_id_shortcuts() -> None:
     from src.model import CognitiveDiagnosisModel
 
     q_matrix = torch.eye(3, dtype=torch.float32)
@@ -926,31 +907,46 @@ def _check_personal_branch_is_state_primary_with_small_id_adapter() -> None:
     sm = model.structure_module
 
     _assert(
-        hasattr(sm, "personal_gate_from_state"),
-        "E 分支缺少从 A 编码 student_repr 到 gate 的主路投影。",
+        not hasattr(sm, "personal_gate_from_state"),
+        "可解释 E 不应继续保留 gate 的 student_repr MLP shortcut。",
     )
     _assert(
-        hasattr(sm, "personal_generator_from_state"),
-        "E 分支缺少从 A 编码 student_repr 到 generator 的主路投影。",
+        not hasattr(sm, "personal_generator_from_state"),
+        "可解释 E 不应继续保留 generator 的 student_repr MLP shortcut。",
     )
     _assert(
-        hasattr(sm, "personal_gate_id_logit"),
-        "E 分支缺少 gate 的 id-adapter 缩放参数。",
+        not hasattr(sm, "personal_gate_id_logit"),
+        "可解释 E 不应继续保留 gate 的 student-id adapter 缩放参数。",
     )
     _assert(
-        hasattr(sm, "personal_generator_id_logit"),
-        "E 分支缺少 generator 的 id-adapter 缩放参数。",
+        not hasattr(sm, "personal_generator_id_logit"),
+        "可解释 E 不应继续保留 generator 的 student-id adapter 缩放参数。",
+    )
+    _assert(
+        not hasattr(sm, "personal_alpha_bias"),
+        "可解释 E 不应继续保留 per-student alpha bias shortcut。",
     )
 
-    gate_id_scale = float(torch.sigmoid(sm.personal_gate_id_logit.detach()).item())
-    gen_id_scale = float(torch.sigmoid(sm.personal_generator_id_logit.detach()).item())
+    model.eval()
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0, 1], dtype=torch.long),
+            exercise_ids=torch.tensor([0, 1], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
     _assert(
-        gate_id_scale < 0.25,
-        f"gate 的 id-adapter 初始占比应较小，当前={gate_id_scale:.4f}",
+        float(details["alpha_id_path_absmean"].item()) == 0.0,
+        "可解释 E 的 alpha id path 必须为 0。",
     )
     _assert(
-        gen_id_scale < 0.25,
-        f"generator 的 id-adapter 初始占比应较小，当前={gen_id_scale:.4f}",
+        float(details["personal_student_mix"].item()) == 0.0,
+        "可解释 E 的 personal student-id mix 必须为 0。",
+    )
+    _assert(
+        float(details["personal_student_adapter_scale"].item()) == 0.0,
+        "可解释 E 的 student adapter scale 必须为 0。",
     )
 
 
@@ -966,14 +962,52 @@ def _check_adaptive_gate_is_state_primary() -> None:
         hidden_dim=16,
     )
     gate.eval()
+    with torch.no_grad():
+        gate.query_norm_weight.copy_(torch.tensor([0.30, -0.20]))
+        gate.context_norm_weight.copy_(torch.tensor([0.10, 0.25]))
 
-    state_a = torch.tensor([[0.0, 0.5, -0.5, 1.0, -1.0, 0.25, -0.25, 0.75]], dtype=torch.float32)
-    state_b = torch.tensor([[1.5, -1.0, 0.75, -0.25, 0.5, -0.5, 1.0, -1.5]], dtype=torch.float32)
-    context_a = torch.tensor([[0.0, 0.2, -0.1, 0.4, -0.3, 0.6, -0.5, 0.8, -0.7, 1.0, -0.9, 0.3]], dtype=torch.float32)
-    context_b = torch.tensor([[1.0, -0.8, 0.6, -0.4, 0.2, -0.1, 0.9, -0.7, 0.5, -0.3, 0.4, -0.2]], dtype=torch.float32)
-    id_a = torch.tensor([[0.1, -0.1, 0.2, -0.2, 0.3, -0.3, 0.4, -0.4]], dtype=torch.float32)
-    id_b = torch.tensor([[0.4, -0.4, 0.3, -0.3, 0.2, -0.2, 0.1, -0.1]], dtype=torch.float32)
-    bias = torch.zeros(1, 2)
+    state_a = torch.tensor(
+        [
+            [0.0, 0.5, -0.5, 1.0, -1.0, 0.25, -0.25, 0.75],
+            [0.2, -0.3, 0.1, -0.4, 0.6, -0.8, 0.9, -1.1],
+        ],
+        dtype=torch.float32,
+    )
+    state_b = torch.tensor(
+        [
+            [1.5, -1.0, 0.75, -0.25, 0.5, -0.5, 1.0, -1.5],
+            [-1.2, 0.9, -0.7, 0.4, -0.2, 0.3, -0.8, 1.1],
+        ],
+        dtype=torch.float32,
+    )
+    context_a = torch.tensor(
+        [
+            [0.0, 0.2, -0.1, 0.4, -0.3, 0.6, -0.5, 0.8, -0.7, 1.0, -0.9, 0.3],
+            [-0.2, 0.1, -0.4, 0.3, -0.6, 0.5, -0.8, 0.7, -1.0, 0.9, -0.3, 0.2],
+        ],
+        dtype=torch.float32,
+    )
+    context_b = torch.tensor(
+        [
+            [1.0, -0.8, 0.6, -0.4, 0.2, -0.1, 0.9, -0.7, 0.5, -0.3, 0.4, -0.2],
+            [-1.1, 0.7, -0.5, 0.3, -0.1, 0.2, -0.8, 0.6, -0.4, 0.5, -0.3, 0.1],
+        ],
+        dtype=torch.float32,
+    )
+    id_a = torch.tensor(
+        [
+            [0.1, -0.1, 0.2, -0.2, 0.3, -0.3, 0.4, -0.4],
+            [0.2, -0.2, 0.1, -0.1, 0.4, -0.4, 0.3, -0.3],
+        ],
+        dtype=torch.float32,
+    )
+    id_b = torch.tensor(
+        [
+            [0.4, -0.4, 0.3, -0.3, 0.2, -0.2, 0.1, -0.1],
+            [0.3, -0.3, 0.4, -0.4, 0.1, -0.1, 0.2, -0.2],
+        ],
+        dtype=torch.float32,
+    )
 
     with torch.no_grad():
         alpha_base, _, diag_base = gate(
@@ -998,16 +1032,16 @@ def _check_adaptive_gate_is_state_primary() -> None:
     state_delta = float((alpha_state - alpha_base).abs().mean().item())
     id_delta = float((alpha_id - alpha_base).abs().mean().item())
     _assert(
-        state_delta > id_delta * 2.0,
-        f"默认安全 gate 下，state/context 改动应显著强于 id 改动；当前 state_delta={state_delta:.6f}, id_delta={id_delta:.6f}",
+        state_delta > 1e-6 and id_delta == 0.0,
+        f"可解释 gate 应只响应 query/context 强度，不应响应 student-id；当前 state_delta={state_delta:.6f}, id_delta={id_delta:.6f}",
     )
     _assert(
         float(diag_state["state_path_absmean"].item()) > float(diag_id["id_path_absmean"].item()),
-        "gate 的主路径幅度应由 state/context 主导，而不是 id adapter 主导。",
+        "gate 的主路径幅度应由 query/context 强度主导，而不是 id adapter 主导。",
     )
     _assert(
-        float(diag_base["effective_id_scale"].item()) < 0.02,
-        f"id adapter 的有效缩放应保持在 tiny adapter 量级，当前={float(diag_base['effective_id_scale'].item()):.6f}",
+        float(diag_base["effective_id_scale"].item()) == 0.0,
+        f"id adapter 的有效缩放必须为 0，当前={float(diag_base['effective_id_scale'].item()):.6f}",
     )
 
 
@@ -1026,9 +1060,16 @@ def _check_gate_saturation_regression() -> None:
         alpha_base_init=0.05,
     )
     gate.eval()
+    with torch.no_grad():
+        gate.query_norm_weight.fill_(0.35)
+        gate.context_norm_weight.fill_(0.25)
 
-    huge_state = torch.full((4, 8), 25.0, dtype=torch.float32)
-    huge_context = torch.full((4, 12), -18.0, dtype=torch.float32)
+    huge_state = torch.stack(
+        [torch.full((8,), value, dtype=torch.float32) for value in (25.0, 12.0, -8.0, -18.0)]
+    )
+    huge_context = torch.stack(
+        [torch.full((12,), value, dtype=torch.float32) for value in (-18.0, -9.0, 6.0, 15.0)]
+    )
     student_id = torch.randn(4, 8)
 
     with torch.no_grad():
@@ -1122,11 +1163,13 @@ def _check_personal_graph_is_support_preserving_and_local() -> None:
     relation_used = _materialize_relation_used_dense(details)[0]
     local_row_mask = details["local_row_mask"].detach()[0].bool()
 
-    support_mask = global_A > 0
+    eye_support = torch.eye(global_A.size(-1), dtype=torch.bool, device=global_A.device)
+    eye_support = eye_support.unsqueeze(0).expand_as(global_A)
+    support_mask = (global_A > 0) | eye_support
     unsupported_mass = float(personal_A.masked_select(~support_mask).abs().max().item())
     _assert(
         unsupported_mass < 1e-6,
-        f"E 应保持在 A 的 support 上重加权，当前 unsupported mass={unsupported_mass:.6e}",
+        f"E 应保持在 A 的 support 加显式 query self-support 上重加权，当前 unsupported mass={unsupported_mass:.6e}",
     )
 
     local_rows = local_row_mask.unsqueeze(0).unsqueeze(-1).expand_as(relation_used)
@@ -1635,7 +1678,7 @@ def _build_tiny_ae_model(**overrides):
     return CognitiveDiagnosisModel(**kwargs)
 
 
-def _check_generator_state_adapter_is_live() -> None:
+def _check_generator_uses_knowledge_state_not_id_shortcut() -> None:
     from src.model import PersonalRelationGenerator
 
     torch.manual_seed(0)
@@ -1651,17 +1694,17 @@ def _check_generator_state_adapter_is_live() -> None:
     generator.eval()
 
     student_state_a = torch.tensor([[0.2, -0.3, 0.4, -0.5, 0.6, -0.7, 0.8, -0.9]], dtype=torch.float32)
-    student_state_b = torch.tensor([[-0.9, 0.8, -0.7, 0.6, -0.5, 0.4, -0.3, 0.2]], dtype=torch.float32)
     student_id_a = torch.tensor([[0.1, 0.0, -0.1, 0.2, -0.2, 0.3, -0.3, 0.4]], dtype=torch.float32)
     student_id_b = torch.tensor([[0.4, -0.3, 0.2, -0.1, 0.0, 0.1, -0.2, 0.3]], dtype=torch.float32)
     context = torch.tensor([[0.2, -0.1, 0.3, -0.2, 0.4, -0.3, 0.5, -0.4, 0.6, -0.5, 0.7, -0.6]], dtype=torch.float32)
-    knowledge_state = torch.tensor(
+    knowledge_state_a = torch.tensor(
         [[[0.2, -0.1, 0.0, 0.3, -0.2, 0.1],
           [-0.3, 0.4, -0.2, 0.1, 0.0, -0.1],
           [0.5, -0.4, 0.3, -0.2, 0.1, 0.0],
           [-0.1, 0.2, -0.3, 0.4, -0.5, 0.6]]],
         dtype=torch.float32,
     )
+    knowledge_state_b = knowledge_state_a.flip(dims=[1])
     active_row_index = torch.tensor([[0, 2]], dtype=torch.long)
     active_row_valid_mask = torch.tensor([[True, True]], dtype=torch.bool)
     support_cache = _build_test_sparse_support_cache(
@@ -1676,16 +1719,16 @@ def _check_generator_state_adapter_is_live() -> None:
         base_scores = generator(
             student_state_a,
             context,
-            knowledge_state,
+            knowledge_state_a,
             student_id_embedding=student_id_a,
             active_row_index=active_row_index,
             active_row_valid_mask=active_row_valid_mask,
             support_row_cache=support_cache,
         )
-        state_scores = generator(
-            student_state_b,
+        knowledge_scores = generator(
+            student_state_a,
             context,
-            knowledge_state,
+            knowledge_state_b,
             student_id_embedding=student_id_a,
             active_row_index=active_row_index,
             active_row_valid_mask=active_row_valid_mask,
@@ -1694,26 +1737,26 @@ def _check_generator_state_adapter_is_live() -> None:
         id_scores = generator(
             student_state_a,
             context,
-            knowledge_state,
+            knowledge_state_a,
             student_id_embedding=student_id_b,
             active_row_index=active_row_index,
             active_row_valid_mask=active_row_valid_mask,
             support_row_cache=support_cache,
         )
 
-    state_delta = float((state_scores - base_scores).abs().max().item())
+    state_delta = float((knowledge_scores - base_scores).abs().max().item())
     id_delta = float((id_scores - base_scores).abs().mean().item())
     _assert(
         state_delta > 1e-6,
-        "generator 的 student_state_embedding 改变后，输出应发生变化；否则 state adapter 仍是死路径。",
+        "generator 的 knowledge_state 改变后，局部重加权应发生变化；否则 E 的个性化状态路径仍是死路径。",
     )
     _assert(
-        state_delta > id_delta,
-        f"state adapter 应比 tiny id adapter 更有影响；当前 state_delta={state_delta:.6f}, id_delta={id_delta:.6f}",
+        id_delta == 0.0,
+        f"可解释 generator 不应响应 student-id embedding；当前 id_delta={id_delta:.6f}",
     )
 
 
-def _check_alpha_bias_scale_is_live() -> None:
+def _check_alpha_bias_shortcut_is_removed() -> None:
     torch.manual_seed(0)
     model_zero = _build_tiny_ae_model(personal_alpha_bias_scale=0.0)
     torch.manual_seed(0)
@@ -1736,14 +1779,17 @@ def _check_alpha_bias_scale_is_live() -> None:
         )
 
     _assert(
-        details_bias.get("alpha_student_bias") is not None,
-        "启用 personal_alpha_bias_scale 后，应返回真实的 alpha_student_bias 诊断张量。",
+        not hasattr(model_bias.structure_module, "personal_alpha_bias"),
+        "可解释 E 不应重新实例化 personal_alpha_bias。",
+    )
+    _assert(
+        details_bias.get("alpha_student_bias") is None,
+        "启用 personal_alpha_bias_scale 也不应返回 alpha_student_bias 诊断，因为该 shortcut 已移除。",
     )
     alpha_logit_delta = float((details_bias["alpha_logit"] - details_zero["alpha_logit"]).abs().max().item())
-    bias_delta = float(details_bias["alpha_student_bias"].abs().max().item())
     _assert(
-        bias_delta > 1e-6 and alpha_logit_delta > 1e-6,
-        "调整 personal_alpha_bias_scale 后，alpha bias 路径和 alpha_logit 都应发生变化；否则该开关仍是 no-op。",
+        alpha_logit_delta == 0.0,
+        f"personal_alpha_bias_scale 应保持兼容配置字段但不改变解释性 E，当前 alpha_logit_delta={alpha_logit_delta:.6f}",
     )
 
 
@@ -2315,62 +2361,35 @@ def _check_graph_query_gate_diagnostics_exist() -> None:
 def _check_query_conditioned_support_value_projection_is_live() -> None:
     model = _build_tiny_ae_model(use_concept_graph=True, use_personal_graph=True, personal_query_support_hops=2)
     model.eval()
-    _assert(hasattr(model, "personal_value_proj_local"), "CognitiveDiagnosisModel 必须显式持有 E 的 local value projection。")
-    _assert(hasattr(model, "personal_value_proj_global"), "CognitiveDiagnosisModel 必须显式持有 E 的 global value projection。")
-    _assert(hasattr(model, "personal_query_writer"), "CognitiveDiagnosisModel 必须显式持有 E 的 query writer。")
+    for name in ("personal_value_proj_local", "personal_value_proj_global", "personal_query_writer"):
+        _assert(not hasattr(model, name), f"可解释 E 不应继续持有可训练 query writer/projection: {name}")
 
     with torch.no_grad():
-        base_global = model.personal_value_proj_global.weight.detach().clone()
-        base_writer = [param.detach().clone() for param in model.personal_query_writer.parameters()]
-        _, details_base = model(
+        _, details = model(
             student_ids=torch.tensor([0, 1], dtype=torch.long),
             exercise_ids=torch.tensor([0, 2], dtype=torch.long),
             return_details=True,
             return_logits=True,
         )
 
-        model.personal_value_proj_global.weight.zero_()
-        for param in model.personal_query_writer.parameters():
-            param.add_(0.05)
-        _, details_ctx = model(
-            student_ids=torch.tensor([0, 1], dtype=torch.long),
-            exercise_ids=torch.tensor([0, 2], dtype=torch.long),
-            return_details=True,
-            return_logits=True,
-        )
-
-        model.personal_value_proj_global.weight.copy_(base_global)
-        for param, old in zip(model.personal_query_writer.parameters(), base_writer):
-            param.copy_(old)
-
-    delta = float(
-        (
-            details_ctx["query_row_personal_message_delta_raw"]
-            - details_base["query_row_personal_message_delta_raw"]
-        ).abs().item()
+    _assert(
+        float(details["query_row_personal_message_delta_raw"].item()) > 1e-6,
+        "可解释 E 应通过 posterior support 上的局部消息差异产生 query personal message。",
     )
     _assert(
-        delta > 1e-6,
-        f"query-conditioned support value projection 改变后，query personal message 应变化；当前 delta={delta:.6f}",
+        float(details["query_row_message_projection_gain"].item()) > 0.0,
+        "可解释 E 的 deterministic message basis 应产生非零 projection gain。",
     )
 
 
-def _check_personal_query_writer_initially_residual() -> None:
+def _check_personal_query_writer_shortcut_removed() -> None:
     torch.manual_seed(7)
     model = _build_tiny_ae_model(use_concept_graph=True, use_personal_graph=True)
     model.eval()
 
-    local = torch.randn(2, model.num_concepts, model.knowledge_dim)
-    global_ctx = torch.randn_like(local)
-    writer_input = torch.cat([local, global_ctx, local - global_ctx], dim=-1)
-    with torch.no_grad():
-        writer_delta = model.personal_query_writer(writer_input)
-
-    writer_rms = float(writer_delta.pow(2).mean().sqrt().item())
-    local_rms = float(local.pow(2).mean().sqrt().item())
     _assert(
-        writer_rms <= 1e-7 * max(local_rms, 1e-8),
-        f"E query writer 初始应是 residual no-op，避免随机写回污染个性化消息；当前 writer_rms={writer_rms:.6f}, local_rms={local_rms:.6f}",
+        not hasattr(model, "personal_query_writer"),
+        "可解释 E 不应继续保留可训练 personal_query_writer shortcut。",
     )
 
 
@@ -2807,6 +2826,7 @@ def _check_personal_generator_is_state_aware_and_bounded() -> None:
         num_heads=2,
         active_row_index=active_row_index,
         active_row_valid_mask=active_row_valid_mask,
+        support_columns=torch.tensor([[0, 1, 2, 3], [0, 1, 2, 3]], dtype=torch.long),
     )
 
     with torch.no_grad():
@@ -3036,12 +3056,12 @@ def _check_junyi_e_on_jobs_use_oom_safe_batch_size() -> None:
         f"junyi no_A 在 E 开启时也应使用 OOM-safe batch_size=64，当前={jobs_by_ablation['no_A'].params['batch_size']}",
     )
     _assert(
-        int(jobs_by_ablation["no_A"].params["early_stop_patience"]) == 2,
-        "junyi no_A 应在验证停滞后更早停止，避免无收益 epoch 触发非有限 alpha。",
+        int(jobs_by_ablation["no_A"].params["early_stop_patience"]) == 3,
+        "junyi no_A 应至少等待 3 个无提升 epoch，避免用过短早停替代稳定性修复。",
     )
     _assert(
-        int(jobs_by_ablation["no_E"].params["early_stop_patience"]) == 2,
-        "junyi no_E 应在验证停滞后更早停止，避免无收益 epoch 触发非有限 knowledge_state。",
+        int(jobs_by_ablation["no_E"].params["early_stop_patience"]) == 3,
+        "junyi no_E 应至少等待 3 个无提升 epoch，避免用过短早停替代稳定性修复。",
     )
     _assert(
         int(jobs_by_ablation["no_E"].params["batch_size"]) == 256,
@@ -3093,8 +3113,8 @@ def _check_matched_no_e_job_can_be_enabled() -> None:
         "matched no_E 作业应固定使用 batch_size=64。",
     )
     _assert(
-        int(jobs_by_ablation["no_E_bs64"].params["early_stop_patience"]) == 2,
-        "matched no_E 作业也应复用 junyi 消融稳定性上限。",
+        int(jobs_by_ablation["no_E_bs64"].params["early_stop_patience"]) == 3,
+        "matched no_E 作业也应至少等待 3 个无提升 epoch。",
     )
 
 
@@ -3157,7 +3177,7 @@ def main() -> None:
     _check_dataset_defaults_respect_explicit_zero_overrides()
     _check_no_a_personal_graph_is_not_identity_locked()
     _check_no_a_support_semantics_regression()
-    _check_personal_branch_is_state_primary_with_small_id_adapter()
+    _check_personal_branch_removes_id_shortcuts()
     _check_adaptive_gate_is_state_primary()
     _check_gate_saturation_regression()
     _check_assist_like_harmfulness_proxy_warning()
@@ -3171,8 +3191,8 @@ def main() -> None:
     _check_posterior_equal_global_gives_zero_personal_query_correction()
     _check_split_hygiene_uses_train_only_maps_and_q_matrix()
     _check_runtime_ablation_guardrails_cover_no_a_and_no_e()
-    _check_generator_state_adapter_is_live()
-    _check_alpha_bias_scale_is_live()
+    _check_generator_uses_knowledge_state_not_id_shortcut()
+    _check_alpha_bias_shortcut_is_removed()
     _check_alpha_bias_diagnostics_consistency()
     _check_config_hash_tracks_ae_structure_switches()
     _check_append_summary_csv_tracks_runtime_structure_fields()
@@ -3182,7 +3202,7 @@ def main() -> None:
     _check_no_a_query_ratio_is_guarded()
     _check_a_diag_zero_when_graph_disabled()
     _check_graph_query_gate_diagnostics_exist()
-    _check_personal_query_writer_initially_residual()
+    _check_personal_query_writer_shortcut_removed()
     _check_query_conditioned_support_value_projection_is_live()
     _check_personal_projection_gap_diagnostics_exist()
     _check_personal_query_trust_region_caps_effective_correction()

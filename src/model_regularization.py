@@ -82,7 +82,12 @@ def get_regularization_components(
                 details["graph_to_uniform_l2"] = uniform_dist.detach()
                 details["graph_to_identity_l2"] = identity_dist.detach()
 
-            tau = F.softplus(model.structure_module.relation_learning.tau_raw) + 1e-6
+            tau_raw = getattr(
+                model.structure_module.relation_learning,
+                "temperature_raw",
+                getattr(model.structure_module.relation_learning, "tau_raw", None),
+            )
+            tau = F.softplus(tau_raw) + 1e-6 if tau_raw is not None else relation_matrices.new_ones((1,))
             if details is not None:
                 details["graph_tau_mean"] = tau.mean().detach()
                 details["graph_tau_std"] = tau.std(unbiased=False).detach()

@@ -406,11 +406,6 @@ def _clip_stability_sensitive_grads(model: nn.Module) -> Dict[str, float]:
     personal_modules = [
         getattr(structure_module, "adaptive_gate", None),
         getattr(structure_module, "personal_generator", None),
-        getattr(structure_module, "personal_gate_embedding", None),
-        getattr(structure_module, "personal_generator_embedding", None),
-        getattr(structure_module, "personal_alpha_bias", None),
-        getattr(structure_module, "personal_gate_from_state", None),
-        getattr(structure_module, "personal_generator_from_state", None),
     ]
 
     graph_params = list(relation_learning.parameters()) if relation_learning is not None else []
@@ -440,116 +435,29 @@ def _build_optimizer(model: nn.Module, args) -> optim.Optimizer:
     personal_generator = getattr(structure_module, "personal_generator", None) if structure_module is not None else None
 
     state_params: List[torch.nn.Parameter] = []
-    id_params: List[torch.nn.Parameter] = []
 
     if structure_module is not None:
-        for module in (
-            getattr(structure_module, "personal_gate_from_state", None),
-            getattr(structure_module, "personal_generator_from_state", None),
-            getattr(structure_module, "personal_support_value_proj", None),
-            getattr(structure_module, "personal_query_value_context_proj", None),
-        ):
-            if module is not None:
-                state_params.extend(list(module.parameters()))
-
         if adaptive_gate is not None:
-            for module in (
-                getattr(adaptive_gate, "state_norm", None),
-                getattr(adaptive_gate, "context_norm", None),
-                getattr(adaptive_gate, "state_proj", None),
-                getattr(adaptive_gate, "context_proj", None),
-                getattr(adaptive_gate, "fusion_proj", None),
-                getattr(adaptive_gate, "state_to_logit", None),
-                getattr(adaptive_gate, "context_to_logit", None),
-                getattr(adaptive_gate, "out", None),
-            ):
-                if module is not None:
-                    state_params.extend(list(module.parameters()))
-            for module in (
-                getattr(adaptive_gate, "id_to_logit", None),
-            ):
-                if module is not None:
-                    id_params.extend(list(module.parameters()))
-            for param_name in ("id_adapter_logit", "head_bias"):
-                param = getattr(adaptive_gate, param_name, None)
-                if isinstance(param, torch.nn.Parameter):
-                    id_params.append(param)
+            state_params.extend(list(adaptive_gate.parameters()))
 
         if personal_generator is not None:
-            for module in (
-                getattr(personal_generator, "student_norm", None),
-                getattr(personal_generator, "context_norm", None),
-                getattr(personal_generator, "state_norm", None),
-                getattr(personal_generator, "context_proj", None),
-                getattr(personal_generator, "hidden_proj", None),
-                getattr(personal_generator, "state_query_proj", None),
-                getattr(personal_generator, "state_key_proj", None),
-                getattr(personal_generator, "context_to_u", None),
-                getattr(personal_generator, "context_to_v", None),
-                getattr(personal_generator, "state_to_u", None),
-                getattr(personal_generator, "state_to_v", None),
-            ):
-                if module is not None:
-                    state_params.extend(list(module.parameters()))
-            for module in (
-                getattr(personal_generator, "id_to_u", None),
-                getattr(personal_generator, "id_to_v", None),
-            ):
-                if module is not None:
-                    id_params.extend(list(module.parameters()))
-            for param_name in (
-                "state_adapter_logit",
-                "context_adapter_logit",
-                "state_mix_logit",
-                "student_mix_logit",
-            ):
-                param = getattr(personal_generator, param_name, None)
-                if isinstance(param, torch.nn.Parameter):
-                    state_params.append(param)
-            for param_name in ("id_adapter_logit",):
-                param = getattr(personal_generator, param_name, None)
-                if isinstance(param, torch.nn.Parameter):
-                    id_params.append(param)
+            state_params.extend(list(personal_generator.parameters()))
 
-        for module_name in ("personal_gate_embedding", "personal_generator_embedding", "personal_alpha_bias"):
-            module = getattr(structure_module, module_name, None)
-            if module is not None:
-                id_params.extend(list(module.parameters()))
-        for param_name in ("personal_gate_id_logit", "personal_generator_id_logit"):
-            param = getattr(structure_module, param_name, None)
-            if isinstance(param, torch.nn.Parameter):
-                id_params.append(param)
-
-    state_params = _dedupe_params(state_params)
-    id_params = _dedupe_params(id_params)
-    for module in (
-        getattr(base_model, "personal_value_proj_local", None),
-        getattr(base_model, "personal_value_proj_global", None),
-        getattr(base_model, "personal_query_writer", None),
-        getattr(base_model, "personal_align_gate", None),
-    ):
-        if module is not None:
-            state_params.extend(list(module.parameters()))
     state_params = _dedupe_params(state_params)
     ae_params: List[torch.nn.Parameter] = []
     for module_name in (
-        "ae_query_state_adapter",
-        "ae_student_logit_emb",
-        "ae_concept_logit_emb",
-        "ae_student_factor",
-        "ae_exercise_factor",
         "ae_student_logit_bias",
         "ae_exercise_logit_bias",
         "ae_concept_logit_bias",
-        "ae_graph_state_proj",
-        "ae_personal_state_proj",
-        "ae_logit_adapter",
     ):
         module = getattr(base_model, module_name, None)
         if module is not None:
             ae_params.extend(list(module.parameters()))
+    ae_logit_feature_weight = getattr(base_model, "ae_logit_feature_weight", None)
+    if isinstance(ae_logit_feature_weight, torch.nn.Parameter):
+        ae_params.append(ae_logit_feature_weight)
     ae_params = _dedupe_params(ae_params)
-    grouped_ids = {id(p) for p in state_params + id_params}
+    grouped_ids = {id(p) for p in state_params}
     grouped_ids.update(id(p) for p in ae_params)
     backbone_params = _dedupe_params([p for p in base_model.parameters() if id(p) not in grouped_ids])
 
@@ -573,15 +481,6 @@ def _build_optimizer(model: nn.Module, args) -> optim.Optimizer:
                 "group_name": "personal_state",
             }
         )
-    if id_params:
-        param_groups.append(
-            {
-                "params": id_params,
-                "lr": float(args.learning_rate) * float(getattr(args, "personal_id_lr_mult", 0.5)),
-                "group_name": "personal_id",
-            }
-        )
-
     return optim.Adam(param_groups, weight_decay=args.weight_decay)
 
 
@@ -673,7 +572,7 @@ def _initialize_ae_stat_priors(
         return
     base_model = _get_base_model(model)
     if (
-        getattr(base_model, "ae_logit_adapter", None) is None
+        getattr(base_model, "ae_logit_feature_weight", None) is None
         or getattr(base_model, "ae_student_logit_bias", None) is None
         or getattr(base_model, "ae_exercise_logit_bias", None) is None
         or getattr(base_model, "ae_concept_logit_bias", None) is None
@@ -827,8 +726,13 @@ def _log_graph_init_state(model: nn.Module, logger, context: str) -> None:
     graph_tau_mean = 0.0
     graph_tau_std = 0.0
     graph_dropout = 0.0
-    if relation_learning is not None and getattr(relation_learning, "tau_raw", None) is not None:
-        tau = F.softplus(relation_learning.tau_raw.detach()) + 1e-6
+    relation_temperature_raw = (
+        getattr(relation_learning, "temperature_raw", getattr(relation_learning, "tau_raw", None))
+        if relation_learning is not None
+        else None
+    )
+    if relation_temperature_raw is not None:
+        tau = F.softplus(relation_temperature_raw.detach()) + 1e-6
         graph_tau_mean = float(tau.mean().item())
         graph_tau_std = float(tau.std(unbiased=False).item())
         graph_dropout = float(getattr(getattr(relation_learning, "dropout", None), "p", 0.0))
@@ -1001,8 +905,13 @@ def _collect_debug_forward_stats(
     tau_std = 0.0
     share_concept_embeddings = float(getattr(base_model, "share_concept_embeddings", False))
     relation_learning = getattr(getattr(base_model, "structure_module", None), "relation_learning", None)
-    if relation_learning is not None and getattr(relation_learning, "tau_raw", None) is not None:
-        tau = F.softplus(relation_learning.tau_raw.detach()) + 1e-6
+    relation_temperature_raw = (
+        getattr(relation_learning, "temperature_raw", getattr(relation_learning, "tau_raw", None))
+        if relation_learning is not None
+        else None
+    )
+    if relation_temperature_raw is not None:
+        tau = F.softplus(relation_temperature_raw.detach()) + 1e-6
         tau_mean = float(tau.mean().item())
         tau_std = float(tau.std(unbiased=False).item())
 
@@ -1298,79 +1207,31 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
     relation_learning = getattr(structure_module, "relation_learning", None) if structure_module is not None else None
     personal_generator = getattr(structure_module, "personal_generator", None) if structure_module is not None else None
     adaptive_gate = getattr(structure_module, "adaptive_gate", None) if structure_module is not None else None
-    personal_gate_embedding = getattr(structure_module, "personal_gate_embedding", None) if structure_module is not None else None
-    personal_generator_embedding = getattr(structure_module, "personal_generator_embedding", None) if structure_module is not None else None
-    personal_alpha_bias = getattr(structure_module, "personal_alpha_bias", None) if structure_module is not None else None
 
     relation_emb = getattr(relation_learning, "concept_embeddings", None) if relation_learning is not None else None
-    relation_tau = getattr(relation_learning, "tau_raw", None) if relation_learning is not None else None
-    relation_edge_bias_u = getattr(relation_learning, "graph_edge_bias_u", None) if relation_learning is not None else None
-    relation_edge_bias_v = getattr(relation_learning, "graph_edge_bias_v", None) if relation_learning is not None else None
-    relation_wq = None
-    relation_wk = None
-    if relation_learning is not None:
-        wq_layers = getattr(relation_learning, "Wq", [])
-        wk_layers = getattr(relation_learning, "Wk", [])
-        wq_norms = [
-            _grad_norm_or_zero(getattr(layer, "weight", None))
-            for layer in wq_layers
-        ]
-        wk_norms = [
-            _grad_norm_or_zero(getattr(layer, "weight", None))
-            for layer in wk_layers
-        ]
-        relation_wq = float(np.mean(wq_norms)) if wq_norms else 0.0
-        relation_wk = float(np.mean(wk_norms)) if wk_norms else 0.0
-    personal_u = getattr(getattr(personal_generator, "state_query_proj", None), "weight", None)
-    personal_v = getattr(getattr(personal_generator, "state_key_proj", None), "weight", None)
-    personal_gate_state_proj = getattr(getattr(adaptive_gate, "state_proj", None), "weight", None)
-    personal_gate_context_proj = getattr(getattr(adaptive_gate, "context_proj", None), "weight", None)
-    personal_gate_state_direct = getattr(getattr(adaptive_gate, "state_to_logit", None), "weight", None)
-    personal_gate_id_direct = getattr(getattr(adaptive_gate, "id_to_logit", None), "weight", None)
-    personal_gate_context_direct = getattr(getattr(adaptive_gate, "context_to_logit", None), "weight", None)
-    personal_gate_out = getattr(getattr(adaptive_gate, "out", None), "weight", None)
-    personal_generator_context_proj = getattr(getattr(personal_generator, "context_proj", None), "weight", None)
-    personal_generator_context_hidden = getattr(getattr(personal_generator, "hidden_proj", None), "weight", None)
-    personal_generator_context_to_u = getattr(getattr(personal_generator, "context_to_u", None), "weight", None)
-    personal_generator_context_to_v = getattr(getattr(personal_generator, "context_to_v", None), "weight", None)
-    personal_generator_state_row = getattr(getattr(personal_generator, "state_to_u", None), "weight", None)
-    personal_generator_state_col = getattr(getattr(personal_generator, "state_to_v", None), "weight", None)
-    personal_generator_id_row = getattr(getattr(personal_generator, "id_to_u", None), "weight", None)
-    personal_generator_id_col = getattr(getattr(personal_generator, "id_to_v", None), "weight", None)
-    personal_generator_state_adapter = getattr(personal_generator, "state_adapter_logit", None)
-    personal_generator_id_adapter = getattr(personal_generator, "id_adapter_logit", None)
-    personal_generator_context_adapter = getattr(personal_generator, "context_adapter_logit", None)
-    personal_generator_direct_scale = getattr(personal_generator, "state_mix_logit", None)
+    relation_tau = (
+        getattr(relation_learning, "temperature_raw", getattr(relation_learning, "tau_raw", None))
+        if relation_learning is not None
+        else None
+    )
+    relation_prior_strength = getattr(relation_learning, "prior_strength_raw", None) if relation_learning is not None else None
+    relation_receiver_bias = getattr(relation_learning, "receiver_bias", None) if relation_learning is not None else None
+    relation_self_loop = getattr(relation_learning, "self_loop_logit", None) if relation_learning is not None else None
+    personal_gate_head_bias = getattr(adaptive_gate, "head_bias", None)
+    personal_gate_query_weight = getattr(adaptive_gate, "query_norm_weight", None)
+    personal_gate_context_weight = getattr(adaptive_gate, "context_norm_weight", None)
+    personal_generator_state_mix = getattr(personal_generator, "state_mix_logit", None)
 
     return {
         "relation_emb": _grad_norm_or_zero(relation_emb),
         "relation_tau": _grad_norm_or_zero(relation_tau),
-        "relation_wq": relation_wq if relation_wq is not None else 0.0,
-        "relation_wk": relation_wk if relation_wk is not None else 0.0,
-        "graph_edge_bias": 0.5 * (_grad_norm_or_zero(relation_edge_bias_u) + _grad_norm_or_zero(relation_edge_bias_v)),
-        "personal_u": _grad_norm_or_zero(personal_u),
-        "personal_v": _grad_norm_or_zero(personal_v),
-        "personal_alpha_bias": _grad_norm_or_zero(getattr(personal_alpha_bias, "weight", None)),
-        "personal_gate_emb": _grad_norm_or_zero(getattr(personal_gate_embedding, "weight", None)),
-        "personal_gate_state_proj": _grad_norm_or_zero(personal_gate_state_proj),
-        "personal_gate_context_proj": _grad_norm_or_zero(personal_gate_context_proj),
-        "personal_gate_state_direct": _grad_norm_or_zero(personal_gate_state_direct),
-        "personal_gate_id_direct": _grad_norm_or_zero(personal_gate_id_direct),
-        "personal_gate_context_direct": _grad_norm_or_zero(personal_gate_context_direct),
-        "personal_gate_out": _grad_norm_or_zero(personal_gate_out),
-        "personal_generator_emb": _grad_norm_or_zero(getattr(personal_generator_embedding, "weight", None)),
-        "personal_generator_context_proj": _grad_norm_or_zero(personal_generator_context_proj),
-        "personal_generator_context_hidden": _grad_norm_or_zero(personal_generator_context_hidden),
-        "personal_generator_context_to_u": _grad_norm_or_zero(personal_generator_context_to_u),
-        "personal_generator_context_to_v": _grad_norm_or_zero(personal_generator_context_to_v),
-        "personal_generator_state_row": _grad_norm_or_zero(personal_generator_state_row),
-        "personal_generator_state_col": _grad_norm_or_zero(personal_generator_state_col),
-        "personal_generator_id_row": _grad_norm_or_zero(personal_generator_id_row),
-        "personal_generator_id_col": _grad_norm_or_zero(personal_generator_id_col),
-        "personal_generator_state_adapter": _grad_norm_or_zero(personal_generator_state_adapter),
-        "personal_generator_id_adapter": _grad_norm_or_zero(personal_generator_id_adapter),
-        "personal_generator_context_adapter": _grad_norm_or_zero(personal_generator_context_adapter),
-        "personal_generator_direct_scale": _grad_norm_or_zero(personal_generator_direct_scale),
+        "relation_prior_strength": _grad_norm_or_zero(relation_prior_strength),
+        "relation_receiver_bias": _grad_norm_or_zero(relation_receiver_bias),
+        "relation_self_loop": _grad_norm_or_zero(relation_self_loop),
+        "personal_gate_head_bias": _grad_norm_or_zero(personal_gate_head_bias),
+        "personal_gate_query_weight": _grad_norm_or_zero(personal_gate_query_weight),
+        "personal_gate_context_weight": _grad_norm_or_zero(personal_gate_context_weight),
+        "personal_generator_state_mix": _grad_norm_or_zero(personal_generator_state_mix),
     }
 
 
@@ -2180,31 +2041,13 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             graph_grad_total = (
                 grad_norms["relation_emb"]
                 + grad_norms["relation_tau"]
-                + grad_norms["relation_wq"]
-                + grad_norms["relation_wk"]
-                + grad_norms["personal_u"]
-                + grad_norms["personal_v"]
-                + grad_norms["personal_alpha_bias"]
-                + grad_norms["personal_gate_emb"]
-                + grad_norms["personal_gate_state_proj"]
-                + grad_norms["personal_gate_context_proj"]
-                + grad_norms["personal_gate_state_direct"]
-                + grad_norms["personal_gate_id_direct"]
-                + grad_norms["personal_gate_context_direct"]
-                + grad_norms["personal_gate_out"]
-                + grad_norms["personal_generator_emb"]
-                + grad_norms["personal_generator_context_proj"]
-                + grad_norms["personal_generator_context_hidden"]
-                + grad_norms["personal_generator_context_to_u"]
-                + grad_norms["personal_generator_context_to_v"]
-                + grad_norms["personal_generator_state_row"]
-                + grad_norms["personal_generator_state_col"]
-                + grad_norms["personal_generator_id_row"]
-                + grad_norms["personal_generator_id_col"]
-                + grad_norms["personal_generator_state_adapter"]
-                + grad_norms["personal_generator_id_adapter"]
-                + grad_norms["personal_generator_context_adapter"]
-                + grad_norms["personal_generator_direct_scale"]
+                + grad_norms["relation_prior_strength"]
+                + grad_norms["relation_receiver_bias"]
+                + grad_norms["relation_self_loop"]
+                + grad_norms["personal_gate_head_bias"]
+                + grad_norms["personal_gate_query_weight"]
+                + grad_norms["personal_gate_context_weight"]
+                + grad_norms["personal_generator_state_mix"]
             )
             if graph_grad_total < 1e-8:
                 graph_low_grad_streak += 1
@@ -2213,91 +2056,37 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             if graph_low_grad_streak >= 2 and getattr(_get_base_model(model), "use_concept_graph", False):
                 logger.warning(
                         "%s [Diag Warning][Graph] graph-related grad norms are near zero for %d epoch(s): "
-                        "relation_emb=%.6e, relation_tau=%.6e, relation_wq=%.6e, relation_wk=%.6e, "
-                        "personal_u=%.6e, personal_v=%.6e, personal_alpha_bias=%.6e, personal_gate_emb=%.6e, "
-                        "personal_gate_state_proj=%.6e, personal_gate_context_proj=%.6e, "
-                        "personal_gate_state_direct=%.6e, personal_gate_id_direct=%.6e, "
-                        "personal_gate_context_direct=%.6e, personal_gate_out=%.6e, "
-                        "personal_generator_emb=%.6e, personal_generator_context_proj=%.6e, "
-                        "personal_generator_context_hidden=%.6e, personal_generator_context_to_u=%.6e, "
-                        "personal_generator_context_to_v=%.6e, personal_generator_state_row=%.6e, "
-                        "personal_generator_state_col=%.6e, personal_generator_id_row=%.6e, "
-                        "personal_generator_id_col=%.6e, personal_generator_state_adapter=%.6e, "
-                        "personal_generator_id_adapter=%.6e, personal_generator_context_adapter=%.6e, "
-                        "personal_generator_direct_scale=%.6e",
+                        "relation_emb=%.6e, relation_tau=%.6e, prior_strength=%.6e, receiver_bias=%.6e, "
+                        "self_loop=%.6e, gate_head_bias=%.6e, gate_query_weight=%.6e, "
+                        "gate_context_weight=%.6e, generator_state_mix=%.6e",
                         run_tag,
                         graph_low_grad_streak,
                         grad_norms["relation_emb"],
                         grad_norms["relation_tau"],
-                    grad_norms["relation_wq"],
-                        grad_norms["relation_wk"],
-                        grad_norms["personal_u"],
-                        grad_norms["personal_v"],
-                        grad_norms["personal_alpha_bias"],
-                        grad_norms["personal_gate_emb"],
-                        grad_norms["personal_gate_state_proj"],
-                        grad_norms["personal_gate_context_proj"],
-                        grad_norms["personal_gate_state_direct"],
-                        grad_norms["personal_gate_id_direct"],
-                        grad_norms["personal_gate_context_direct"],
-                        grad_norms["personal_gate_out"],
-                        grad_norms["personal_generator_emb"],
-                        grad_norms["personal_generator_context_proj"],
-                        grad_norms["personal_generator_context_hidden"],
-                        grad_norms["personal_generator_context_to_u"],
-                        grad_norms["personal_generator_context_to_v"],
-                        grad_norms["personal_generator_state_row"],
-                        grad_norms["personal_generator_state_col"],
-                        grad_norms["personal_generator_id_row"],
-                        grad_norms["personal_generator_id_col"],
-                        grad_norms["personal_generator_state_adapter"],
-                        grad_norms["personal_generator_id_adapter"],
-                        grad_norms["personal_generator_context_adapter"],
-                        grad_norms["personal_generator_direct_scale"],
+                        grad_norms["relation_prior_strength"],
+                        grad_norms["relation_receiver_bias"],
+                        grad_norms["relation_self_loop"],
+                        grad_norms["personal_gate_head_bias"],
+                        grad_norms["personal_gate_query_weight"],
+                        grad_norms["personal_gate_context_weight"],
+                        grad_norms["personal_generator_state_mix"],
                     )
             logger.info(
                 "%s [Grad Norms] Epoch [%03d] | "
-                "relation_emb=%.6e, relation_tau=%.6e, relation_wq=%.6e, relation_wk=%.6e, "
-                "personal_u=%.6e, personal_v=%.6e, personal_alpha_bias=%.6e, personal_gate_emb=%.6e, "
-                "personal_gate_state_proj=%.6e, personal_gate_context_proj=%.6e, "
-                "personal_gate_state_direct=%.6e, personal_gate_id_direct=%.6e, "
-                "personal_gate_context_direct=%.6e, personal_gate_out=%.6e, "
-                "personal_generator_emb=%.6e, personal_generator_context_proj=%.6e, "
-                "personal_generator_context_hidden=%.6e, personal_generator_context_to_u=%.6e, "
-                "personal_generator_context_to_v=%.6e, personal_generator_state_row=%.6e, "
-                "personal_generator_state_col=%.6e, personal_generator_id_row=%.6e, "
-                "personal_generator_id_col=%.6e, personal_generator_state_adapter=%.6e, "
-                "personal_generator_id_adapter=%.6e, personal_generator_context_adapter=%.6e, "
-                "personal_generator_direct_scale=%.6e",
+                "relation_emb=%.6e, relation_tau=%.6e, prior_strength=%.6e, receiver_bias=%.6e, "
+                "self_loop=%.6e, gate_head_bias=%.6e, gate_query_weight=%.6e, "
+                "gate_context_weight=%.6e, generator_state_mix=%.6e",
                 run_tag,
                 epoch,
                 grad_norms["relation_emb"],
                 grad_norms["relation_tau"],
-                grad_norms["relation_wq"],
-                grad_norms["relation_wk"],
-                grad_norms["personal_u"],
-                grad_norms["personal_v"],
-                grad_norms["personal_alpha_bias"],
-                grad_norms["personal_gate_emb"],
-                grad_norms["personal_gate_state_proj"],
-                grad_norms["personal_gate_context_proj"],
-                grad_norms["personal_gate_state_direct"],
-                grad_norms["personal_gate_id_direct"],
-                grad_norms["personal_gate_context_direct"],
-                grad_norms["personal_gate_out"],
-                grad_norms["personal_generator_emb"],
-                grad_norms["personal_generator_context_proj"],
-                grad_norms["personal_generator_context_hidden"],
-                grad_norms["personal_generator_context_to_u"],
-                grad_norms["personal_generator_context_to_v"],
-                grad_norms["personal_generator_state_row"],
-                grad_norms["personal_generator_state_col"],
-                grad_norms["personal_generator_id_row"],
-                grad_norms["personal_generator_id_col"],
-                grad_norms["personal_generator_state_adapter"],
-                grad_norms["personal_generator_id_adapter"],
-                grad_norms["personal_generator_context_adapter"],
-                grad_norms["personal_generator_direct_scale"],
+                grad_norms["relation_prior_strength"],
+                grad_norms["relation_receiver_bias"],
+                grad_norms["relation_self_loop"],
+                grad_norms["personal_gate_head_bias"],
+                grad_norms["personal_gate_query_weight"],
+                grad_norms["personal_gate_context_weight"],
+                grad_norms["personal_generator_state_mix"],
             )
 
         scheduler.step(val_metrics["auc"])

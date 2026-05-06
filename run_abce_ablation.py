@@ -110,10 +110,11 @@ STRUCTURAL_SWITCH_KEYS = (
 OOM_SAFE_E_BATCH_SIZE = {
     "junyi": 64,
 }
+MIN_EARLY_STOP_PATIENCE = 3
 STABILITY_SAFE_ABLATION_PATIENCE = {
-    ("junyi", "no_A"): 2,
-    ("junyi", "no_E"): 2,
-    ("junyi", "no_E_bs64"): 2,
+    ("junyi", "no_A"): 3,
+    ("junyi", "no_E"): 3,
+    ("junyi", "no_E_bs64"): 3,
 }
 
 
@@ -220,11 +221,9 @@ def _apply_oom_safety_overrides(dataset: str, ablation: AblationSpec, params: Di
 
 
 def _apply_ablation_stability_overrides(dataset: str, ablation: AblationSpec, params: Dict[str, Any]) -> None:
-    patience_cap = STABILITY_SAFE_ABLATION_PATIENCE.get((dataset, ablation.name))
-    if patience_cap is None:
-        return
-    current_patience = int(params.get("early_stop_patience", patience_cap))
-    params["early_stop_patience"] = min(current_patience, int(patience_cap))
+    patience_floor = STABILITY_SAFE_ABLATION_PATIENCE.get((dataset, ablation.name), MIN_EARLY_STOP_PATIENCE)
+    current_patience = int(params.get("early_stop_patience", patience_floor))
+    params["early_stop_patience"] = max(current_patience, int(patience_floor))
 
 
 def _build_job_env(base_env: Dict[str, str], gpu_id: int) -> Dict[str, str]:

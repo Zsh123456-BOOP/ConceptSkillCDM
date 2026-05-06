@@ -59,7 +59,7 @@ def _build_support_cache(
     if force_self_support:
         self_index = torch.arange(C, device=device, dtype=torch.long).view(1, C, 1).expand(H, -1, 1)
         self_prob = torch.diagonal(relation_matrices, dim1=-2, dim2=-1).unsqueeze(-1)
-        self_prob = torch.maximum(self_prob, torch.full_like(self_prob, 1e-6))
+        self_prob = torch.maximum(self_prob, torch.full_like(self_prob, 0.05))
         has_self = (support_col_index == self_index).any(dim=-1)
         if not bool(has_self.all()):
             replace_slot = support_valid_mask.sum(dim=-1).clamp(min=1, max=k_max).long() - 1

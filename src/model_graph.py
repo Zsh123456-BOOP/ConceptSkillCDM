@@ -15,11 +15,12 @@ from src.model_ops import _gather_head_rows, _gather_head_support_features
 
 class MultiHeadRelationLearning(nn.Module):
     """
-    多头概念邻接学习 A_h（row-stochastic）：
-    - softmax 保证每行归一化（row-stochastic）
-    - learnable temperature（softplus 保证正值）
-    - 可选 top-k 硬稀疏
-    - 稀疏正则使用“行熵”（row entropy）
+    可解释概念邻接 A_h（row-stochastic）。
+
+    A 不再用 query/key attention 或低秩边 MLP 学边。每条边只由三类可解释量决定：
+    - Q 矩阵共现先验：训练数据中概念共同出现的强弱；
+    - receiver_bias：某个概念作为依赖来源的全局倾向；
+    - self_loop_logit：保留本概念状态的强度。
     """
 
     def __init__(
@@ -43,8 +44,6 @@ class MultiHeadRelationLearning(nn.Module):
         self.topk = topk
         self.allow_self_loop = bool(allow_self_loop)
         self.identity_residual = float(max(0.0, min(1.0, identity_residual))) if self.allow_self_loop else 0.0
-        rel_rank = max(4, min(16, concept_dim // 4 if concept_dim >= 4 else 4))
-        self.relation_rank = int(rel_rank)
         self.edge_bias_rank = max(1, int(edge_bias_rank))
         self.prior_logit_scale = max(0.0, float(prior_logit_scale))
 
@@ -60,33 +59,23 @@ class MultiHeadRelationLearning(nn.Module):
             prior = prior / prior.sum(dim=-1, keepdim=True).clamp(min=1e-12)
             prior_scores = prior.log()
             prior_scores = prior_scores - prior_scores.mean(dim=-1, keepdim=True)
+            prior_scores = prior_scores.clamp(min=-1.5, max=1.5)
         self.register_buffer("prior_logit_scores", prior_scores, persistent=False)
 
-        # 注意：concept_embeddings 会在主模型里“可选绑定”到 knowledge_encoder.concept_emb.weight
-        self.concept_embeddings = nn.Parameter(torch.randn(num_concepts, concept_dim))  # Fix: 移除 0.02
-        self.rel_query_anchor = nn.Parameter(torch.randn(num_heads, num_concepts, self.relation_rank) * 0.02)
-        self.rel_key_anchor = nn.Parameter(torch.randn(num_heads, num_concepts, self.relation_rank) * 0.02)
-        self.graph_edge_bias_u = nn.Parameter(torch.randn(num_heads, num_concepts, self.edge_bias_rank) * 0.02)
-        self.graph_edge_bias_v = nn.Parameter(torch.randn(num_heads, num_concepts, self.edge_bias_rank) * 0.02)
-        self.self_loop_bias = nn.Parameter(torch.ones(num_heads) * 0.75)
-
-        self.Wq = nn.ModuleList([nn.Linear(concept_dim, concept_dim, bias=False) for _ in range(num_heads)])
-        self.Wk = nn.ModuleList([nn.Linear(concept_dim, concept_dim, bias=False) for _ in range(num_heads)])
-
-        # temperature > 0：用 softplus 约束
-        self.tau_raw = nn.Parameter(torch.ones(num_heads) * float(tau_init))
+        # 保留 concept_embeddings 只是为了和 knowledge encoder 共享同一概念坐标系；A 的边权不再由它生成。
+        self.concept_embeddings = nn.Parameter(torch.zeros(num_concepts, concept_dim))
+        init_strength = max(1e-4, self.prior_logit_scale if self.prior_logit_scale > 0 else 1.0)
+        init_strength_raw = math.log(math.exp(init_strength) - 1.0)
+        self.prior_strength_raw = nn.Parameter(torch.full((num_heads,), init_strength_raw))
+        self.receiver_bias = nn.Parameter(torch.zeros(num_heads, num_concepts))
+        self.self_loop_logit = nn.Parameter(torch.full((num_heads,), 0.75))
+        self.temperature_raw = nn.Parameter(torch.full((num_heads,), float(tau_init)))
 
         self.dropout = nn.Dropout(dropout)
         self._initialize_weights()
 
     def _initialize_weights(self) -> None:
-        nn.init.xavier_normal_(self.concept_embeddings, gain=1.0)  # Fix: gain=1.0 prevents softmax saturation
-        nn.init.xavier_normal_(self.rel_query_anchor)
-        nn.init.xavier_normal_(self.rel_key_anchor)
-        nn.init.xavier_normal_(self.graph_edge_bias_u)
-        nn.init.xavier_normal_(self.graph_edge_bias_v)
-        for m in list(self.Wq) + list(self.Wk):
-            nn.init.xavier_normal_(m.weight)
+        nn.init.normal_(self.concept_embeddings, mean=0.0, std=0.02)
 
     @staticmethod
     def _apply_topk(scores: torch.Tensor, k: int) -> torch.Tensor:
@@ -102,7 +91,7 @@ class MultiHeadRelationLearning(nn.Module):
             relation_matrices: (H, C, C)  每行归一的邻接矩阵
             concept_embeddings: (C, D)    概念 embedding（可能与 encoder 绑定共享）
         """
-        C, D = self.num_concepts, self.concept_dim
+        C = self.num_concepts
         x = self.concept_embeddings  # (C, D)
 
         # ---- Fix #3：退化情况 C==1 防 NaN ----
@@ -110,27 +99,20 @@ class MultiHeadRelationLearning(nn.Module):
             A = torch.ones((self.num_heads, 1, 1), device=x.device, dtype=x.dtype)
             return A, x
 
-        tau = F.softplus(self.tau_raw) + 1e-6  # (H,)
+        tau = F.softplus(self.temperature_raw) + 1e-6  # (H,)
+        prior_scores = self.prior_logit_scores.to(device=x.device, dtype=x.dtype)
+        prior_strength = F.softplus(self.prior_strength_raw).to(device=x.device, dtype=x.dtype)
         rels = []
 
         for h in range(self.num_heads):
-            q = self.Wq[h](x)  # (C, D)
-            k = self.Wk[h](x)  # (C, D)
-            scores = (q @ k.t()) / math.sqrt(D)  # (C, C)
-            rel_bias = (self.rel_query_anchor[h] @ self.rel_key_anchor[h].t()) / math.sqrt(self.relation_rank)
-            edge_bias = (self.graph_edge_bias_u[h] @ self.graph_edge_bias_v[h].t()) / math.sqrt(self.edge_bias_rank)
-            scores = scores + rel_bias + edge_bias
+            scores = prior_strength[h] * prior_scores
+            scores = scores + self.receiver_bias[h].to(device=x.device, dtype=x.dtype).view(1, C)
             scores = scores / tau[h]
             scores = scores - scores.mean(dim=-1, keepdim=True)
-            if self.prior_logit_scale > 0.0:
-                scores = scores + self.prior_logit_scale * self.prior_logit_scores.to(
-                    device=scores.device,
-                    dtype=scores.dtype,
-                )
 
             eye = torch.eye(C, device=scores.device, dtype=torch.bool)
             if self.allow_self_loop:
-                scores = scores + self.self_loop_bias[h] * eye.to(dtype=scores.dtype)
+                scores = scores + self.self_loop_logit[h].to(dtype=scores.dtype) * eye.to(dtype=scores.dtype)
             else:
                 scores = scores.masked_fill(eye, float("-inf"))
 

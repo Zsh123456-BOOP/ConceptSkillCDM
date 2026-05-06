@@ -252,89 +252,19 @@ class CognitiveDiagnosisModel(nn.Module):
             nn.init.zeros_(self.graph_query_head_gate.bias)
         else:
             self.graph_query_head_gate = None
-        if self.graph_query_adapter_enable:
-            graph_hidden = max(knowledge_dim, knowledge_dim * self.personal_projection_hidden_factor)
-            self.graph_query_adapter = nn.Sequential(
-                nn.Linear(knowledge_dim * 3, graph_hidden),
-                nn.GELU(),
-                nn.Linear(graph_hidden, knowledge_dim),
-            )
-            nn.init.zeros_(self.graph_query_adapter[-1].weight)
-            nn.init.zeros_(self.graph_query_adapter[-1].bias)
-        else:
-            self.graph_query_adapter = None
+        self.graph_query_adapter = None
         ae_joint_enabled = self.enable_module1 and self.use_concept_graph and self.use_personal_graph
         ae_partial_enabled = self.enable_module1 and (self.use_concept_graph or self.use_personal_graph)
-        if ae_joint_enabled and self.ae_query_residual_scale > 0.0:
-            ae_hidden = max(knowledge_dim, knowledge_dim * self.personal_projection_hidden_factor)
-            self.ae_query_state_adapter = nn.Sequential(
-                nn.Linear(knowledge_dim * 4, ae_hidden),
-                nn.GELU(),
-                nn.Linear(ae_hidden, knowledge_dim),
-            )
-            nn.init.normal_(self.ae_query_state_adapter[-1].weight, mean=0.0, std=0.02)
-            nn.init.zeros_(self.ae_query_state_adapter[-1].bias)
-        else:
-            self.ae_query_state_adapter = None
         if ae_partial_enabled and self.ae_logit_residual_scale > 0.0:
-            ae_logit_hidden = max(self.ae_logit_dim * 2, knowledge_dim)
-            ae_logit_input_dim = self.ae_logit_dim * 6 + 4
-            self.ae_student_logit_emb = nn.Embedding(num_students, self.ae_logit_dim)
-            self.ae_concept_logit_emb = nn.Embedding(num_concepts, self.ae_logit_dim)
-            self.ae_student_factor = nn.Embedding(num_students, self.ae_logit_dim)
-            self.ae_exercise_factor = nn.Embedding(num_exercises, self.ae_logit_dim)
             self.ae_student_logit_bias = nn.Embedding(num_students, 1)
             self.ae_exercise_logit_bias = nn.Embedding(num_exercises, 1)
             self.ae_concept_logit_bias = nn.Embedding(num_concepts, 1)
-            self.ae_graph_state_proj = nn.Linear(knowledge_dim, self.ae_logit_dim, bias=False)
-            self.ae_personal_state_proj = nn.Linear(knowledge_dim, self.ae_logit_dim, bias=False)
-            self.ae_logit_adapter = nn.Sequential(
-                nn.Linear(ae_logit_input_dim, ae_logit_hidden),
-                nn.GELU(),
-                nn.Linear(ae_logit_hidden, 1),
+            self.ae_logit_feature_weight = nn.Parameter(
+                torch.tensor([0.05, 0.05, 0.05, 0.02], dtype=torch.float32)
             )
-            nn.init.normal_(self.ae_student_logit_emb.weight, mean=0.0, std=0.05)
-            nn.init.xavier_normal_(self.ae_concept_logit_emb.weight)
-            nn.init.normal_(self.ae_student_factor.weight, mean=0.0, std=0.05)
-            nn.init.normal_(self.ae_exercise_factor.weight, mean=0.0, std=0.05)
             nn.init.zeros_(self.ae_student_logit_bias.weight)
             nn.init.zeros_(self.ae_exercise_logit_bias.weight)
             nn.init.zeros_(self.ae_concept_logit_bias.weight)
-            nn.init.xavier_normal_(self.ae_graph_state_proj.weight)
-            nn.init.xavier_normal_(self.ae_personal_state_proj.weight)
-            nn.init.normal_(self.ae_logit_adapter[-1].weight, mean=0.0, std=0.01)
-            nn.init.zeros_(self.ae_logit_adapter[-1].bias)
-        else:
-            self.ae_student_logit_emb = None
-            self.ae_concept_logit_emb = None
-            self.ae_student_factor = None
-            self.ae_exercise_factor = None
-            self.ae_student_logit_bias = None
-            self.ae_exercise_logit_bias = None
-            self.ae_concept_logit_bias = None
-            self.ae_graph_state_proj = None
-            self.ae_personal_state_proj = None
-            self.ae_logit_adapter = None
-
-        personal_hidden = max(knowledge_dim, knowledge_dim * self.personal_projection_hidden_factor)
-        self.personal_value_proj_local = nn.Linear(knowledge_dim, knowledge_dim, bias=False)
-        self.personal_value_proj_global = nn.Linear(knowledge_dim, knowledge_dim, bias=False)
-        self.personal_query_writer = nn.Sequential(
-            nn.Linear(knowledge_dim * 3, personal_hidden),
-            nn.GELU(),
-            nn.Linear(personal_hidden, knowledge_dim),
-        )
-        self.personal_align_gate = nn.Sequential(
-            nn.Linear(knowledge_dim * 3 + 4, max(1, knowledge_dim // 2)),
-            nn.GELU(),
-            nn.Linear(max(1, knowledge_dim // 2), 1),
-        )
-        nn.init.eye_(self.personal_value_proj_local.weight)
-        nn.init.eye_(self.personal_value_proj_global.weight)
-        nn.init.zeros_(self.personal_query_writer[-1].weight)
-        nn.init.zeros_(self.personal_query_writer[-1].bias)
-        nn.init.zeros_(self.personal_align_gate[-1].weight)
-        nn.init.constant_(self.personal_align_gate[-1].bias, 2.0)
 
         self._initialize_graph_prior_concept_embeddings()
         if self.share_concept_embeddings:
@@ -491,31 +421,8 @@ class CognitiveDiagnosisModel(nn.Module):
         personal_query_correction: torch.Tensor,
         concept_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        if (
-            self.ae_query_state_adapter is None
-            or self.ae_query_residual_scale <= 0.0
-            or not self.enable_module1
-            or not self.use_concept_graph
-            or not self.use_personal_graph
-        ):
-            zero = knowledge_state.new_tensor(0.0)
-            return torch.zeros_like(knowledge_state), zero
-
-        query_rows = concept_mask.float().unsqueeze(-1).bool()
-        graph_active = global_query_context.pow(2).sum(dim=-1, keepdim=True) > 1e-12
-        personal_active = personal_query_correction.pow(2).sum(dim=-1, keepdim=True) > 1e-12
-        features = torch.cat(
-            [
-                knowledge_state,
-                global_query_context,
-                personal_query_correction,
-                global_query_context * personal_query_correction,
-            ],
-            dim=-1,
-        )
-        residual = self.ae_query_state_adapter(features) * self.ae_query_residual_scale
-        residual = torch.where(query_rows & graph_active & personal_active, residual, torch.zeros_like(residual))
-        return residual, self._masked_query_rms(residual, concept_mask)
+        zero = knowledge_state.new_tensor(0.0)
+        return torch.zeros_like(knowledge_state), zero
 
     def _build_ae_logit_residual(
         self,
@@ -530,17 +437,15 @@ class CognitiveDiagnosisModel(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         zero_vec = knowledge_state.new_zeros((knowledge_state.size(0),))
         zero_scalar = knowledge_state.new_tensor(0.0)
+        feature_weight = getattr(self, "ae_logit_feature_weight", None)
+        student_logit_bias = getattr(self, "ae_student_logit_bias", None)
+        exercise_logit_bias = getattr(self, "ae_exercise_logit_bias", None)
+        concept_logit_bias = getattr(self, "ae_concept_logit_bias", None)
         if (
-            self.ae_logit_adapter is None
-            or self.ae_student_logit_emb is None
-            or self.ae_concept_logit_emb is None
-            or self.ae_student_factor is None
-            or self.ae_exercise_factor is None
-            or self.ae_student_logit_bias is None
-            or self.ae_exercise_logit_bias is None
-            or self.ae_concept_logit_bias is None
-            or self.ae_graph_state_proj is None
-            or self.ae_personal_state_proj is None
+            feature_weight is None
+            or student_logit_bias is None
+            or exercise_logit_bias is None
+            or concept_logit_bias is None
             or self.ae_logit_residual_scale <= 0.0
             or not self.enable_module1
             or not (self.use_concept_graph or self.use_personal_graph)
@@ -558,8 +463,6 @@ class CognitiveDiagnosisModel(nn.Module):
 
         query_mask = concept_mask.float()
         query_weight = query_mask / query_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
-        concept_emb = self.ae_concept_logit_emb.weight
-        query_self_context = query_weight.matmul(concept_emb) * a_gate
         if isinstance(relation_matrices, dict):
             global_relation = relation_matrices["global_matrices"]
         else:
@@ -567,61 +470,37 @@ class CognitiveDiagnosisModel(nn.Module):
         A = global_relation.mean(dim=0).to(dtype=query_weight.dtype)
         A = A / A.sum(dim=-1, keepdim=True).clamp(min=1e-12)
         graph_query_weight = query_weight.matmul(A)
-        query_graph_context = graph_query_weight.matmul(concept_emb) * a_gate
-        student_context = self.ae_student_logit_emb(student_ids) * e_gate
-        mixed_concept_context = 0.65 * query_self_context + 0.35 * query_graph_context
-        bilinear = (student_context * mixed_concept_context).sum(dim=-1) / math.sqrt(float(self.ae_logit_dim))
-        interaction_logit = (
-            self.ae_student_factor(student_ids) * self.ae_exercise_factor(exercise_ids)
-        ).sum(dim=-1) / math.sqrt(float(self.ae_logit_dim))
-        interaction_logit = self.ae_interaction_logit_scale * interaction_logit * joint_gate
         student_prior = self.ae_student_prior_logit[student_ids].to(dtype=dtype, device=device)
         exercise_prior = self.ae_exercise_prior_logit[exercise_ids].to(dtype=dtype, device=device)
         concept_prior = query_weight.matmul(
             self.ae_concept_prior_logit.to(dtype=query_weight.dtype, device=query_weight.device).unsqueeze(-1)
         ).squeeze(-1)
         stat_prior = e_gate * student_prior + a_gate * (0.75 * exercise_prior + 0.75 * concept_prior)
-        student_bias = e_gate * self.ae_student_logit_bias(student_ids).squeeze(-1)
-        exercise_bias = a_gate * self.ae_exercise_logit_bias(exercise_ids).squeeze(-1)
-        query_concept_bias = query_weight.matmul(self.ae_concept_logit_bias.weight).squeeze(-1)
-        graph_concept_bias = graph_query_weight.matmul(self.ae_concept_logit_bias.weight).squeeze(-1)
+        student_bias = e_gate * student_logit_bias(student_ids).squeeze(-1)
+        exercise_bias = a_gate * exercise_logit_bias(exercise_ids).squeeze(-1)
+        query_concept_bias = query_weight.matmul(concept_logit_bias.weight).squeeze(-1)
+        graph_concept_bias = graph_query_weight.matmul(concept_logit_bias.weight).squeeze(-1)
         concept_bias = a_gate * (0.65 * query_concept_bias + 0.35 * graph_concept_bias)
-        pooled_graph_state = self.ae_graph_state_proj(
-            self._masked_query_pool(global_query_context, concept_mask)
-        ) * a_gate
-        pooled_personal_state = self.ae_personal_state_proj(
-            self._masked_query_pool(personal_query_correction, concept_mask)
-        ) * e_gate
         query_count = concept_mask.float().sum(dim=1, keepdim=True)
-        query_density = query_count / float(max(1, self.num_concepts))
+        query_density = (query_count / float(max(1, self.num_concepts))).squeeze(-1)
         graph_neighbor_mass = a_gate * (graph_query_weight * (1.0 - query_mask)).sum(dim=1, keepdim=True)
-        scalar_feats = torch.cat(
+        graph_neighbor_mass = graph_neighbor_mass.squeeze(-1)
+        scalar_feats = torch.stack(
             [
-                graph_rms.unsqueeze(-1),
-                personal_rms.unsqueeze(-1),
-                (graph_rms * personal_rms).unsqueeze(-1),
+                graph_rms,
+                personal_rms,
+                graph_rms * personal_rms * joint_gate,
                 a_gate * query_density + graph_neighbor_mass,
             ],
-            dim=-1,
+            dim=1,
         )
-        features = torch.cat(
-            [
-                student_context,
-                query_self_context,
-                query_graph_context,
-                student_context * query_graph_context,
-                pooled_graph_state,
-                pooled_personal_state,
-                scalar_feats,
-            ],
-            dim=-1,
+        feature_weight_t = feature_weight.to(device=device, dtype=dtype)
+        explicit_feature_logit = (scalar_feats.to(dtype=dtype) * feature_weight_t.view(1, -1)).sum(dim=1) * joint_gate
+        interaction_logit = self.ae_interaction_logit_scale * graph_rms * personal_rms * joint_gate
+        interpretable_bias = 0.20 * (
+            student_bias + 0.75 * exercise_bias + 0.75 * concept_bias
         )
-        learned_raw = (
-            bilinear
-            + 0.20 * (student_bias + 0.75 * exercise_bias + 0.75 * concept_bias)
-            + self.ae_logit_adapter(features).squeeze(-1)
-        ) * joint_gate
-        raw = stat_prior + interaction_logit + 0.15 * learned_raw
+        raw = stat_prior + interpretable_bias + explicit_feature_logit + interaction_logit
         if self.ae_logit_residual_clip > 0.0:
             clip = self.ae_logit_residual_clip
             raw = clip * torch.tanh(raw / clip)
@@ -639,9 +518,9 @@ class CognitiveDiagnosisModel(nn.Module):
         scale: float,
     ) -> None:
         if (
-            self.ae_student_logit_bias is None
-            or self.ae_exercise_logit_bias is None
-            or self.ae_concept_logit_bias is None
+            getattr(self, "ae_student_logit_bias", None) is None
+            or getattr(self, "ae_exercise_logit_bias", None) is None
+            or getattr(self, "ae_concept_logit_bias", None) is None
             or not self.enable_module1
             or not (self.use_concept_graph or self.use_personal_graph)
         ):
@@ -862,12 +741,10 @@ class CognitiveDiagnosisModel(nn.Module):
             global_basis = self._build_personal_message_basis(global_basis_seed, relation_spec)
         else:
             global_basis = knowledge_state
-        value_local = self.personal_value_proj_local(local_basis)
-        value_global = self.personal_value_proj_global(global_basis)
-        value_basis = self.personal_query_writer(
-            torch.cat([value_local, value_global, value_local - value_global], dim=-1)
-        )
-        value_basis = value_basis + value_local
+        if self.personal_value_use_global_basis:
+            value_basis = 0.5 * local_basis + 0.5 * global_basis
+        else:
+            value_basis = local_basis
 
         expanded_values = value_basis.unsqueeze(1).expand(
             -1,
@@ -997,6 +874,17 @@ class CognitiveDiagnosisModel(nn.Module):
             dim=-1,
             eps=1e-6,
         ).unsqueeze(-1)
+        personal_align_gate = getattr(self, "personal_align_gate", None)
+        if personal_align_gate is None:
+            trust = (0.5 + 0.5 * cos_align).clamp(min=0.0, max=1.0)
+            trust = torch.where(query_rows, trust, torch.zeros_like(trust))
+            aligned = trust * personal_query_correction
+            alignment = (
+                (cos_align.squeeze(-1) * concept_mask.float()).sum()
+                / concept_mask.float().sum().clamp(min=1.0)
+            )
+            return aligned, trust, alignment
+
         scalar_feats = torch.cat(
             [
                 cos_align,
@@ -1015,7 +903,7 @@ class CognitiveDiagnosisModel(nn.Module):
             ],
             dim=-1,
         )
-        trust = torch.sigmoid(self.personal_align_gate(align_input))
+        trust = torch.sigmoid(personal_align_gate(align_input))
         trust = torch.where(query_rows, trust, torch.zeros_like(trust))
         aligned = trust * personal_query_correction
         alignment = (

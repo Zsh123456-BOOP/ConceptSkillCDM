@@ -84,7 +84,7 @@ def _check_module1_ae_numerics_and_signals() -> None:
     torch.manual_seed(7)
     model = _build_model(ablate_module1=False, use_concept_graph=True, use_personal_graph=True)
     model.set_epoch(3)
-    if model.structure_module.personal_alpha_bias is not None:
+    if getattr(model.structure_module, "personal_alpha_bias", None) is not None:
         with torch.no_grad():
             model.structure_module.personal_alpha_bias.weight.fill_(5.0)
     model.structure_module.personal_delta_scale = 10.0
@@ -192,8 +192,9 @@ def _check_graph_query_adapter_is_initially_residual() -> None:
 
 def _check_per_head_personal_graph() -> None:
     model = _build_model(ablate_module1=False, use_personal_graph=True)
-    with torch.no_grad():
-        model.structure_module.personal_alpha_bias.weight.fill_(5.0)
+    if getattr(model.structure_module, "personal_alpha_bias", None) is not None:
+        with torch.no_grad():
+            model.structure_module.personal_alpha_bias.weight.fill_(5.0)
     model.structure_module.personal_delta_scale = 10.0
     student_ids = torch.tensor([0, 1], dtype=torch.long)
     exercise_ids = torch.tensor([0, 2], dtype=torch.long)

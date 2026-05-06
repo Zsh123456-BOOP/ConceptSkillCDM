@@ -116,15 +116,6 @@ class ConceptStructureModeling(nn.Module):
             self.knowledge_encoder = None
             self.adaptive_gate = None
             self.personal_generator = None
-            self.personal_gate_embedding = None
-            self.personal_generator_embedding = None
-            self.personal_alpha_bias = None
-            self.personal_gate_from_state = None
-            self.personal_generator_from_state = None
-            self.personal_gate_id_logit = None
-            self.personal_generator_id_logit = None
-            self.personal_support_value_proj = None
-            self.personal_query_value_context_proj = None
             return
 
         # -------- 正常启用：A/E 可选 --------
@@ -164,64 +155,29 @@ class ConceptStructureModeling(nn.Module):
 
         # E) 个性化图（可选）
         if self.use_personal_graph:
-            self.personal_gate_embedding = nn.Embedding(num_students, self.personal_student_dim)
-            self.personal_generator_embedding = nn.Embedding(num_students, self.personal_student_dim)
-            self.personal_alpha_bias = (
-                nn.Embedding(num_students, num_relation_heads)
-                if self.personal_alpha_bias_scale > 0
-                else None
-            )
-            self.personal_gate_from_state = nn.Linear(knowledge_dim, self.personal_student_dim, bias=False)
-            self.personal_generator_from_state = nn.Linear(knowledge_dim, self.personal_student_dim, bias=False)
-            self.personal_gate_id_logit = nn.Parameter(torch.tensor(-2.9444390))
-            self.personal_generator_id_logit = nn.Parameter(torch.tensor(-2.9444390))
-            nn.init.normal_(self.personal_gate_embedding.weight, mean=0.0, std=0.05)
-            nn.init.normal_(self.personal_generator_embedding.weight, mean=0.0, std=0.05)
-            if self.personal_alpha_bias is not None:
-                nn.init.normal_(self.personal_alpha_bias.weight, mean=0.0, std=0.05)
-            nn.init.xavier_normal_(self.personal_gate_from_state.weight)
-            nn.init.xavier_normal_(self.personal_generator_from_state.weight)
             context_dim = knowledge_dim * (6 if self.personal_disable_student_global_context else 7)
-            personal_hidden_dim = max(self.personal_student_dim, knowledge_dim)
             self.adaptive_gate = AdaptiveGate(
-                self.personal_student_dim,
+                knowledge_dim,
                 context_dim,
                 num_heads=num_relation_heads,
                 max_alpha=self.personal_max_alpha,
-                hidden_dim=personal_hidden_dim,
+                hidden_dim=None,
                 alpha_temperature=self.personal_alpha_temperature,
                 alpha_budget=self.personal_alpha_budget,
                 alpha_base_init=self.personal_alpha_base_init,
             )
             self.personal_generator = PersonalRelationGenerator(
-                self.personal_student_dim,
+                knowledge_dim,
                 context_dim,
                 knowledge_dim,
                 num_concepts,
                 num_relation_heads,
                 personal_rank,
-                hidden_dim=personal_hidden_dim,
+                hidden_dim=None,
             )
-            if self.enable_personal_support_value_proj:
-                self.personal_support_value_proj = nn.Linear(knowledge_dim, knowledge_dim, bias=False)
-                self.personal_query_value_context_proj = nn.Linear(knowledge_dim, knowledge_dim, bias=False)
-                nn.init.eye_(self.personal_support_value_proj.weight)
-                nn.init.zeros_(self.personal_query_value_context_proj.weight)
-            else:
-                self.personal_support_value_proj = None
-                self.personal_query_value_context_proj = None
         else:
             self.adaptive_gate = None
             self.personal_generator = None
-            self.personal_gate_embedding = None
-            self.personal_generator_embedding = None
-            self.personal_alpha_bias = None
-            self.personal_gate_from_state = None
-            self.personal_generator_from_state = None
-            self.personal_gate_id_logit = None
-            self.personal_generator_id_logit = None
-            self.personal_support_value_proj = None
-            self.personal_query_value_context_proj = None
 
     def set_epoch(self, epoch: int) -> None:
         self._current_epoch = max(1, int(epoch))

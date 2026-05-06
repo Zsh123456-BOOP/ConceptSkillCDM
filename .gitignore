@@ -21,4 +21,9 @@ venv/
 
 # 忽略 checkpoints 文件夹下的所有内容（如果你不希望任何 checkpoints 被提交）
 checkpoints/
+
+# 实验运行日志和远端启动脚本输出
+logs/
+server_logs/
+results/
 .claude/

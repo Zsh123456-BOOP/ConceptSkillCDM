@@ -166,14 +166,12 @@ def run_structure_forward(
                 ],
                 dim=-1,
             )
-        gate_state_input = query_state + 0.5 * query_contrast
-        generator_state_input = query_state + 0.5 * local_contrast
-        gate_state_repr = torch.tanh(module.personal_gate_from_state(gate_state_input))
-        generator_state_repr = torch.tanh(module.personal_generator_from_state(generator_state_input))
-        gate_id_scale = torch.sigmoid(module.personal_gate_id_logit)
-        generator_id_scale = torch.sigmoid(module.personal_generator_id_logit)
-        gate_id_embedding = module.personal_gate_embedding(student_ids)
-        generator_id_embedding = module.personal_generator_embedding(student_ids)
+        gate_state_repr = query_state + 0.5 * query_contrast
+        generator_state_repr = query_state + 0.5 * local_contrast
+        gate_id_scale = None
+        generator_id_scale = None
+        gate_id_embedding = None
+        generator_id_embedding = None
         row_budget_mask, query_row_mask, neighbor_row_mask = module._build_personal_row_budget_mask(
             concept_mask,
             local_row_mask,
@@ -262,10 +260,6 @@ def run_structure_forward(
         )
         if has_personal_active_rows:
             gate_alpha_bias = None
-            if module.personal_alpha_bias is not None:
-                gate_alpha_bias = module.personal_alpha_bias_scale * torch.tanh(
-                    module.personal_alpha_bias(student_ids)
-                )
             personal_warmup_scale = module._get_personal_warmup_scale()
             gate_alpha, gate_alpha_logit, gate_diag = module.adaptive_gate(
                 gate_state_repr,
@@ -429,12 +423,8 @@ def run_structure_forward(
         "id_logit_nonfinite_count": id_logit_nonfinite_count,
         "alpha_base_nonfinite_count": alpha_base_nonfinite_count,
         "alpha_preclamp_nonfinite_count": alpha_preclamp_nonfinite_count,
-        "personal_gate_id_scale": None
-        if module.personal_gate_id_logit is None
-        else torch.sigmoid(module.personal_gate_id_logit).to(device=device, dtype=dtype),
-        "personal_generator_id_scale": None
-        if module.personal_generator_id_logit is None
-        else torch.sigmoid(module.personal_generator_id_logit).to(device=device, dtype=dtype),
+        "personal_gate_id_scale": None,
+        "personal_generator_id_scale": None,
         "personal_matrices": personal_matrices,
         "personal_matrix_delta": personal_matrix_delta,
         "personal_matrix_student_std": personal_matrix_student_std,
