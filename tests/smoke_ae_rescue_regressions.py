@@ -1984,12 +1984,44 @@ def _check_personal_alignment_gate_suppresses_antialigned_messages() -> None:
         f"alignment gate 必须强力抑制反向 E message；当前 neg_ratio={neg_ratio:.6f}",
     )
 
+    weak_model = _build_tiny_ae_model(use_concept_graph=True, use_personal_graph=True)
+    weak_model.eval()
+    global_unit = torch.nn.functional.normalize(torch.randn(2, weak_model.num_concepts, weak_model.knowledge_dim), dim=-1)
+    orthogonal_seed = torch.randn_like(global_unit)
+    orthogonal = orthogonal_seed - (orthogonal_seed * global_unit).sum(dim=-1, keepdim=True) * global_unit
+    orthogonal = torch.nn.functional.normalize(orthogonal, dim=-1)
+    weak_positive = 0.05 * global_unit + (1.0 - 0.05 ** 2) ** 0.5 * orthogonal
+    weak_concept_mask = torch.ones(2, weak_model.num_concepts)
+
+    with torch.no_grad():
+        weak_aligned, _, weak_alignment = weak_model._apply_personal_alignment_gate(
+            knowledge_state=torch.randn_like(global_unit),
+            global_query_context=global_unit,
+            personal_query_correction=weak_positive,
+            concept_mask=weak_concept_mask,
+            query_row_posterior_kl=torch.tensor(0.05),
+            query_row_self_support_mass=torch.tensor(0.02),
+            query_row_graph_support_mass=torch.tensor(0.10),
+        )
+
+    weak_ratio = float(weak_model._masked_query_rms(weak_aligned, weak_concept_mask).item()) / max(
+        float(weak_model._masked_query_rms(weak_positive, weak_concept_mask).item()),
+        1e-8,
+    )
+    _assert(0.04 <= float(weak_alignment.item()) <= 0.06, "测试构造的 weak-positive E message 应只有微弱正向 alignment。")
+    _assert(
+        weak_ratio >= 0.75,
+        f"alignment gate 不应过度压低微弱但同向的 E message；当前 weak_ratio={weak_ratio:.6f}",
+    )
+
 
 def _check_personal_query_trust_region_caps_effective_correction() -> None:
+    torch.manual_seed(0)
     model = _build_tiny_ae_model(
         personal_query_correction_scale=5.0,
         personal_query_correction_max_ratio=0.01,
         personal_query_correction_min_graph_anchor=1e-4,
+        personal_message_alignment_gate=False,
     )
     model.eval()
 

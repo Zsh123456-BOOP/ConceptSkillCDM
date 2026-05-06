@@ -688,10 +688,13 @@ class CognitiveDiagnosisModel(nn.Module):
             dim=-1,
         )
         learned_trust = torch.sigmoid(self.personal_align_gate(align_input))
-        direction_trust = torch.sigmoid(8.0 * cos_align)
-        trust = learned_trust * direction_trust
+        global_norm_sq = global_query_context.pow(2).sum(dim=-1, keepdim=True).clamp(min=1e-8)
+        parallel_coeff = (personal_query_correction * global_query_context).sum(dim=-1, keepdim=True) / global_norm_sq
+        anti_parallel = torch.minimum(parallel_coeff, torch.zeros_like(parallel_coeff)) * global_query_context
+        direction_corrected = personal_query_correction - anti_parallel
+        trust = learned_trust
         trust = torch.where(query_rows, trust, torch.zeros_like(trust))
-        aligned = trust * personal_query_correction
+        aligned = trust * direction_corrected
         alignment = (
             (cos_align.squeeze(-1) * concept_mask.float()).sum()
             / concept_mask.float().sum().clamp(min=1.0)
