@@ -1931,90 +1931,6 @@ def _check_personal_projection_gap_diagnostics_exist() -> None:
     )
 
 
-def _check_personal_alignment_gate_suppresses_antialigned_messages() -> None:
-    torch.manual_seed(11)
-    model = _build_tiny_ae_model(use_concept_graph=True, use_personal_graph=True)
-    model.eval()
-
-    with torch.no_grad():
-        for param in model.personal_align_gate.parameters():
-            param.zero_()
-
-        knowledge_state = torch.randn(2, model.num_concepts, model.knowledge_dim)
-        global_query_context = torch.randn_like(knowledge_state)
-        concept_mask = torch.ones(2, model.num_concepts)
-        positive_correction = global_query_context.clone()
-        negative_correction = -global_query_context.clone()
-
-        aligned_pos, _, pos_alignment = model._apply_personal_alignment_gate(
-            knowledge_state=knowledge_state,
-            global_query_context=global_query_context,
-            personal_query_correction=positive_correction,
-            concept_mask=concept_mask,
-            query_row_posterior_kl=torch.tensor(0.05),
-            query_row_self_support_mass=torch.tensor(0.02),
-            query_row_graph_support_mass=torch.tensor(0.10),
-        )
-        aligned_neg, _, neg_alignment = model._apply_personal_alignment_gate(
-            knowledge_state=knowledge_state,
-            global_query_context=global_query_context,
-            personal_query_correction=negative_correction,
-            concept_mask=concept_mask,
-            query_row_posterior_kl=torch.tensor(0.05),
-            query_row_self_support_mass=torch.tensor(0.02),
-            query_row_graph_support_mass=torch.tensor(0.10),
-        )
-
-    pos_ratio = float(model._masked_query_rms(aligned_pos, concept_mask).item()) / max(
-        float(model._masked_query_rms(positive_correction, concept_mask).item()),
-        1e-8,
-    )
-    neg_ratio = float(model._masked_query_rms(aligned_neg, concept_mask).item()) / max(
-        float(model._masked_query_rms(negative_correction, concept_mask).item()),
-        1e-8,
-    )
-    _assert(float(pos_alignment.item()) > 0.99, "测试构造的正向 E message 应与 global query context 同向。")
-    _assert(float(neg_alignment.item()) < -0.99, "测试构造的反向 E message 应与 global query context 反向。")
-    _assert(
-        pos_ratio >= 0.45,
-        f"alignment gate 不应压垮同向 E message；当前 pos_ratio={pos_ratio:.6f}",
-    )
-    _assert(
-        neg_ratio <= 0.05,
-        f"alignment gate 必须强力抑制反向 E message；当前 neg_ratio={neg_ratio:.6f}",
-    )
-
-    weak_model = _build_tiny_ae_model(use_concept_graph=True, use_personal_graph=True)
-    weak_model.eval()
-    global_unit = torch.nn.functional.normalize(torch.randn(2, weak_model.num_concepts, weak_model.knowledge_dim), dim=-1)
-    orthogonal_seed = torch.randn_like(global_unit)
-    orthogonal = orthogonal_seed - (orthogonal_seed * global_unit).sum(dim=-1, keepdim=True) * global_unit
-    orthogonal = torch.nn.functional.normalize(orthogonal, dim=-1)
-    weak_positive = 0.05 * global_unit + (1.0 - 0.05 ** 2) ** 0.5 * orthogonal
-    weak_concept_mask = torch.ones(2, weak_model.num_concepts)
-
-    with torch.no_grad():
-        weak_aligned, _, weak_alignment = weak_model._apply_personal_alignment_gate(
-            knowledge_state=torch.randn_like(global_unit),
-            global_query_context=global_unit,
-            personal_query_correction=weak_positive,
-            concept_mask=weak_concept_mask,
-            query_row_posterior_kl=torch.tensor(0.05),
-            query_row_self_support_mass=torch.tensor(0.02),
-            query_row_graph_support_mass=torch.tensor(0.10),
-        )
-
-    weak_ratio = float(weak_model._masked_query_rms(weak_aligned, weak_concept_mask).item()) / max(
-        float(weak_model._masked_query_rms(weak_positive, weak_concept_mask).item()),
-        1e-8,
-    )
-    _assert(0.04 <= float(weak_alignment.item()) <= 0.06, "测试构造的 weak-positive E message 应只有微弱正向 alignment。")
-    _assert(
-        weak_ratio >= 0.75,
-        f"alignment gate 不应过度压低微弱但同向的 E message；当前 weak_ratio={weak_ratio:.6f}",
-    )
-
-
 def _check_personal_query_trust_region_caps_effective_correction() -> None:
     torch.manual_seed(0)
     model = _build_tiny_ae_model(
@@ -2727,7 +2643,6 @@ def main() -> None:
     _check_personal_query_writer_initially_residual()
     _check_query_conditioned_support_value_projection_is_live()
     _check_personal_projection_gap_diagnostics_exist()
-    _check_personal_alignment_gate_suppresses_antialigned_messages()
     _check_personal_query_trust_region_caps_effective_correction()
     _check_masked_support_softmax_active_fallback_semantics()
     _check_no_a_finite_alpha_smoke()
