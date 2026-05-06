@@ -286,6 +286,7 @@ class CognitiveDiagnosisModel(nn.Module):
         nn.init.zeros_(self.personal_align_gate[-1].weight)
         nn.init.constant_(self.personal_align_gate[-1].bias, 2.0)
 
+        self._initialize_graph_prior_concept_embeddings()
         if self.share_concept_embeddings:
             self._tie_concept_embeddings()
 
@@ -323,6 +324,42 @@ class CognitiveDiagnosisModel(nn.Module):
         prior = prior * offdiag
         prior = prior / prior.sum(dim=-1, keepdim=True).clamp(min=1e-12)
         return prior.to(dtype=torch.float32)
+
+    def _initialize_graph_prior_concept_embeddings(self) -> None:
+        if not (self.enable_module1 and self.use_concept_graph and self.graph_prior_logit_scale > 0.0):
+            return
+        structure_module = getattr(self, "structure_module", None)
+        if structure_module is None:
+            return
+        knowledge_encoder = getattr(structure_module, "knowledge_encoder", None)
+        if knowledge_encoder is None or not hasattr(knowledge_encoder, "concept_emb"):
+            return
+
+        prior = self.graph_prior_matrix.detach().float()
+        C = int(prior.size(0))
+        if C <= 1:
+            return
+
+        sim = 0.5 * (prior + prior.t())
+        sim = sim + torch.eye(C, device=sim.device, dtype=sim.dtype)
+        try:
+            eigvals, eigvecs = torch.linalg.eigh(sim.cpu())
+        except RuntimeError:
+            return
+
+        width = min(int(knowledge_encoder.concept_emb.embedding_dim), C)
+        eigvals = eigvals[-width:].clamp(min=1e-6).sqrt()
+        basis = eigvecs[:, -width:] * eigvals.unsqueeze(0)
+        basis = basis - basis.mean(dim=0, keepdim=True)
+        basis = basis / basis.std(dim=0, keepdim=True).clamp(min=1e-6)
+        basis = basis.to(device=knowledge_encoder.concept_emb.weight.device, dtype=knowledge_encoder.concept_emb.weight.dtype)
+        scale = min(0.20, max(0.02, 0.20 * self.graph_prior_logit_scale))
+
+        with torch.no_grad():
+            knowledge_encoder.concept_emb.weight[:, :width].mul_(0.5).add_(basis * scale)
+            relation_learning = getattr(structure_module, "relation_learning", None)
+            if relation_learning is not None and relation_learning.concept_embeddings is not knowledge_encoder.concept_emb.weight:
+                relation_learning.concept_embeddings[:, :width].mul_(0.5).add_(basis * scale)
 
     def _tie_concept_embeddings(self) -> None:
         if not self.enable_module1:

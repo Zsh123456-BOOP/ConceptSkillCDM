@@ -428,6 +428,9 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
     prior = model.graph_prior_matrix
     _assert((prior.sum(dim=-1) - 1.0).abs().max().item() < 1e-6, "Q-prior matrix rows should sum to 1.")
     _assert(prior[0, 1].item() > prior[0, 2].item(), "Q-prior should favor stronger train-Q co-occurrence.")
+    concept_weight = model.structure_module.knowledge_encoder.concept_emb.weight.detach()
+    _assert(torch.isfinite(concept_weight).all().item(), "Q-prior concept embedding initialization should stay finite.")
+    _assert(concept_weight[:, :3].std().item() > 1e-5, "Q-prior should leave a non-flat concept embedding basis.")
     rel = model.structure_module.relation_learning
     _assert(rel is not None and rel.prior_logit_scale > 0.0, "A relation learner should receive graph prior scale.")
 
