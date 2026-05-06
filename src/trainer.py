@@ -842,6 +842,7 @@ def _collect_debug_forward_stats(
     query_row_graph_delta_vals: List[float] = []
     query_row_global_readout_delta_vals: List[float] = []
     query_row_personal_message_delta_vals: List[float] = []
+    ae_query_state_residual_delta_vals: List[float] = []
     query_row_posterior_delta_abs_vals: List[float] = []
     query_row_posterior_kl_vals: List[float] = []
     personal_to_graph_query_ratio_vals: List[float] = []
@@ -962,6 +963,7 @@ def _collect_debug_forward_stats(
                 ("local_row_ratio", local_row_ratio_vals),
                 ("personal_support_density", personal_support_density_vals),
                 ("query_row_personal_message_delta", query_row_personal_message_delta_vals),
+                ("ae_query_state_residual_delta", ae_query_state_residual_delta_vals),
                 ("query_row_posterior_delta_abs", query_row_posterior_delta_abs_vals),
                 ("query_row_posterior_kl", query_row_posterior_kl_vals),
                 ("personal_to_graph_query_ratio_effective", personal_to_graph_query_ratio_vals),
@@ -1058,6 +1060,7 @@ def _collect_debug_forward_stats(
     query_row_graph_delta_mean, _ = _safe_mean_std(query_row_graph_delta_vals)
     query_row_global_readout_delta_mean, _ = _safe_mean_std(query_row_global_readout_delta_vals)
     query_row_personal_message_delta_mean, _ = _safe_mean_std(query_row_personal_message_delta_vals)
+    ae_query_state_residual_delta_mean, _ = _safe_mean_std(ae_query_state_residual_delta_vals)
     query_row_posterior_delta_abs_mean, _ = _safe_mean_std(query_row_posterior_delta_abs_vals)
     query_row_posterior_kl_mean, _ = _safe_mean_std(query_row_posterior_kl_vals)
     personal_to_graph_query_ratio_mean, _ = _safe_mean_std(personal_to_graph_query_ratio_vals)
@@ -1125,6 +1128,7 @@ def _collect_debug_forward_stats(
         "query_row_graph_delta": query_row_graph_delta_mean,
         "query_row_global_readout_delta": query_row_global_readout_delta_mean,
         "query_row_personal_message_delta": query_row_personal_message_delta_mean,
+        "ae_query_state_residual_delta": ae_query_state_residual_delta_mean,
         "query_row_posterior_delta_abs": query_row_posterior_delta_abs_mean,
         "query_row_posterior_kl": query_row_posterior_kl_mean,
         "personal_to_graph_query_ratio": personal_to_graph_query_ratio_mean,
@@ -1850,6 +1854,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "personal_row_entropy=%.4f, personal_matrix_delta=%.4f, personal_matrix_student_std=%.4f, "
                 "personal_delta_pre_softmax_norm=%.4f, personal_delta_student_std=%.4f, alpha_head_std=%.4f, "
                 "query_row_global_readout_delta=%.4f, query_row_personal_message_delta=%.4f, "
+                "ae_query_state_residual_delta=%.4f, "
                 "query_row_posterior_delta_abs=%.4f, query_row_posterior_kl=%.4f, "
                 "query_row_delta_local_rms_raw=%.4f, query_row_message_projection_gain=%.4f, "
                 "personal_to_graph_query_ratio=%.4f, query_row_global_support_mass=%.4f, "
@@ -1886,6 +1891,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["alpha_head_std"],
                 diag["query_row_global_readout_delta"],
                 diag["query_row_personal_message_delta"],
+                diag["ae_query_state_residual_delta"],
                 diag["query_row_posterior_delta_abs"],
                 diag["query_row_posterior_kl"],
                 diag["query_row_delta_local_rms_raw"],

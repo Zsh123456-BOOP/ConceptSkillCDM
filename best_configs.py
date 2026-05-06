@@ -26,7 +26,7 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "num_relation_heads": 2,
 
         # Module1
-        "lambda_sparse": 0.8,
+        "lambda_sparse": 0.2,
         "lambda_sparse_personal": 0.0005,
         "lambda_alpha": 0.0,
         "lambda_alpha_min": 0.08,
@@ -37,8 +37,8 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "use_personal_graph": True,
         "graph_entropy_min": 0.25,
         "graph_entropy_max": 0.75,
-        "lambda_graph_diag": 0.10,
-        "lambda_graph_uniform": 0.04,
+        "lambda_graph_diag": 0.02,
+        "lambda_graph_uniform": 0.01,
         "graph_uniform_margin": 0.10,
         "graph_reg_warmup_epochs": 4,
         "graph_reg_cap_ratio": 6.0,
@@ -118,7 +118,7 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "num_relation_heads": 2,
 
         # Module1
-        "lambda_sparse": 0.6,
+        "lambda_sparse": 0.15,
         "lambda_sparse_personal": 0.0005,
         "lambda_alpha": 0.0,
         "lambda_alpha_min": 0.05,
@@ -129,8 +129,8 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "use_personal_graph": True,
         "graph_entropy_min": 0.15,
         "graph_entropy_max": 0.70,
-        "lambda_graph_diag": 0.12,
-        "lambda_graph_uniform": 0.06,
+        "lambda_graph_diag": 0.03,
+        "lambda_graph_uniform": 0.015,
         "graph_uniform_margin": 0.12,
         "graph_reg_warmup_epochs": 2,
         "graph_reg_cap_ratio": 6.0,
