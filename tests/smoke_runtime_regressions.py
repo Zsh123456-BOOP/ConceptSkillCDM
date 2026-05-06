@@ -269,12 +269,35 @@ def _check_get_student_diagnosis() -> None:
         _assert("skill_latent" not in out, "skill_latent should be removed with module B.")
 
 
+def _check_grad_guard_keeps_nan_from_poisoning_group() -> None:
+    from src.trainer import _clip_stability_sensitive_grads
+
+    model = _build_model(ablate_module1=False, use_concept_graph=True, use_personal_graph=True)
+    model.train()
+    for param in model.parameters():
+        if param.requires_grad:
+            param.grad = torch.full_like(param, 0.01)
+
+    bad_param = model.exercise_encoder.b.weight
+    good_param = model.structure_module.knowledge_encoder.concept_emb.weight
+    bad_param.grad.view(-1)[0] = float("nan")
+    good_before = good_param.grad.detach().clone()
+
+    stats = _clip_stability_sensitive_grads(model)
+
+    _assert(int(stats["nonfinite_grad_count"]) == 1, "Grad guard should report the injected NaN gradient.")
+    _assert(torch.isfinite(good_param.grad).all().item(), "A finite knowledge-state grad must not be poisoned by another NaN grad.")
+    _assert(torch.isfinite(bad_param.grad).all().item(), "Non-finite grad entries should be sanitized before optimizer.step.")
+    _assert(good_param.grad.abs().max().item() <= good_before.abs().max().item() + 1e-8, "Grad clipping should remain bounded.")
+
+
 def main() -> None:
     _check_module1_ae_numerics_and_signals()
     _check_graph_query_adapter_is_initially_residual()
     _check_per_head_personal_graph()
     _check_removed_residual_artifacts()
     _check_get_student_diagnosis()
+    _check_grad_guard_keeps_nan_from_poisoning_group()
     print("OK: runtime regression smoke checks passed.")
 
 

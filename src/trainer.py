@@ -391,40 +391,102 @@ def _dedupe_params(params: List[torch.nn.Parameter]) -> List[torch.nn.Parameter]
     return out
 
 
-def _clip_grad_group(params: List[torch.nn.Parameter], max_norm: float) -> float:
-    params = [p for p in _dedupe_params(params) if p.requires_grad and p.grad is not None]
+def _sanitize_nonfinite_grads(
+    named_params: List[Tuple[str, torch.nn.Parameter]],
+) -> Tuple[int, List[str]]:
+    nonfinite_count = 0
+    bad_names: List[str] = []
+    for name, param in named_params:
+        grad = param.grad
+        if grad is None:
+            continue
+        finite = torch.isfinite(grad)
+        if bool(finite.all().item()):
+            continue
+        bad = int((~finite).sum().item())
+        nonfinite_count += bad
+        bad_names.append(name)
+        grad.copy_(torch.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0))
+    return nonfinite_count, bad_names[:8]
+
+
+def _clip_grad_group(
+    named_params: List[Tuple[str, torch.nn.Parameter]],
+    max_norm: float,
+) -> Tuple[float, int, List[str]]:
+    deduped: List[Tuple[str, torch.nn.Parameter]] = []
+    seen: set[int] = set()
+    for name, param in named_params:
+        if param is None or not isinstance(param, torch.nn.Parameter):
+            continue
+        pid = id(param)
+        if pid in seen:
+            continue
+        seen.add(pid)
+        deduped.append((name, param))
+    params = [p for _, p in deduped if p.requires_grad and p.grad is not None]
     if not params:
-        return 0.0
+        return 0.0, 0, []
+    nonfinite_count, bad_names = _sanitize_nonfinite_grads(
+        [(name, p) for name, p in deduped if p.requires_grad and p.grad is not None]
+    )
     norm = torch.nn.utils.clip_grad_norm_(params, max_norm=max_norm)
-    return float(norm.item() if isinstance(norm, torch.Tensor) else norm)
+    norm_value = float(norm.item() if isinstance(norm, torch.Tensor) else norm)
+    if not math.isfinite(norm_value):
+        for param in params:
+            if param.grad is not None:
+                param.grad.zero_()
+        nonfinite_count += sum(int(p.grad.numel()) for p in params if p.grad is not None)
+        bad_names = bad_names or ["<group_total_norm>"]
+        norm_value = 0.0
+    return norm_value, nonfinite_count, bad_names
 
 
-def _clip_stability_sensitive_grads(model: nn.Module) -> Dict[str, float]:
+def _clip_stability_sensitive_grads(model: nn.Module) -> Dict[str, Any]:
     base_model = _get_base_model(model)
     structure_module = getattr(base_model, "structure_module", None)
     relation_learning = getattr(structure_module, "relation_learning", None) if structure_module is not None else None
+    adaptive_gate = getattr(structure_module, "adaptive_gate", None) if structure_module is not None else None
+    personal_generator = getattr(structure_module, "personal_generator", None) if structure_module is not None else None
     personal_modules = [
-        getattr(structure_module, "adaptive_gate", None),
-        getattr(structure_module, "personal_generator", None),
+        adaptive_gate,
+        personal_generator,
     ]
 
-    graph_params = list(relation_learning.parameters()) if relation_learning is not None else []
-    personal_params: List[torch.nn.Parameter] = []
+    graph_named_params = (
+        [(f"structure_module.relation_learning.{name}", param) for name, param in relation_learning.named_parameters()]
+        if relation_learning is not None
+        else []
+    )
+    personal_named_params: List[Tuple[str, torch.nn.Parameter]] = []
     for module in personal_modules:
         if module is None:
             continue
-        personal_params.extend(list(module.parameters()))
+        module_prefix = "adaptive_gate" if module is adaptive_gate else "personal_generator"
+        personal_named_params.extend(
+            [(f"structure_module.{module_prefix}.{name}", param) for name, param in module.named_parameters()]
+        )
 
-    graph_ids = {id(p) for p in _dedupe_params(graph_params)}
-    personal_ids = {id(p) for p in _dedupe_params(personal_params)}
-    other_params = [
-        p for p in base_model.parameters() if id(p) not in graph_ids and id(p) not in personal_ids
+    graph_ids = {id(p) for _, p in graph_named_params}
+    personal_ids = {id(p) for _, p in personal_named_params}
+    other_named_params = [
+        (name, param)
+        for name, param in base_model.named_parameters()
+        if id(param) not in graph_ids and id(param) not in personal_ids
     ]
 
+    graph_norm, graph_bad, graph_names = _clip_grad_group(graph_named_params, max_norm=1.5)
+    personal_norm, personal_bad, personal_names = _clip_grad_group(personal_named_params, max_norm=1.0)
+    other_norm, other_bad, other_names = _clip_grad_group(other_named_params, max_norm=5.0)
     return {
-        "graph_clip_norm": _clip_grad_group(graph_params, max_norm=1.5),
-        "personal_clip_norm": _clip_grad_group(personal_params, max_norm=1.0),
-        "other_clip_norm": _clip_grad_group(other_params, max_norm=5.0),
+        "graph_clip_norm": graph_norm,
+        "personal_clip_norm": personal_norm,
+        "other_clip_norm": other_norm,
+        "nonfinite_grad_count": float(graph_bad + personal_bad + other_bad),
+        "nonfinite_graph_grad_count": float(graph_bad),
+        "nonfinite_personal_grad_count": float(personal_bad),
+        "nonfinite_other_grad_count": float(other_bad),
+        "nonfinite_grad_param_names": ",".join(graph_names + personal_names + other_names),
     }
 
 
@@ -1345,7 +1407,18 @@ def train_epoch(
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
-        _clip_stability_sensitive_grads(model)
+        grad_clip_stats = _clip_stability_sensitive_grads(model)
+        nonfinite_grad_count = int(grad_clip_stats.get("nonfinite_grad_count", 0.0))
+        if nonfinite_grad_count > 0:
+            logger.warning(
+                "[Grad Guard] sanitized %d non-finite gradient values before optimizer.step "
+                "(graph=%d, personal=%d, other=%d, params=%s)",
+                nonfinite_grad_count,
+                int(grad_clip_stats.get("nonfinite_graph_grad_count", 0.0)),
+                int(grad_clip_stats.get("nonfinite_personal_grad_count", 0.0)),
+                int(grad_clip_stats.get("nonfinite_other_grad_count", 0.0)),
+                grad_clip_stats.get("nonfinite_grad_param_names", ""),
+            )
         optimizer.step()
 
         total_loss += float(loss.item())
