@@ -174,7 +174,6 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "graph_headwise_query_gate",
         "graph_edge_bias_rank",
         "graph_prior_logit_scale",
-        "ae_query_residual_scale",
         "ae_logit_residual_scale",
         "ae_logit_residual_clip",
         "ae_irt_logit_scale",
@@ -189,6 +188,15 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         for key in required_positive:
             _assert(key in cfg, f"{dataset} 缺少 E-rescue 配置项: {key}")
             _assert(float(cfg[key]) > 0.0, f"{dataset} 的 {key} 必须为正值，当前={cfg[key]}")
+        _assert("ae_query_residual_scale" in cfg, f"{dataset} 缺少 E-rescue 配置项: ae_query_residual_scale")
+        _assert(
+            float(cfg["ae_query_residual_scale"]) >= 0.0,
+            f"{dataset} 的 ae_query_residual_scale 不能为负值，当前={cfg['ae_query_residual_scale']}",
+        )
+        _assert(
+            float(cfg["ae_query_residual_scale"]) > 0.0 or float(cfg["ae_logit_residual_scale"]) > 0.0,
+            f"{dataset} 必须至少开启一种 AE residual 通路。",
+        )
         _assert(
             float(cfg["personal_delta_scale"]) >= 2.0,
             f"{dataset} 的 personal_delta_scale 过小，无法有效放大 E 扰动。",
