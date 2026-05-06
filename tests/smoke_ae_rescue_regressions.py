@@ -1888,6 +1888,25 @@ def _check_query_conditioned_support_value_projection_is_live() -> None:
     )
 
 
+def _check_personal_query_writer_initially_residual() -> None:
+    torch.manual_seed(7)
+    model = _build_tiny_ae_model(use_concept_graph=True, use_personal_graph=True)
+    model.eval()
+
+    local = torch.randn(2, model.num_concepts, model.knowledge_dim)
+    global_ctx = torch.randn_like(local)
+    writer_input = torch.cat([local, global_ctx, local - global_ctx], dim=-1)
+    with torch.no_grad():
+        writer_delta = model.personal_query_writer(writer_input)
+
+    writer_rms = float(writer_delta.pow(2).mean().sqrt().item())
+    local_rms = float(local.pow(2).mean().sqrt().item())
+    _assert(
+        writer_rms <= 1e-7 * max(local_rms, 1e-8),
+        f"E query writer 初始应是 residual no-op，避免随机写回污染个性化消息；当前 writer_rms={writer_rms:.6f}, local_rms={local_rms:.6f}",
+    )
+
+
 def _check_personal_projection_gap_diagnostics_exist() -> None:
     model = _build_tiny_ae_model(use_concept_graph=True, use_personal_graph=True)
     model.eval()
@@ -2619,6 +2638,7 @@ def main() -> None:
     _check_no_a_query_ratio_is_guarded()
     _check_a_diag_zero_when_graph_disabled()
     _check_graph_query_gate_diagnostics_exist()
+    _check_personal_query_writer_initially_residual()
     _check_query_conditioned_support_value_projection_is_live()
     _check_personal_projection_gap_diagnostics_exist()
     _check_personal_query_trust_region_caps_effective_correction()

@@ -275,6 +275,8 @@ class CognitiveDiagnosisModel(nn.Module):
         )
         nn.init.eye_(self.personal_value_proj_local.weight)
         nn.init.eye_(self.personal_value_proj_global.weight)
+        nn.init.zeros_(self.personal_query_writer[-1].weight)
+        nn.init.zeros_(self.personal_query_writer[-1].bias)
 
         if self.share_concept_embeddings:
             self._tie_concept_embeddings()
