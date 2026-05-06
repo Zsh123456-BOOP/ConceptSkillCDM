@@ -2751,8 +2751,8 @@ def _check_junyi_e_on_jobs_use_oom_safe_batch_size() -> None:
         f"junyi full 在 E 开启时应自动降到 OOM-safe batch_size=64，当前={jobs_by_ablation['full'].params['batch_size']}",
     )
     _assert(
-        int(jobs_by_ablation["no_A"].params["batch_size"]) == 64,
-        f"junyi no_A 在 E 开启时也应自动降到 OOM-safe batch_size=64，当前={jobs_by_ablation['no_A'].params['batch_size']}",
+        int(jobs_by_ablation["no_A"].params["batch_size"]) == 256,
+        f"junyi no_A 现在按 A-conditioned E 语义关闭 E，不应再降 batch，当前={jobs_by_ablation['no_A'].params['batch_size']}",
     )
     _assert(
         int(jobs_by_ablation["no_E"].params["batch_size"]) == 256,
