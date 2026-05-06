@@ -277,6 +277,8 @@ class CognitiveDiagnosisModel(nn.Module):
         nn.init.eye_(self.personal_value_proj_global.weight)
         nn.init.zeros_(self.personal_query_writer[-1].weight)
         nn.init.zeros_(self.personal_query_writer[-1].bias)
+        nn.init.zeros_(self.personal_align_gate[-1].weight)
+        nn.init.constant_(self.personal_align_gate[-1].bias, 2.0)
 
         if self.share_concept_embeddings:
             self._tie_concept_embeddings()
@@ -685,7 +687,9 @@ class CognitiveDiagnosisModel(nn.Module):
             ],
             dim=-1,
         )
-        trust = torch.sigmoid(self.personal_align_gate(align_input))
+        learned_trust = torch.sigmoid(self.personal_align_gate(align_input))
+        direction_trust = torch.sigmoid(8.0 * cos_align)
+        trust = learned_trust * direction_trust
         trust = torch.where(query_rows, trust, torch.zeros_like(trust))
         aligned = trust * personal_query_correction
         alignment = (
