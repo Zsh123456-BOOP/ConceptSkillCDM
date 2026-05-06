@@ -277,6 +277,8 @@ class CognitiveDiagnosisModel(nn.Module):
         nn.init.eye_(self.personal_value_proj_global.weight)
         nn.init.zeros_(self.personal_query_writer[-1].weight)
         nn.init.zeros_(self.personal_query_writer[-1].bias)
+        nn.init.zeros_(self.personal_align_gate[-1].weight)
+        nn.init.constant_(self.personal_align_gate[-1].bias, 2.0)
 
         if self.share_concept_embeddings:
             self._tie_concept_embeddings()
@@ -422,7 +424,7 @@ class CognitiveDiagnosisModel(nn.Module):
         )
         global_msg = torch.where(query_rows, global_msg, torch.zeros_like(global_msg))
         if self.graph_query_adapter is not None:
-            graph_write = global_msg + self.graph_query_adapter(
+            graph_write = 0.15 * global_msg + self.graph_query_adapter(
                 torch.cat([knowledge_state, global_msg, global_msg - knowledge_state], dim=-1)
             )
         else:
@@ -581,7 +583,9 @@ class CognitiveDiagnosisModel(nn.Module):
             delta_local_raw / delta_rms
         ) * delta_rms.detach() * self.personal_query_message_gain
         gate_alpha = relation_spec["gate_alpha"].unsqueeze(-1).unsqueeze(-1)
-        message_delta_effective = gate_alpha * effective_delta_local
+        query_gate = gate_alpha / gate_alpha.detach().mean(dim=(1, 2, 3), keepdim=True).clamp(min=1e-4)
+        query_gate = query_gate.clamp(min=0.35, max=2.50)
+        message_delta_effective = query_gate * effective_delta_local
 
         correction = torch.zeros_like(knowledge_state)
         global_local_full = torch.zeros_like(knowledge_state)
