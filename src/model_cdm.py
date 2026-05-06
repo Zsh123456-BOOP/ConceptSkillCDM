@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 from src.model_ops import (
     _apply_sparse_local_posterior,
@@ -272,6 +273,8 @@ class CognitiveDiagnosisModel(nn.Module):
             ae_logit_input_dim = self.ae_logit_dim * 6 + 4
             self.ae_student_logit_emb = nn.Embedding(num_students, self.ae_logit_dim)
             self.ae_concept_logit_emb = nn.Embedding(num_concepts, self.ae_logit_dim)
+            self.ae_student_logit_bias = nn.Embedding(num_students, 1)
+            self.ae_concept_logit_bias = nn.Embedding(num_concepts, 1)
             self.ae_graph_state_proj = nn.Linear(knowledge_dim, self.ae_logit_dim, bias=False)
             self.ae_personal_state_proj = nn.Linear(knowledge_dim, self.ae_logit_dim, bias=False)
             self.ae_logit_adapter = nn.Sequential(
@@ -281,6 +284,8 @@ class CognitiveDiagnosisModel(nn.Module):
             )
             nn.init.normal_(self.ae_student_logit_emb.weight, mean=0.0, std=0.05)
             nn.init.xavier_normal_(self.ae_concept_logit_emb.weight)
+            nn.init.zeros_(self.ae_student_logit_bias.weight)
+            nn.init.zeros_(self.ae_concept_logit_bias.weight)
             nn.init.xavier_normal_(self.ae_graph_state_proj.weight)
             nn.init.xavier_normal_(self.ae_personal_state_proj.weight)
             nn.init.normal_(self.ae_logit_adapter[-1].weight, mean=0.0, std=0.01)
@@ -288,6 +293,8 @@ class CognitiveDiagnosisModel(nn.Module):
         else:
             self.ae_student_logit_emb = None
             self.ae_concept_logit_emb = None
+            self.ae_student_logit_bias = None
+            self.ae_concept_logit_bias = None
             self.ae_graph_state_proj = None
             self.ae_personal_state_proj = None
             self.ae_logit_adapter = None
@@ -509,6 +516,8 @@ class CognitiveDiagnosisModel(nn.Module):
             self.ae_logit_adapter is None
             or self.ae_student_logit_emb is None
             or self.ae_concept_logit_emb is None
+            or self.ae_student_logit_bias is None
+            or self.ae_concept_logit_bias is None
             or self.ae_graph_state_proj is None
             or self.ae_personal_state_proj is None
             or self.ae_logit_residual_scale <= 0.0
@@ -520,7 +529,6 @@ class CognitiveDiagnosisModel(nn.Module):
 
         graph_rms = self._masked_query_rms_per_sample(global_query_context, concept_mask)
         personal_rms = self._masked_query_rms_per_sample(personal_query_correction, concept_mask)
-        active = (graph_rms > 1e-8) & (personal_rms > 1e-8)
 
         query_mask = concept_mask.float()
         query_weight = query_mask / query_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
@@ -535,6 +543,12 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_query_weight = query_weight.matmul(A)
         query_graph_context = graph_query_weight.matmul(concept_emb)
         student_context = self.ae_student_logit_emb(student_ids)
+        mixed_concept_context = 0.65 * query_self_context + 0.35 * query_graph_context
+        bilinear = (student_context * mixed_concept_context).sum(dim=-1) / math.sqrt(float(self.ae_logit_dim))
+        student_bias = self.ae_student_logit_bias(student_ids).squeeze(-1)
+        query_concept_bias = query_weight.matmul(self.ae_concept_logit_bias.weight).squeeze(-1)
+        graph_concept_bias = graph_query_weight.matmul(self.ae_concept_logit_bias.weight).squeeze(-1)
+        concept_bias = 0.65 * query_concept_bias + 0.35 * graph_concept_bias
         pooled_graph_state = self.ae_graph_state_proj(
             self._masked_query_pool(global_query_context, concept_mask)
         )
@@ -565,13 +579,50 @@ class CognitiveDiagnosisModel(nn.Module):
             ],
             dim=-1,
         )
-        raw = self.ae_logit_adapter(features).squeeze(-1)
+        raw = bilinear + student_bias + concept_bias + self.ae_logit_adapter(features).squeeze(-1)
         if self.ae_logit_residual_clip > 0.0:
             clip = self.ae_logit_residual_clip
             raw = clip * torch.tanh(raw / clip)
         residual = self.ae_logit_residual_scale * raw
+        active = query_mask.sum(dim=1) > 0
         residual = torch.where(active, residual, torch.zeros_like(residual))
         return residual, residual.detach().abs().mean()
+
+    def initialize_ae_logit_priors(
+        self,
+        *,
+        student_logits: torch.Tensor,
+        concept_logits: torch.Tensor,
+        scale: float,
+    ) -> None:
+        if (
+            self.ae_student_logit_bias is None
+            or self.ae_concept_logit_bias is None
+            or not self.enable_module1
+            or not self.use_concept_graph
+            or not self.use_personal_graph
+        ):
+            return
+        scale = max(0.0, float(scale))
+        with torch.no_grad():
+            student_target = torch.zeros_like(self.ae_student_logit_bias.weight)
+            concept_target = torch.zeros_like(self.ae_concept_logit_bias.weight)
+            s = student_logits.detach().to(
+                device=student_target.device,
+                dtype=student_target.dtype,
+            ).view(-1, 1)
+            c = concept_logits.detach().to(
+                device=concept_target.device,
+                dtype=concept_target.dtype,
+            ).view(-1, 1)
+            student_target[: min(student_target.size(0), s.size(0))].copy_(
+                s[: student_target.size(0)] * scale
+            )
+            concept_target[: min(concept_target.size(0), c.size(0))].copy_(
+                c[: concept_target.size(0)] * scale
+            )
+            self.ae_student_logit_bias.weight.copy_(student_target.clamp(min=-3.0, max=3.0))
+            self.ae_concept_logit_bias.weight.copy_(concept_target.clamp(min=-3.0, max=3.0))
 
     def _apply_personal_query_trust_region(
         self,

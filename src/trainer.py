@@ -75,6 +75,8 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "ae_logit_residual_scale",
     "ae_logit_residual_clip",
     "ae_logit_dim",
+    "ae_lr_mult",
+    "ae_stat_prior_scale",
     "graph_query_adapter_enable",
     "personal_delta_scale",
     "personal_warmup_epochs",
@@ -527,12 +529,37 @@ def _build_optimizer(model: nn.Module, args) -> optim.Optimizer:
         if module is not None:
             state_params.extend(list(module.parameters()))
     state_params = _dedupe_params(state_params)
+    ae_params: List[torch.nn.Parameter] = []
+    for module_name in (
+        "ae_query_state_adapter",
+        "ae_student_logit_emb",
+        "ae_concept_logit_emb",
+        "ae_student_logit_bias",
+        "ae_concept_logit_bias",
+        "ae_graph_state_proj",
+        "ae_personal_state_proj",
+        "ae_logit_adapter",
+    ):
+        module = getattr(base_model, module_name, None)
+        if module is not None:
+            ae_params.extend(list(module.parameters()))
+    ae_params = _dedupe_params(ae_params)
     grouped_ids = {id(p) for p in state_params + id_params}
+    grouped_ids.update(id(p) for p in ae_params)
     backbone_params = _dedupe_params([p for p in base_model.parameters() if id(p) not in grouped_ids])
 
     param_groups: List[Dict[str, Any]] = []
     if backbone_params:
         param_groups.append({"params": backbone_params, "lr": float(args.learning_rate), "group_name": "backbone"})
+    if ae_params:
+        param_groups.append(
+            {
+                "params": ae_params,
+                "lr": float(args.learning_rate) * float(getattr(args, "ae_lr_mult", 1.0)),
+                "weight_decay": 0.0,
+                "group_name": "ae_joint",
+            }
+        )
     if state_params:
         param_groups.append(
             {
@@ -551,6 +578,109 @@ def _build_optimizer(model: nn.Module, args) -> optim.Optimizer:
         )
 
     return optim.Adam(param_groups, weight_decay=args.weight_decay)
+
+
+def _safe_logit(rate: torch.Tensor) -> torch.Tensor:
+    rate = rate.clamp(min=1e-4, max=1.0 - 1e-4)
+    return torch.log(rate / (1.0 - rate))
+
+
+def _compute_train_stat_logits(
+    train_loader: DataLoader,
+    q_matrix: torch.Tensor,
+    *,
+    num_students: int,
+    num_concepts: int,
+) -> Tuple[torch.Tensor, torch.Tensor, float]:
+    q_cpu = q_matrix.detach().float().cpu()
+    student_count = torch.zeros(num_students, dtype=torch.float32)
+    student_correct = torch.zeros(num_students, dtype=torch.float32)
+    concept_count = torch.zeros(num_concepts, dtype=torch.float32)
+    concept_correct = torch.zeros(num_concepts, dtype=torch.float32)
+    total_count = 0
+    total_correct = 0.0
+
+    for student_ids, exercise_ids, labels in train_loader:
+        student_ids = student_ids.detach().long().cpu()
+        exercise_ids = exercise_ids.detach().long().cpu()
+        y = labels.detach().float().cpu().reshape(-1)
+        if y.numel() == 0:
+            continue
+        total_count += int(y.numel())
+        total_correct += float(y.sum().item())
+        ones = torch.ones_like(y)
+        student_count.index_add_(0, student_ids, ones)
+        student_correct.index_add_(0, student_ids, y)
+
+        q = q_cpu[exercise_ids]
+        concept_count += q.sum(dim=0)
+        concept_correct += (q * y.unsqueeze(-1)).sum(dim=0)
+
+    if total_count <= 0:
+        return (
+            torch.zeros(num_students, dtype=torch.float32),
+            torch.zeros(num_concepts, dtype=torch.float32),
+            0.5,
+        )
+
+    global_rate = min(max(total_correct / float(total_count), 1e-4), 1.0 - 1e-4)
+    global_rate_t = torch.tensor(global_rate, dtype=torch.float32)
+    global_logit = _safe_logit(global_rate_t)
+
+    student_smoothing = 8.0
+    concept_smoothing = 20.0
+    student_rate = (
+        student_correct + student_smoothing * global_rate_t
+    ) / (student_count + student_smoothing).clamp(min=1.0)
+    concept_rate = (
+        concept_correct + concept_smoothing * global_rate_t
+    ) / (concept_count + concept_smoothing).clamp(min=1.0)
+
+    student_logits = (_safe_logit(student_rate) - global_logit).clamp(min=-2.5, max=2.5)
+    concept_logits = (_safe_logit(concept_rate) - global_logit).clamp(min=-2.5, max=2.5)
+    student_logits = torch.where(torch.isfinite(student_logits), student_logits, torch.zeros_like(student_logits))
+    concept_logits = torch.where(torch.isfinite(concept_logits), concept_logits, torch.zeros_like(concept_logits))
+    return student_logits, concept_logits, float(global_rate)
+
+
+def _initialize_ae_stat_priors(
+    model: nn.Module,
+    train_loader: DataLoader,
+    info_dict: Dict[str, Any],
+    args,
+    logger,
+    run_tag: str,
+) -> None:
+    scale = max(0.0, float(getattr(args, "ae_stat_prior_scale", 0.0)))
+    if scale <= 0.0:
+        return
+    base_model = _get_base_model(model)
+    if (
+        getattr(base_model, "ae_student_logit_bias", None) is None
+        or getattr(base_model, "ae_concept_logit_bias", None) is None
+    ):
+        return
+
+    student_logits, concept_logits, global_rate = _compute_train_stat_logits(
+        train_loader,
+        info_dict["q_matrix"],
+        num_students=info_dict["num_students"],
+        num_concepts=info_dict["num_concepts"],
+    )
+    base_model.initialize_ae_logit_priors(
+        student_logits=student_logits,
+        concept_logits=concept_logits,
+        scale=scale,
+    )
+    logger.info(
+        "%s AE stat priors initialized: scale=%.3f, train_global_rate=%.4f, "
+        "student_absmean=%.4f, concept_absmean=%.4f",
+        run_tag,
+        scale,
+        global_rate,
+        float(student_logits.abs().mean().item()),
+        float(concept_logits.abs().mean().item()),
+    )
 
 
 def _get_base_model(model: nn.Module) -> CognitiveDiagnosisModel:
@@ -1659,6 +1789,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         graph_query_adapter_enable=getattr(args, "graph_query_adapter_enable", True),
         share_concept_embeddings=getattr(args, "share_concept_embeddings", False),
     ).to(device)
+    _initialize_ae_stat_priors(model, train_loader, info_dict, args, logger, run_tag)
 
     # 多 GPU 支持（DataParallel）
     is_multi_gpu = getattr(args, "multi_gpu", False) and torch.cuda.device_count() > 1

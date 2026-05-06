@@ -310,6 +310,10 @@ def parse_args():
                         help="Tanh clip magnitude for the A/E-only query logit residual before scaling.")
     parser.add_argument("--ae_logit_dim", type=int, default=32,
                         help="Embedding width for the A/E joint logit interaction head.")
+    parser.add_argument("--ae_lr_mult", type=float, default=1.0,
+                        help="Learning-rate multiplier for the A/E joint prediction head.")
+    parser.add_argument("--ae_stat_prior_scale", type=float, default=0.0,
+                        help="Scale for train-set student/concept logit priors used to initialize the A/E head.")
     parser.add_argument("--graph_query_adapter_enable", action=bool_action, default=None,
                         help="Enable query adapter on top of graph readout before the fixed diagnosis head.")
     parser.add_argument("--personal_state_lr_mult", type=float, default=1.0,

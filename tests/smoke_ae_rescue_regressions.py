@@ -176,6 +176,9 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "ae_query_residual_scale",
         "ae_logit_residual_scale",
         "ae_logit_residual_clip",
+        "ae_logit_dim",
+        "ae_lr_mult",
+        "ae_stat_prior_scale",
         "graph_query_adapter_enable",
     )
     for dataset in ("assist_09", "junyi"):
