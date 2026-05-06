@@ -669,9 +669,15 @@ def _initialize_ae_stat_priors(
         return
     base_model = _get_base_model(model)
     if (
-        getattr(base_model, "ae_student_prior_logit", None) is None
+        getattr(base_model, "ae_logit_adapter", None) is None
+        or getattr(base_model, "ae_student_logit_bias", None) is None
+        or getattr(base_model, "ae_exercise_logit_bias", None) is None
+        or getattr(base_model, "ae_concept_logit_bias", None) is None
+        or getattr(base_model, "ae_student_prior_logit", None) is None
         or getattr(base_model, "ae_exercise_prior_logit", None) is None
         or getattr(base_model, "ae_concept_prior_logit", None) is None
+        or not getattr(base_model, "use_concept_graph", False)
+        or not getattr(base_model, "use_personal_graph", False)
     ):
         return
 
