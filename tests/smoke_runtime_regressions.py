@@ -163,6 +163,33 @@ def _check_module1_ae_numerics_and_signals() -> None:
     _assert(reg_terms["total"].abs().item() < 10.0, "Regularization total should not numerically dominate smoke loss.")
 
 
+def _check_graph_query_adapter_is_initially_residual() -> None:
+    torch.manual_seed(1)
+    model = _build_model(ablate_module1=False, use_concept_graph=True, use_personal_graph=True)
+    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=student_ids,
+            exercise_ids=exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+
+    pre_gate_delta = details["query_row_global_readout_pre_gate_delta"].item()
+    post_gate_delta = details["query_row_global_readout_delta"].item()
+    adapter_gain = details["graph_query_adapter_gain"].item()
+    _assert(pre_gate_delta > 1e-5, "Smoke case should exercise non-zero graph query readout.")
+    _assert(
+        adapter_gain <= 1.05,
+        (
+            "Graph query adapter should be a near-residual no-op at initialization; "
+            f"got gain={adapter_gain:.4f}, pre={pre_gate_delta:.4f}, post={post_gate_delta:.4f}."
+        ),
+    )
+
+
 def _check_per_head_personal_graph() -> None:
     model = _build_model(ablate_module1=False, use_personal_graph=True)
     with torch.no_grad():
@@ -243,6 +270,7 @@ def _check_get_student_diagnosis() -> None:
 
 def main() -> None:
     _check_module1_ae_numerics_and_signals()
+    _check_graph_query_adapter_is_initially_residual()
     _check_per_head_personal_graph()
     _check_removed_residual_artifacts()
     _check_get_student_diagnosis()

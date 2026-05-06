@@ -255,6 +255,8 @@ class CognitiveDiagnosisModel(nn.Module):
                 nn.GELU(),
                 nn.Linear(graph_hidden, knowledge_dim),
             )
+            nn.init.zeros_(self.graph_query_adapter[-1].weight)
+            nn.init.zeros_(self.graph_query_adapter[-1].bias)
         else:
             self.graph_query_adapter = None
 
@@ -418,7 +420,7 @@ class CognitiveDiagnosisModel(nn.Module):
         )
         global_msg = torch.where(query_rows, global_msg, torch.zeros_like(global_msg))
         if self.graph_query_adapter is not None:
-            graph_write = self.graph_query_adapter(
+            graph_write = global_msg + self.graph_query_adapter(
                 torch.cat([knowledge_state, global_msg, global_msg - knowledge_state], dim=-1)
             )
         else:
