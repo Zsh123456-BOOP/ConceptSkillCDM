@@ -130,6 +130,7 @@ def run_cdm_forward(
         "use_concept_graph": torch.tensor(int(model.use_concept_graph), device=device),
         "use_personal_graph": torch.tensor(int(model.use_personal_graph), device=device),
         "share_concept_embeddings": torch.tensor(int(model.share_concept_embeddings), device=device),
+        "graph_prior_logit_scale": torch.tensor(float(model.graph_prior_logit_scale), device=device),
         "relation_matrices": relation_matrices,
         "relation_used": relation_used,
         "personal_relation_spec": personal_relation_spec,

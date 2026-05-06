@@ -318,6 +318,8 @@ def parse_args():
                         help="Use query-discriminative head gating instead of averaging graph heads before query readout.")
     parser.add_argument("--graph_edge_bias_rank", type=int, default=8,
                         help="Low-rank edge bias rank added to A's adjacency logits.")
+    parser.add_argument("--graph_prior_logit_scale", type=float, default=0.0,
+                        help="Logit scale for the train-Q concept co-occurrence prior injected into A.")
     parser.add_argument("--graph_query_adapter_enable", action=bool_action, default=None,
                         help="Enable query adapter on top of graph readout before the fixed diagnosis head.")
     parser.add_argument("--personal_state_lr_mult", type=float, default=1.0,
@@ -662,6 +664,9 @@ def main():
                 personal_query_correction_min_graph_anchor=loaded_args.get(
                     "personal_query_correction_min_graph_anchor",
                     getattr(args, "personal_query_correction_min_graph_anchor", 0.01),
+                ),
+                graph_prior_logit_scale=loaded_args.get(
+                    "graph_prior_logit_scale", getattr(args, "graph_prior_logit_scale", 0.0)
                 ),
                 share_concept_embeddings=loaded_args.get(
                     "share_concept_embeddings", getattr(args, "share_concept_embeddings", False)

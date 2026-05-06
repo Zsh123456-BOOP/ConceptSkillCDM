@@ -70,6 +70,8 @@ class ConceptStructureModeling(nn.Module):
         personal_support_include_neighbors: bool,
         enable_personal_support_value_proj: bool,
         graph_edge_bias_rank: int,
+        graph_prior_matrix: Optional[torch.Tensor] = None,
+        graph_prior_logit_scale: float = 0.0,
         # 完全消融开关
         enable_module: bool = True,
     ):
@@ -142,6 +144,8 @@ class ConceptStructureModeling(nn.Module):
                 allow_self_loop=allow_self_loop,
                 identity_residual=graph_identity_residual,
                 edge_bias_rank=graph_edge_bias_rank,
+                prior_matrix=graph_prior_matrix,
+                prior_logit_scale=graph_prior_logit_scale,
             )
         else:
             self.relation_learning = None

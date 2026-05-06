@@ -202,6 +202,7 @@ def _build_config_hash(args) -> str:
         "personal_warmup_epochs",
         "graph_headwise_query_gate",
         "graph_edge_bias_rank",
+        "graph_prior_logit_scale",
         "graph_query_adapter_enable",
         "lambda_personal_kl",
         "lambda_personal_query_residual",

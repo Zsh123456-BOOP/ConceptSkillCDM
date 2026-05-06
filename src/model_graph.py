@@ -33,6 +33,8 @@ class MultiHeadRelationLearning(nn.Module):
         allow_self_loop: bool = True,
         identity_residual: float = 0.0,
         edge_bias_rank: int = 8,
+        prior_matrix: Optional[torch.Tensor] = None,
+        prior_logit_scale: float = 0.0,
     ):
         super().__init__()
         self.num_concepts = int(num_concepts)
@@ -44,6 +46,21 @@ class MultiHeadRelationLearning(nn.Module):
         rel_rank = max(4, min(16, concept_dim // 4 if concept_dim >= 4 else 4))
         self.relation_rank = int(rel_rank)
         self.edge_bias_rank = max(1, int(edge_bias_rank))
+        self.prior_logit_scale = max(0.0, float(prior_logit_scale))
+
+        if prior_matrix is None:
+            prior_scores = torch.zeros(num_concepts, num_concepts, dtype=torch.float32)
+        else:
+            prior = prior_matrix.detach().float()
+            if tuple(prior.shape) != (num_concepts, num_concepts):
+                raise ValueError(
+                    f"prior_matrix shape must be ({num_concepts}, {num_concepts}), got {tuple(prior.shape)}"
+                )
+            prior = prior.clamp(min=1e-4)
+            prior = prior / prior.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+            prior_scores = prior.log()
+            prior_scores = prior_scores - prior_scores.mean(dim=-1, keepdim=True)
+        self.register_buffer("prior_logit_scores", prior_scores, persistent=False)
 
         # 注意：concept_embeddings 会在主模型里“可选绑定”到 knowledge_encoder.concept_emb.weight
         self.concept_embeddings = nn.Parameter(torch.randn(num_concepts, concept_dim))  # Fix: 移除 0.02
@@ -105,6 +122,11 @@ class MultiHeadRelationLearning(nn.Module):
             scores = scores + rel_bias + edge_bias
             scores = scores / tau[h]
             scores = scores - scores.mean(dim=-1, keepdim=True)
+            if self.prior_logit_scale > 0.0:
+                scores = scores + self.prior_logit_scale * self.prior_logit_scores.to(
+                    device=scores.device,
+                    dtype=scores.dtype,
+                )
 
             eye = torch.eye(C, device=scores.device, dtype=torch.bool)
             if self.allow_self_loop:

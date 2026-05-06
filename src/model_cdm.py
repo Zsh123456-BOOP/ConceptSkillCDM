@@ -101,6 +101,7 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_headwise_query_gate: bool = True,
         graph_edge_bias_rank: int = 8,
         graph_query_adapter_enable: bool = True,
+        graph_prior_logit_scale: float = 0.0,
         share_concept_embeddings: bool = False,
     ):
         super().__init__()
@@ -192,9 +193,12 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_headwise_query_gate = bool(graph_headwise_query_gate)
         self.graph_edge_bias_rank = max(1, int(graph_edge_bias_rank))
         self.graph_query_adapter_enable = bool(graph_query_adapter_enable)
+        self.graph_prior_logit_scale = max(0.0, float(graph_prior_logit_scale))
         self.share_concept_embeddings = bool(share_concept_embeddings)
 
         self.register_buffer("q_matrix", q_matrix)
+        graph_prior_matrix = self._build_graph_prior_matrix(q_matrix, num_concepts)
+        self.register_buffer("graph_prior_matrix", graph_prior_matrix, persistent=False)
 
         identity = torch.eye(num_concepts, dtype=torch.float32).unsqueeze(0).repeat(self.num_relation_heads, 1, 1)
         self.register_buffer("identity_relations", identity)
@@ -237,6 +241,8 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_support_include_neighbors=self.personal_support_include_neighbors,
             enable_personal_support_value_proj=self.enable_personal_support_value_proj,
             graph_edge_bias_rank=self.graph_edge_bias_rank,
+            graph_prior_matrix=self.graph_prior_matrix,
+            graph_prior_logit_scale=self.graph_prior_logit_scale,
             enable_module=self.enable_module1,
         )
         self.graph_query_gate = nn.Linear(knowledge_dim, 1)
@@ -288,6 +294,35 @@ class CognitiveDiagnosisModel(nn.Module):
             use_weight_norm=self.enable_module1,
         )
         self.exercise_encoder = ExerciseDifficultyEncoder(num_exercises=num_exercises)
+
+    @staticmethod
+    def _build_graph_prior_matrix(q_matrix: torch.Tensor, num_concepts: int) -> torch.Tensor:
+        C = int(num_concepts)
+        if C <= 0:
+            raise ValueError(f"num_concepts must be positive, got {num_concepts}")
+        if C == 1:
+            return torch.ones(1, 1, dtype=torch.float32)
+
+        q = q_matrix.detach().float()
+        if q.dim() != 2 or q.size(1) != C:
+            raise ValueError(f"q_matrix must have shape (num_exercises, {C}), got {tuple(q.shape)}")
+
+        concept_occurs = (q > 0).float()
+        cooccurrence = concept_occurs.t().matmul(concept_occurs)
+        eye = torch.eye(C, dtype=torch.float32, device=cooccurrence.device)
+        offdiag = 1.0 - eye
+        cooccurrence = cooccurrence * offdiag
+
+        uniform_offdiag = offdiag / float(C - 1)
+        row_sum = cooccurrence.sum(dim=-1, keepdim=True)
+        data_prior = cooccurrence / row_sum.clamp(min=1.0)
+        data_prior = torch.where(row_sum > 0, data_prior, uniform_offdiag)
+
+        smooth = 0.10
+        prior = (1.0 - smooth) * data_prior + smooth * uniform_offdiag
+        prior = prior * offdiag
+        prior = prior / prior.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+        return prior.to(dtype=torch.float32)
 
     def _tie_concept_embeddings(self) -> None:
         if not self.enable_module1:

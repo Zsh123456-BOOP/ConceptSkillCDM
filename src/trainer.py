@@ -70,6 +70,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "graph_query_readout_2hop_scale",
     "graph_headwise_query_gate",
     "graph_edge_bias_rank",
+    "graph_prior_logit_scale",
     "graph_query_adapter_enable",
     "personal_delta_scale",
     "personal_warmup_epochs",
@@ -1682,6 +1683,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         personal_projection_hidden_factor=getattr(args, "personal_projection_hidden_factor", 2),
         graph_headwise_query_gate=getattr(args, "graph_headwise_query_gate", True),
         graph_edge_bias_rank=getattr(args, "graph_edge_bias_rank", 8),
+        graph_prior_logit_scale=getattr(args, "graph_prior_logit_scale", 0.0),
         graph_query_adapter_enable=getattr(args, "graph_query_adapter_enable", True),
         share_concept_embeddings=getattr(args, "share_concept_embeddings", False),
     ).to(device)
@@ -2493,6 +2495,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         graph_edge_bias_rank=loaded_args.get(
             "graph_edge_bias_rank", getattr(args, "graph_edge_bias_rank", 8)
+        ),
+        graph_prior_logit_scale=loaded_args.get(
+            "graph_prior_logit_scale", getattr(args, "graph_prior_logit_scale", 0.0)
         ),
         graph_query_adapter_enable=loaded_args.get(
             "graph_query_adapter_enable", getattr(args, "graph_query_adapter_enable", True)

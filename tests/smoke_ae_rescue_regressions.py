@@ -172,6 +172,7 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "personal_message_alignment_gate",
         "graph_headwise_query_gate",
         "graph_edge_bias_rank",
+        "graph_prior_logit_scale",
         "graph_query_adapter_enable",
     )
     for dataset in ("assist_09", "junyi"):
@@ -358,6 +359,77 @@ def _check_dataset_defaults_respect_explicit_zero_overrides() -> None:
         not hasattr(args, "personal_disable_direct_bias") and not hasattr(args, "personal_direct_bias_scale"),
         "direct bias 既然已经从 E 结构里删除，parser/defaults 也不应继续暴露这些假开关。",
     )
+
+
+def _check_graph_prior_anchors_a_relation_learning() -> None:
+    from src.model import CognitiveDiagnosisModel
+    from src.model_graph import MultiHeadRelationLearning
+
+    torch.manual_seed(3)
+    explicit_prior = torch.tensor(
+        [
+            [0.0, 0.9, 0.1],
+            [0.8, 0.0, 0.2],
+            [0.2, 0.8, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    no_prior = MultiHeadRelationLearning(
+        num_concepts=3,
+        concept_dim=8,
+        num_heads=1,
+        dropout=0.0,
+        tau_init=0.6,
+        prior_logit_scale=0.0,
+    )
+    with_prior = MultiHeadRelationLearning(
+        num_concepts=3,
+        concept_dim=8,
+        num_heads=1,
+        dropout=0.0,
+        tau_init=0.6,
+        prior_matrix=explicit_prior,
+        prior_logit_scale=1.2,
+    )
+    with_prior.load_state_dict(no_prior.state_dict(), strict=True)
+    no_prior.eval()
+    with_prior.eval()
+    A0, _ = no_prior()
+    A1, _ = with_prior()
+    _assert(torch.isfinite(A1).all().item(), "Q-prior A relation should stay finite.")
+    _assert((A1 >= -1e-7).all().item(), "Q-prior A relation should stay non-negative.")
+    _assert((A1.sum(dim=-1) - 1.0).abs().max().item() < 1e-5, "Q-prior A rows should stay normalized.")
+    _assert(
+        A1[0, 0, 1].item() > A0[0, 0, 1].item(),
+        "graph_prior_logit_scale 应提高 Q 共现先验支持的概念边权重。",
+    )
+
+    q_matrix = torch.tensor(
+        [
+            [1.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 0.0, 1.0],
+        ],
+        dtype=torch.float32,
+    )
+    model = CognitiveDiagnosisModel(
+        num_students=4,
+        num_exercises=3,
+        num_concepts=3,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=1,
+        num_gnn_layers=1,
+        dropout=0.0,
+        graph_prior_logit_scale=0.7,
+        use_concept_graph=True,
+        use_personal_graph=False,
+    )
+    prior = model.graph_prior_matrix
+    _assert((prior.sum(dim=-1) - 1.0).abs().max().item() < 1e-6, "Q-prior matrix rows should sum to 1.")
+    _assert(prior[0, 1].item() > prior[0, 2].item(), "Q-prior should favor stronger train-Q co-occurrence.")
+    rel = model.structure_module.relation_learning
+    _assert(rel is not None and rel.prior_logit_scale > 0.0, "A relation learner should receive graph prior scale.")
 
 
 def _check_no_a_personal_graph_is_not_identity_locked() -> None:
@@ -2612,6 +2684,7 @@ def _check_matched_no_e_job_can_be_enabled() -> None:
 def main() -> None:
     _check_no_a_keeps_gnn_layers()
     _check_best_configs_enable_e_rescue_knobs()
+    _check_graph_prior_anchors_a_relation_learning()
     _check_dataset_defaults_respect_explicit_zero_overrides()
     _check_no_a_personal_graph_is_not_identity_locked()
     _check_no_a_support_semantics_regression()
