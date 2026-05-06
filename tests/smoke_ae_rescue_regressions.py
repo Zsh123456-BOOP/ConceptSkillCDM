@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 import sys
 import tempfile
@@ -177,6 +178,7 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "ae_logit_residual_scale",
         "ae_logit_residual_clip",
         "ae_irt_logit_scale",
+        "ae_interaction_logit_scale",
         "ae_logit_dim",
         "ae_lr_mult",
         "ae_stat_prior_scale",
@@ -707,6 +709,96 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         no_e_details["ae_query_state_residual_delta"].item() == 0.0,
         "AE query-state residual must be exactly inactive in no_E.",
     )
+
+
+def _check_ae_interaction_logit_is_full_only() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    torch.manual_seed(0)
+    q_matrix = torch.tensor(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=torch.float32,
+    )
+    student_ids = torch.tensor([0, 1, 2], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 1, 2], dtype=torch.long)
+
+    def build_model(*, use_concept_graph: bool, use_personal_graph: bool) -> CognitiveDiagnosisModel:
+        model = CognitiveDiagnosisModel(
+            num_students=3,
+            num_exercises=3,
+            num_concepts=3,
+            q_matrix=q_matrix,
+            knowledge_dim=8,
+            num_relation_heads=1,
+            num_gnn_layers=1,
+            dropout=0.0,
+            ae_query_residual_scale=0.0,
+            ae_logit_residual_scale=1.0,
+            ae_logit_residual_clip=0.0,
+            ae_irt_logit_scale=0.2,
+            ae_interaction_logit_scale=2.0,
+            ae_logit_dim=2,
+            use_concept_graph=use_concept_graph,
+            use_personal_graph=use_personal_graph,
+            personal_delta_scale=3.0,
+        )
+        with torch.no_grad():
+            model.ae_student_logit_emb.weight.zero_()
+            model.ae_concept_logit_emb.weight.zero_()
+            model.ae_student_logit_bias.weight.zero_()
+            model.ae_exercise_logit_bias.weight.zero_()
+            model.ae_concept_logit_bias.weight.zero_()
+            for p in model.ae_logit_adapter.parameters():
+                p.zero_()
+            model.ae_student_factor.weight.copy_(
+                torch.tensor([[1.0, 0.0], [0.0, 2.0], [1.0, 1.0]], dtype=torch.float32)
+            )
+            model.ae_exercise_factor.weight.copy_(
+                torch.tensor([[3.0, 0.0], [0.0, 4.0], [2.0, -1.0]], dtype=torch.float32)
+            )
+        return model
+
+    full_model = build_model(use_concept_graph=True, use_personal_graph=True)
+    with torch.no_grad():
+        _, full_details = full_model(
+            student_ids=student_ids,
+            exercise_ids=exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+    expected = torch.tensor([3.0, 8.0, 1.0], dtype=torch.float32) / math.sqrt(2.0) * 2.0
+    _assert(
+        torch.allclose(full_details["ae_logit_residual"], expected, atol=1e-6),
+        "full 应直接使用可训练的 A x E student-exercise 交互 logit。",
+    )
+    _assert(
+        abs(float(full_details["ae_interaction_logit_scale"].item()) - 2.0) < 1e-8,
+        "forward details 必须暴露 ae_interaction_logit_scale，便于诊断真实结构。",
+    )
+
+    for label, use_concept_graph, use_personal_graph in (
+        ("no_A", False, True),
+        ("no_E", True, False),
+    ):
+        model = build_model(
+            use_concept_graph=use_concept_graph,
+            use_personal_graph=use_personal_graph,
+        )
+        with torch.no_grad():
+            _, details = model(
+                student_ids=student_ids,
+                exercise_ids=exercise_ids,
+                return_details=True,
+                return_logits=True,
+            )
+        _assert(
+            torch.allclose(details["ae_logit_residual"], torch.zeros_like(expected), atol=1e-8),
+            f"{label} 必须关闭 full-only A x E 交互，否则消融不再是单模块消融。",
+        )
 
 
 def _check_no_a_personal_graph_is_not_identity_locked() -> None:
@@ -1730,6 +1822,7 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
         ae_logit_residual_scale=0.65,
         ae_logit_residual_clip=1.2,
         ae_irt_logit_scale=0.2,
+        ae_interaction_logit_scale=1.0,
         lambda_personal_kl=0.02,
         lambda_personal_query_residual=0.05,
         personal_query_residual_margin=0.08,
@@ -1746,6 +1839,7 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
     hash_query_residual = _build_config_hash(SimpleNamespace(**{**base, "lambda_personal_query_residual": 0.02}))
     hash_ae_logit = _build_config_hash(SimpleNamespace(**{**base, "ae_logit_residual_scale": 0.2}))
     hash_ae_irt = _build_config_hash(SimpleNamespace(**{**base, "ae_irt_logit_scale": 0.0}))
+    hash_ae_interaction = _build_config_hash(SimpleNamespace(**{**base, "ae_interaction_logit_scale": 0.0}))
 
     _assert(hash_base != hash_share, "config hash 必须区分 share_concept_embeddings 的结构差异。")
     _assert(hash_base != hash_alpha_bias, "config hash 必须区分 personal_alpha_bias_scale 的结构差异。")
@@ -1754,6 +1848,7 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
     _assert(hash_base != hash_query_residual, "config hash 必须区分 lambda_personal_query_residual 的差异。")
     _assert(hash_base != hash_ae_logit, "config hash 必须区分 ae_logit_residual_scale 的结构差异。")
     _assert(hash_base != hash_ae_irt, "config hash 必须区分 ae_irt_logit_scale 的结构差异。")
+    _assert(hash_base != hash_ae_interaction, "config hash 必须区分 ae_interaction_logit_scale 的结构差异。")
 
 
 def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
@@ -1776,6 +1871,7 @@ def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
         ae_logit_residual_scale=0.65,
         ae_logit_residual_clip=1.2,
         ae_irt_logit_scale=0.2,
+        ae_interaction_logit_scale=1.0,
         personal_include_neighbor_rows=False,
         personal_query_correction_scale=0.10,
         lambda_personal_kl=0.02,
@@ -1826,6 +1922,7 @@ def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
         "ae_logit_residual_scale",
         "ae_logit_residual_clip",
         "ae_irt_logit_scale",
+        "ae_interaction_logit_scale",
         "personal_include_neighbor_rows",
         "personal_query_correction_scale",
         "lambda_personal_kl",
@@ -2474,6 +2571,7 @@ def _check_result_schema_regression() -> None:
             "personal_query_correction_max_ratio": "0.15",
             "personal_query_correction_min_graph_anchor": "0.02",
             "ae_irt_logit_scale": "0.2",
+            "ae_interaction_logit_scale": "1.0",
         },
         {
             "dataset": "junyi",
@@ -2510,6 +2608,7 @@ def _check_result_schema_regression() -> None:
             "full_ae_query_state_residual_delta",
             "full_ae_logit_residual_abs_mean",
             "full_ae_irt_logit_scale",
+            "full_ae_interaction_logit_scale",
             "full_query_row_posterior_delta_abs",
             "full_query_row_delta_local_rms_raw",
             "full_query_row_message_projection_gain",
@@ -3010,6 +3109,7 @@ def _check_runner_param_overrides_are_applied_to_jobs() -> None:
         max_test_batches=None,
         param_overrides=[
             "ae_irt_logit_scale=0.8",
+            "ae_interaction_logit_scale=1.5",
             "graph_query_adapter_enable=false",
         ],
         include_matched_no_e=False,
@@ -3022,11 +3122,19 @@ def _check_runner_param_overrides_are_applied_to_jobs() -> None:
         "runner --set 应覆盖数值型参数。",
     )
     _assert(
+        abs(float(job.params["ae_interaction_logit_scale"]) - 1.5) < 1e-9,
+        "runner --set 应覆盖新 A x E 交互参数。",
+    )
+    _assert(
         bool(job.params["graph_query_adapter_enable"]) is False,
         "runner --set 应覆盖 BooleanOptionalAction 参数。",
     )
     cmd = " ".join(job.cmd)
     _assert("--ae_irt_logit_scale 0.8" in cmd, "覆盖后的 ae_irt_logit_scale 应进入命令行。")
+    _assert(
+        "--ae_interaction_logit_scale 1.5" in cmd,
+        "覆盖后的 ae_interaction_logit_scale 应进入命令行。",
+    )
     _assert(
         "--no-graph_query_adapter_enable" in cmd,
         "False 的 BooleanOptionalAction 覆盖应进入命令行，而不是被静默丢弃。",
@@ -3037,6 +3145,7 @@ def main() -> None:
     _check_no_a_keeps_gnn_layers()
     _check_best_configs_enable_e_rescue_knobs()
     _check_graph_prior_anchors_a_relation_learning()
+    _check_ae_interaction_logit_is_full_only()
     _check_dataset_defaults_respect_explicit_zero_overrides()
     _check_no_a_personal_graph_is_not_identity_locked()
     _check_no_a_support_semantics_regression()

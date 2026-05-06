@@ -207,6 +207,7 @@ def _build_config_hash(args) -> str:
         "ae_logit_residual_scale",
         "ae_logit_residual_clip",
         "ae_irt_logit_scale",
+        "ae_interaction_logit_scale",
         "ae_logit_dim",
         "ae_lr_mult",
         "ae_stat_prior_scale",

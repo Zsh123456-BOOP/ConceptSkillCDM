@@ -162,6 +162,7 @@ def run_cdm_forward(
         "ae_logit_residual_scale": torch.tensor(float(model.ae_logit_residual_scale), device=device),
         "ae_logit_residual_clip": torch.tensor(float(model.ae_logit_residual_clip), device=device),
         "ae_irt_logit_scale": torch.tensor(float(model.ae_irt_logit_scale), device=device),
+        "ae_interaction_logit_scale": torch.tensor(float(model.ae_interaction_logit_scale), device=device),
         "irt_logit_scale_used": torch.tensor(float(irt_logit_scale), device=device),
         "ae_logit_dim": torch.tensor(float(model.ae_logit_dim), device=device),
         "relation_matrices": relation_matrices,

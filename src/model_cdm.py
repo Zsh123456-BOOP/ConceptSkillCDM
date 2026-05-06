@@ -103,6 +103,7 @@ class CognitiveDiagnosisModel(nn.Module):
         ae_logit_residual_scale: float = 0.0,
         ae_logit_residual_clip: float = 1.0,
         ae_irt_logit_scale: float = 1.0,
+        ae_interaction_logit_scale: float = 0.0,
         ae_logit_dim: int = 32,
         share_concept_embeddings: bool = False,
     ):
@@ -186,6 +187,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.ae_logit_residual_scale = max(0.0, float(ae_logit_residual_scale))
         self.ae_logit_residual_clip = max(0.0, float(ae_logit_residual_clip))
         self.ae_irt_logit_scale = max(0.0, float(ae_irt_logit_scale))
+        self.ae_interaction_logit_scale = max(0.0, float(ae_interaction_logit_scale))
         self.ae_logit_dim = max(1, int(ae_logit_dim))
         self.share_concept_embeddings = bool(share_concept_embeddings)
 
@@ -279,6 +281,8 @@ class CognitiveDiagnosisModel(nn.Module):
             ae_logit_input_dim = self.ae_logit_dim * 6 + 4
             self.ae_student_logit_emb = nn.Embedding(num_students, self.ae_logit_dim)
             self.ae_concept_logit_emb = nn.Embedding(num_concepts, self.ae_logit_dim)
+            self.ae_student_factor = nn.Embedding(num_students, self.ae_logit_dim)
+            self.ae_exercise_factor = nn.Embedding(num_exercises, self.ae_logit_dim)
             self.ae_student_logit_bias = nn.Embedding(num_students, 1)
             self.ae_exercise_logit_bias = nn.Embedding(num_exercises, 1)
             self.ae_concept_logit_bias = nn.Embedding(num_concepts, 1)
@@ -291,6 +295,8 @@ class CognitiveDiagnosisModel(nn.Module):
             )
             nn.init.normal_(self.ae_student_logit_emb.weight, mean=0.0, std=0.05)
             nn.init.xavier_normal_(self.ae_concept_logit_emb.weight)
+            nn.init.normal_(self.ae_student_factor.weight, mean=0.0, std=0.05)
+            nn.init.normal_(self.ae_exercise_factor.weight, mean=0.0, std=0.05)
             nn.init.zeros_(self.ae_student_logit_bias.weight)
             nn.init.zeros_(self.ae_exercise_logit_bias.weight)
             nn.init.zeros_(self.ae_concept_logit_bias.weight)
@@ -301,6 +307,8 @@ class CognitiveDiagnosisModel(nn.Module):
         else:
             self.ae_student_logit_emb = None
             self.ae_concept_logit_emb = None
+            self.ae_student_factor = None
+            self.ae_exercise_factor = None
             self.ae_student_logit_bias = None
             self.ae_exercise_logit_bias = None
             self.ae_concept_logit_bias = None
@@ -526,6 +534,8 @@ class CognitiveDiagnosisModel(nn.Module):
             self.ae_logit_adapter is None
             or self.ae_student_logit_emb is None
             or self.ae_concept_logit_emb is None
+            or self.ae_student_factor is None
+            or self.ae_exercise_factor is None
             or self.ae_student_logit_bias is None
             or self.ae_exercise_logit_bias is None
             or self.ae_concept_logit_bias is None
@@ -561,6 +571,10 @@ class CognitiveDiagnosisModel(nn.Module):
         student_context = self.ae_student_logit_emb(student_ids) * e_gate
         mixed_concept_context = 0.65 * query_self_context + 0.35 * query_graph_context
         bilinear = (student_context * mixed_concept_context).sum(dim=-1) / math.sqrt(float(self.ae_logit_dim))
+        interaction_logit = (
+            self.ae_student_factor(student_ids) * self.ae_exercise_factor(exercise_ids)
+        ).sum(dim=-1) / math.sqrt(float(self.ae_logit_dim))
+        interaction_logit = self.ae_interaction_logit_scale * interaction_logit * joint_gate
         student_prior = self.ae_student_prior_logit[student_ids].to(dtype=dtype, device=device)
         exercise_prior = self.ae_exercise_prior_logit[exercise_ids].to(dtype=dtype, device=device)
         concept_prior = query_weight.matmul(
@@ -607,7 +621,7 @@ class CognitiveDiagnosisModel(nn.Module):
             + 0.20 * (student_bias + 0.75 * exercise_bias + 0.75 * concept_bias)
             + self.ae_logit_adapter(features).squeeze(-1)
         ) * joint_gate
-        raw = stat_prior + 0.15 * learned_raw
+        raw = stat_prior + interaction_logit + 0.15 * learned_raw
         if self.ae_logit_residual_clip > 0.0:
             clip = self.ae_logit_residual_clip
             raw = clip * torch.tanh(raw / clip)
