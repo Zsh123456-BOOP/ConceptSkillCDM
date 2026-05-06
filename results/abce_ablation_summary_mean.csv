@@ -1,3 +1,3 @@
 dataset,profile,n_seeds,full_auc_mean,delta_A_mean,delta_E_mean,full_clean_baseline_majority,full_test_seen_coverage_mean,A_useful_seed_ratio,E_useful_seed_ratio,suggest_keep_by_mean,state_A_majority,state_E_majority
-assist_09,best,1,0.6779109057196909,0.03167148248891738,0.04091880241324475,True,0.9722354374012826,1.0,1.0,"A,E",useful,useful
-junyi,best,1,0.7791599007322528,0.0033702012929317515,-0.0035236377994388723,True,0.902047328631287,1.0,0.0,A,useful,harmful_or_unstable
+assist_09,best,1,0.678626220034448,0.03244326898641847,0.04163411672800177,True,0.9722354374012826,1.0,1.0,"A,E",useful,useful
+junyi,best,1,0.7784245840865223,0.0026348846472011855,-0.004258954445169438,True,0.902047328631287,0.0,0.0,,neutral_tiny_positive,harmful_or_unstable
