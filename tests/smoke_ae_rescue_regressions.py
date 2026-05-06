@@ -2929,6 +2929,14 @@ def _check_junyi_e_on_jobs_use_oom_safe_batch_size() -> None:
         f"junyi no_A 在 E 开启时也应使用 OOM-safe batch_size=64，当前={jobs_by_ablation['no_A'].params['batch_size']}",
     )
     _assert(
+        int(jobs_by_ablation["no_A"].params["early_stop_patience"]) == 2,
+        "junyi no_A 应在验证停滞后更早停止，避免无收益 epoch 触发非有限 alpha。",
+    )
+    _assert(
+        int(jobs_by_ablation["no_E"].params["early_stop_patience"]) == 2,
+        "junyi no_E 应在验证停滞后更早停止，避免无收益 epoch 触发非有限 knowledge_state。",
+    )
+    _assert(
         int(jobs_by_ablation["no_E"].params["batch_size"]) == 256,
         f"junyi no_E 不应被错误降 batch；当前={jobs_by_ablation['no_E'].params['batch_size']}",
     )
@@ -2976,6 +2984,52 @@ def _check_matched_no_e_job_can_be_enabled() -> None:
     _assert(
         int(jobs_by_ablation["no_E_bs64"].params["batch_size"]) == 64,
         "matched no_E 作业应固定使用 batch_size=64。",
+    )
+    _assert(
+        int(jobs_by_ablation["no_E_bs64"].params["early_stop_patience"]) == 2,
+        "matched no_E 作业也应复用 junyi 消融稳定性上限。",
+    )
+
+
+def _check_runner_param_overrides_are_applied_to_jobs() -> None:
+    from run_abce_ablation import make_jobs
+
+    args = SimpleNamespace(
+        datasets="assist_09",
+        seeds="42",
+        component_set="single",
+        ablations="full",
+        profiles="best",
+        rerun_existing=True,
+        epochs=None,
+        early_stop_patience=None,
+        learning_rate=None,
+        generate_diagnosis=True,
+        max_train_batches=None,
+        max_val_batches=None,
+        max_test_batches=None,
+        param_overrides=[
+            "ae_irt_logit_scale=0.8",
+            "graph_query_adapter_enable=false",
+        ],
+        include_matched_no_e=False,
+    )
+    jobs = make_jobs(args, run_id="smoke_override")
+    _assert(len(jobs) == 1, "override smoke 应只生成一个 full 作业。")
+    job = jobs[0]
+    _assert(
+        abs(float(job.params["ae_irt_logit_scale"]) - 0.8) < 1e-9,
+        "runner --set 应覆盖数值型参数。",
+    )
+    _assert(
+        bool(job.params["graph_query_adapter_enable"]) is False,
+        "runner --set 应覆盖 BooleanOptionalAction 参数。",
+    )
+    cmd = " ".join(job.cmd)
+    _assert("--ae_irt_logit_scale 0.8" in cmd, "覆盖后的 ae_irt_logit_scale 应进入命令行。")
+    _assert(
+        "--no-graph_query_adapter_enable" in cmd,
+        "False 的 BooleanOptionalAction 覆盖应进入命令行，而不是被静默丢弃。",
     )
 
 
@@ -3034,6 +3088,7 @@ def main() -> None:
     _check_junyi_e_on_jobs_use_oom_safe_batch_size()
     _check_runner_env_enables_expandable_segments()
     _check_matched_no_e_job_can_be_enabled()
+    _check_runner_param_overrides_are_applied_to_jobs()
     _check_module_activity_brief_uses_live_risk()
     print("OK: AE rescue regression smoke checks passed.")
 

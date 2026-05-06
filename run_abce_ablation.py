@@ -45,8 +45,15 @@ BOOLEAN_OPTIONAL_KEYS = {
     "use_personal_graph",
     "personal_disable_student_global_context",
     "personal_include_neighbor_rows",
+    "personal_support_include_query_self",
+    "personal_support_include_graph",
+    "personal_support_include_neighbors",
     "personal_support_only",
+    "personal_value_use_global_basis",
+    "personal_message_alignment_gate",
     "share_concept_embeddings",
+    "graph_headwise_query_gate",
+    "graph_query_adapter_enable",
 }
 STRUCTURAL_SWITCH_KEYS = (
     "share_concept_embeddings",
@@ -102,6 +109,11 @@ STRUCTURAL_SWITCH_KEYS = (
 OOM_SAFE_E_BATCH_SIZE = {
     "junyi": 64,
 }
+STABILITY_SAFE_ABLATION_PATIENCE = {
+    ("junyi", "no_A"): 2,
+    ("junyi", "no_E"): 2,
+    ("junyi", "no_E_bs64"): 2,
+}
 
 
 @dataclass
@@ -150,6 +162,36 @@ def parse_csv_tokens(text: str) -> List[str]:
     return [t.strip() for t in str(text).split(",") if t.strip()]
 
 
+def parse_override_value(text: str) -> Any:
+    token = str(text).strip()
+    lowered = token.lower()
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    if lowered in {"none", "null"}:
+        return None
+    try:
+        return int(token)
+    except ValueError:
+        pass
+    try:
+        return float(token)
+    except ValueError:
+        return token
+
+
+def parse_param_overrides(items: Optional[Sequence[str]]) -> Dict[str, Any]:
+    overrides: Dict[str, Any] = {}
+    for item in items or ():
+        if "=" not in item:
+            raise ValueError(f"--set expects KEY=VALUE, got: {item!r}")
+        key, value = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError(f"--set key cannot be empty: {item!r}")
+        overrides[key] = parse_override_value(value)
+    return overrides
+
+
 def append_arg(cmd: List[str], key: str, value: Any) -> None:
     if value is None:
         return
@@ -174,6 +216,14 @@ def _apply_oom_safety_overrides(dataset: str, ablation: AblationSpec, params: Di
         return
     current_batch = int(params.get("batch_size", e_batch_cap))
     params["batch_size"] = min(current_batch, int(e_batch_cap))
+
+
+def _apply_ablation_stability_overrides(dataset: str, ablation: AblationSpec, params: Dict[str, Any]) -> None:
+    patience_cap = STABILITY_SAFE_ABLATION_PATIENCE.get((dataset, ablation.name))
+    if patience_cap is None:
+        return
+    current_patience = int(params.get("early_stop_patience", patience_cap))
+    params["early_stop_patience"] = min(current_patience, int(patience_cap))
 
 
 def _build_job_env(base_env: Dict[str, str], gpu_id: int) -> Dict[str, str]:
@@ -1305,6 +1355,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_train_batches", type=int, default=None)
     parser.add_argument("--max_val_batches", type=int, default=None)
     parser.add_argument("--max_test_batches", type=int, default=None)
+    parser.add_argument(
+        "--set",
+        dest="param_overrides",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Override any model/training parameter for all selected jobs; repeat for multiple keys.",
+    )
     parser.add_argument("--include_matched_no_e", action="store_true", help="Add junyi no_E control with matched batch_size=64.")
     return parser.parse_args()
 
@@ -1428,6 +1486,7 @@ def make_jobs(args: argparse.Namespace, run_id: str) -> List[JobSpec]:
     seeds = list(DEFAULT_SEEDS) if args.seeds is None else parse_int_csv(args.seeds)
     base_abls = _selected_ablations(pick_base_ablations(args.component_set), args.ablations)
     profiles = _selected_profiles(["best", "ae_dominant"], args.profiles)
+    param_overrides = parse_param_overrides(getattr(args, "param_overrides", []))
 
     jobs: List[JobSpec] = []
     for dataset in datasets:
@@ -1473,10 +1532,12 @@ def make_jobs(args: argparse.Namespace, run_id: str) -> List[JobSpec]:
                         params["max_val_batches"] = int(args.max_val_batches)
                     if args.max_test_batches is not None:
                         params["max_test_batches"] = int(args.max_test_batches)
+                    params.update(param_overrides)
 
                     for key in set(ablation.drop_keys) | set(ablation.flags.keys()):
                         params.pop(key, None)
 
+                    _apply_ablation_stability_overrides(dataset, ablation, params)
                     _apply_oom_safety_overrides(dataset, ablation, params)
 
                     model_variant = f"{dataset}_abce_{profile}_{ablation.name}"
