@@ -677,10 +677,31 @@ class CognitiveDiagnosisModel(nn.Module):
         head_weight = query_head_weight.permute(0, 2, 1).unsqueeze(-1)
         hop1 = (head_weight * head_hop1).sum(dim=1)
         hop2 = (head_weight * head_hop2).sum(dim=1)
-        global_msg = (
+        raw_global_msg = (
             self.graph_query_readout_scale * (hop1 - knowledge_state)
             + self.graph_query_readout_2hop_scale * (hop2 - hop1)
         )
+        raw_query_rms = self._masked_query_rms_per_sample(raw_global_msg, concept_mask)
+        state_query_rms = self._masked_query_rms_per_sample(knowledge_state.detach(), concept_mask).clamp(min=0.25)
+        # Interpret the readout scales as a bounded relative correction to the
+        # current query-state magnitude. This keeps A visible at prediction time
+        # without adding a black-box adapter.
+        target_ratio = min(
+            0.20,
+            max(
+                0.015,
+                abs(float(self.graph_query_readout_scale))
+                + 0.5 * abs(float(self.graph_query_readout_2hop_scale)),
+            ),
+        )
+        target_rms = state_query_rms * raw_global_msg.new_tensor(target_ratio)
+        readout_gain = target_rms / raw_query_rms.clamp(min=1e-8)
+        readout_gain = torch.where(
+            raw_query_rms > 1e-8,
+            readout_gain.clamp(min=0.25, max=8.0),
+            torch.ones_like(readout_gain),
+        )
+        global_msg = raw_global_msg * readout_gain.view(-1, 1, 1)
         global_msg = torch.where(query_rows, global_msg, torch.zeros_like(global_msg))
         if self.graph_query_adapter is not None:
             graph_write = 0.15 * global_msg + self.graph_query_adapter(
@@ -707,8 +728,21 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_query_adapter_gain = query_row_graph_delta_post / query_row_graph_delta_pre.clamp(min=1e-8)
 
         query_seed = query_mask / query_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
-        query_support_heads = self._aggregate_with_relation_heads(query_seed.unsqueeze(-1), relation_matrices).squeeze(-1)
-        query_support = (query_head_weight.permute(0, 2, 1) * query_support_heads).sum(dim=1)
+        query_head_sample_weight = (
+            (query_head_weight * query_mask.unsqueeze(-1)).sum(dim=1)
+            / query_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+        )
+        if isinstance(relation_matrices, dict):
+            global_rel = relation_matrices["global_matrices"]
+        else:
+            global_rel = relation_matrices
+        support_heads = []
+        for h in range(global_rel.size(0)):
+            A_h = global_rel[h].to(dtype=query_seed.dtype)
+            A_h = A_h / A_h.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+            support_heads.append(query_seed.matmul(A_h))
+        query_support_heads = torch.stack(support_heads, dim=1)
+        query_support = (query_head_sample_weight.unsqueeze(-1) * query_support_heads).sum(dim=1)
         query_row_global_support_mass = (query_support * (1.0 - query_mask)).sum(dim=1).mean()
         return (
             global_context,
