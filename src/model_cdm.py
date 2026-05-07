@@ -107,6 +107,8 @@ class CognitiveDiagnosisModel(nn.Module):
         ae_irt_logit_scale: float = 1.0,
         ae_interaction_logit_scale: float = 0.0,
         ae_logit_dim: int = 32,
+        relation_theta_scale: float = 0.0,
+        relation_theta_delta_clip: float = 2.0,
         share_concept_embeddings: bool = False,
     ):
         super().__init__()
@@ -191,6 +193,8 @@ class CognitiveDiagnosisModel(nn.Module):
         self.ae_irt_logit_scale = max(0.0, float(ae_irt_logit_scale))
         self.ae_interaction_logit_scale = max(0.0, float(ae_interaction_logit_scale))
         self.ae_logit_dim = max(1, int(ae_logit_dim))
+        self.relation_theta_scale = max(0.0, float(relation_theta_scale))
+        self.relation_theta_delta_clip = max(1e-6, float(relation_theta_delta_clip))
         self.share_concept_embeddings = bool(share_concept_embeddings)
 
         self.register_buffer("q_matrix", q_matrix)
@@ -458,6 +462,98 @@ class CognitiveDiagnosisModel(nn.Module):
         query_weight = concept_mask.float().unsqueeze(-1)
         denom = query_weight.sum(dim=1).clamp(min=1.0)
         return (tensor * query_weight).sum(dim=1) / denom
+
+    def _query_sparse_support_distribution(
+        self,
+        query_weight: torch.Tensor,
+        relation_spec: Optional[Dict[str, torch.Tensor]],
+    ) -> torch.Tensor:
+        if not isinstance(relation_spec, dict):
+            return query_weight.new_zeros(query_weight.shape)
+        active_row_index = relation_spec.get("active_row_index")
+        active_row_valid_mask = relation_spec.get("active_row_valid_mask")
+        support_col_index = relation_spec.get("support_col_index")
+        support_valid_mask = relation_spec.get("support_valid_mask")
+        posterior_prob = relation_spec.get("posterior_prob")
+        if (
+            active_row_index is None
+            or active_row_valid_mask is None
+            or support_col_index is None
+            or support_valid_mask is None
+            or posterior_prob is None
+            or active_row_index.numel() == 0
+        ):
+            return query_weight.new_zeros(query_weight.shape)
+
+        query_row_active_mask = relation_spec.get("query_row_active_mask")
+        if query_row_active_mask is None:
+            query_row_active_mask = active_row_valid_mask
+        row_valid = active_row_valid_mask.bool() & query_row_active_mask.bool()
+        row_index = active_row_index.clamp(min=0)
+        row_seed = torch.gather(query_weight, 1, row_index) * row_valid.to(dtype=query_weight.dtype)
+
+        B, C = query_weight.shape
+        H = int(posterior_prob.size(1))
+        support_out = query_weight.new_zeros((B, H, C))
+        for h in range(H):
+            col_idx = support_col_index[:, h].clamp(min=0)
+            valid = support_valid_mask[:, h].bool() & row_valid.unsqueeze(-1)
+            weight = posterior_prob[:, h].to(dtype=query_weight.dtype) * valid.to(dtype=query_weight.dtype)
+            weight = weight * row_seed.unsqueeze(-1)
+            support_out[:, h].scatter_add_(1, col_idx.reshape(B, -1), weight.reshape(B, -1))
+
+        support = support_out.mean(dim=1)
+        denom = support.sum(dim=1, keepdim=True)
+        return torch.where(denom > 1e-12, support / denom.clamp(min=1e-12), torch.zeros_like(support))
+
+    def _build_relation_theta_readout(
+        self,
+        *,
+        prediction_state: torch.Tensor,
+        relation_matrices: torch.Tensor,
+        personal_relation_spec: Optional[Dict[str, torch.Tensor]],
+        concept_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        zero_vec = prediction_state.new_zeros((prediction_state.size(0),))
+        zero_scalar = prediction_state.new_tensor(0.0)
+        if (
+            self.relation_theta_scale <= 0.0
+            or not self.enable_module1
+            or not self.use_concept_graph
+            or concept_mask is None
+        ):
+            return zero_vec, zero_scalar, zero_scalar, zero_scalar
+
+        query_mask = concept_mask.float()
+        query_weight = query_mask / query_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+        global_relation = relation_matrices["global_matrices"] if isinstance(relation_matrices, dict) else relation_matrices
+        if global_relation.dim() == 4:
+            A = global_relation.mean(dim=1).to(dtype=query_weight.dtype)
+            A = A / A.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+            global_support = torch.bmm(query_weight.unsqueeze(1), A).squeeze(1)
+        else:
+            A = global_relation.mean(dim=0).to(dtype=query_weight.dtype)
+            A = A / A.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+            global_support = query_weight.matmul(A)
+        global_support = global_support / global_support.sum(dim=1, keepdim=True).clamp(min=1e-12)
+
+        support_weight = global_support
+        personal_support_mass = zero_scalar
+        if self.use_personal_graph and isinstance(personal_relation_spec, dict):
+            personal_support = self._query_sparse_support_distribution(query_weight, personal_relation_spec)
+            personal_mass = personal_support.sum(dim=1, keepdim=True)
+            has_personal = personal_mass > 1e-12
+            support_weight = torch.where(has_personal, personal_support / personal_mass.clamp(min=1e-12), support_weight)
+            personal_support_mass = personal_mass.squeeze(-1).mean()
+
+        theta_c = self.diagnosis_head.theta_proj(prediction_state).squeeze(-1)
+        theta_query = (theta_c * query_weight).sum(dim=1)
+        theta_support = (theta_c * support_weight).sum(dim=1)
+        raw_delta = theta_support - theta_query
+        clip = prediction_state.new_tensor(self.relation_theta_delta_clip)
+        delta = torch.tanh(raw_delta / clip) * clip
+        neighbor_mass = (support_weight * (1.0 - query_mask)).sum(dim=1).mean()
+        return delta, delta.abs().mean(), neighbor_mass, personal_support_mass
 
     def _build_ae_query_state_residual(
         self,

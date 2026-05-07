@@ -42,6 +42,7 @@ GRID_KEYS: Tuple[str, ...] = (
     "personal_query_correction_max_ratio",
     "lambda_personal_kl",
     "lambda_personal_query_residual",
+    "relation_theta_scale",
 )
 
 
@@ -133,6 +134,11 @@ def build_grid() -> List[Dict[str, Any]]:
             item = dict(base)
             item.update(lambda_personal_kl=kl, lambda_personal_query_residual=query_reg)
             candidates.append(item)
+
+    for relation_theta_scale in (0.15, 0.25, 0.35):
+        item = dict(base)
+        item.update(relation_theta_scale=relation_theta_scale)
+        candidates.append(item)
 
     return _dedupe(candidates)
 

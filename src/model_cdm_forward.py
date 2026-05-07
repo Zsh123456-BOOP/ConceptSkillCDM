@@ -124,6 +124,18 @@ def run_cdm_forward(
             return_details=False,
         )
         diag_details = None
+    relation_theta_delta, relation_theta_delta_abs_mean, relation_theta_neighbor_mass, relation_theta_personal_mass = (
+        model._build_relation_theta_readout(
+            prediction_state=prediction_state,
+            relation_matrices=relation_matrices,
+            personal_relation_spec=personal_relation_spec,
+            concept_mask=q_vector,
+        )
+    )
+    relation_theta_logit = a * float(getattr(model, "relation_theta_scale", 0.0)) * relation_theta_delta
+    if diag_details is not None:
+        diag_details["relation_theta_delta"] = relation_theta_delta.detach()
+        diag_details["relation_theta_logit"] = relation_theta_logit.detach()
 
     ae_logit_residual, ae_logit_residual_abs_mean = model._build_ae_logit_residual(
         student_ids=student_ids,
@@ -151,7 +163,7 @@ def run_cdm_forward(
         irt_logit_for_total = torch.zeros_like(ae_logit_residual)
     else:
         irt_logit_for_total = irt_logit * irt_logit_scale
-    total_logit = irt_logit_for_total + ae_logit_residual
+    total_logit = irt_logit_for_total + ae_logit_residual + relation_theta_logit
     out_main = total_logit if return_logits else torch.sigmoid(total_logit)
 
     if not return_details:
@@ -168,6 +180,8 @@ def run_cdm_forward(
         "ae_logit_residual_clip": torch.tensor(float(model.ae_logit_residual_clip), device=device),
         "ae_irt_logit_scale": torch.tensor(float(model.ae_irt_logit_scale), device=device),
         "ae_interaction_logit_scale": torch.tensor(float(model.ae_interaction_logit_scale), device=device),
+        "relation_theta_scale": torch.tensor(float(model.relation_theta_scale), device=device),
+        "relation_theta_delta_clip": torch.tensor(float(model.relation_theta_delta_clip), device=device),
         "irt_logit_scale_used": torch.tensor(float(irt_logit_scale), device=device),
         "ae_logit_dim": torch.tensor(float(model.ae_logit_dim), device=device),
         "relation_matrices": relation_matrices,
@@ -180,6 +194,11 @@ def run_cdm_forward(
         "irt_b": b.detach(),
         "irt_a": a.detach(),
         "irt_logit": irt_logit.detach(),
+        "relation_theta_logit": relation_theta_logit.detach(),
+        "relation_theta_logit_abs_mean": relation_theta_logit.detach().abs().mean(),
+        "relation_theta_delta_abs_mean": relation_theta_delta_abs_mean.detach(),
+        "relation_theta_neighbor_mass": relation_theta_neighbor_mass.detach(),
+        "relation_theta_personal_mass": relation_theta_personal_mass.detach(),
         "irt_logit_for_total": irt_logit_for_total.detach(),
         "ae_logit_residual": ae_logit_residual.detach(),
         "ae_logit_residual_abs_mean": ae_logit_residual_abs_mean.detach(),

@@ -79,6 +79,8 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "ae_logit_dim",
     "ae_lr_mult",
     "ae_stat_prior_scale",
+    "relation_theta_scale",
+    "relation_theta_delta_clip",
     "graph_query_adapter_enable",
     "personal_delta_scale",
     "personal_warmup_epochs",
@@ -995,6 +997,10 @@ def _collect_debug_forward_stats(
     support_seq_survival_vals: List[float] = []
     support_item_seq_overlap_vals: List[float] = []
     support_self_retention_vals: List[float] = []
+    relation_theta_delta_abs_vals: List[float] = []
+    relation_theta_logit_abs_vals: List[float] = []
+    relation_theta_neighbor_mass_vals: List[float] = []
+    relation_theta_personal_mass_vals: List[float] = []
 
     graph_row_entropy_mean = 0.0
     graph_entropy_ratio = 0.0
@@ -1140,6 +1146,10 @@ def _collect_debug_forward_stats(
                 ("support_seq_survival_rate", support_seq_survival_vals),
                 ("support_item_seq_overlap", support_item_seq_overlap_vals),
                 ("support_self_retention_rate", support_self_retention_vals),
+                ("relation_theta_delta_abs_mean", relation_theta_delta_abs_vals),
+                ("relation_theta_logit_abs_mean", relation_theta_logit_abs_vals),
+                ("relation_theta_neighbor_mass", relation_theta_neighbor_mass_vals),
+                ("relation_theta_personal_mass", relation_theta_personal_mass_vals),
             ):
                 val = details.get(detail_key)
                 if val is not None:
@@ -1232,6 +1242,10 @@ def _collect_debug_forward_stats(
     support_seq_survival_rate, _ = _safe_mean_std(support_seq_survival_vals)
     support_item_seq_overlap, _ = _safe_mean_std(support_item_seq_overlap_vals)
     support_self_retention_rate, _ = _safe_mean_std(support_self_retention_vals)
+    relation_theta_delta_abs_mean, _ = _safe_mean_std(relation_theta_delta_abs_vals)
+    relation_theta_logit_abs_mean, _ = _safe_mean_std(relation_theta_logit_abs_vals)
+    relation_theta_neighbor_mass_mean, _ = _safe_mean_std(relation_theta_neighbor_mass_vals)
+    relation_theta_personal_mass_mean, _ = _safe_mean_std(relation_theta_personal_mass_vals)
 
     return {
         "irt_abs_mean": irt_abs_mean,
@@ -1308,6 +1322,10 @@ def _collect_debug_forward_stats(
         "support_seq_survival_rate": support_seq_survival_rate,
         "support_item_seq_overlap": support_item_seq_overlap,
         "support_self_retention_rate": support_self_retention_rate,
+        "relation_theta_delta_abs_mean": relation_theta_delta_abs_mean,
+        "relation_theta_logit_abs_mean": relation_theta_logit_abs_mean,
+        "relation_theta_neighbor_mass": relation_theta_neighbor_mass_mean,
+        "relation_theta_personal_mass": relation_theta_personal_mass_mean,
         "personal_warmup_scale": personal_warmup_scale,
         "share_concept_embeddings": share_concept_embeddings,
     }
@@ -1834,6 +1852,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         ae_irt_logit_scale=getattr(args, "ae_irt_logit_scale", 1.0),
         ae_interaction_logit_scale=getattr(args, "ae_interaction_logit_scale", 0.0),
         ae_logit_dim=getattr(args, "ae_logit_dim", 32),
+        relation_theta_scale=getattr(args, "relation_theta_scale", 0.0),
+        relation_theta_delta_clip=getattr(args, "relation_theta_delta_clip", 2.0),
         graph_query_adapter_enable=getattr(args, "graph_query_adapter_enable", True),
         share_concept_embeddings=getattr(args, "share_concept_embeddings", False),
     ).to(device)
@@ -1992,6 +2012,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             logger.info(
                 "%s [Diag][AE] Epoch [%03d] | "
                 "irt_abs_mean=%.4f, irt_std=%.4f, personal_warmup_scale=%.2f, "
+                "relation_theta_delta=%.4f, relation_theta_logit=%.4f, "
+                "relation_theta_neighbor_mass=%.4f, relation_theta_personal_mass=%.4f, "
                 "graph_row_entropy=%.4f, graph_entropy_ratio=%.4f, "
                 "alpha_mean=%.4f, alpha_std=%.4f, alpha_base_mean=%.4f, alpha_delta_absmean=%.4f, "
                 "alpha_saturation_ratio=%.4f, alpha_bias_std=%s, "
@@ -2016,6 +2038,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["irt_abs_mean"],
                 diag["irt_std"],
                 diag["personal_warmup_scale"],
+                diag["relation_theta_delta_abs_mean"],
+                diag["relation_theta_logit_abs_mean"],
+                diag["relation_theta_neighbor_mass"],
+                diag["relation_theta_personal_mass"],
                 diag["graph_row_entropy_mean"],
                 diag["graph_entropy_ratio"],
                 diag["alpha_mean"],
@@ -2605,6 +2631,12 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         ae_logit_dim=loaded_args.get(
             "ae_logit_dim", getattr(args, "ae_logit_dim", 32)
+        ),
+        relation_theta_scale=loaded_args.get(
+            "relation_theta_scale", getattr(args, "relation_theta_scale", 0.0)
+        ),
+        relation_theta_delta_clip=loaded_args.get(
+            "relation_theta_delta_clip", getattr(args, "relation_theta_delta_clip", 2.0)
         ),
         graph_query_adapter_enable=loaded_args.get(
             "graph_query_adapter_enable", getattr(args, "graph_query_adapter_enable", True)

@@ -318,6 +318,10 @@ def parse_args():
                         help="Learning-rate multiplier for the A/E joint prediction head.")
     parser.add_argument("--ae_stat_prior_scale", type=float, default=0.0,
                         help="Scale for train-set student/concept logit priors used to initialize the A/E head.")
+    parser.add_argument("--relation_theta_scale", type=float, default=0.0,
+                        help="Scale for interpretable A/E support theta readout inside the IRT logit.")
+    parser.add_argument("--relation_theta_delta_clip", type=float, default=2.0,
+                        help="Tanh clip for relation support theta contrast before scaling.")
     parser.add_argument("--graph_query_adapter_enable", action=bool_action, default=None,
                         help="Enable query adapter on top of graph readout before the fixed diagnosis head.")
     parser.add_argument("--personal_state_lr_mult", type=float, default=1.0,
@@ -673,6 +677,12 @@ def main():
                 ),
                 ae_logit_dim=loaded_args.get(
                     "ae_logit_dim", getattr(args, "ae_logit_dim", 32)
+                ),
+                relation_theta_scale=loaded_args.get(
+                    "relation_theta_scale", getattr(args, "relation_theta_scale", 0.0)
+                ),
+                relation_theta_delta_clip=loaded_args.get(
+                    "relation_theta_delta_clip", getattr(args, "relation_theta_delta_clip", 2.0)
                 ),
                 share_concept_embeddings=loaded_args.get(
                     "share_concept_embeddings", getattr(args, "share_concept_embeddings", False)

@@ -47,6 +47,7 @@ def _build_model(
     ablate_module1: bool = False,
     use_concept_graph: bool = True,
     use_personal_graph: bool = True,
+    relation_theta_scale: float = 0.0,
 ):
     from src.model import CognitiveDiagnosisModel
 
@@ -75,6 +76,7 @@ def _build_model(
         graph_tau_init=0.6,
         graph_topk=2,
         allow_self_loop=True,
+        relation_theta_scale=relation_theta_scale,
     )
     model.eval()
     return model
@@ -256,6 +258,43 @@ def _check_removed_residual_artifacts() -> None:
     _assert("irt_logit" in details, "Fixed prediction head should still expose irt_logit.")
 
 
+def _check_relation_theta_readout_is_interpretable_and_ablatable() -> None:
+    torch.manual_seed(11)
+    full = _build_model(use_concept_graph=True, use_personal_graph=True, relation_theta_scale=0.5)
+    no_a = _build_model(use_concept_graph=False, use_personal_graph=True, relation_theta_scale=0.5)
+    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+
+    with torch.no_grad():
+        full_logits, full_details = full(
+            student_ids=student_ids,
+            exercise_ids=exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+        off_logits, off_details = no_a(
+            student_ids=student_ids,
+            exercise_ids=exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+
+    _assert_all_finite("relation_theta_full_logits", full_logits)
+    _assert(full_details["relation_theta_scale"].item() == 0.5, "Relation-theta scale should be exposed.")
+    _assert(
+        full_details["relation_theta_neighbor_mass"].item() > 0.0,
+        "Relation-theta readout should use explicit A/E support outside query self when A is enabled.",
+    )
+    _assert(
+        full_details["relation_theta_logit_abs_mean"].item() >= 0.0,
+        "Relation-theta readout should expose a bounded logit diagnostic.",
+    )
+    _assert(
+        off_details["relation_theta_logit_abs_mean"].item() == 0.0,
+        "no_A should remove relation-theta support readout completely.",
+    )
+
+
 def _check_get_student_diagnosis() -> None:
     for ablate_module1 in (False, True):
         model = _build_model(ablate_module1=ablate_module1, use_personal_graph=True)
@@ -296,6 +335,7 @@ def main() -> None:
     _check_graph_query_adapter_is_initially_residual()
     _check_per_head_personal_graph()
     _check_removed_residual_artifacts()
+    _check_relation_theta_readout_is_interpretable_and_ablatable()
     _check_get_student_diagnosis()
     _check_grad_guard_keeps_nan_from_poisoning_group()
     print("OK: runtime regression smoke checks passed.")
