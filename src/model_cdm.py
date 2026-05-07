@@ -217,6 +217,13 @@ class CognitiveDiagnosisModel(nn.Module):
             "ae_student_concept_prior_logit",
             torch.zeros(num_students, num_concepts, dtype=torch.float32),
         )
+        self.register_buffer("ae_student_count_feature", torch.zeros(num_students, dtype=torch.float32))
+        self.register_buffer("ae_exercise_count_feature", torch.zeros(num_exercises, dtype=torch.float32))
+        self.register_buffer("ae_concept_count_feature", torch.zeros(num_concepts, dtype=torch.float32))
+        self.register_buffer(
+            "ae_student_concept_count_feature",
+            torch.zeros(num_students, num_concepts, dtype=torch.float32),
+        )
 
         identity = torch.eye(num_concepts, dtype=torch.float32).unsqueeze(0).repeat(self.num_relation_heads, 1, 1)
         self.register_buffer("identity_relations", identity)
@@ -283,6 +290,7 @@ class CognitiveDiagnosisModel(nn.Module):
             self.ae_logit_feature_weight = nn.Parameter(
                 torch.tensor([0.05, 0.05, 0.05, 0.02], dtype=torch.float32)
             )
+            self.ae_reliability_feature_weight = nn.Parameter(torch.zeros(7, dtype=torch.float32))
             nn.init.zeros_(self.ae_student_logit_bias.weight)
             nn.init.zeros_(self.ae_exercise_logit_bias.weight)
             nn.init.zeros_(self.ae_concept_logit_bias.weight)
@@ -589,6 +597,7 @@ class CognitiveDiagnosisModel(nn.Module):
             "ae_stat_query_student_concept_prior": zero_vec,
             "ae_stat_graph_student_concept_prior": zero_vec,
             "ae_posterior_prior_logit": zero_vec,
+            "ae_reliability_feature_logit": zero_vec,
             "ae_interpretable_bias": zero_vec,
             "ae_explicit_feature_logit": zero_vec,
             "ae_interaction_logit": zero_vec,
@@ -596,6 +605,7 @@ class CognitiveDiagnosisModel(nn.Module):
             "ae_raw_logit_after_clip": zero_vec,
         }
         feature_weight = getattr(self, "ae_logit_feature_weight", None)
+        reliability_feature_weight = getattr(self, "ae_reliability_feature_weight", None)
         student_logit_bias = getattr(self, "ae_student_logit_bias", None)
         exercise_logit_bias = getattr(self, "ae_exercise_logit_bias", None)
         concept_logit_bias = getattr(self, "ae_concept_logit_bias", None)
@@ -628,6 +638,7 @@ class CognitiveDiagnosisModel(nn.Module):
         stat_query_sc_prior = zero_vec
         stat_graph_sc_prior = zero_vec
         posterior_prior_logit = zero_vec
+        reliability_feature_logit = zero_vec
         stat_prior = zero_vec
         if e_active:
             stat_student_prior = student_prior
@@ -689,6 +700,44 @@ class CognitiveDiagnosisModel(nn.Module):
                     posterior_prior_logit_abs_mean = posterior_prior_logit.detach().abs().mean()
                     posterior_prior_delta_abs_mean = posterior_prior_delta.detach().abs().mean()
 
+            if isinstance(reliability_feature_weight, nn.Parameter):
+                student_count_feature = self.ae_student_count_feature[student_ids].to(dtype=dtype, device=device)
+                exercise_count_feature = self.ae_exercise_count_feature[exercise_ids].to(dtype=dtype, device=device)
+                concept_count = self.ae_concept_count_feature.to(dtype=query_weight.dtype, device=device)
+                query_concept_count = query_weight.matmul(concept_count)
+                graph_concept_count = graph_query_weight.matmul(concept_count)
+                sc_count = self.ae_student_concept_count_feature[student_ids].to(
+                    dtype=query_weight.dtype,
+                    device=device,
+                )
+                query_sc_count = (query_weight * sc_count).sum(dim=1)
+                graph_sc_count = (graph_query_weight * sc_count).sum(dim=1)
+                active_sc_count = torch.where(
+                    query_mask > 0,
+                    sc_count,
+                    torch.full_like(sc_count, 1.0e4),
+                )
+                query_sc_min = active_sc_count.min(dim=1).values
+                query_sc_min = torch.where(
+                    query_mask.sum(dim=1) > 0,
+                    query_sc_min,
+                    torch.zeros_like(query_sc_min),
+                )
+                reliability_features = torch.stack(
+                    [
+                        student_count_feature,
+                        exercise_count_feature,
+                        query_concept_count,
+                        graph_concept_count,
+                        query_sc_count,
+                        graph_sc_count,
+                        query_sc_min,
+                    ],
+                    dim=1,
+                ).to(dtype=dtype)
+                reliability_weights = reliability_feature_weight.to(dtype=dtype, device=device)
+                reliability_feature_logit = (reliability_features * reliability_weights.view(1, -1)).sum(dim=1)
+
             graph_rms = self._masked_query_rms_per_sample(global_query_context, concept_mask)
             personal_rms = self._masked_query_rms_per_sample(personal_query_correction, concept_mask)
             query_count = concept_mask.float().sum(dim=1, keepdim=True)
@@ -710,7 +759,7 @@ class CognitiveDiagnosisModel(nn.Module):
         interpretable_bias = 0.20 * (
             student_bias + 0.75 * exercise_bias + 0.75 * concept_bias
         )
-        raw = stat_prior + interpretable_bias + explicit_feature_logit + interaction_logit
+        raw = stat_prior + reliability_feature_logit + interpretable_bias + explicit_feature_logit + interaction_logit
         raw_before_clip = raw
         if self.ae_logit_residual_clip > 0.0:
             clip = self.ae_logit_residual_clip
@@ -725,6 +774,7 @@ class CognitiveDiagnosisModel(nn.Module):
             "ae_stat_query_student_concept_prior": torch.where(active, stat_query_sc_prior, zero_vec),
             "ae_stat_graph_student_concept_prior": torch.where(active, stat_graph_sc_prior, zero_vec),
             "ae_posterior_prior_logit": torch.where(active, posterior_prior_logit, zero_vec),
+            "ae_reliability_feature_logit": torch.where(active, reliability_feature_logit, zero_vec),
             "ae_interpretable_bias": torch.where(active, interpretable_bias, zero_vec),
             "ae_explicit_feature_logit": torch.where(active, explicit_feature_logit, zero_vec),
             "ae_interaction_logit": torch.where(active, interaction_logit, zero_vec),
@@ -747,6 +797,10 @@ class CognitiveDiagnosisModel(nn.Module):
         concept_logits: torch.Tensor,
         scale: float,
         student_concept_logits: Optional[torch.Tensor] = None,
+        student_count_features: Optional[torch.Tensor] = None,
+        exercise_count_features: Optional[torch.Tensor] = None,
+        concept_count_features: Optional[torch.Tensor] = None,
+        student_concept_count_features: Optional[torch.Tensor] = None,
     ) -> None:
         if (
             getattr(self, "ae_student_logit_bias", None) is None
@@ -798,6 +852,45 @@ class CognitiveDiagnosisModel(nn.Module):
             self.ae_exercise_prior_logit.copy_(exercise_target.clamp(min=-3.0, max=3.0))
             self.ae_concept_prior_logit.copy_(concept_target.clamp(min=-3.0, max=3.0))
             self.ae_student_concept_prior_logit.copy_(student_concept_target.clamp(min=-2.0, max=2.0))
+            if student_count_features is not None:
+                target = student_count_features.detach().to(
+                    device=self.ae_student_count_feature.device,
+                    dtype=self.ae_student_count_feature.dtype,
+                ).view(-1)
+                self.ae_student_count_feature.zero_()
+                self.ae_student_count_feature[: min(self.ae_student_count_feature.size(0), target.size(0))].copy_(
+                    target[: self.ae_student_count_feature.size(0)].clamp(min=-5.0, max=5.0)
+                )
+            if exercise_count_features is not None:
+                target = exercise_count_features.detach().to(
+                    device=self.ae_exercise_count_feature.device,
+                    dtype=self.ae_exercise_count_feature.dtype,
+                ).view(-1)
+                self.ae_exercise_count_feature.zero_()
+                self.ae_exercise_count_feature[: min(self.ae_exercise_count_feature.size(0), target.size(0))].copy_(
+                    target[: self.ae_exercise_count_feature.size(0)].clamp(min=-5.0, max=5.0)
+                )
+            if concept_count_features is not None:
+                target = concept_count_features.detach().to(
+                    device=self.ae_concept_count_feature.device,
+                    dtype=self.ae_concept_count_feature.dtype,
+                ).view(-1)
+                self.ae_concept_count_feature.zero_()
+                self.ae_concept_count_feature[: min(self.ae_concept_count_feature.size(0), target.size(0))].copy_(
+                    target[: self.ae_concept_count_feature.size(0)].clamp(min=-5.0, max=5.0)
+                )
+            if student_concept_count_features is not None:
+                target = student_concept_count_features.detach().to(
+                    device=self.ae_student_concept_count_feature.device,
+                    dtype=self.ae_student_concept_count_feature.dtype,
+                )
+                self.ae_student_concept_count_feature.zero_()
+                rows = min(self.ae_student_concept_count_feature.size(0), target.size(0))
+                cols = min(self.ae_student_concept_count_feature.size(1), target.size(1)) if target.dim() == 2 else 0
+                if rows > 0 and cols > 0:
+                    self.ae_student_concept_count_feature[:rows, :cols].copy_(
+                        target[:rows, :cols].clamp(min=-5.0, max=5.0)
+                    )
             self.ae_student_logit_bias.weight.zero_()
             self.ae_exercise_logit_bias.weight.zero_()
             self.ae_concept_logit_bias.weight.zero_()

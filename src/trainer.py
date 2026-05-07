@@ -521,6 +521,9 @@ def _build_optimizer(model: nn.Module, args) -> optim.Optimizer:
     ae_logit_feature_weight = getattr(base_model, "ae_logit_feature_weight", None)
     if isinstance(ae_logit_feature_weight, torch.nn.Parameter):
         ae_params.append(ae_logit_feature_weight)
+    ae_reliability_feature_weight = getattr(base_model, "ae_reliability_feature_weight", None)
+    if isinstance(ae_reliability_feature_weight, torch.nn.Parameter):
+        ae_params.append(ae_reliability_feature_weight)
     ae_params = _dedupe_params(ae_params)
     grouped_ids = {id(p) for p in state_params}
     grouped_ids.update(id(p) for p in ae_params)
@@ -554,6 +557,20 @@ def _safe_logit(rate: torch.Tensor) -> torch.Tensor:
     return torch.log(rate / (1.0 - rate))
 
 
+def _standardized_log_count_feature(counts: torch.Tensor) -> torch.Tensor:
+    """Train-only reliability feature from interaction counts.
+
+    The value is a standardized log-count, so it encodes evidence reliability
+    without using validation/test outcomes or adding a black-box branch.
+    """
+    values = torch.log1p(counts.detach().float())
+    if values.numel() <= 1:
+        return torch.zeros_like(values)
+    centered = values - values.mean()
+    scaled = centered / values.std(unbiased=False).clamp(min=1e-6)
+    return torch.nan_to_num(scaled, nan=0.0, posinf=0.0, neginf=0.0).clamp(min=-5.0, max=5.0)
+
+
 def _compute_train_stat_logits(
     train_loader: DataLoader,
     q_matrix: torch.Tensor,
@@ -561,7 +578,7 @@ def _compute_train_stat_logits(
     num_students: int,
     num_exercises: int,
     num_concepts: int,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float, Dict[str, torch.Tensor]]:
     q_cpu = q_matrix.detach().float().cpu()
     student_count = torch.zeros(num_students, dtype=torch.float32)
     student_correct = torch.zeros(num_students, dtype=torch.float32)
@@ -601,6 +618,12 @@ def _compute_train_stat_logits(
             torch.zeros(num_concepts, dtype=torch.float32),
             torch.zeros(num_students, num_concepts, dtype=torch.float32),
             0.5,
+            {
+                "student": torch.zeros(num_students, dtype=torch.float32),
+                "exercise": torch.zeros(num_exercises, dtype=torch.float32),
+                "concept": torch.zeros(num_concepts, dtype=torch.float32),
+                "student_concept": torch.zeros(num_students, num_concepts, dtype=torch.float32),
+            },
         )
 
     global_rate = min(max(total_correct / float(total_count), 1e-4), 1.0 - 1e-4)
@@ -638,7 +661,13 @@ def _compute_train_stat_logits(
         student_concept_logits,
         torch.zeros_like(student_concept_logits),
     )
-    return student_logits, exercise_logits, concept_logits, student_concept_logits, float(global_rate)
+    count_features = {
+        "student": _standardized_log_count_feature(student_count),
+        "exercise": _standardized_log_count_feature(exercise_count),
+        "concept": _standardized_log_count_feature(concept_count),
+        "student_concept": _standardized_log_count_feature(student_concept_count),
+    }
+    return student_logits, exercise_logits, concept_logits, student_concept_logits, float(global_rate), count_features
 
 
 def _initialize_ae_stat_priors(
@@ -668,7 +697,14 @@ def _initialize_ae_stat_priors(
     ):
         return
 
-    student_logits, exercise_logits, concept_logits, student_concept_logits, global_rate = _compute_train_stat_logits(
+    (
+        student_logits,
+        exercise_logits,
+        concept_logits,
+        student_concept_logits,
+        global_rate,
+        count_features,
+    ) = _compute_train_stat_logits(
         train_loader,
         info_dict["q_matrix"],
         num_students=info_dict["num_students"],
@@ -681,10 +717,15 @@ def _initialize_ae_stat_priors(
         concept_logits=concept_logits,
         student_concept_logits=student_concept_logits,
         scale=scale,
+        student_count_features=count_features["student"],
+        exercise_count_features=count_features["exercise"],
+        concept_count_features=count_features["concept"],
+        student_concept_count_features=count_features["student_concept"],
     )
     logger.info(
         "%s AE stat priors initialized: scale=%.3f, train_global_rate=%.4f, "
-        "student_absmean=%.4f, exercise_absmean=%.4f, concept_absmean=%.4f, student_concept_absmean=%.4f",
+        "student_absmean=%.4f, exercise_absmean=%.4f, concept_absmean=%.4f, "
+        "student_concept_absmean=%.4f, reliability_absmean=%.4f",
         run_tag,
         scale,
         global_rate,
@@ -692,6 +733,16 @@ def _initialize_ae_stat_priors(
         float(exercise_logits.abs().mean().item()),
         float(concept_logits.abs().mean().item()),
         float(student_concept_logits.abs().mean().item()),
+        float(
+            torch.stack(
+                [
+                    count_features["student"].abs().mean(),
+                    count_features["exercise"].abs().mean(),
+                    count_features["concept"].abs().mean(),
+                    count_features["student_concept"].abs().mean(),
+                ]
+            ).mean().item()
+        ),
     )
 
 
@@ -1017,6 +1068,7 @@ def _collect_debug_forward_stats(
     ae_stat_concept_prior_abs_vals: List[float] = []
     ae_stat_query_sc_prior_abs_vals: List[float] = []
     ae_stat_graph_sc_prior_abs_vals: List[float] = []
+    ae_reliability_feature_logit_abs_vals: List[float] = []
     ae_interpretable_bias_abs_vals: List[float] = []
     ae_explicit_feature_logit_abs_vals: List[float] = []
     ae_interaction_logit_abs_vals: List[float] = []
@@ -1135,6 +1187,7 @@ def _collect_debug_forward_stats(
                 ("ae_stat_concept_prior_abs_mean", ae_stat_concept_prior_abs_vals),
                 ("ae_stat_query_student_concept_prior_abs_mean", ae_stat_query_sc_prior_abs_vals),
                 ("ae_stat_graph_student_concept_prior_abs_mean", ae_stat_graph_sc_prior_abs_vals),
+                ("ae_reliability_feature_logit_abs_mean", ae_reliability_feature_logit_abs_vals),
                 ("ae_interpretable_bias_abs_mean", ae_interpretable_bias_abs_vals),
                 ("ae_explicit_feature_logit_abs_mean", ae_explicit_feature_logit_abs_vals),
                 ("ae_interaction_logit_abs_mean", ae_interaction_logit_abs_vals),
@@ -1286,6 +1339,7 @@ def _collect_debug_forward_stats(
     ae_stat_concept_prior_abs_mean, _ = _safe_mean_std(ae_stat_concept_prior_abs_vals)
     ae_stat_query_sc_prior_abs_mean, _ = _safe_mean_std(ae_stat_query_sc_prior_abs_vals)
     ae_stat_graph_sc_prior_abs_mean, _ = _safe_mean_std(ae_stat_graph_sc_prior_abs_vals)
+    ae_reliability_feature_logit_abs_mean, _ = _safe_mean_std(ae_reliability_feature_logit_abs_vals)
     ae_interpretable_bias_abs_mean, _ = _safe_mean_std(ae_interpretable_bias_abs_vals)
     ae_explicit_feature_logit_abs_mean, _ = _safe_mean_std(ae_explicit_feature_logit_abs_vals)
     ae_interaction_logit_abs_mean, _ = _safe_mean_std(ae_interaction_logit_abs_vals)
@@ -1378,6 +1432,7 @@ def _collect_debug_forward_stats(
         "ae_stat_concept_prior_abs_mean": ae_stat_concept_prior_abs_mean,
         "ae_stat_query_student_concept_prior_abs_mean": ae_stat_query_sc_prior_abs_mean,
         "ae_stat_graph_student_concept_prior_abs_mean": ae_stat_graph_sc_prior_abs_mean,
+        "ae_reliability_feature_logit_abs_mean": ae_reliability_feature_logit_abs_mean,
         "ae_interpretable_bias_abs_mean": ae_interpretable_bias_abs_mean,
         "ae_explicit_feature_logit_abs_mean": ae_explicit_feature_logit_abs_mean,
         "ae_interaction_logit_abs_mean": ae_interaction_logit_abs_mean,
@@ -2192,7 +2247,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "%s [Diag][AE Components] Epoch [%03d] | "
                 "student_prior=%.4f, exercise_prior=%.4f, concept_prior=%.4f, "
                 "query_student_concept=%.4f, graph_student_concept=%.4f, "
-                "posterior_prior=%.4f, interpretable_bias=%.4f, explicit_feature=%.4f, "
+                "posterior_prior=%.4f, reliability=%.4f, interpretable_bias=%.4f, explicit_feature=%.4f, "
                 "interaction=%.4f, raw_before_clip=%.4f, raw_after_clip=%.4f",
                 run_tag,
                 epoch,
@@ -2202,6 +2257,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["ae_stat_query_student_concept_prior_abs_mean"],
                 diag["ae_stat_graph_student_concept_prior_abs_mean"],
                 diag["ae_posterior_prior_logit_abs_mean"],
+                diag["ae_reliability_feature_logit_abs_mean"],
                 diag["ae_interpretable_bias_abs_mean"],
                 diag["ae_explicit_feature_logit_abs_mean"],
                 diag["ae_interaction_logit_abs_mean"],
