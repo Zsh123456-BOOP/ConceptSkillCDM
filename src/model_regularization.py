@@ -9,6 +9,26 @@ import torch.nn.functional as F
 from src.model_ops import _masked_sparse_row_entropy
 
 
+def _get_personal_reweightable_support(
+    details: Dict[str, torch.Tensor],
+    *,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[bool, torch.Tensor]:
+    """Return whether E has at least one query row with 2+ support choices."""
+    support_valid_mask = details.get("support_valid_mask")
+    query_row_active_mask = details.get("query_row_active_mask")
+    if support_valid_mask is None or query_row_active_mask is None:
+        return True, torch.tensor(1.0, device=device, dtype=dtype)
+
+    support_count = support_valid_mask.bool().sum(dim=-1)
+    query_rows = query_row_active_mask.bool().unsqueeze(1).expand_as(support_count)
+    active_count = query_rows.float().sum().clamp(min=1.0)
+    reweightable = query_rows & (support_count > 1)
+    rate = reweightable.float().sum() / active_count
+    return bool(reweightable.any().item()), rate.to(device=device, dtype=dtype)
+
+
 def get_regularization_components(
     model,
     relation_matrices: torch.Tensor,
@@ -120,6 +140,16 @@ def get_regularization_components(
             terms["prediction_l2"] = model.prediction_l2_lambda * sum(reg_terms)
 
     if model.enable_module1 and model.use_personal_graph and details is not None:
+        has_reweightable_support, reweightable_row_rate = _get_personal_reweightable_support(
+            details,
+            device=device,
+            dtype=relation_matrices.dtype,
+        )
+        details["personal_reweightable_row_rate"] = reweightable_row_rate.detach()
+        details["alpha_collapse_skipped_no_reweightable_support"] = relation_matrices.new_tensor(
+            int(not has_reweightable_support), dtype=torch.long
+        )
+
         posterior_prob = details.get("posterior_prob")
         support_valid_mask = details.get("support_valid_mask")
         if posterior_prob is not None and support_valid_mask is not None and model.lambda_sparse_personal > 0:
@@ -137,7 +167,7 @@ def get_regularization_components(
             terms["personal_sparse"] = model.lambda_sparse_personal * model._row_entropy(pm) * personal_reg_ramp_t
 
         alpha_for_reg = details.get("alpha_effective", details.get("alpha"))
-        if alpha_for_reg is not None and model.lambda_alpha > 0:
+        if alpha_for_reg is not None and model.lambda_alpha > 0 and has_reweightable_support:
             alpha_flat = alpha_for_reg.view(-1)
             alpha_var = alpha_flat.var() + 1e-6
             if "alpha_student_bias" in details and details["alpha_student_bias"] is not None:
@@ -146,7 +176,7 @@ def get_regularization_components(
                 details["alpha_bias_std_runtime"] = alpha_bias_flat.std(unbiased=False).detach()
             terms["alpha_var"] = -model.lambda_alpha * alpha_var * personal_reg_ramp_t
 
-        if alpha_for_reg is not None and model.lambda_alpha_min > 0:
+        if alpha_for_reg is not None and model.lambda_alpha_min > 0 and has_reweightable_support:
             alpha_flat = alpha_for_reg.view(-1)
             alpha_std = alpha_flat.std(unbiased=False)
             alpha_target = torch.tensor(model.alpha_min_target, device=device, dtype=alpha_std.dtype)
@@ -169,6 +199,10 @@ def get_regularization_components(
             terms["alpha_collapse"] = model.lambda_alpha_min * alpha_pen * personal_reg_ramp_t
             details["alpha_std_runtime"] = alpha_std.detach()
             details["alpha_collapse_pen"] = alpha_pen.detach()
+        elif alpha_for_reg is not None and model.lambda_alpha_min > 0:
+            alpha_flat = alpha_for_reg.view(-1)
+            details["alpha_std_runtime"] = alpha_flat.std(unbiased=False).detach()
+            details["alpha_collapse_pen"] = relation_matrices.new_tensor(0.0)
 
         posterior_prob = details.get("posterior_prob")
         global_support_prob = details.get("global_support_prob")

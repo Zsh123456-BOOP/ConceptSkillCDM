@@ -2540,6 +2540,87 @@ def _check_no_a_backward_has_no_nonfinite_gradients() -> None:
     _assert(not bad, f"no_A backward 不应再产生非有限梯度，当前异常参数: {bad[:8]}")
 
 
+def _check_no_a_single_support_skips_impossible_e_collapse_penalty() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    torch.manual_seed(0)
+    num_concepts = 8
+    q_matrix = torch.eye(num_concepts, dtype=torch.float32)
+    model = CognitiveDiagnosisModel(
+        num_students=12,
+        num_exercises=num_concepts,
+        num_concepts=num_concepts,
+        q_matrix=q_matrix,
+        knowledge_dim=16,
+        num_relation_heads=2,
+        num_gnn_layers=2,
+        dropout=0.0,
+        use_concept_graph=False,
+        use_personal_graph=True,
+        share_concept_embeddings=True,
+        ae_logit_residual_scale=0.5,
+        ae_irt_logit_scale=1.0,
+        ae_interaction_logit_scale=0.25,
+        lambda_personal_kl=0.03,
+        lambda_personal_query_residual=0.06,
+        lambda_sparse_personal=0.0005,
+        lambda_alpha_min=0.05,
+        alpha_min_target=0.04,
+        personal_delta_scale=4.0,
+        personal_warmup_epochs=0,
+        personal_reg_warmup_epochs=0,
+        personal_alpha_base_init=0.04,
+        personal_alpha_budget=0.09,
+        personal_alpha_temperature=1.8,
+        personal_disable_student_global_context=True,
+        personal_include_neighbor_rows=False,
+        personal_query_row_budget=1.3,
+        personal_query_support_hops=1,
+        personal_support_only=True,
+        personal_support_include_graph=True,
+        personal_support_include_query_self=True,
+        personal_support_include_neighbors=False,
+    )
+    model.train()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.01, weight_decay=0.001)
+    student_ids = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7], dtype=torch.long)
+    labels = torch.tensor([1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0], dtype=torch.float32)
+
+    for _ in range(80):
+        logits, details = model(
+            student_ids=student_ids,
+            exercise_ids=exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+        bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+        reg_terms = model.get_regularization_components(details["relation_matrices"], details, bce)
+        loss = bce + reg_terms["total"]
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        bad = [
+            name
+            for name, param in model.named_parameters()
+            if param.grad is not None and not torch.isfinite(param.grad).all()
+        ]
+        _assert(not bad, f"single-support no_A 不应再产生非有限梯度，当前异常参数: {bad[:8]}")
+        optimizer.step()
+
+    _assert(
+        int(details["alpha_collapse_skipped_no_reweightable_support"].item()) == 1,
+        "single-support no_A 应跳过无法实现的 E anti-collapse 正则。",
+    )
+    _assert(
+        float(details["personal_reweightable_row_rate"].item()) == 0.0,
+        "single-support no_A 不应被误判为有可重加权 support。",
+    )
+    _assert(
+        float(reg_terms["alpha_collapse"].item()) == 0.0,
+        "single-support no_A 的 alpha_collapse 应为 0，不能强迫单点 posterior 产生差异。",
+    )
+
+
 def _check_student_diagnosis_queryless_path() -> None:
     model = _build_tiny_ae_model(
         use_concept_graph=True,
@@ -3246,6 +3327,7 @@ def main() -> None:
     _check_masked_support_softmax_active_fallback_semantics()
     _check_no_a_finite_alpha_smoke()
     _check_no_a_backward_has_no_nonfinite_gradients()
+    _check_no_a_single_support_skips_impossible_e_collapse_penalty()
     _check_message_projection_gain_regression()
     _check_component_analysis_uses_real_q_conditioned_path()
     _check_component_analysis_handles_ragged_sparse_samples()
