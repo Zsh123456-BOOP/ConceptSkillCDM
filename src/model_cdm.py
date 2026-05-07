@@ -579,9 +579,22 @@ class CognitiveDiagnosisModel(nn.Module):
         global_query_context: torch.Tensor,
         personal_query_correction: torch.Tensor,
         concept_mask: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         zero_vec = knowledge_state.new_zeros((knowledge_state.size(0),))
         zero_scalar = knowledge_state.new_tensor(0.0)
+        zero_components: Dict[str, torch.Tensor] = {
+            "ae_stat_student_prior": zero_vec,
+            "ae_stat_exercise_prior": zero_vec,
+            "ae_stat_concept_prior": zero_vec,
+            "ae_stat_query_student_concept_prior": zero_vec,
+            "ae_stat_graph_student_concept_prior": zero_vec,
+            "ae_posterior_prior_logit": zero_vec,
+            "ae_interpretable_bias": zero_vec,
+            "ae_explicit_feature_logit": zero_vec,
+            "ae_interaction_logit": zero_vec,
+            "ae_raw_logit_before_clip": zero_vec,
+            "ae_raw_logit_after_clip": zero_vec,
+        }
         feature_weight = getattr(self, "ae_logit_feature_weight", None)
         student_logit_bias = getattr(self, "ae_student_logit_bias", None)
         exercise_logit_bias = getattr(self, "ae_exercise_logit_bias", None)
@@ -595,7 +608,7 @@ class CognitiveDiagnosisModel(nn.Module):
             or not self.enable_module1
             or not (self.use_concept_graph or self.use_personal_graph)
         ):
-            return zero_vec, zero_scalar, zero_scalar, zero_scalar
+            return zero_vec, zero_scalar, zero_scalar, zero_scalar, zero_components
 
         dtype = knowledge_state.dtype
         device = knowledge_state.device
@@ -609,13 +622,21 @@ class CognitiveDiagnosisModel(nn.Module):
         student_prior = self.ae_student_prior_logit[student_ids].to(dtype=dtype, device=device)
         exercise_prior = self.ae_exercise_prior_logit[exercise_ids].to(dtype=dtype, device=device)
 
+        stat_student_prior = zero_vec
+        stat_exercise_prior = zero_vec
+        stat_concept_prior = zero_vec
+        stat_query_sc_prior = zero_vec
+        stat_graph_sc_prior = zero_vec
+        posterior_prior_logit = zero_vec
         stat_prior = zero_vec
         if e_active:
-            stat_prior = stat_prior + student_prior
+            stat_student_prior = student_prior
+            stat_prior = stat_prior + stat_student_prior
         student_bias = student_logit_bias(student_ids).squeeze(-1) if e_active else zero_vec
 
         exercise_bias = zero_vec
         concept_bias = zero_vec
+        graph_query_weight = query_weight
         if a_active:
             if isinstance(relation_matrices, dict):
                 global_relation = relation_matrices["global_matrices"]
@@ -627,7 +648,9 @@ class CognitiveDiagnosisModel(nn.Module):
             concept_prior = query_weight.matmul(
                 self.ae_concept_prior_logit.to(dtype=query_weight.dtype, device=query_weight.device).unsqueeze(-1)
             ).squeeze(-1)
-            stat_prior = stat_prior + 0.75 * exercise_prior + 0.75 * concept_prior
+            stat_exercise_prior = 0.75 * exercise_prior
+            stat_concept_prior = 0.75 * concept_prior
+            stat_prior = stat_prior + stat_exercise_prior + stat_concept_prior
             exercise_bias = exercise_logit_bias(exercise_ids).squeeze(-1)
             query_concept_bias = query_weight.matmul(concept_logit_bias.weight).squeeze(-1)
             graph_concept_bias = graph_query_weight.matmul(concept_logit_bias.weight).squeeze(-1)
@@ -643,7 +666,9 @@ class CognitiveDiagnosisModel(nn.Module):
                 sc_prior = student_concept_prior[student_ids].to(dtype=query_weight.dtype, device=device)
                 query_sc_prior = (query_weight * sc_prior).sum(dim=1)
                 graph_sc_prior = (graph_query_weight * sc_prior).sum(dim=1)
-                stat_prior = stat_prior + 0.60 * query_sc_prior + 0.40 * graph_sc_prior
+                stat_query_sc_prior = 0.60 * query_sc_prior
+                stat_graph_sc_prior = 0.40 * graph_sc_prior
+                stat_prior = stat_prior + stat_query_sc_prior + stat_graph_sc_prior
                 if self.ae_posterior_prior_scale > 0.0 and isinstance(personal_relation_spec, dict):
                     personal_support = self._query_sparse_support_distribution(query_weight, personal_relation_spec)
                     personal_mass = personal_support.sum(dim=1, keepdim=True)
@@ -686,17 +711,32 @@ class CognitiveDiagnosisModel(nn.Module):
             student_bias + 0.75 * exercise_bias + 0.75 * concept_bias
         )
         raw = stat_prior + interpretable_bias + explicit_feature_logit + interaction_logit
+        raw_before_clip = raw
         if self.ae_logit_residual_clip > 0.0:
             clip = self.ae_logit_residual_clip
             raw = clip * torch.tanh(raw / clip)
         residual = self.ae_logit_residual_scale * raw
         active = query_mask.sum(dim=1) > 0
         residual = torch.where(active, residual, torch.zeros_like(residual))
+        component_details: Dict[str, torch.Tensor] = {
+            "ae_stat_student_prior": torch.where(active, stat_student_prior, zero_vec),
+            "ae_stat_exercise_prior": torch.where(active, stat_exercise_prior, zero_vec),
+            "ae_stat_concept_prior": torch.where(active, stat_concept_prior, zero_vec),
+            "ae_stat_query_student_concept_prior": torch.where(active, stat_query_sc_prior, zero_vec),
+            "ae_stat_graph_student_concept_prior": torch.where(active, stat_graph_sc_prior, zero_vec),
+            "ae_posterior_prior_logit": torch.where(active, posterior_prior_logit, zero_vec),
+            "ae_interpretable_bias": torch.where(active, interpretable_bias, zero_vec),
+            "ae_explicit_feature_logit": torch.where(active, explicit_feature_logit, zero_vec),
+            "ae_interaction_logit": torch.where(active, interaction_logit, zero_vec),
+            "ae_raw_logit_before_clip": torch.where(active, raw_before_clip, zero_vec),
+            "ae_raw_logit_after_clip": torch.where(active, raw, zero_vec),
+        }
         return (
             residual,
             residual.detach().abs().mean(),
             posterior_prior_logit_abs_mean,
             posterior_prior_delta_abs_mean,
+            component_details,
         )
 
     def initialize_ae_logit_priors(

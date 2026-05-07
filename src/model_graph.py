@@ -61,11 +61,9 @@ class MultiHeadRelationLearning(nn.Module):
         # 保留 concept_embeddings 只是为了和 knowledge encoder 共享同一概念坐标系；A 的边权不再由它生成。
         self.concept_embeddings = nn.Parameter(torch.zeros(num_concepts, concept_dim))
         init_strength = max(1e-4, self.prior_logit_scale if self.prior_logit_scale > 0 else 1.0)
-        init_strength_raw = math.log(math.exp(init_strength) - 1.0)
-        self.prior_strength_raw = nn.Parameter(torch.full((num_heads,), init_strength_raw))
-        seq_init = init_strength if self.has_sequence_prior else 1e-4
-        seq_init_raw = math.log(math.exp(seq_init) - 1.0)
-        self.sequence_prior_strength_raw = nn.Parameter(torch.full((num_heads,), seq_init_raw))
+        item_init, seq_init = self._build_source_specialized_strength_init(init_strength)
+        self.prior_strength_raw = nn.Parameter(self._inverse_softplus(item_init))
+        self.sequence_prior_strength_raw = nn.Parameter(self._inverse_softplus(seq_init))
         self.receiver_bias = nn.Parameter(torch.zeros(num_heads, num_concepts))
         self.self_loop_logit = nn.Parameter(torch.full((num_heads,), 0.75))
         self.temperature_raw = nn.Parameter(torch.full((num_heads,), float(tau_init)))
@@ -76,6 +74,29 @@ class MultiHeadRelationLearning(nn.Module):
 
     def _initialize_weights(self) -> None:
         nn.init.normal_(self.concept_embeddings, mean=0.0, std=0.02)
+
+    @staticmethod
+    def _inverse_softplus(value: torch.Tensor) -> torch.Tensor:
+        value = value.detach().float().clamp(min=1e-4)
+        return torch.log(torch.expm1(value).clamp(min=1e-12))
+
+    def _build_source_specialized_strength_init(self, base_strength: float) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Initialize heads with interpretable item-vs-sequence evidence roles."""
+        base = max(1e-4, float(base_strength))
+        item = torch.full((self.num_heads,), base, dtype=torch.float32)
+        seq_base = base if self.has_sequence_prior else 1e-4
+        seq = torch.full((self.num_heads,), seq_base, dtype=torch.float32)
+        if self.has_item_prior and self.has_sequence_prior and self.num_heads >= 2:
+            high = max(1e-4, base * 1.45)
+            low = max(1e-4, base * 0.65)
+            for h in range(self.num_heads):
+                if h % 2 == 0:
+                    item[h] = high
+                    seq[h] = low
+                else:
+                    item[h] = low
+                    seq[h] = high
+        return item, seq
 
     def _build_prior_buffers(self, prior_matrix: Optional[torch.Tensor], name: str) -> Tuple[torch.Tensor, torch.Tensor]:
         if prior_matrix is None:

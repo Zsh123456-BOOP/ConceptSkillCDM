@@ -822,27 +822,35 @@ def _log_graph_init_state(model: nn.Module, logger, context: str) -> None:
         graph_dropout = float(getattr(getattr(relation_learning, "dropout", None), "p", 0.0))
     item_beta = 0.0
     seq_beta = 0.0
+    item_beta_std = 0.0
+    seq_beta_std = 0.0
     self_beta = 0.0
     if relation_learning is not None:
         item_strength = getattr(relation_learning, "prior_strength_raw", None)
         seq_strength = getattr(relation_learning, "sequence_prior_strength_raw", None)
         self_loop = getattr(relation_learning, "self_loop_logit", None)
         if item_strength is not None:
-            item_beta = float(F.softplus(item_strength.detach()).mean().item())
+            item_beta_t = F.softplus(item_strength.detach())
+            item_beta = float(item_beta_t.mean().item())
+            item_beta_std = float(item_beta_t.std(unbiased=False).item())
         if seq_strength is not None:
-            seq_beta = float(F.softplus(seq_strength.detach()).mean().item())
+            seq_beta_t = F.softplus(seq_strength.detach())
+            seq_beta = float(seq_beta_t.mean().item())
+            seq_beta_std = float(seq_beta_t.std(unbiased=False).item())
         if self_loop is not None:
             self_beta = float(self_loop.detach().mean().item())
 
     logger.info(
         "%s [Graph Init] graph_tau_mean=%.4f, graph_tau_std=%.4f, graph_dropout=%.3f, "
-        "item_beta=%.4f, seq_beta=%.4f, self_loop_logit=%.4f, use_personal_graph=%s",
+        "item_beta=%.4f±%.4f, seq_beta=%.4f±%.4f, self_loop_logit=%.4f, use_personal_graph=%s",
         context,
         graph_tau_mean,
         graph_tau_std,
         graph_dropout,
         item_beta,
+        item_beta_std,
         seq_beta,
+        seq_beta_std,
         self_beta,
         bool(getattr(base_model, "use_personal_graph", False)),
     )
@@ -1004,6 +1012,16 @@ def _collect_debug_forward_stats(
     relation_theta_personal_mass_vals: List[float] = []
     ae_posterior_prior_logit_abs_vals: List[float] = []
     ae_posterior_prior_delta_abs_vals: List[float] = []
+    ae_stat_student_prior_abs_vals: List[float] = []
+    ae_stat_exercise_prior_abs_vals: List[float] = []
+    ae_stat_concept_prior_abs_vals: List[float] = []
+    ae_stat_query_sc_prior_abs_vals: List[float] = []
+    ae_stat_graph_sc_prior_abs_vals: List[float] = []
+    ae_interpretable_bias_abs_vals: List[float] = []
+    ae_explicit_feature_logit_abs_vals: List[float] = []
+    ae_interaction_logit_abs_vals: List[float] = []
+    ae_raw_logit_before_clip_abs_vals: List[float] = []
+    ae_raw_logit_after_clip_abs_vals: List[float] = []
 
     graph_row_entropy_mean = 0.0
     graph_entropy_ratio = 0.0
@@ -1112,6 +1130,16 @@ def _collect_debug_forward_stats(
                 ("ae_logit_residual_abs_mean", ae_logit_residual_abs_mean_vals),
                 ("ae_posterior_prior_logit_abs_mean", ae_posterior_prior_logit_abs_vals),
                 ("ae_posterior_prior_delta_abs_mean", ae_posterior_prior_delta_abs_vals),
+                ("ae_stat_student_prior_abs_mean", ae_stat_student_prior_abs_vals),
+                ("ae_stat_exercise_prior_abs_mean", ae_stat_exercise_prior_abs_vals),
+                ("ae_stat_concept_prior_abs_mean", ae_stat_concept_prior_abs_vals),
+                ("ae_stat_query_student_concept_prior_abs_mean", ae_stat_query_sc_prior_abs_vals),
+                ("ae_stat_graph_student_concept_prior_abs_mean", ae_stat_graph_sc_prior_abs_vals),
+                ("ae_interpretable_bias_abs_mean", ae_interpretable_bias_abs_vals),
+                ("ae_explicit_feature_logit_abs_mean", ae_explicit_feature_logit_abs_vals),
+                ("ae_interaction_logit_abs_mean", ae_interaction_logit_abs_vals),
+                ("ae_raw_logit_before_clip_abs_mean", ae_raw_logit_before_clip_abs_vals),
+                ("ae_raw_logit_after_clip_abs_mean", ae_raw_logit_after_clip_abs_vals),
                 ("query_row_posterior_delta_abs", query_row_posterior_delta_abs_vals),
                 ("query_row_posterior_kl", query_row_posterior_kl_vals),
                 ("personal_to_graph_query_ratio_effective", personal_to_graph_query_ratio_vals),
@@ -1253,6 +1281,16 @@ def _collect_debug_forward_stats(
     relation_theta_personal_mass_mean, _ = _safe_mean_std(relation_theta_personal_mass_vals)
     ae_posterior_prior_logit_abs_mean, _ = _safe_mean_std(ae_posterior_prior_logit_abs_vals)
     ae_posterior_prior_delta_abs_mean, _ = _safe_mean_std(ae_posterior_prior_delta_abs_vals)
+    ae_stat_student_prior_abs_mean, _ = _safe_mean_std(ae_stat_student_prior_abs_vals)
+    ae_stat_exercise_prior_abs_mean, _ = _safe_mean_std(ae_stat_exercise_prior_abs_vals)
+    ae_stat_concept_prior_abs_mean, _ = _safe_mean_std(ae_stat_concept_prior_abs_vals)
+    ae_stat_query_sc_prior_abs_mean, _ = _safe_mean_std(ae_stat_query_sc_prior_abs_vals)
+    ae_stat_graph_sc_prior_abs_mean, _ = _safe_mean_std(ae_stat_graph_sc_prior_abs_vals)
+    ae_interpretable_bias_abs_mean, _ = _safe_mean_std(ae_interpretable_bias_abs_vals)
+    ae_explicit_feature_logit_abs_mean, _ = _safe_mean_std(ae_explicit_feature_logit_abs_vals)
+    ae_interaction_logit_abs_mean, _ = _safe_mean_std(ae_interaction_logit_abs_vals)
+    ae_raw_logit_before_clip_abs_mean, _ = _safe_mean_std(ae_raw_logit_before_clip_abs_vals)
+    ae_raw_logit_after_clip_abs_mean, _ = _safe_mean_std(ae_raw_logit_after_clip_abs_vals)
 
     return {
         "irt_abs_mean": irt_abs_mean,
@@ -1335,6 +1373,16 @@ def _collect_debug_forward_stats(
         "relation_theta_personal_mass": relation_theta_personal_mass_mean,
         "ae_posterior_prior_logit_abs_mean": ae_posterior_prior_logit_abs_mean,
         "ae_posterior_prior_delta_abs_mean": ae_posterior_prior_delta_abs_mean,
+        "ae_stat_student_prior_abs_mean": ae_stat_student_prior_abs_mean,
+        "ae_stat_exercise_prior_abs_mean": ae_stat_exercise_prior_abs_mean,
+        "ae_stat_concept_prior_abs_mean": ae_stat_concept_prior_abs_mean,
+        "ae_stat_query_student_concept_prior_abs_mean": ae_stat_query_sc_prior_abs_mean,
+        "ae_stat_graph_student_concept_prior_abs_mean": ae_stat_graph_sc_prior_abs_mean,
+        "ae_interpretable_bias_abs_mean": ae_interpretable_bias_abs_mean,
+        "ae_explicit_feature_logit_abs_mean": ae_explicit_feature_logit_abs_mean,
+        "ae_interaction_logit_abs_mean": ae_interaction_logit_abs_mean,
+        "ae_raw_logit_before_clip_abs_mean": ae_raw_logit_before_clip_abs_mean,
+        "ae_raw_logit_after_clip_abs_mean": ae_raw_logit_after_clip_abs_mean,
         "ae_posterior_prior_scale": float(getattr(base_model, "ae_posterior_prior_scale", 0.0)),
         "personal_warmup_scale": personal_warmup_scale,
         "share_concept_embeddings": share_concept_embeddings,
@@ -2139,6 +2187,26 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["support_seq_survival_rate"],
                 diag["support_item_seq_overlap"],
                 diag["support_self_retention_rate"],
+            )
+            logger.info(
+                "%s [Diag][AE Components] Epoch [%03d] | "
+                "student_prior=%.4f, exercise_prior=%.4f, concept_prior=%.4f, "
+                "query_student_concept=%.4f, graph_student_concept=%.4f, "
+                "posterior_prior=%.4f, interpretable_bias=%.4f, explicit_feature=%.4f, "
+                "interaction=%.4f, raw_before_clip=%.4f, raw_after_clip=%.4f",
+                run_tag,
+                epoch,
+                diag["ae_stat_student_prior_abs_mean"],
+                diag["ae_stat_exercise_prior_abs_mean"],
+                diag["ae_stat_concept_prior_abs_mean"],
+                diag["ae_stat_query_student_concept_prior_abs_mean"],
+                diag["ae_stat_graph_student_concept_prior_abs_mean"],
+                diag["ae_posterior_prior_logit_abs_mean"],
+                diag["ae_interpretable_bias_abs_mean"],
+                diag["ae_explicit_feature_logit_abs_mean"],
+                diag["ae_interaction_logit_abs_mean"],
+                diag["ae_raw_logit_before_clip_abs_mean"],
+                diag["ae_raw_logit_after_clip_abs_mean"],
             )
             last_diag = dict(diag)
 

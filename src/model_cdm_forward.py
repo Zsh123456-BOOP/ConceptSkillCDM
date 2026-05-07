@@ -143,6 +143,7 @@ def run_cdm_forward(
         ae_logit_residual_abs_mean,
         ae_posterior_prior_logit_abs_mean,
         ae_posterior_prior_delta_abs_mean,
+        ae_logit_component_details,
     ) = model._build_ae_logit_residual(
         student_ids=student_ids,
         exercise_ids=exercise_ids,
@@ -264,6 +265,10 @@ def run_cdm_forward(
         "personal_query_support_hops": torch.tensor(model.personal_query_support_hops, device=device, dtype=torch.long),
         "personal_query_message_gain": torch.tensor(model.personal_query_message_gain, device=device, dtype=knowledge_state.dtype),
     }
+    for key, value in ae_logit_component_details.items():
+        details[key] = value.detach()
+        if value.ndim > 0:
+            details[f"{key}_abs_mean"] = value.detach().abs().mean()
     details["irt_logit_for_reg"] = irt_logit
     details["readout_local_row_ratio"] = q_vector.float().mean().detach()
 

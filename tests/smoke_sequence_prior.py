@@ -166,10 +166,60 @@ def _check_item_support_is_not_pruned_by_dense_sequence_prior() -> None:
     _assert(diag["support_item_survival_rate"].item() > 0.0, "item source survival should be tracked and nonzero.")
 
 
+def _check_relation_heads_start_with_source_roles() -> None:
+    from src.model import CognitiveDiagnosisModel
+    import torch.nn.functional as F
+
+    q_matrix = torch.eye(4, dtype=torch.float32)
+    item_prior = torch.tensor(
+        [
+            [0.0, 1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    sequence_prior = torch.tensor(
+        [
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    model = CognitiveDiagnosisModel(
+        num_students=3,
+        num_exercises=4,
+        num_concepts=4,
+        q_matrix=q_matrix,
+        item_prior_matrix=item_prior,
+        sequence_prior_matrix=sequence_prior,
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+        graph_dropout=0.0,
+        graph_prior_logit_scale=1.0,
+        graph_topk=3,
+        use_concept_graph=True,
+        use_personal_graph=False,
+    )
+    relation_learning = model.structure_module.relation_learning
+    item_beta = F.softplus(relation_learning.prior_strength_raw.detach())
+    seq_beta = F.softplus(relation_learning.sequence_prior_strength_raw.detach())
+    _assert(item_beta[0].item() > seq_beta[0].item(), "head 0 should start item-heavy.")
+    _assert(seq_beta[1].item() > item_beta[1].item(), "head 1 should start sequence-heavy.")
+    _assert(item_beta.std(unbiased=False).item() > 0.0, "item beta should expose head source diversity.")
+    _assert(seq_beta.std(unbiased=False).item() > 0.0, "sequence beta should expose head source diversity.")
+
+
 def main() -> None:
     _check_train_only_sequence_prior_handles_single_concept_items()
     _check_sequence_prior_drives_relation_learning_support()
     _check_item_support_is_not_pruned_by_dense_sequence_prior()
+    _check_relation_heads_start_with_source_roles()
     print("smoke_sequence_prior passed")
 
 
