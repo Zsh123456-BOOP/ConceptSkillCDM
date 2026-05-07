@@ -314,6 +314,8 @@ def parse_args():
                         help="Scale for the full-only A x E student-exercise interaction logit.")
     parser.add_argument("--ae_logit_dim", type=int, default=32,
                         help="Embedding width for the A/E joint logit interaction head.")
+    parser.add_argument("--ae_posterior_prior_scale", type=float, default=0.0,
+                        help="Scale for full-only E-posterior readout over train-only student-concept priors.")
     parser.add_argument("--ae_lr_mult", type=float, default=1.0,
                         help="Learning-rate multiplier for the A/E joint prediction head.")
     parser.add_argument("--ae_stat_prior_scale", type=float, default=0.0,
@@ -322,8 +324,6 @@ def parse_args():
                         help="Signed scale for interpretable A/E support theta contrast inside the IRT logit.")
     parser.add_argument("--relation_theta_delta_clip", type=float, default=2.0,
                         help="Tanh clip for relation support theta contrast before scaling.")
-    parser.add_argument("--concept_gap_scale", type=float, default=0.0,
-                        help="Interpretable multi-concept weakness penalty: theta_e = mean(theta_c) - scale * std(theta_c) for multi-concept items.")
     parser.add_argument("--graph_query_adapter_enable", action=bool_action, default=None,
                         help="Enable query adapter on top of graph readout before the fixed diagnosis head.")
     parser.add_argument("--personal_state_lr_mult", type=float, default=1.0,
@@ -680,14 +680,14 @@ def main():
                 ae_logit_dim=loaded_args.get(
                     "ae_logit_dim", getattr(args, "ae_logit_dim", 32)
                 ),
+                ae_posterior_prior_scale=loaded_args.get(
+                    "ae_posterior_prior_scale", getattr(args, "ae_posterior_prior_scale", 0.0)
+                ),
                 relation_theta_scale=loaded_args.get(
                     "relation_theta_scale", getattr(args, "relation_theta_scale", 0.0)
                 ),
                 relation_theta_delta_clip=loaded_args.get(
                     "relation_theta_delta_clip", getattr(args, "relation_theta_delta_clip", 2.0)
-                ),
-                concept_gap_scale=loaded_args.get(
-                    "concept_gap_scale", getattr(args, "concept_gap_scale", 0.0)
                 ),
                 share_concept_embeddings=loaded_args.get(
                     "share_concept_embeddings", getattr(args, "share_concept_embeddings", False)

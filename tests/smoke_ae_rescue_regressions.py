@@ -179,6 +179,7 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "ae_irt_logit_scale",
         "ae_interaction_logit_scale",
         "ae_logit_dim",
+        "ae_posterior_prior_scale",
         "ae_lr_mult",
         "ae_stat_prior_scale",
         "graph_query_adapter_enable",
@@ -788,6 +789,92 @@ def _check_ae_interaction_logit_is_full_only() -> None:
             torch.allclose(details["ae_logit_residual"], torch.zeros_like(details["ae_logit_residual"]), atol=1e-8),
             f"{label} 必须关闭 full-only A x E 交互，否则消融不再是单模块消融。",
         )
+
+
+def _check_e_posterior_prior_readout_is_full_only() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    torch.manual_seed(7)
+    q_matrix = torch.tensor(
+        [
+            [1.0, 1.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0, 0.0],
+            [0.0, 1.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0],
+        ],
+        dtype=torch.float32,
+    )
+    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    student_concept_prior = torch.tensor(
+        [
+            [0.80, -0.40, 0.20, -0.10],
+            [-0.30, 0.70, -0.50, 0.10],
+            [0.20, -0.60, 0.90, -0.20],
+            [-0.50, 0.10, -0.20, 0.85],
+        ],
+        dtype=torch.float32,
+    )
+
+    def build_model(*, use_concept_graph: bool, use_personal_graph: bool) -> CognitiveDiagnosisModel:
+        model = CognitiveDiagnosisModel(
+            num_students=4,
+            num_exercises=4,
+            num_concepts=4,
+            q_matrix=q_matrix,
+            knowledge_dim=8,
+            num_relation_heads=1,
+            num_gnn_layers=1,
+            dropout=0.0,
+            graph_topk=3,
+            graph_prior_logit_scale=0.8,
+            use_concept_graph=use_concept_graph,
+            use_personal_graph=use_personal_graph,
+            personal_delta_scale=5.0,
+            personal_warmup_epochs=0,
+            personal_reg_warmup_epochs=0,
+            ae_logit_residual_scale=1.0,
+            ae_logit_residual_clip=0.0,
+            ae_posterior_prior_scale=1.0,
+        )
+        if getattr(model, "ae_logit_feature_weight", None) is not None:
+            with torch.no_grad():
+                model.ae_logit_feature_weight.zero_()
+        model.initialize_ae_logit_priors(
+            student_logits=torch.zeros(4),
+            exercise_logits=torch.zeros(4),
+            concept_logits=torch.zeros(4),
+            student_concept_logits=student_concept_prior,
+            scale=1.0,
+        )
+        model.eval()
+        return model
+
+    full = build_model(use_concept_graph=True, use_personal_graph=True)
+    no_a = build_model(use_concept_graph=False, use_personal_graph=True)
+    no_e = build_model(use_concept_graph=True, use_personal_graph=False)
+
+    with torch.no_grad():
+        _, full_details = full(student_ids, exercise_ids, return_details=True, return_logits=True)
+        _, no_a_details = no_a(student_ids, exercise_ids, return_details=True, return_logits=True)
+        _, no_e_details = no_e(student_ids, exercise_ids, return_details=True, return_logits=True)
+
+    _assert(
+        full_details["ae_posterior_prior_delta_abs_mean"].item() > 1e-8,
+        "Full AE should expose a non-zero E posterior minus A prior train-stat readout.",
+    )
+    _assert(
+        full_details["ae_posterior_prior_logit_abs_mean"].item() > 1e-8,
+        "E posterior prior readout should directly contribute to the AE logit in full.",
+    )
+    _assert(
+        no_a_details["ae_posterior_prior_logit_abs_mean"].item() == 0.0,
+        "no_A must remove the E posterior prior readout because A support is absent.",
+    )
+    _assert(
+        no_e_details["ae_posterior_prior_logit_abs_mean"].item() == 0.0,
+        "no_E must remove the E posterior prior readout because E posterior is absent.",
+    )
 
 
 def _check_no_a_personal_graph_is_not_identity_locked() -> None:
@@ -1877,6 +1964,7 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
         ae_logit_residual_clip=1.2,
         ae_irt_logit_scale=0.2,
         ae_interaction_logit_scale=1.0,
+        ae_posterior_prior_scale=1.0,
         lambda_personal_kl=0.02,
         lambda_personal_query_residual=0.05,
         personal_query_residual_margin=0.08,
@@ -1894,6 +1982,7 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
     hash_ae_logit = _build_config_hash(SimpleNamespace(**{**base, "ae_logit_residual_scale": 0.2}))
     hash_ae_irt = _build_config_hash(SimpleNamespace(**{**base, "ae_irt_logit_scale": 0.0}))
     hash_ae_interaction = _build_config_hash(SimpleNamespace(**{**base, "ae_interaction_logit_scale": 0.0}))
+    hash_ae_posterior_prior = _build_config_hash(SimpleNamespace(**{**base, "ae_posterior_prior_scale": 0.0}))
 
     _assert(hash_base != hash_share, "config hash 必须区分 share_concept_embeddings 的结构差异。")
     _assert(hash_base != hash_alpha_bias, "config hash 必须区分 personal_alpha_bias_scale 的结构差异。")
@@ -1903,6 +1992,7 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
     _assert(hash_base != hash_ae_logit, "config hash 必须区分 ae_logit_residual_scale 的结构差异。")
     _assert(hash_base != hash_ae_irt, "config hash 必须区分 ae_irt_logit_scale 的结构差异。")
     _assert(hash_base != hash_ae_interaction, "config hash 必须区分 ae_interaction_logit_scale 的结构差异。")
+    _assert(hash_base != hash_ae_posterior_prior, "config hash 必须区分 ae_posterior_prior_scale 的结构差异。")
 
 
 def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
@@ -1926,6 +2016,7 @@ def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
         ae_logit_residual_clip=1.2,
         ae_irt_logit_scale=0.2,
         ae_interaction_logit_scale=1.0,
+        ae_posterior_prior_scale=1.0,
         personal_include_neighbor_rows=False,
         personal_query_correction_scale=0.10,
         lambda_personal_kl=0.02,
@@ -1977,6 +2068,7 @@ def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
         "ae_logit_residual_clip",
         "ae_irt_logit_scale",
         "ae_interaction_logit_scale",
+        "ae_posterior_prior_scale",
         "personal_include_neighbor_rows",
         "personal_query_correction_scale",
         "lambda_personal_kl",
@@ -3292,6 +3384,7 @@ def main() -> None:
     _check_best_configs_enable_e_rescue_knobs()
     _check_graph_prior_anchors_a_relation_learning()
     _check_ae_interaction_logit_is_full_only()
+    _check_e_posterior_prior_readout_is_full_only()
     _check_dataset_defaults_respect_explicit_zero_overrides()
     _check_no_a_personal_graph_is_not_identity_locked()
     _check_no_a_support_semantics_regression()

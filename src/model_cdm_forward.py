@@ -137,11 +137,17 @@ def run_cdm_forward(
         diag_details["relation_theta_delta"] = relation_theta_delta.detach()
         diag_details["relation_theta_logit"] = relation_theta_logit.detach()
 
-    ae_logit_residual, ae_logit_residual_abs_mean = model._build_ae_logit_residual(
+    (
+        ae_logit_residual,
+        ae_logit_residual_abs_mean,
+        ae_posterior_prior_logit_abs_mean,
+        ae_posterior_prior_delta_abs_mean,
+    ) = model._build_ae_logit_residual(
         student_ids=student_ids,
         exercise_ids=exercise_ids,
         knowledge_state=knowledge_state,
         relation_matrices=relation_matrices,
+        personal_relation_spec=personal_relation_spec,
         global_query_context=global_query_context,
         personal_query_correction=personal_query_correction,
         concept_mask=q_vector,
@@ -180,6 +186,7 @@ def run_cdm_forward(
         "ae_logit_residual_clip": torch.tensor(float(model.ae_logit_residual_clip), device=device),
         "ae_irt_logit_scale": torch.tensor(float(model.ae_irt_logit_scale), device=device),
         "ae_interaction_logit_scale": torch.tensor(float(model.ae_interaction_logit_scale), device=device),
+        "ae_posterior_prior_scale": torch.tensor(float(model.ae_posterior_prior_scale), device=device),
         "relation_theta_scale": torch.tensor(float(model.relation_theta_scale), device=device),
         "relation_theta_delta_clip": torch.tensor(float(model.relation_theta_delta_clip), device=device),
         "irt_logit_scale_used": torch.tensor(float(irt_logit_scale), device=device),
@@ -202,6 +209,8 @@ def run_cdm_forward(
         "irt_logit_for_total": irt_logit_for_total.detach(),
         "ae_logit_residual": ae_logit_residual.detach(),
         "ae_logit_residual_abs_mean": ae_logit_residual_abs_mean.detach(),
+        "ae_posterior_prior_logit_abs_mean": ae_posterior_prior_logit_abs_mean.detach(),
+        "ae_posterior_prior_delta_abs_mean": ae_posterior_prior_delta_abs_mean.detach(),
         "logits": total_logit.detach(),
         "relation_identity_delta": s_out["relation_identity_delta"].detach(),
         "knowledge_state_backbone_delta": s_out["knowledge_state_backbone_delta"].detach(),

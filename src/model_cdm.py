@@ -107,9 +107,9 @@ class CognitiveDiagnosisModel(nn.Module):
         ae_irt_logit_scale: float = 1.0,
         ae_interaction_logit_scale: float = 0.0,
         ae_logit_dim: int = 32,
+        ae_posterior_prior_scale: float = 0.0,
         relation_theta_scale: float = 0.0,
         relation_theta_delta_clip: float = 2.0,
-        concept_gap_scale: float = 0.0,
         share_concept_embeddings: bool = False,
     ):
         super().__init__()
@@ -194,9 +194,9 @@ class CognitiveDiagnosisModel(nn.Module):
         self.ae_irt_logit_scale = max(0.0, float(ae_irt_logit_scale))
         self.ae_interaction_logit_scale = max(0.0, float(ae_interaction_logit_scale))
         self.ae_logit_dim = max(1, int(ae_logit_dim))
+        self.ae_posterior_prior_scale = max(0.0, float(ae_posterior_prior_scale))
         self.relation_theta_scale = float(relation_theta_scale)
         self.relation_theta_delta_clip = max(1e-6, float(relation_theta_delta_clip))
-        self.concept_gap_scale = max(0.0, float(concept_gap_scale))
         self.share_concept_embeddings = bool(share_concept_embeddings)
 
         self.register_buffer("q_matrix", q_matrix)
@@ -291,10 +291,7 @@ class CognitiveDiagnosisModel(nn.Module):
         if self.share_concept_embeddings:
             self._tie_concept_embeddings()
 
-        self.diagnosis_head = CognitiveDiagnosisHead(
-            knowledge_dim=knowledge_dim,
-            concept_gap_scale=self.concept_gap_scale,
-        )
+        self.diagnosis_head = CognitiveDiagnosisHead(knowledge_dim=knowledge_dim)
         self.exercise_encoder = ExerciseDifficultyEncoder(num_exercises=num_exercises)
 
     @staticmethod
@@ -578,10 +575,11 @@ class CognitiveDiagnosisModel(nn.Module):
         exercise_ids: torch.Tensor,
         knowledge_state: torch.Tensor,
         relation_matrices: torch.Tensor,
+        personal_relation_spec: Optional[Dict[str, torch.Tensor]],
         global_query_context: torch.Tensor,
         personal_query_correction: torch.Tensor,
         concept_mask: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         zero_vec = knowledge_state.new_zeros((knowledge_state.size(0),))
         zero_scalar = knowledge_state.new_tensor(0.0)
         feature_weight = getattr(self, "ae_logit_feature_weight", None)
@@ -597,7 +595,7 @@ class CognitiveDiagnosisModel(nn.Module):
             or not self.enable_module1
             or not (self.use_concept_graph or self.use_personal_graph)
         ):
-            return zero_vec, zero_scalar
+            return zero_vec, zero_scalar, zero_scalar, zero_scalar
 
         dtype = knowledge_state.dtype
         device = knowledge_state.device
@@ -637,6 +635,8 @@ class CognitiveDiagnosisModel(nn.Module):
 
         explicit_feature_logit = zero_vec
         interaction_logit = zero_vec
+        posterior_prior_logit_abs_mean = zero_scalar
+        posterior_prior_delta_abs_mean = zero_scalar
         if joint_active:
             student_concept_prior = getattr(self, "ae_student_concept_prior_logit", None)
             if student_concept_prior is not None:
@@ -644,6 +644,25 @@ class CognitiveDiagnosisModel(nn.Module):
                 query_sc_prior = (query_weight * sc_prior).sum(dim=1)
                 graph_sc_prior = (graph_query_weight * sc_prior).sum(dim=1)
                 stat_prior = stat_prior + 0.60 * query_sc_prior + 0.40 * graph_sc_prior
+                if self.ae_posterior_prior_scale > 0.0 and isinstance(personal_relation_spec, dict):
+                    personal_support = self._query_sparse_support_distribution(query_weight, personal_relation_spec)
+                    personal_mass = personal_support.sum(dim=1, keepdim=True)
+                    has_personal = personal_mass.squeeze(-1) > 1e-12
+                    normalized_personal_support = torch.where(
+                        personal_mass > 1e-12,
+                        personal_support / personal_mass.clamp(min=1e-12),
+                        torch.zeros_like(personal_support),
+                    )
+                    personal_sc_prior = (normalized_personal_support * sc_prior).sum(dim=1)
+                    posterior_prior_delta = torch.where(
+                        has_personal,
+                        personal_sc_prior - graph_sc_prior,
+                        torch.zeros_like(personal_sc_prior),
+                    )
+                    posterior_prior_logit = self.ae_posterior_prior_scale * posterior_prior_delta
+                    stat_prior = stat_prior + posterior_prior_logit
+                    posterior_prior_logit_abs_mean = posterior_prior_logit.detach().abs().mean()
+                    posterior_prior_delta_abs_mean = posterior_prior_delta.detach().abs().mean()
 
             graph_rms = self._masked_query_rms_per_sample(global_query_context, concept_mask)
             personal_rms = self._masked_query_rms_per_sample(personal_query_correction, concept_mask)
@@ -673,7 +692,12 @@ class CognitiveDiagnosisModel(nn.Module):
         residual = self.ae_logit_residual_scale * raw
         active = query_mask.sum(dim=1) > 0
         residual = torch.where(active, residual, torch.zeros_like(residual))
-        return residual, residual.detach().abs().mean()
+        return (
+            residual,
+            residual.detach().abs().mean(),
+            posterior_prior_logit_abs_mean,
+            posterior_prior_delta_abs_mean,
+        )
 
     def initialize_ae_logit_priors(
         self,

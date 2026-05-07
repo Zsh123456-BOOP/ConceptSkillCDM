@@ -43,7 +43,7 @@ GRID_KEYS: Tuple[str, ...] = (
     "lambda_personal_kl",
     "lambda_personal_query_residual",
     "relation_theta_scale",
-    "concept_gap_scale",
+    "ae_posterior_prior_scale",
 )
 
 
@@ -141,9 +141,9 @@ def build_grid() -> List[Dict[str, Any]]:
         item.update(relation_theta_scale=relation_theta_scale)
         candidates.append(item)
 
-    for gap_scale in (0.05, 0.10, 0.20, 0.35):
+    for posterior_prior_scale in (0.5, 1.0, 2.0, 3.0):
         item = dict(base)
-        item.update(concept_gap_scale=gap_scale, relation_theta_scale=0.0)
+        item.update(ae_posterior_prior_scale=posterior_prior_scale, relation_theta_scale=0.0)
         candidates.append(item)
 
     return _dedupe(candidates)

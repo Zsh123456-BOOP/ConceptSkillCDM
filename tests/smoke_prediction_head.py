@@ -56,11 +56,11 @@ def _check_prediction_head_module() -> None:
         _assert(param.grad is not None, f"missing grad for {name}")
         _assert(torch.isfinite(param.grad).all().item(), f"non-finite grad in {name}")
 
-    gap_head = CognitiveDiagnosisHead(knowledge_dim=2, concept_gap_scale=0.5)
+    mean_head = CognitiveDiagnosisHead(knowledge_dim=2)
     with torch.no_grad():
-        gap_head.theta_proj.weight.zero_()
-        gap_head.theta_proj.weight[0, 0] = 1.0
-        gap_head.theta_proj.bias.zero_()
+        mean_head.theta_proj.weight.zero_()
+        mean_head.theta_proj.weight[0, 0] = 1.0
+        mean_head.theta_proj.bias.zero_()
     known_state = torch.tensor(
         [
             [[2.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
@@ -75,17 +75,16 @@ def _check_prediction_head_module() -> None:
         ],
         dtype=torch.float32,
     )
-    gap_logits, gap_details = gap_head(
+    mean_logits, mean_details = mean_head(
         knowledge_state=known_state,
         concept_mask=known_mask,
         b=torch.zeros(2),
         a=torch.ones(2),
         return_details=True,
     )
-    _assert(torch.allclose(gap_details["theta_gap"][0], torch.tensor(0.0), atol=1e-6), "single-concept gap must be zero.")
-    _assert(torch.allclose(gap_logits[0], torch.tensor(2.0), atol=1e-6), "single-concept item must stay unchanged.")
-    _assert(gap_logits[1].item() < gap_details["theta_mean"][1].item(), "multi-concept gap should penalize dispersed theta.")
-    _assert(torch.allclose(gap_details["concept_gap_scale"], torch.tensor(0.5), atol=1e-6), "gap scale should be exposed.")
+    _assert(torch.allclose(mean_logits[0], torch.tensor(2.0), atol=1e-6), "single-concept item should use its concept theta.")
+    _assert(torch.allclose(mean_logits[1], torch.tensor(1.0), atol=1e-6), "multi-concept item should use the Q-mask mean theta.")
+    _assert("theta_gap" not in mean_details, "prediction head should not keep the removed multi-concept gap path.")
 
 
 def main() -> None:
