@@ -65,10 +65,11 @@ def _check_train_only_sequence_prior_handles_single_concept_items() -> None:
     stats = info["graph_prior_stats"]
 
     _assert(tuple(seq_prior.shape) == (3, 3), "sequence prior should cover train-seen concepts only.")
-    _assert(torch.allclose(seq_prior.sum(dim=-1), torch.ones(3), atol=1e-6), "sequence prior rows should sum to 1.")
+    _assert(seq_prior[0].sum().item() == 0.0, "concepts without observed incoming transitions should not fake support.")
+    _assert(torch.allclose(seq_prior[1:].sum(dim=-1), torch.ones(2), atol=1e-6), "observed sequence prior rows should sum to 1.")
     _assert(seq_prior[1, 0].item() > seq_prior[1, 2].item(), "incoming row 101 should prefer previous concept 100.")
     _assert(seq_prior[2, 1].item() > seq_prior[2, 0].item(), "incoming row 102 should prefer previous concept 101.")
-    _assert(abs(item_prior[0, 1].item() - item_prior[0, 2].item()) < 1e-6, "single-concept items should leave row-0 item prior uninformative.")
+    _assert(item_prior.sum().item() == 0.0, "single-concept items should not fake item co-occurrence support.")
     _assert(stats["seq_raw_transition_mass"] > 0.0, "sequence stats should record raw train-only transitions.")
     _assert(stats["seq_student_weighted_mass"] > 0.0, "sequence stats should record reliability-weighted transition mass.")
     _assert(
@@ -82,14 +83,7 @@ def _check_sequence_prior_drives_relation_learning_support() -> None:
     from src.model import CognitiveDiagnosisModel
 
     q_matrix = torch.eye(3, dtype=torch.float32)
-    item_prior = torch.tensor(
-        [
-            [0.0, 0.5, 0.5],
-            [0.5, 0.0, 0.5],
-            [0.5, 0.5, 0.0],
-        ],
-        dtype=torch.float32,
-    )
+    item_prior = torch.zeros(3, 3, dtype=torch.float32)
     sequence_prior = torch.tensor(
         [
             [0.0, 0.10, 0.90],
@@ -111,7 +105,7 @@ def _check_sequence_prior_drives_relation_learning_support() -> None:
         dropout=0.0,
         graph_dropout=0.0,
         graph_prior_logit_scale=1.0,
-        graph_topk=1,
+        graph_topk=2,
         use_concept_graph=True,
         use_personal_graph=False,
     )
@@ -126,9 +120,56 @@ def _check_sequence_prior_drives_relation_learning_support() -> None:
     _assert(diag["support_final_size_mean"].item() >= 1.0, "support diagnostics should track final support size.")
 
 
+def _check_item_support_is_not_pruned_by_dense_sequence_prior() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    q_matrix = torch.eye(4, dtype=torch.float32)
+    item_prior = torch.tensor(
+        [
+            [0.0, 1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    sequence_prior = torch.tensor(
+        [
+            [0.0, 0.0, 0.9, 0.1],
+            [0.0, 0.0, 0.9, 0.1],
+            [0.1, 0.9, 0.0, 0.0],
+            [0.9, 0.1, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    model = CognitiveDiagnosisModel(
+        num_students=3,
+        num_exercises=4,
+        num_concepts=4,
+        q_matrix=q_matrix,
+        item_prior_matrix=item_prior,
+        sequence_prior_matrix=sequence_prior,
+        knowledge_dim=8,
+        num_relation_heads=1,
+        num_gnn_layers=1,
+        dropout=0.0,
+        graph_dropout=0.0,
+        graph_prior_logit_scale=1.0,
+        graph_topk=2,
+        use_concept_graph=True,
+        use_personal_graph=False,
+    )
+    model.eval()
+    relation, _ = model.structure_module.relation_learning()
+    _assert(relation[0, 0, 1].item() > 0.0, "source-balanced top-k should preserve observed item support.")
+    diag = model.structure_module.relation_learning._last_support_diagnostics
+    _assert(diag["support_item_survival_rate"].item() > 0.0, "item source survival should be tracked and nonzero.")
+
+
 def main() -> None:
     _check_train_only_sequence_prior_handles_single_concept_items()
     _check_sequence_prior_drives_relation_learning_support()
+    _check_item_support_is_not_pruned_by_dense_sequence_prior()
     print("smoke_sequence_prior passed")
 
 

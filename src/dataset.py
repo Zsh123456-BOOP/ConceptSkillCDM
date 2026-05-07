@@ -238,6 +238,13 @@ def _row_normalize_offdiag_counts(
     return prior.to(dtype=torch.float32)
 
 
+def _keep_observed_support_only(prior: torch.Tensor, observed_mask: torch.Tensor) -> torch.Tensor:
+    """Keep smoothed scores only on observed evidence edges; do not turn smoothing into support."""
+    prior = prior.detach().float() * observed_mask.detach().float()
+    row_sum = prior.sum(dim=-1, keepdim=True)
+    return torch.where(row_sum > 0, prior / row_sum.clamp(min=1e-12), torch.zeros_like(prior))
+
+
 def _prior_entropy(prior: torch.Tensor) -> float:
     if prior.numel() <= 1:
         return 0.0
@@ -261,7 +268,9 @@ def build_item_cooccurrence_prior(q_matrix: torch.Tensor) -> Tuple[torch.Tensor,
     counts = concept_occurs.t().matmul(concept_occurs)
     eye = torch.eye(C, dtype=torch.float32, device=counts.device)
     counts = counts * (1.0 - eye)
+    observed_mask = (counts > 0).float()
     prior = _row_normalize_offdiag_counts(counts, shrink=0.0)
+    prior = _keep_observed_support_only(prior, observed_mask)
     possible = float(C * (C - 1))
     observed = float((counts > 0).float().sum().item())
     return prior, {
@@ -373,7 +382,9 @@ def build_sequence_transition_prior(
         uniform = _uniform_offdiag_prior(C)
         fallback = torch.where(fallback.sum(dim=-1, keepdim=True) > 0, fallback, uniform)
 
+    observed_mask = (counts > 0).float()
     prior = _row_normalize_offdiag_counts(counts, fallback_prior=fallback, shrink=shrink)
+    prior = _keep_observed_support_only(prior, observed_mask)
     possible = float(C * (C - 1))
     observed = float((counts > 0).float().sum().item())
     return prior, {

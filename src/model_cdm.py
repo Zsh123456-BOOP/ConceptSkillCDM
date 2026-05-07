@@ -194,11 +194,11 @@ class CognitiveDiagnosisModel(nn.Module):
         self.share_concept_embeddings = bool(share_concept_embeddings)
 
         self.register_buffer("q_matrix", q_matrix)
-        item_prior = self._build_graph_prior_matrix(q_matrix, num_concepts) if item_prior_matrix is None else self._validate_prior_matrix(item_prior_matrix, num_concepts, "item_prior_matrix")
+        item_prior = self._build_graph_prior_matrix(q_matrix, num_concepts) if item_prior_matrix is None else self._validate_prior_matrix(item_prior_matrix, num_concepts, "item_prior_matrix", fill_empty_rows=False)
         sequence_prior = (
             torch.zeros_like(item_prior)
             if sequence_prior_matrix is None
-            else self._validate_prior_matrix(sequence_prior_matrix, num_concepts, "sequence_prior_matrix")
+            else self._validate_prior_matrix(sequence_prior_matrix, num_concepts, "sequence_prior_matrix", fill_empty_rows=False)
         )
         graph_prior_matrix = self._fuse_graph_prior_matrix(item_prior, sequence_prior)
         self.register_buffer("item_prior_matrix", item_prior, persistent=False)
@@ -314,7 +314,13 @@ class CognitiveDiagnosisModel(nn.Module):
         return prior.to(dtype=torch.float32)
 
     @staticmethod
-    def _validate_prior_matrix(prior_matrix: torch.Tensor, num_concepts: int, name: str) -> torch.Tensor:
+    def _validate_prior_matrix(
+        prior_matrix: torch.Tensor,
+        num_concepts: int,
+        name: str,
+        *,
+        fill_empty_rows: bool = False,
+    ) -> torch.Tensor:
         C = int(num_concepts)
         prior = prior_matrix.detach().float()
         if tuple(prior.shape) != (C, C):
@@ -325,7 +331,8 @@ class CognitiveDiagnosisModel(nn.Module):
         prior = prior.clamp(min=0.0) * (1.0 - eye)
         row_sum = prior.sum(dim=-1, keepdim=True)
         uniform = (1.0 - eye) / float(C - 1)
-        prior = torch.where(row_sum > 0, prior / row_sum.clamp(min=1e-12), uniform)
+        empty_fallback = uniform if fill_empty_rows else torch.zeros_like(prior)
+        prior = torch.where(row_sum > 0, prior / row_sum.clamp(min=1e-12), empty_fallback)
         return prior.to(dtype=torch.float32)
 
     @classmethod
@@ -338,7 +345,7 @@ class CognitiveDiagnosisModel(nn.Module):
             fused = 0.5 * item_prior.detach().float() + 0.5 * sequence_prior.detach().float()
         else:
             fused = item_prior.detach().float()
-        return cls._validate_prior_matrix(fused, C, "graph_prior_matrix")
+        return cls._validate_prior_matrix(fused, C, "graph_prior_matrix", fill_empty_rows=False)
 
     def _initialize_graph_prior_concept_embeddings(self) -> None:
         if not (self.enable_module1 and self.use_concept_graph and self.graph_prior_logit_scale > 0.0):

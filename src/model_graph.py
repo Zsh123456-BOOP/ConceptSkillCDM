@@ -107,13 +107,13 @@ class MultiHeadRelationLearning(nn.Module):
         eye = torch.eye(C, dtype=torch.bool)
         for row_idx in range(C):
             row = support_scores[row_idx].detach().float().clone()
-            off_values = row[~eye[row_idx]]
-            if off_values.numel() == 0:
+            positive = (row > 0.0) & (~eye[row_idx])
+            positive_count = int(positive.sum().item())
+            if positive_count <= 0:
                 continue
-            if off_values.max().item() <= 0.0:
-                continue
-            row[row_idx] = float("-inf")
-            _, idx = torch.topk(row, k=k)
+            take = min(k, positive_count)
+            row = row.masked_fill(~positive, float("-inf"))
+            _, idx = torch.topk(row, k=take)
             mask[row_idx, idx] = True
         return mask
 
@@ -124,6 +124,65 @@ class MultiHeadRelationLearning(nn.Module):
         masked = torch.full_like(scores, float("-inf"))
         masked.scatter_(dim=-1, index=idx, src=vals)
         return masked
+
+    def _apply_source_balanced_topk(
+        self,
+        scores: torch.Tensor,
+        *,
+        item_mask: torch.Tensor,
+        sequence_mask: torch.Tensor,
+        self_mask: torch.Tensor,
+        k: int,
+    ) -> torch.Tensor:
+        """Keep observed item evidence from being crowded out by dense sequence evidence."""
+        C = scores.size(0)
+        total_budget = min(max(1, int(k)), C)
+        offdiag_budget = total_budget - 1 if self.allow_self_loop else total_budget
+        selected = torch.zeros((C, C), device=scores.device, dtype=torch.bool)
+        offdiag = ~self_mask
+        if self.allow_self_loop:
+            selected = selected | self_mask
+        if offdiag_budget <= 0:
+            return scores.masked_fill(~selected, float("-inf"))
+
+        item_quota_default = max(1, int(math.ceil(offdiag_budget * 0.25)))
+        sequence_quota_default = max(1, int(math.ceil(offdiag_budget * 0.50)))
+
+        for row_idx in range(C):
+            row_selected = selected[row_idx].clone()
+            remaining = offdiag_budget
+
+            def _pick(source_mask: torch.Tensor, quota: int) -> int:
+                available = source_mask[row_idx] & offdiag[row_idx] & (~row_selected)
+                count = int(available.sum().item())
+                if count <= 0 or quota <= 0 or remaining <= 0:
+                    return 0
+                take = min(count, quota, remaining)
+                row_scores = scores[row_idx].masked_fill(~available, float("-inf"))
+                idx = torch.topk(row_scores, k=take, dim=-1).indices
+                row_selected[idx] = True
+                return int(take)
+
+            picked = _pick(item_mask, item_quota_default)
+            remaining -= picked
+            picked = _pick(sequence_mask, sequence_quota_default)
+            remaining -= picked
+
+            if remaining > 0:
+                candidate = (item_mask[row_idx] | sequence_mask[row_idx]) & offdiag[row_idx] & (~row_selected)
+                count = int(candidate.sum().item())
+                if count > 0:
+                    take = min(count, remaining)
+                    row_scores = scores[row_idx].masked_fill(~candidate, float("-inf"))
+                    idx = torch.topk(row_scores, k=take, dim=-1).indices
+                    row_selected[idx] = True
+            if not bool(row_selected.any()):
+                row_scores = scores[row_idx].masked_fill(self_mask[row_idx], float("-inf"))
+                idx = torch.topk(row_scores, k=offdiag_budget, dim=-1).indices
+                row_selected[idx] = True
+            selected[row_idx] = row_selected
+
+        return scores.masked_fill(~selected, float("-inf"))
 
     def _update_support_diagnostics(self, relation_matrices: torch.Tensor) -> None:
         """Record how much item/sequence evidence survives final support pruning."""
@@ -192,15 +251,20 @@ class MultiHeadRelationLearning(nn.Module):
                 scores = scores.masked_fill(eye, float("-inf"))
 
             if self.topk is not None and 0 < self.topk < C:
-                support_mask = (
-                    self.item_support_mask.to(device=scores.device)
-                    | self.sequence_support_mask.to(device=scores.device)
-                )
+                item_mask = self.item_support_mask.to(device=scores.device)
+                sequence_mask = self.sequence_support_mask.to(device=scores.device)
+                support_mask = item_mask | sequence_mask
                 if self.allow_self_loop:
                     support_mask = support_mask | eye
                 row_has_support = support_mask.any(dim=-1, keepdim=True)
                 if bool(row_has_support.all()):
-                    scores = self._apply_topk(scores.masked_fill(~support_mask, float("-inf")), self.topk)
+                    scores = self._apply_source_balanced_topk(
+                        scores.masked_fill(~support_mask, float("-inf")),
+                        item_mask=item_mask,
+                        sequence_mask=sequence_mask,
+                        self_mask=eye,
+                        k=self.topk,
+                    )
                 else:
                     scores = self._apply_topk(scores, self.topk)
 
