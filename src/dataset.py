@@ -197,6 +197,162 @@ def build_q_matrix(
     return q_matrix
 
 
+def _uniform_offdiag_prior(num_concepts: int) -> torch.Tensor:
+    if num_concepts <= 0:
+        raise ValueError(f"num_concepts must be positive, got {num_concepts}")
+    if num_concepts == 1:
+        return torch.ones(1, 1, dtype=torch.float32)
+    eye = torch.eye(num_concepts, dtype=torch.float32)
+    offdiag = 1.0 - eye
+    return offdiag / float(num_concepts - 1)
+
+
+def _row_normalize_offdiag_counts(
+        counts: torch.Tensor,
+        *,
+        fallback_prior: Optional[torch.Tensor] = None,
+        shrink: float = 0.0,
+) -> torch.Tensor:
+    C = int(counts.size(0))
+    if C == 1:
+        return torch.ones(1, 1, dtype=torch.float32)
+    counts = counts.detach().float().clone()
+    eye = torch.eye(C, dtype=torch.float32, device=counts.device)
+    offdiag = 1.0 - eye
+    counts = counts * offdiag
+    if fallback_prior is None:
+        fallback = _uniform_offdiag_prior(C).to(device=counts.device, dtype=counts.dtype)
+    else:
+        fallback = fallback_prior.detach().float().to(device=counts.device, dtype=counts.dtype) * offdiag
+        fallback = fallback / fallback.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+
+    smooth = max(0.0, float(shrink))
+    row_sum = counts.sum(dim=-1, keepdim=True)
+    if smooth > 0.0:
+        prior = (counts + smooth * fallback) / (row_sum + smooth).clamp(min=1e-12)
+    else:
+        prior = counts / row_sum.clamp(min=1.0)
+        prior = torch.where(row_sum > 0, prior, fallback)
+    prior = prior * offdiag
+    prior = prior / prior.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+    return prior.to(dtype=torch.float32)
+
+
+def _prior_entropy(prior: torch.Tensor) -> float:
+    if prior.numel() <= 1:
+        return 0.0
+    p = prior.detach().float().clamp(min=1e-12)
+    return float((-(p * p.log()).sum(dim=-1)).mean().item())
+
+
+def build_item_cooccurrence_prior(q_matrix: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, float]]:
+    q = q_matrix.detach().float()
+    if q.dim() != 2:
+        raise ValueError(f"q_matrix must be 2D, got {tuple(q.shape)}")
+    C = int(q.size(1))
+    if C == 1:
+        prior = torch.ones(1, 1, dtype=torch.float32)
+        return prior, {
+            "item_observed_edge_count": 0.0,
+            "item_prior_density": 0.0,
+            "item_prior_entropy": 0.0,
+        }
+    concept_occurs = (q > 0).float()
+    counts = concept_occurs.t().matmul(concept_occurs)
+    eye = torch.eye(C, dtype=torch.float32, device=counts.device)
+    counts = counts * (1.0 - eye)
+    prior = _row_normalize_offdiag_counts(counts, shrink=0.0)
+    possible = float(C * (C - 1))
+    observed = float((counts > 0).float().sum().item())
+    return prior, {
+        "item_observed_edge_count": observed,
+        "item_prior_density": observed / possible if possible > 0 else 0.0,
+        "item_prior_entropy": _prior_entropy(prior),
+    }
+
+
+def build_sequence_transition_prior(
+        train_sources: list,
+        cpt_id_map: Dict[int, int],
+        *,
+        max_hops: int = 3,
+        decay: float = 0.70,
+        shrink: float = 2.0,
+) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """Build a train-only empirical concept transition prior from student order."""
+    C = len(cpt_id_map)
+    if C <= 0:
+        raise ValueError("cpt_id_map must not be empty")
+    if C == 1:
+        prior = torch.ones(1, 1, dtype=torch.float32)
+        return prior, {
+            "sequence_transition_count": 0.0,
+            "sequence_observed_edge_count": 0.0,
+            "sequence_prior_density": 0.0,
+            "sequence_prior_entropy": 0.0,
+        }
+
+    max_hops = max(1, int(max_hops))
+    decay = max(0.0, min(1.0, float(decay)))
+    counts = torch.zeros(C, C, dtype=torch.float32)
+    popularity = torch.zeros(C, dtype=torch.float32)
+    raw_transition_count = 0.0
+
+    for df in _iter_source_dfs(train_sources):
+        if "stu_id" not in df.columns or "cpt_seq" not in df.columns:
+            continue
+        for _, stu_df in df.groupby("stu_id", sort=False):
+            concept_sets: List[List[int]] = []
+            for seq in stu_df["cpt_seq"].values:
+                mapped = sorted({cpt_id_map[cid] for cid in _parse_concept_seq(seq) if cid in cpt_id_map})
+                if mapped:
+                    concept_sets.append(mapped)
+                    inc = 1.0 / float(len(mapped))
+                    for cid in mapped:
+                        popularity[cid] += inc
+            if len(concept_sets) < 2:
+                continue
+            student_counts = torch.zeros_like(counts)
+            student_total = 0.0
+            for idx, src_concepts in enumerate(concept_sets):
+                for hop in range(1, max_hops + 1):
+                    j = idx + hop
+                    if j >= len(concept_sets):
+                        break
+                    dst_concepts = concept_sets[j]
+                    weight = (decay ** (hop - 1)) / float(len(src_concepts) * len(dst_concepts))
+                    for src_c in src_concepts:
+                        for dst_c in dst_concepts:
+                            if src_c == dst_c:
+                                continue
+                            student_counts[src_c, dst_c] += weight
+                            student_total += weight
+            if student_total > 0.0:
+                counts += student_counts / float(student_total)
+                raw_transition_count += student_total
+
+    eye = torch.eye(C, dtype=torch.float32)
+    offdiag = 1.0 - eye
+    pop = popularity.clamp(min=0.0)
+    if pop.sum().item() <= 0.0:
+        fallback = _uniform_offdiag_prior(C)
+    else:
+        fallback = pop.view(1, C).repeat(C, 1) * offdiag
+        fallback = fallback / fallback.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+        uniform = _uniform_offdiag_prior(C)
+        fallback = torch.where(fallback.sum(dim=-1, keepdim=True) > 0, fallback, uniform)
+
+    prior = _row_normalize_offdiag_counts(counts, fallback_prior=fallback, shrink=shrink)
+    possible = float(C * (C - 1))
+    observed = float((counts > 0).float().sum().item())
+    return prior, {
+        "sequence_transition_count": float(raw_transition_count),
+        "sequence_observed_edge_count": observed,
+        "sequence_prior_density": observed / possible if possible > 0 else 0.0,
+        "sequence_prior_entropy": _prior_entropy(prior),
+    }
+
+
 def create_dataloaders(
         train_file: str,
         val_file: str,
@@ -343,6 +499,25 @@ def create_dataloaders(
 
     log("正在构建Q矩阵...")
     q_matrix = build_q_matrix(train_sources=train_sources, exer_id_map=exer_id_map, cpt_id_map=cpt_id_map)
+    item_prior_matrix, item_prior_stats = build_item_cooccurrence_prior(q_matrix)
+    sequence_prior_matrix, sequence_prior_stats = build_sequence_transition_prior(
+        train_sources=train_sources,
+        cpt_id_map=cpt_id_map,
+        max_hops=3,
+        decay=0.70,
+        shrink=2.0,
+    )
+    graph_prior_stats = {**item_prior_stats, **sequence_prior_stats}
+    log(
+        "[A Prior] train-only evidence: "
+        f"item_edges={graph_prior_stats['item_observed_edge_count']:.0f}, "
+        f"item_density={graph_prior_stats['item_prior_density']:.4f}, "
+        f"item_entropy={graph_prior_stats['item_prior_entropy']:.4f}, "
+        f"seq_transitions={graph_prior_stats['sequence_transition_count']:.1f}, "
+        f"seq_edges={graph_prior_stats['sequence_observed_edge_count']:.0f}, "
+        f"seq_density={graph_prior_stats['sequence_prior_density']:.4f}, "
+        f"seq_entropy={graph_prior_stats['sequence_prior_entropy']:.4f}"
+    )
 
     def _filter_seen_support(df: pd.DataFrame, split_name: str):
         before = len(df)
@@ -468,6 +643,9 @@ def create_dataloaders(
         'exer_id_reverse_map': {v: k for k, v in exer_id_map.items()},
         'cpt_id_reverse_map': {v: k for k, v in cpt_id_map.items()},
         'q_matrix': q_matrix,
+        'item_prior_matrix': item_prior_matrix,
+        'sequence_prior_matrix': sequence_prior_matrix,
+        'graph_prior_stats': graph_prior_stats,
         # 新增：每道题的“概念数量”，与 exer_id 内部索引对齐
         'concepts_per_exercise': concepts_per_exercise,
         'train_only_split_hygiene': True,

@@ -17,8 +17,9 @@ class MultiHeadRelationLearning(nn.Module):
     """
     可解释概念邻接 A_h（row-stochastic）。
 
-    A 不再用 query/key attention 或低秩边 MLP 学边。每条边只由三类可解释量决定：
-    - Q 矩阵共现先验：训练数据中概念共同出现的强弱；
+    A 不再用 query/key attention 或低秩边 MLP 学边。每条边只由 train-only evidence 与少量校正量决定：
+    - item cooccurrence prior：同一习题内概念共同出现的强弱；
+    - sequence transition prior：同一学生训练序列中概念接续的强弱；
     - receiver_bias：某个概念作为依赖来源的全局倾向；
     - self_loop_logit：保留本概念状态的强度。
     """
@@ -35,6 +36,7 @@ class MultiHeadRelationLearning(nn.Module):
         identity_residual: float = 0.0,
         edge_bias_rank: int = 8,
         prior_matrix: Optional[torch.Tensor] = None,
+        sequence_prior_matrix: Optional[torch.Tensor] = None,
         prior_logit_scale: float = 0.0,
     ):
         super().__init__()
@@ -47,26 +49,23 @@ class MultiHeadRelationLearning(nn.Module):
         self.edge_bias_rank = max(1, int(edge_bias_rank))
         self.prior_logit_scale = max(0.0, float(prior_logit_scale))
 
-        if prior_matrix is None:
-            prior_scores = torch.zeros(num_concepts, num_concepts, dtype=torch.float32)
-        else:
-            prior = prior_matrix.detach().float()
-            if tuple(prior.shape) != (num_concepts, num_concepts):
-                raise ValueError(
-                    f"prior_matrix shape must be ({num_concepts}, {num_concepts}), got {tuple(prior.shape)}"
-                )
-            prior = prior.clamp(min=1e-4)
-            prior = prior / prior.sum(dim=-1, keepdim=True).clamp(min=1e-12)
-            prior_scores = prior.log()
-            prior_scores = prior_scores - prior_scores.mean(dim=-1, keepdim=True)
-            prior_scores = prior_scores.clamp(min=-1.5, max=1.5)
-        self.register_buffer("prior_logit_scores", prior_scores, persistent=False)
+        item_scores, item_support_scores = self._build_prior_buffers(prior_matrix, "prior_matrix")
+        seq_scores, seq_support_scores = self._build_prior_buffers(sequence_prior_matrix, "sequence_prior_matrix")
+        self.has_item_prior = prior_matrix is not None
+        self.has_sequence_prior = sequence_prior_matrix is not None
+        self.register_buffer("prior_logit_scores", item_scores, persistent=False)
+        self.register_buffer("sequence_prior_logit_scores", seq_scores, persistent=False)
+        self.register_buffer("item_support_mask", self._build_topk_support_mask(item_support_scores), persistent=False)
+        self.register_buffer("sequence_support_mask", self._build_topk_support_mask(seq_support_scores), persistent=False)
 
         # 保留 concept_embeddings 只是为了和 knowledge encoder 共享同一概念坐标系；A 的边权不再由它生成。
         self.concept_embeddings = nn.Parameter(torch.zeros(num_concepts, concept_dim))
         init_strength = max(1e-4, self.prior_logit_scale if self.prior_logit_scale > 0 else 1.0)
         init_strength_raw = math.log(math.exp(init_strength) - 1.0)
         self.prior_strength_raw = nn.Parameter(torch.full((num_heads,), init_strength_raw))
+        seq_init = init_strength if self.has_sequence_prior else 1e-4
+        seq_init_raw = math.log(math.exp(seq_init) - 1.0)
+        self.sequence_prior_strength_raw = nn.Parameter(torch.full((num_heads,), seq_init_raw))
         self.receiver_bias = nn.Parameter(torch.zeros(num_heads, num_concepts))
         self.self_loop_logit = nn.Parameter(torch.full((num_heads,), 0.75))
         self.temperature_raw = nn.Parameter(torch.full((num_heads,), float(tau_init)))
@@ -76,6 +75,46 @@ class MultiHeadRelationLearning(nn.Module):
 
     def _initialize_weights(self) -> None:
         nn.init.normal_(self.concept_embeddings, mean=0.0, std=0.02)
+
+    def _build_prior_buffers(self, prior_matrix: Optional[torch.Tensor], name: str) -> Tuple[torch.Tensor, torch.Tensor]:
+        if prior_matrix is None:
+            zeros = torch.zeros(self.num_concepts, self.num_concepts, dtype=torch.float32)
+            return zeros, zeros
+        prior = prior_matrix.detach().float()
+        if tuple(prior.shape) != (self.num_concepts, self.num_concepts):
+            raise ValueError(
+                f"{name} shape must be ({self.num_concepts}, {self.num_concepts}), got {tuple(prior.shape)}"
+            )
+        if self.num_concepts == 1:
+            ones = torch.ones(1, 1, dtype=torch.float32)
+            return ones, ones
+        eye = torch.eye(self.num_concepts, dtype=torch.float32, device=prior.device)
+        support_scores = prior.clamp(min=0.0) * (1.0 - eye)
+        prior = prior.clamp(min=1e-4)
+        prior = prior / prior.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+        prior_scores = prior.log()
+        prior_scores = prior_scores - prior_scores.mean(dim=-1, keepdim=True)
+        prior_scores = prior_scores.clamp(min=-4.0, max=4.0)
+        return prior_scores.cpu(), support_scores.cpu()
+
+    def _build_topk_support_mask(self, support_scores: torch.Tensor) -> torch.Tensor:
+        C = self.num_concepts
+        mask = torch.zeros(C, C, dtype=torch.bool)
+        if self.topk is None or self.topk <= 0 or C <= 1:
+            return mask
+        k = min(int(self.topk), C - 1)
+        eye = torch.eye(C, dtype=torch.bool)
+        for row_idx in range(C):
+            row = support_scores[row_idx].detach().float().clone()
+            off_values = row[~eye[row_idx]]
+            if off_values.numel() == 0:
+                continue
+            if off_values.max().item() <= 0.0:
+                continue
+            row[row_idx] = float("-inf")
+            _, idx = torch.topk(row, k=k)
+            mask[row_idx, idx] = True
+        return mask
 
     @staticmethod
     def _apply_topk(scores: torch.Tensor, k: int) -> torch.Tensor:
@@ -100,12 +139,14 @@ class MultiHeadRelationLearning(nn.Module):
             return A, x
 
         tau = F.softplus(self.temperature_raw) + 1e-6  # (H,)
-        prior_scores = self.prior_logit_scores.to(device=x.device, dtype=x.dtype)
-        prior_strength = F.softplus(self.prior_strength_raw).to(device=x.device, dtype=x.dtype)
+        item_prior_scores = self.prior_logit_scores.to(device=x.device, dtype=x.dtype)
+        seq_prior_scores = self.sequence_prior_logit_scores.to(device=x.device, dtype=x.dtype)
+        item_strength = F.softplus(self.prior_strength_raw).to(device=x.device, dtype=x.dtype)
+        seq_strength = F.softplus(self.sequence_prior_strength_raw).to(device=x.device, dtype=x.dtype)
         rels = []
 
         for h in range(self.num_heads):
-            scores = prior_strength[h] * prior_scores
+            scores = item_strength[h] * item_prior_scores + seq_strength[h] * seq_prior_scores
             scores = scores + self.receiver_bias[h].to(device=x.device, dtype=x.dtype).view(1, C)
             scores = scores / tau[h]
             scores = scores - scores.mean(dim=-1, keepdim=True)
@@ -117,7 +158,17 @@ class MultiHeadRelationLearning(nn.Module):
                 scores = scores.masked_fill(eye, float("-inf"))
 
             if self.topk is not None and 0 < self.topk < C:
-                scores = self._apply_topk(scores, self.topk)
+                support_mask = (
+                    self.item_support_mask.to(device=scores.device)
+                    | self.sequence_support_mask.to(device=scores.device)
+                )
+                if self.allow_self_loop:
+                    support_mask = support_mask | eye
+                row_has_support = support_mask.any(dim=-1, keepdim=True)
+                if bool(row_has_support.all()):
+                    scores = self._apply_topk(scores.masked_fill(~support_mask, float("-inf")), self.topk)
+                else:
+                    scores = self._apply_topk(scores, self.topk)
 
             A = F.softmax(scores, dim=-1)  # (C, C) row-stochastic
             A = self.dropout(A)

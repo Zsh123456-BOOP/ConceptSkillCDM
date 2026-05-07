@@ -798,13 +798,30 @@ def _log_graph_init_state(model: nn.Module, logger, context: str) -> None:
         graph_tau_mean = float(tau.mean().item())
         graph_tau_std = float(tau.std(unbiased=False).item())
         graph_dropout = float(getattr(getattr(relation_learning, "dropout", None), "p", 0.0))
+    item_beta = 0.0
+    seq_beta = 0.0
+    self_beta = 0.0
+    if relation_learning is not None:
+        item_strength = getattr(relation_learning, "prior_strength_raw", None)
+        seq_strength = getattr(relation_learning, "sequence_prior_strength_raw", None)
+        self_loop = getattr(relation_learning, "self_loop_logit", None)
+        if item_strength is not None:
+            item_beta = float(F.softplus(item_strength.detach()).mean().item())
+        if seq_strength is not None:
+            seq_beta = float(F.softplus(seq_strength.detach()).mean().item())
+        if self_loop is not None:
+            self_beta = float(self_loop.detach().mean().item())
 
     logger.info(
-        "%s [Graph Init] graph_tau_mean=%.4f, graph_tau_std=%.4f, graph_dropout=%.3f, use_personal_graph=%s",
+        "%s [Graph Init] graph_tau_mean=%.4f, graph_tau_std=%.4f, graph_dropout=%.3f, "
+        "item_beta=%.4f, seq_beta=%.4f, self_loop_logit=%.4f, use_personal_graph=%s",
         context,
         graph_tau_mean,
         graph_tau_std,
         graph_dropout,
+        item_beta,
+        seq_beta,
+        self_beta,
         bool(getattr(base_model, "use_personal_graph", False)),
     )
 
@@ -1277,6 +1294,9 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
         else None
     )
     relation_prior_strength = getattr(relation_learning, "prior_strength_raw", None) if relation_learning is not None else None
+    relation_sequence_strength = (
+        getattr(relation_learning, "sequence_prior_strength_raw", None) if relation_learning is not None else None
+    )
     relation_receiver_bias = getattr(relation_learning, "receiver_bias", None) if relation_learning is not None else None
     relation_self_loop = getattr(relation_learning, "self_loop_logit", None) if relation_learning is not None else None
     personal_gate_head_bias = getattr(adaptive_gate, "head_bias", None)
@@ -1288,6 +1308,7 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
         "relation_emb": _grad_norm_or_zero(relation_emb),
         "relation_tau": _grad_norm_or_zero(relation_tau),
         "relation_prior_strength": _grad_norm_or_zero(relation_prior_strength),
+        "relation_sequence_strength": _grad_norm_or_zero(relation_sequence_strength),
         "relation_receiver_bias": _grad_norm_or_zero(relation_receiver_bias),
         "relation_self_loop": _grad_norm_or_zero(relation_self_loop),
         "personal_gate_head_bias": _grad_norm_or_zero(personal_gate_head_bias),
@@ -1650,6 +1671,20 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     logger.info("%s Number of students: %d", run_tag, info_dict["num_students"])
     logger.info("%s Number of exercises: %d", run_tag, info_dict["num_exercises"])
     logger.info("%s Number of concepts: %d", run_tag, info_dict["num_concepts"])
+    prior_stats = info_dict.get("graph_prior_stats", {})
+    if prior_stats:
+        logger.info(
+            "%s [A Prior] item_edges=%.0f item_density=%.4f item_entropy=%.4f | "
+            "seq_transitions=%.1f seq_edges=%.0f seq_density=%.4f seq_entropy=%.4f",
+            run_tag,
+            float(prior_stats.get("item_observed_edge_count", 0.0)),
+            float(prior_stats.get("item_prior_density", 0.0)),
+            float(prior_stats.get("item_prior_entropy", 0.0)),
+            float(prior_stats.get("sequence_transition_count", 0.0)),
+            float(prior_stats.get("sequence_observed_edge_count", 0.0)),
+            float(prior_stats.get("sequence_prior_density", 0.0)),
+            float(prior_stats.get("sequence_prior_entropy", 0.0)),
+        )
 
     logger.info("%s Creating model...", run_tag)
 
@@ -1681,6 +1716,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         num_exercises=info_dict["num_exercises"],
         num_concepts=info_dict["num_concepts"],
         q_matrix=info_dict["q_matrix"],
+        item_prior_matrix=info_dict.get("item_prior_matrix"),
+        sequence_prior_matrix=info_dict.get("sequence_prior_matrix"),
         knowledge_dim=args.knowledge_dim,
         num_relation_heads=args.num_relation_heads,
         num_gnn_layers=eff_gnn_layers,
@@ -2344,6 +2381,8 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         num_exercises=info_dict["num_exercises"],
         num_concepts=info_dict["num_concepts"],
         q_matrix=q_matrix,
+        item_prior_matrix=info_dict.get("item_prior_matrix"),
+        sequence_prior_matrix=info_dict.get("sequence_prior_matrix"),
         knowledge_dim=loaded_args.get("knowledge_dim", args.knowledge_dim),
         num_relation_heads=loaded_args.get("num_relation_heads", args.num_relation_heads),
         num_gnn_layers=eff_gnn_layers,

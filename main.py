@@ -525,6 +525,8 @@ def main():
                 num_exercises=info_dict["num_exercises"],
                 num_concepts=info_dict["num_concepts"],
                 q_matrix=info_dict["q_matrix"],
+                item_prior_matrix=info_dict.get("item_prior_matrix"),
+                sequence_prior_matrix=info_dict.get("sequence_prior_matrix"),
                 knowledge_dim=loaded_args.get("knowledge_dim", args.knowledge_dim),
                 num_relation_heads=loaded_args.get("num_relation_heads", args.num_relation_heads),
                 num_gnn_layers=loaded_args.get("num_gnn_layers", args.num_gnn_layers),

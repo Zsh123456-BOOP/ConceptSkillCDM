@@ -34,6 +34,8 @@ class CognitiveDiagnosisModel(nn.Module):
         num_exercises: int,
         num_concepts: int,
         q_matrix: torch.Tensor,
+        item_prior_matrix: Optional[torch.Tensor] = None,
+        sequence_prior_matrix: Optional[torch.Tensor] = None,
         knowledge_dim: int = 32,
         num_relation_heads: int = 4,
         num_gnn_layers: int = 2,
@@ -192,7 +194,15 @@ class CognitiveDiagnosisModel(nn.Module):
         self.share_concept_embeddings = bool(share_concept_embeddings)
 
         self.register_buffer("q_matrix", q_matrix)
-        graph_prior_matrix = self._build_graph_prior_matrix(q_matrix, num_concepts)
+        item_prior = self._build_graph_prior_matrix(q_matrix, num_concepts) if item_prior_matrix is None else self._validate_prior_matrix(item_prior_matrix, num_concepts, "item_prior_matrix")
+        sequence_prior = (
+            torch.zeros_like(item_prior)
+            if sequence_prior_matrix is None
+            else self._validate_prior_matrix(sequence_prior_matrix, num_concepts, "sequence_prior_matrix")
+        )
+        graph_prior_matrix = self._fuse_graph_prior_matrix(item_prior, sequence_prior)
+        self.register_buffer("item_prior_matrix", item_prior, persistent=False)
+        self.register_buffer("sequence_prior_matrix", sequence_prior, persistent=False)
         self.register_buffer("graph_prior_matrix", graph_prior_matrix, persistent=False)
         self.register_buffer("ae_student_prior_logit", torch.zeros(num_students, dtype=torch.float32))
         self.register_buffer("ae_exercise_prior_logit", torch.zeros(num_exercises, dtype=torch.float32))
@@ -239,7 +249,8 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_support_include_neighbors=self.personal_support_include_neighbors,
             enable_personal_support_value_proj=self.enable_personal_support_value_proj,
             graph_edge_bias_rank=self.graph_edge_bias_rank,
-            graph_prior_matrix=self.graph_prior_matrix,
+            graph_prior_matrix=self.item_prior_matrix,
+            graph_sequence_prior_matrix=self.sequence_prior_matrix if sequence_prior_matrix is not None else None,
             graph_prior_logit_scale=self.graph_prior_logit_scale,
             enable_module=self.enable_module1,
         )
@@ -301,6 +312,33 @@ class CognitiveDiagnosisModel(nn.Module):
         prior = prior * offdiag
         prior = prior / prior.sum(dim=-1, keepdim=True).clamp(min=1e-12)
         return prior.to(dtype=torch.float32)
+
+    @staticmethod
+    def _validate_prior_matrix(prior_matrix: torch.Tensor, num_concepts: int, name: str) -> torch.Tensor:
+        C = int(num_concepts)
+        prior = prior_matrix.detach().float()
+        if tuple(prior.shape) != (C, C):
+            raise ValueError(f"{name} must have shape ({C}, {C}), got {tuple(prior.shape)}")
+        if C == 1:
+            return torch.ones(1, 1, dtype=torch.float32)
+        eye = torch.eye(C, dtype=torch.float32, device=prior.device)
+        prior = prior.clamp(min=0.0) * (1.0 - eye)
+        row_sum = prior.sum(dim=-1, keepdim=True)
+        uniform = (1.0 - eye) / float(C - 1)
+        prior = torch.where(row_sum > 0, prior / row_sum.clamp(min=1e-12), uniform)
+        return prior.to(dtype=torch.float32)
+
+    @classmethod
+    def _fuse_graph_prior_matrix(cls, item_prior: torch.Tensor, sequence_prior: torch.Tensor) -> torch.Tensor:
+        if item_prior.numel() <= 1:
+            return torch.ones_like(item_prior, dtype=torch.float32)
+        C = int(item_prior.size(0))
+        seq_has_signal = bool(sequence_prior.detach().float().sum().item() > 0.0)
+        if seq_has_signal:
+            fused = 0.5 * item_prior.detach().float() + 0.5 * sequence_prior.detach().float()
+        else:
+            fused = item_prior.detach().float()
+        return cls._validate_prior_matrix(fused, C, "graph_prior_matrix")
 
     def _initialize_graph_prior_concept_embeddings(self) -> None:
         if not (self.enable_module1 and self.use_concept_graph and self.graph_prior_logit_scale > 0.0):
