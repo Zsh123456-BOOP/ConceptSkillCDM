@@ -278,15 +278,26 @@ def build_sequence_transition_prior(
         max_hops: int = 3,
         decay: float = 0.70,
         shrink: float = 2.0,
+        student_reliability_lambda: float = 5.0,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
-    """Build a train-only empirical concept transition prior from student order."""
+    """
+    Build a train-only empirical concept transition prior from student order.
+
+    A row is consumed as incoming support in the graph encoder: A[c, k] means
+    concept c aggregates information from support concept k. For a train
+    sequence k -> c, the transition evidence is therefore written to row c,
+    column k.
+    """
     C = len(cpt_id_map)
     if C <= 0:
         raise ValueError("cpt_id_map must not be empty")
     if C == 1:
         prior = torch.ones(1, 1, dtype=torch.float32)
         return prior, {
-            "sequence_transition_count": 0.0,
+            "seq_raw_transition_mass": 0.0,
+            "seq_student_weighted_mass": 0.0,
+            "seq_student_count": 0.0,
+            "seq_reliability_lambda": float(student_reliability_lambda),
             "sequence_observed_edge_count": 0.0,
             "sequence_prior_density": 0.0,
             "sequence_prior_entropy": 0.0,
@@ -297,11 +308,24 @@ def build_sequence_transition_prior(
     counts = torch.zeros(C, C, dtype=torch.float32)
     popularity = torch.zeros(C, dtype=torch.float32)
     raw_transition_count = 0.0
+    student_weighted_mass = 0.0
+    effective_student_count = 0.0
+    reliability_lambda = max(0.0, float(student_reliability_lambda))
 
     for df in _iter_source_dfs(train_sources):
         if "stu_id" not in df.columns or "cpt_seq" not in df.columns:
             continue
-        for _, stu_df in df.groupby("stu_id", sort=False):
+        ordered_df = df.copy()
+        ordered_df["_source_order"] = np.arange(len(ordered_df))
+        order_cols = [
+            col for col in ("timestamp", "time", "order_id", "original_row_id")
+            if col in ordered_df.columns
+        ]
+        ordered_df = ordered_df.sort_values(
+            ["stu_id", *order_cols, "_source_order"],
+            kind="mergesort",
+        )
+        for _, stu_df in ordered_df.groupby("stu_id", sort=False):
             concept_sets: List[List[int]] = []
             for seq in stu_df["cpt_seq"].values:
                 mapped = sorted({cpt_id_map[cid] for cid in _parse_concept_seq(seq) if cid in cpt_id_map})
@@ -325,11 +349,18 @@ def build_sequence_transition_prior(
                         for dst_c in dst_concepts:
                             if src_c == dst_c:
                                 continue
-                            student_counts[src_c, dst_c] += weight
+                            student_counts[dst_c, src_c] += weight
                             student_total += weight
             if student_total > 0.0:
-                counts += student_counts / float(student_total)
+                reliability = (
+                    student_total / (student_total + reliability_lambda)
+                    if reliability_lambda > 0.0
+                    else 1.0
+                )
+                counts += reliability * (student_counts / float(student_total))
                 raw_transition_count += student_total
+                student_weighted_mass += reliability
+                effective_student_count += 1.0
 
     eye = torch.eye(C, dtype=torch.float32)
     offdiag = 1.0 - eye
@@ -346,7 +377,10 @@ def build_sequence_transition_prior(
     possible = float(C * (C - 1))
     observed = float((counts > 0).float().sum().item())
     return prior, {
-        "sequence_transition_count": float(raw_transition_count),
+        "seq_raw_transition_mass": float(raw_transition_count),
+        "seq_student_weighted_mass": float(student_weighted_mass),
+        "seq_student_count": float(effective_student_count),
+        "seq_reliability_lambda": float(reliability_lambda),
         "sequence_observed_edge_count": observed,
         "sequence_prior_density": observed / possible if possible > 0 else 0.0,
         "sequence_prior_entropy": _prior_entropy(prior),
@@ -513,7 +547,9 @@ def create_dataloaders(
         f"item_edges={graph_prior_stats['item_observed_edge_count']:.0f}, "
         f"item_density={graph_prior_stats['item_prior_density']:.4f}, "
         f"item_entropy={graph_prior_stats['item_prior_entropy']:.4f}, "
-        f"seq_transitions={graph_prior_stats['sequence_transition_count']:.1f}, "
+        f"seq_raw_mass={graph_prior_stats['seq_raw_transition_mass']:.1f}, "
+        f"seq_weighted_mass={graph_prior_stats['seq_student_weighted_mass']:.1f}, "
+        f"seq_students={graph_prior_stats['seq_student_count']:.0f}, "
         f"seq_edges={graph_prior_stats['sequence_observed_edge_count']:.0f}, "
         f"seq_density={graph_prior_stats['sequence_prior_density']:.4f}, "
         f"seq_entropy={graph_prior_stats['sequence_prior_entropy']:.4f}"

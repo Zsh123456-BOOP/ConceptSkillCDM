@@ -43,8 +43,10 @@ def run_structure_forward(
             "personal_matrices": None,
         }
 
+    support_diagnostics = {}
     if module.use_concept_graph and module.relation_learning is not None:
         relation_matrices, _ = module.relation_learning()
+        support_diagnostics = getattr(module.relation_learning, "_last_support_diagnostics", {}) or {}
     else:
         relation_matrices = identity_relations
 
@@ -394,6 +396,14 @@ def run_structure_forward(
                 personal_relation_spec = relation_used
                 personal_matrices = None
 
+    def _support_diag_value(key: str) -> torch.Tensor:
+        value = support_diagnostics.get(key)
+        if value is None:
+            return relation_matrices.new_tensor(0.0)
+        if isinstance(value, torch.Tensor):
+            return value.to(device=device, dtype=dtype)
+        return relation_matrices.new_tensor(float(value))
+
     return {
         "relation_matrices": relation_matrices,
         "relation_used": relation_used,
@@ -405,6 +415,12 @@ def run_structure_forward(
         "knowledge_state_graph_delta": knowledge_state_graph_delta,
         "knowledge_state_personal_delta": knowledge_state_personal_delta,
         "a_diag_semantic_ok": a_diag_semantic_ok,
+        "support_candidate_size_mean": _support_diag_value("support_candidate_size_mean"),
+        "support_final_size_mean": _support_diag_value("support_final_size_mean"),
+        "support_item_survival_rate": _support_diag_value("support_item_survival_rate"),
+        "support_seq_survival_rate": _support_diag_value("support_seq_survival_rate"),
+        "support_item_seq_overlap": _support_diag_value("support_item_seq_overlap"),
+        "support_self_retention_rate": _support_diag_value("support_self_retention_rate"),
         "alpha": gate_alpha,
         "alpha_logit": gate_alpha_logit,
         "alpha_student_bias": gate_alpha_bias,

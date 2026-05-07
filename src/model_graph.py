@@ -71,6 +71,7 @@ class MultiHeadRelationLearning(nn.Module):
         self.temperature_raw = nn.Parameter(torch.full((num_heads,), float(tau_init)))
 
         self.dropout = nn.Dropout(dropout)
+        self._last_support_diagnostics: Dict[str, torch.Tensor] = {}
         self._initialize_weights()
 
     def _initialize_weights(self) -> None:
@@ -124,6 +125,38 @@ class MultiHeadRelationLearning(nn.Module):
         masked.scatter_(dim=-1, index=idx, src=vals)
         return masked
 
+    def _update_support_diagnostics(self, relation_matrices: torch.Tensor) -> None:
+        """Record how much item/sequence evidence survives final support pruning."""
+        H, C, _ = relation_matrices.shape
+        device = relation_matrices.device
+        dtype = relation_matrices.dtype
+        eye = torch.eye(C, device=device, dtype=torch.bool)
+        item_mask = self.item_support_mask.to(device=device)
+        seq_mask = self.sequence_support_mask.to(device=device)
+        candidate_mask = item_mask | seq_mask
+        if self.allow_self_loop:
+            candidate_mask = candidate_mask | eye
+        final_mask = relation_matrices.detach() > 1e-12
+
+        def _survival_rate(source_mask: torch.Tensor) -> torch.Tensor:
+            denom = source_mask.to(dtype=dtype).sum() * float(max(1, H))
+            if float(denom.detach().cpu().item()) <= 0.0:
+                return relation_matrices.new_tensor(0.0)
+            return (
+                final_mask
+                & source_mask.view(1, C, C)
+            ).to(dtype=dtype).sum() / denom.clamp(min=1.0)
+
+        overlap_union = (item_mask | seq_mask).to(dtype=dtype).sum().clamp(min=1.0)
+        self._last_support_diagnostics = {
+            "support_candidate_size_mean": candidate_mask.to(dtype=dtype).sum(dim=-1).mean().detach(),
+            "support_final_size_mean": final_mask.to(dtype=dtype).sum(dim=-1).mean().detach(),
+            "support_item_survival_rate": _survival_rate(item_mask).detach(),
+            "support_seq_survival_rate": _survival_rate(seq_mask).detach(),
+            "support_item_seq_overlap": ((item_mask & seq_mask).to(dtype=dtype).sum() / overlap_union).detach(),
+            "support_self_retention_rate": _survival_rate(eye).detach(),
+        }
+
     def forward(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Returns:
@@ -136,6 +169,7 @@ class MultiHeadRelationLearning(nn.Module):
         # ---- Fix #3：退化情况 C==1 防 NaN ----
         if C == 1:
             A = torch.ones((self.num_heads, 1, 1), device=x.device, dtype=x.dtype)
+            self._update_support_diagnostics(A)
             return A, x
 
         tau = F.softplus(self.temperature_raw) + 1e-6  # (H,)
@@ -195,6 +229,7 @@ class MultiHeadRelationLearning(nn.Module):
             rels.append(A)
 
         relation_matrices = torch.stack(rels, dim=0)  # (H, C, C)
+        self._update_support_diagnostics(relation_matrices)
         return relation_matrices, self.concept_embeddings
 
     def get_entropy_sparsity(self, relation_matrices: torch.Tensor) -> torch.Tensor:

@@ -970,6 +970,12 @@ def _collect_debug_forward_stats(
     readout_query_support_mass_vals: List[float] = []
     query_row_global_support_mass_vals: List[float] = []
     query_row_personal_support_mass_vals: List[float] = []
+    support_candidate_size_vals: List[float] = []
+    support_final_size_vals: List[float] = []
+    support_item_survival_vals: List[float] = []
+    support_seq_survival_vals: List[float] = []
+    support_item_seq_overlap_vals: List[float] = []
+    support_self_retention_vals: List[float] = []
 
     graph_row_entropy_mean = 0.0
     graph_entropy_ratio = 0.0
@@ -1109,6 +1115,12 @@ def _collect_debug_forward_stats(
                 ("readout_query_support_mass", readout_query_support_mass_vals),
                 ("query_row_global_support_mass", query_row_global_support_mass_vals),
                 ("query_row_personal_support_mass", query_row_personal_support_mass_vals),
+                ("support_candidate_size_mean", support_candidate_size_vals),
+                ("support_final_size_mean", support_final_size_vals),
+                ("support_item_survival_rate", support_item_survival_vals),
+                ("support_seq_survival_rate", support_seq_survival_vals),
+                ("support_item_seq_overlap", support_item_seq_overlap_vals),
+                ("support_self_retention_rate", support_self_retention_vals),
             ):
                 val = details.get(detail_key)
                 if val is not None:
@@ -1195,6 +1207,12 @@ def _collect_debug_forward_stats(
     readout_query_support_mass_mean, _ = _safe_mean_std(readout_query_support_mass_vals)
     query_row_global_support_mass_mean, _ = _safe_mean_std(query_row_global_support_mass_vals)
     query_row_personal_support_mass_mean, _ = _safe_mean_std(query_row_personal_support_mass_vals)
+    support_candidate_size_mean, _ = _safe_mean_std(support_candidate_size_vals)
+    support_final_size_mean, _ = _safe_mean_std(support_final_size_vals)
+    support_item_survival_rate, _ = _safe_mean_std(support_item_survival_vals)
+    support_seq_survival_rate, _ = _safe_mean_std(support_seq_survival_vals)
+    support_item_seq_overlap, _ = _safe_mean_std(support_item_seq_overlap_vals)
+    support_self_retention_rate, _ = _safe_mean_std(support_self_retention_vals)
 
     return {
         "irt_abs_mean": irt_abs_mean,
@@ -1265,6 +1283,12 @@ def _collect_debug_forward_stats(
         "readout_query_support_mass": readout_query_support_mass_mean,
         "query_row_global_support_mass": query_row_global_support_mass_mean,
         "query_row_personal_support_mass": query_row_personal_support_mass_mean,
+        "support_candidate_size_mean": support_candidate_size_mean,
+        "support_final_size_mean": support_final_size_mean,
+        "support_item_survival_rate": support_item_survival_rate,
+        "support_seq_survival_rate": support_seq_survival_rate,
+        "support_item_seq_overlap": support_item_seq_overlap,
+        "support_self_retention_rate": support_self_retention_rate,
         "personal_warmup_scale": personal_warmup_scale,
         "share_concept_embeddings": share_concept_embeddings,
     }
@@ -1675,12 +1699,15 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     if prior_stats:
         logger.info(
             "%s [A Prior] item_edges=%.0f item_density=%.4f item_entropy=%.4f | "
-            "seq_transitions=%.1f seq_edges=%.0f seq_density=%.4f seq_entropy=%.4f",
+            "seq_raw_mass=%.1f seq_weighted_mass=%.1f seq_students=%.0f "
+            "seq_edges=%.0f seq_density=%.4f seq_entropy=%.4f",
             run_tag,
             float(prior_stats.get("item_observed_edge_count", 0.0)),
             float(prior_stats.get("item_prior_density", 0.0)),
             float(prior_stats.get("item_prior_entropy", 0.0)),
-            float(prior_stats.get("sequence_transition_count", 0.0)),
+            float(prior_stats.get("seq_raw_transition_mass", 0.0)),
+            float(prior_stats.get("seq_student_weighted_mass", 0.0)),
+            float(prior_stats.get("seq_student_count", 0.0)),
             float(prior_stats.get("sequence_observed_edge_count", 0.0)),
             float(prior_stats.get("sequence_prior_density", 0.0)),
             float(prior_stats.get("sequence_prior_entropy", 0.0)),
@@ -2038,6 +2065,19 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["graph_tau_std"],
                 train_metrics.get("reg_graph_reg_scale", 1.0),
                 val_metrics.get("reg_graph_reg_scale", 1.0),
+            )
+            logger.info(
+                "%s [Diag][A Support] Epoch [%03d] | "
+                "candidate_size=%.2f, final_size=%.2f, item_survival=%.4f, "
+                "seq_survival=%.4f, item_seq_overlap=%.4f, self_retention=%.4f",
+                run_tag,
+                epoch,
+                diag["support_candidate_size_mean"],
+                diag["support_final_size_mean"],
+                diag["support_item_survival_rate"],
+                diag["support_seq_survival_rate"],
+                diag["support_item_seq_overlap"],
+                diag["support_self_retention_rate"],
             )
             last_diag = dict(diag)
 

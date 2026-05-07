@@ -66,10 +66,15 @@ def _check_train_only_sequence_prior_handles_single_concept_items() -> None:
 
     _assert(tuple(seq_prior.shape) == (3, 3), "sequence prior should cover train-seen concepts only.")
     _assert(torch.allclose(seq_prior.sum(dim=-1), torch.ones(3), atol=1e-6), "sequence prior rows should sum to 1.")
-    _assert(seq_prior[0, 1].item() > seq_prior[0, 2].item(), "train sequence 100->101 should be stronger than 100->102.")
-    _assert(seq_prior[1, 2].item() > seq_prior[1, 0].item(), "train sequence 101->102 should be stronger than 101->100.")
+    _assert(seq_prior[1, 0].item() > seq_prior[1, 2].item(), "incoming row 101 should prefer previous concept 100.")
+    _assert(seq_prior[2, 1].item() > seq_prior[2, 0].item(), "incoming row 102 should prefer previous concept 101.")
     _assert(abs(item_prior[0, 1].item() - item_prior[0, 2].item()) < 1e-6, "single-concept items should leave row-0 item prior uninformative.")
-    _assert(stats["sequence_transition_count"] > 0.0, "sequence stats should record train-only transitions.")
+    _assert(stats["seq_raw_transition_mass"] > 0.0, "sequence stats should record raw train-only transitions.")
+    _assert(stats["seq_student_weighted_mass"] > 0.0, "sequence stats should record reliability-weighted transition mass.")
+    _assert(
+        stats["seq_student_weighted_mass"] < stats["seq_student_count"],
+        "student reliability should down-weight short/noisy trajectories.",
+    )
     _assert(stats["item_observed_edge_count"] == 0.0, "single-concept train data should not fake item co-occurrence edges.")
 
 
@@ -87,9 +92,9 @@ def _check_sequence_prior_drives_relation_learning_support() -> None:
     )
     sequence_prior = torch.tensor(
         [
-            [0.0, 0.90, 0.10],
-            [0.10, 0.0, 0.90],
-            [0.90, 0.10, 0.0],
+            [0.0, 0.10, 0.90],
+            [0.90, 0.0, 0.10],
+            [0.10, 0.90, 0.0],
         ],
         dtype=torch.float32,
     )
@@ -112,10 +117,13 @@ def _check_sequence_prior_drives_relation_learning_support() -> None:
     )
     model.eval()
     relation, _ = model.structure_module.relation_learning()
-    row0 = relation[0, 0]
     row1 = relation[0, 1]
-    _assert(row0[1].item() > row0[2].item(), "A row 0 should prefer sequence-supported 0->1 over 0->2.")
-    _assert(row1[2].item() > row1[0].item(), "A row 1 should prefer sequence-supported 1->2 over 1->0.")
+    row2 = relation[0, 2]
+    _assert(row1[0].item() > row1[2].item(), "A row 1 should prefer incoming sequence support 0->1.")
+    _assert(row2[1].item() > row2[0].item(), "A row 2 should prefer incoming sequence support 1->2.")
+    diag = model.structure_module.relation_learning._last_support_diagnostics
+    _assert(diag["support_seq_survival_rate"].item() > 0.0, "support diagnostics should track sequence source survival.")
+    _assert(diag["support_final_size_mean"].item() >= 1.0, "support diagnostics should track final support size.")
 
 
 def main() -> None:
