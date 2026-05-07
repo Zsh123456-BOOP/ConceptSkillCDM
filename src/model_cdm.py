@@ -193,7 +193,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.ae_irt_logit_scale = max(0.0, float(ae_irt_logit_scale))
         self.ae_interaction_logit_scale = max(0.0, float(ae_interaction_logit_scale))
         self.ae_logit_dim = max(1, int(ae_logit_dim))
-        self.relation_theta_scale = max(0.0, float(relation_theta_scale))
+        self.relation_theta_scale = float(relation_theta_scale)
         self.relation_theta_delta_clip = max(1e-6, float(relation_theta_delta_clip))
         self.share_concept_embeddings = bool(share_concept_embeddings)
 
@@ -517,7 +517,7 @@ class CognitiveDiagnosisModel(nn.Module):
         zero_vec = prediction_state.new_zeros((prediction_state.size(0),))
         zero_scalar = prediction_state.new_tensor(0.0)
         if (
-            self.relation_theta_scale <= 0.0
+            abs(float(self.relation_theta_scale)) <= 0.0
             or not self.enable_module1
             or not self.use_concept_graph
             or concept_mask is None

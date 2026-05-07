@@ -319,7 +319,7 @@ def parse_args():
     parser.add_argument("--ae_stat_prior_scale", type=float, default=0.0,
                         help="Scale for train-set student/concept logit priors used to initialize the A/E head.")
     parser.add_argument("--relation_theta_scale", type=float, default=0.0,
-                        help="Scale for interpretable A/E support theta readout inside the IRT logit.")
+                        help="Signed scale for interpretable A/E support theta contrast inside the IRT logit.")
     parser.add_argument("--relation_theta_delta_clip", type=float, default=2.0,
                         help="Tanh clip for relation support theta contrast before scaling.")
     parser.add_argument("--graph_query_adapter_enable", action=bool_action, default=None,

@@ -261,6 +261,7 @@ def _check_removed_residual_artifacts() -> None:
 def _check_relation_theta_readout_is_interpretable_and_ablatable() -> None:
     torch.manual_seed(11)
     full = _build_model(use_concept_graph=True, use_personal_graph=True, relation_theta_scale=0.5)
+    contrast = _build_model(use_concept_graph=True, use_personal_graph=True, relation_theta_scale=-0.5)
     no_a = _build_model(use_concept_graph=False, use_personal_graph=True, relation_theta_scale=0.5)
     student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
     exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
@@ -273,6 +274,12 @@ def _check_relation_theta_readout_is_interpretable_and_ablatable() -> None:
             return_logits=True,
         )
         off_logits, off_details = no_a(
+            student_ids=student_ids,
+            exercise_ids=exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+        contrast_logits, contrast_details = contrast(
             student_ids=student_ids,
             exercise_ids=exercise_ids,
             return_details=True,
@@ -293,6 +300,8 @@ def _check_relation_theta_readout_is_interpretable_and_ablatable() -> None:
         off_details["relation_theta_logit_abs_mean"].item() == 0.0,
         "no_A should remove relation-theta support readout completely.",
     )
+    _assert_all_finite("relation_theta_contrast_logits", contrast_logits)
+    _assert(contrast_details["relation_theta_scale"].item() == -0.5, "Relation-theta scale should preserve sign.")
 
 
 def _check_get_student_diagnosis() -> None:
