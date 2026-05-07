@@ -558,7 +558,7 @@ def _compute_train_stat_logits(
     num_students: int,
     num_exercises: int,
     num_concepts: int,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float]:
     q_cpu = q_matrix.detach().float().cpu()
     student_count = torch.zeros(num_students, dtype=torch.float32)
     student_correct = torch.zeros(num_students, dtype=torch.float32)
@@ -566,6 +566,8 @@ def _compute_train_stat_logits(
     exercise_correct = torch.zeros(num_exercises, dtype=torch.float32)
     concept_count = torch.zeros(num_concepts, dtype=torch.float32)
     concept_correct = torch.zeros(num_concepts, dtype=torch.float32)
+    student_concept_count = torch.zeros(num_students, num_concepts, dtype=torch.float32)
+    student_concept_correct = torch.zeros(num_students, num_concepts, dtype=torch.float32)
     total_count = 0
     total_correct = 0.0
 
@@ -586,12 +588,15 @@ def _compute_train_stat_logits(
         q = q_cpu[exercise_ids]
         concept_count += q.sum(dim=0)
         concept_correct += (q * y.unsqueeze(-1)).sum(dim=0)
+        student_concept_count.index_add_(0, student_ids, q)
+        student_concept_correct.index_add_(0, student_ids, q * y.unsqueeze(-1))
 
     if total_count <= 0:
         return (
             torch.zeros(num_students, dtype=torch.float32),
             torch.zeros(num_exercises, dtype=torch.float32),
             torch.zeros(num_concepts, dtype=torch.float32),
+            torch.zeros(num_students, num_concepts, dtype=torch.float32),
             0.5,
         )
 
@@ -611,14 +616,26 @@ def _compute_train_stat_logits(
     concept_rate = (
         concept_correct + concept_smoothing * global_rate_t
     ) / (concept_count + concept_smoothing).clamp(min=1.0)
+    student_concept_smoothing = 8.0
+    student_concept_rate = (
+        student_concept_correct + student_concept_smoothing * concept_rate.view(1, -1)
+    ) / (student_concept_count + student_concept_smoothing).clamp(min=1.0)
 
     student_logits = (_safe_logit(student_rate) - global_logit).clamp(min=-3.0, max=3.0)
     exercise_logits = (_safe_logit(exercise_rate) - global_logit).clamp(min=-3.0, max=3.0)
     concept_logits = (_safe_logit(concept_rate) - global_logit).clamp(min=-3.0, max=3.0)
+    student_concept_logits = (
+        _safe_logit(student_concept_rate) - _safe_logit(concept_rate).view(1, -1)
+    ).clamp(min=-2.0, max=2.0)
     student_logits = torch.where(torch.isfinite(student_logits), student_logits, torch.zeros_like(student_logits))
     exercise_logits = torch.where(torch.isfinite(exercise_logits), exercise_logits, torch.zeros_like(exercise_logits))
     concept_logits = torch.where(torch.isfinite(concept_logits), concept_logits, torch.zeros_like(concept_logits))
-    return student_logits, exercise_logits, concept_logits, float(global_rate)
+    student_concept_logits = torch.where(
+        torch.isfinite(student_concept_logits),
+        student_concept_logits,
+        torch.zeros_like(student_concept_logits),
+    )
+    return student_logits, exercise_logits, concept_logits, student_concept_logits, float(global_rate)
 
 
 def _initialize_ae_stat_priors(
@@ -648,7 +665,7 @@ def _initialize_ae_stat_priors(
     ):
         return
 
-    student_logits, exercise_logits, concept_logits, global_rate = _compute_train_stat_logits(
+    student_logits, exercise_logits, concept_logits, student_concept_logits, global_rate = _compute_train_stat_logits(
         train_loader,
         info_dict["q_matrix"],
         num_students=info_dict["num_students"],
@@ -659,17 +676,19 @@ def _initialize_ae_stat_priors(
         student_logits=student_logits,
         exercise_logits=exercise_logits,
         concept_logits=concept_logits,
+        student_concept_logits=student_concept_logits,
         scale=scale,
     )
     logger.info(
         "%s AE stat priors initialized: scale=%.3f, train_global_rate=%.4f, "
-        "student_absmean=%.4f, exercise_absmean=%.4f, concept_absmean=%.4f",
+        "student_absmean=%.4f, exercise_absmean=%.4f, concept_absmean=%.4f, student_concept_absmean=%.4f",
         run_tag,
         scale,
         global_rate,
         float(student_logits.abs().mean().item()),
         float(exercise_logits.abs().mean().item()),
         float(concept_logits.abs().mean().item()),
+        float(student_concept_logits.abs().mean().item()),
     )
 
 

@@ -207,6 +207,10 @@ class CognitiveDiagnosisModel(nn.Module):
         self.register_buffer("ae_student_prior_logit", torch.zeros(num_students, dtype=torch.float32))
         self.register_buffer("ae_exercise_prior_logit", torch.zeros(num_exercises, dtype=torch.float32))
         self.register_buffer("ae_concept_prior_logit", torch.zeros(num_concepts, dtype=torch.float32))
+        self.register_buffer(
+            "ae_student_concept_prior_logit",
+            torch.zeros(num_students, num_concepts, dtype=torch.float32),
+        )
 
         identity = torch.eye(num_concepts, dtype=torch.float32).unsqueeze(0).repeat(self.num_relation_heads, 1, 1)
         self.register_buffer("identity_relations", identity)
@@ -533,6 +537,13 @@ class CognitiveDiagnosisModel(nn.Module):
         explicit_feature_logit = zero_vec
         interaction_logit = zero_vec
         if joint_active:
+            student_concept_prior = getattr(self, "ae_student_concept_prior_logit", None)
+            if student_concept_prior is not None:
+                sc_prior = student_concept_prior[student_ids].to(dtype=query_weight.dtype, device=device)
+                query_sc_prior = (query_weight * sc_prior).sum(dim=1)
+                graph_sc_prior = (graph_query_weight * sc_prior).sum(dim=1)
+                stat_prior = stat_prior + 0.60 * query_sc_prior + 0.40 * graph_sc_prior
+
             graph_rms = self._masked_query_rms_per_sample(global_query_context, concept_mask)
             personal_rms = self._masked_query_rms_per_sample(personal_query_correction, concept_mask)
             query_count = concept_mask.float().sum(dim=1, keepdim=True)
@@ -570,6 +581,7 @@ class CognitiveDiagnosisModel(nn.Module):
         exercise_logits: torch.Tensor,
         concept_logits: torch.Tensor,
         scale: float,
+        student_concept_logits: Optional[torch.Tensor] = None,
     ) -> None:
         if (
             getattr(self, "ae_student_logit_bias", None) is None
@@ -584,6 +596,7 @@ class CognitiveDiagnosisModel(nn.Module):
             student_target = torch.zeros_like(self.ae_student_prior_logit)
             exercise_target = torch.zeros_like(self.ae_exercise_prior_logit)
             concept_target = torch.zeros_like(self.ae_concept_prior_logit)
+            student_concept_target = torch.zeros_like(self.ae_student_concept_prior_logit)
             s = student_logits.detach().to(
                 device=student_target.device,
                 dtype=student_target.dtype,
@@ -596,6 +609,13 @@ class CognitiveDiagnosisModel(nn.Module):
                 device=concept_target.device,
                 dtype=concept_target.dtype,
             ).view(-1)
+            if student_concept_logits is not None:
+                sc = student_concept_logits.detach().to(
+                    device=student_concept_target.device,
+                    dtype=student_concept_target.dtype,
+                )
+            else:
+                sc = torch.zeros_like(student_concept_target)
             student_target[: min(student_target.size(0), s.size(0))].copy_(
                 s[: student_target.size(0)] * scale
             )
@@ -605,9 +625,14 @@ class CognitiveDiagnosisModel(nn.Module):
             concept_target[: min(concept_target.size(0), c.size(0))].copy_(
                 c[: concept_target.size(0)] * scale
             )
+            sc_rows = min(student_concept_target.size(0), sc.size(0))
+            sc_cols = min(student_concept_target.size(1), sc.size(1)) if sc.dim() == 2 else 0
+            if sc_rows > 0 and sc_cols > 0:
+                student_concept_target[:sc_rows, :sc_cols].copy_(sc[:sc_rows, :sc_cols] * scale)
             self.ae_student_prior_logit.copy_(student_target.clamp(min=-3.0, max=3.0))
             self.ae_exercise_prior_logit.copy_(exercise_target.clamp(min=-3.0, max=3.0))
             self.ae_concept_prior_logit.copy_(concept_target.clamp(min=-3.0, max=3.0))
+            self.ae_student_concept_prior_logit.copy_(student_concept_target.clamp(min=-2.0, max=2.0))
             self.ae_student_logit_bias.weight.zero_()
             self.ae_exercise_logit_bias.weight.zero_()
             self.ae_concept_logit_bias.weight.zero_()
