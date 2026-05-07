@@ -91,12 +91,13 @@ def run_cdm_forward(
     query_row_personal_message_delta_raw = model._masked_query_rms(scaled_personal_query_correction, q_vector)
     query_row_personal_message_delta = model._masked_query_rms(personal_query_correction, q_vector)
     personal_message_projection_gap = query_row_posterior_delta_abs / query_row_personal_message_delta.clamp(min=1e-8)
-    has_graph_query_signal_bool = bool(query_row_global_readout_delta.detach().item() >= 1e-8)
-    has_graph_query_signal = torch.tensor(int(has_graph_query_signal_bool), device=device, dtype=torch.long)
-    if has_graph_query_signal_bool:
-        personal_to_graph_query_ratio = query_row_personal_message_delta / query_row_global_readout_delta.clamp(min=1e-8)
-    else:
-        personal_to_graph_query_ratio = query_row_personal_message_delta.new_tensor(0.0)
+    has_graph_query_signal_mask = query_row_global_readout_delta.detach() >= 1e-8
+    has_graph_query_signal = has_graph_query_signal_mask.to(device=device, dtype=torch.long)
+    personal_to_graph_query_ratio = torch.where(
+        has_graph_query_signal_mask,
+        query_row_personal_message_delta / query_row_global_readout_delta.clamp(min=1e-8),
+        query_row_personal_message_delta.new_tensor(0.0),
+    )
     personal_to_graph_query_ratio_effective = personal_to_graph_query_ratio.detach()
     personal_query_trust_scale_mean = personal_query_trust_scale.mean()
     personal_query_trust_scale_min = personal_query_trust_scale.min()

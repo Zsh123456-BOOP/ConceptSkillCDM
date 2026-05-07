@@ -334,7 +334,7 @@ def run_structure_forward(
                 )
                 row_has_support = support_valid_mask.any(dim=-1)
                 row_is_valid = active_row_valid_mask.unsqueeze(1).expand(-1, support_valid_mask.size(1), -1)
-                bad_rows_all = ~row_has_support
+                bad_rows_all = row_is_valid & (~row_has_support)
                 bad_rows_active = row_is_valid & (~row_has_support)
                 padded_rows = ~row_is_valid
                 active_row_count = row_is_valid.float().sum().clamp(min=1.0)

@@ -2448,12 +2448,17 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     )
 
     pin_memory = bool(getattr(device, "type", "cpu") == "cuda")
+    test_loader_kwargs = {
+        "num_workers": args.num_workers,
+        "pin_memory": pin_memory,
+    }
+    if int(args.num_workers) > 0:
+        test_loader_kwargs["persistent_workers"] = True
     test_loader = DataLoader(
         test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=pin_memory,
+        **test_loader_kwargs,
     )
 
     # Build model from loaded args (fallback to current args)

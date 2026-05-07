@@ -79,7 +79,7 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "graph_headwise_query_gate": True,
         "graph_edge_bias_rank": 8,
         "graph_prior_logit_scale": 0.55,
-        "ae_query_residual_scale": 0.01,
+        "ae_query_residual_scale": 0.0,
         "ae_logit_residual_scale": 1.00,
         "ae_logit_residual_clip": 6.00,
         "ae_irt_logit_scale": 0.20,

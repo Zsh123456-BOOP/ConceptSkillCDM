@@ -148,39 +148,41 @@ class MultiHeadRelationLearning(nn.Module):
         item_quota_default = max(1, int(math.ceil(offdiag_budget * 0.25)))
         sequence_quota_default = max(1, int(math.ceil(offdiag_budget * 0.50)))
 
-        for row_idx in range(C):
-            row_selected = selected[row_idx].clone()
-            remaining = offdiag_budget
+        def _offdiag_selected_count(mask: torch.Tensor) -> torch.Tensor:
+            return (mask & offdiag).sum(dim=-1)
 
-            def _pick(source_mask: torch.Tensor, quota: int) -> int:
-                available = source_mask[row_idx] & offdiag[row_idx] & (~row_selected)
-                count = int(available.sum().item())
-                if count <= 0 or quota <= 0 or remaining <= 0:
-                    return 0
-                take = min(count, quota, remaining)
-                row_scores = scores[row_idx].masked_fill(~available, float("-inf"))
-                idx = torch.topk(row_scores, k=take, dim=-1).indices
-                row_selected[idx] = True
-                return int(take)
+        def _pick(
+            source_mask: torch.Tensor,
+            quota: int,
+            current: torch.Tensor,
+            row_limit: Optional[torch.Tensor] = None,
+        ) -> torch.Tensor:
+            take = min(max(0, int(quota)), C)
+            if take <= 0:
+                return current
+            available = source_mask & offdiag & (~current)
+            vals, idx = torch.topk(scores.masked_fill(~available, float("-inf")), k=take, dim=-1)
+            keep = torch.isfinite(vals)
+            if row_limit is not None:
+                rank = torch.arange(take, device=scores.device).view(1, take)
+                keep = keep & (rank < row_limit.clamp(min=0).view(-1, 1))
+            picked = torch.zeros_like(current)
+            picked.scatter_(dim=-1, index=idx, src=keep)
+            return current | (picked & available)
 
-            picked = _pick(item_mask, item_quota_default)
-            remaining -= picked
-            picked = _pick(sequence_mask, sequence_quota_default)
-            remaining -= picked
+        selected = _pick(item_mask, item_quota_default, selected)
+        remaining = offdiag_budget - _offdiag_selected_count(selected)
+        selected = _pick(sequence_mask, sequence_quota_default, selected, remaining)
+        remaining = offdiag_budget - _offdiag_selected_count(selected)
+        selected = _pick(item_mask | sequence_mask, offdiag_budget, selected, remaining)
 
-            if remaining > 0:
-                candidate = (item_mask[row_idx] | sequence_mask[row_idx]) & offdiag[row_idx] & (~row_selected)
-                count = int(candidate.sum().item())
-                if count > 0:
-                    take = min(count, remaining)
-                    row_scores = scores[row_idx].masked_fill(~candidate, float("-inf"))
-                    idx = torch.topk(row_scores, k=take, dim=-1).indices
-                    row_selected[idx] = True
-            if not bool(row_selected.any()):
-                row_scores = scores[row_idx].masked_fill(self_mask[row_idx], float("-inf"))
-                idx = torch.topk(row_scores, k=offdiag_budget, dim=-1).indices
-                row_selected[idx] = True
-            selected[row_idx] = row_selected
+        if not self.allow_self_loop:
+            row_has_support = selected.any(dim=-1)
+            fallback_take = min(max(1, offdiag_budget), C)
+            vals, idx = torch.topk(scores.masked_fill(~offdiag, float("-inf")), k=fallback_take, dim=-1)
+            fallback = torch.zeros_like(selected)
+            fallback.scatter_(dim=-1, index=idx, src=torch.isfinite(vals))
+            selected = torch.where(row_has_support.view(-1, 1), selected, fallback)
 
         return scores.masked_fill(~selected, float("-inf"))
 
@@ -198,13 +200,11 @@ class MultiHeadRelationLearning(nn.Module):
         final_mask = relation_matrices.detach() > 1e-12
 
         def _survival_rate(source_mask: torch.Tensor) -> torch.Tensor:
-            denom = source_mask.to(dtype=dtype).sum() * float(max(1, H))
-            if float(denom.detach().cpu().item()) <= 0.0:
-                return relation_matrices.new_tensor(0.0)
+            denom = (source_mask.to(dtype=dtype).sum() * float(max(1, H))).clamp(min=1.0)
             return (
                 final_mask
                 & source_mask.view(1, C, C)
-            ).to(dtype=dtype).sum() / denom.clamp(min=1.0)
+            ).to(dtype=dtype).sum() / denom
 
         overlap_union = (item_mask | seq_mask).to(dtype=dtype).sum().clamp(min=1.0)
         self._last_support_diagnostics = {
