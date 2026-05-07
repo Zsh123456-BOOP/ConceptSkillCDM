@@ -1,5 +1,10 @@
 
-"""A+E structure modeling assembly."""
+"""GLICR-AE structure modeling assembly.
+
+GLICR-AE is the Global-Local Interpretable Concept Relation module:
+- A: evidence-guided global concept relation graph.
+- E: student-conditioned local posterior reweighting over A support.
+"""
 
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 

@@ -1,0 +1,268 @@
+2026-05-07 17:07:20,594 - INFO - Arguments:
+2026-05-07 17:07:20,594 - INFO -   ablate_concept_graph: True
+2026-05-07 17:07:20,594 - INFO -   ablate_module1: False
+2026-05-07 17:07:20,594 - INFO -   ae_interaction_logit_scale: 1.0
+2026-05-07 17:07:20,594 - INFO -   ae_irt_logit_scale: 0.2
+2026-05-07 17:07:20,594 - INFO -   ae_logit_dim: 64
+2026-05-07 17:07:20,594 - INFO -   ae_logit_residual_clip: 6.0
+2026-05-07 17:07:20,594 - INFO -   ae_logit_residual_scale: 1.0
+2026-05-07 17:07:20,594 - INFO -   ae_lr_mult: 30.0
+2026-05-07 17:07:20,594 - INFO -   ae_posterior_prior_scale: 1.0
+2026-05-07 17:07:20,594 - INFO -   ae_query_residual_scale: 0.0
+2026-05-07 17:07:20,594 - INFO -   ae_stat_prior_scale: 1.0
+2026-05-07 17:07:20,594 - INFO -   allow_self_loop: True
+2026-05-07 17:07:20,594 - INFO -   alpha_min_target: 0.05
+2026-05-07 17:07:20,594 - INFO -   batch_size: 128
+2026-05-07 17:07:20,594 - INFO -   data_dir: ./data/assist_09
+2026-05-07 17:07:20,594 - INFO -   dataset_name: assist_09
+2026-05-07 17:07:20,594 - INFO -   debug_graph_diag: True
+2026-05-07 17:07:20,594 - INFO -   diag_batches: 1
+2026-05-07 17:07:20,594 - INFO -   disable_self_loop: False
+2026-05-07 17:07:20,594 - INFO -   dropout: 0.2
+2026-05-07 17:07:20,594 - INFO -   early_stop_patience: 3
+2026-05-07 17:07:20,594 - INFO -   enable_module1: True
+2026-05-07 17:07:20,594 - INFO -   epochs: 100
+2026-05-07 17:07:20,595 - INFO -   generate_diagnosis: True
+2026-05-07 17:07:20,595 - INFO -   gnn_residual_weight: 0.5
+2026-05-07 17:07:20,595 - INFO -   gpu_candidates: None
+2026-05-07 17:07:20,595 - INFO -   gpu_ids: None
+2026-05-07 17:07:20,595 - INFO -   gpu_memory_threshold: 2000
+2026-05-07 17:07:20,595 - INFO -   gpus: None
+2026-05-07 17:07:20,595 - INFO -   graph_dropout: 0.0
+2026-05-07 17:07:20,595 - INFO -   graph_edge_bias_rank: 8
+2026-05-07 17:07:20,595 - INFO -   graph_entropy_max: 0.75
+2026-05-07 17:07:20,595 - INFO -   graph_entropy_min: 0.25
+2026-05-07 17:07:20,595 - INFO -   graph_headwise_query_gate: True
+2026-05-07 17:07:20,595 - INFO -   graph_identity_residual: 0.05
+2026-05-07 17:07:20,595 - INFO -   graph_prior_logit_scale: 0.55
+2026-05-07 17:07:20,595 - INFO -   graph_propagation_alpha: 0.02
+2026-05-07 17:07:20,595 - INFO -   graph_query_adapter_enable: True
+2026-05-07 17:07:20,595 - INFO -   graph_query_readout_2hop_scale: 0.01
+2026-05-07 17:07:20,595 - INFO -   graph_query_readout_scale: 0.02
+2026-05-07 17:07:20,595 - INFO -   graph_reg_cap_ratio: 6.0
+2026-05-07 17:07:20,595 - INFO -   graph_reg_warmup_epochs: 4
+2026-05-07 17:07:20,595 - INFO -   graph_tau_init: 0.55
+2026-05-07 17:07:20,595 - INFO -   graph_topk: 12
+2026-05-07 17:07:20,595 - INFO -   graph_uniform_margin: 0.1
+2026-05-07 17:07:20,595 - INFO -   knowledge_dim: 64
+2026-05-07 17:07:20,595 - INFO -   lambda_alpha: 0.0
+2026-05-07 17:07:20,595 - INFO -   lambda_alpha_min: 0.08
+2026-05-07 17:07:20,595 - INFO -   lambda_graph_diag: 0.02
+2026-05-07 17:07:20,595 - INFO -   lambda_graph_uniform: 0.01
+2026-05-07 17:07:20,595 - INFO -   lambda_personal_kl: 0.04
+2026-05-07 17:07:20,595 - INFO -   lambda_personal_query_residual: 0.06
+2026-05-07 17:07:20,595 - INFO -   lambda_sparse: 0.2
+2026-05-07 17:07:20,595 - INFO -   lambda_sparse_personal: 0.0005
+2026-05-07 17:07:20,595 - INFO -   learning_rate: 0.0003
+2026-05-07 17:07:20,596 - INFO -   log_dir: logs/abce_diag/ae_reliability_gpu23_20260507_170717/assist_09/seed42/best_no_A
+2026-05-07 17:07:20,596 - INFO -   max_test_batches: None
+2026-05-07 17:07:20,596 - INFO -   max_train_batches: None
+2026-05-07 17:07:20,596 - INFO -   max_val_batches: None
+2026-05-07 17:07:20,596 - INFO -   min_exer_interactions: 0
+2026-05-07 17:07:20,596 - INFO -   min_poison_count: 0
+2026-05-07 17:07:20,596 - INFO -   min_stu_interactions: 15
+2026-05-07 17:07:20,596 - INFO -   model_variant: assist_09_abce_best_no_A
+2026-05-07 17:07:20,596 - INFO -   multi_gpu: False
+2026-05-07 17:07:20,596 - INFO -   no_cuda: False
+2026-05-07 17:07:20,596 - INFO -   num_gnn_layers: 2
+2026-05-07 17:07:20,596 - INFO -   num_gpus: 1
+2026-05-07 17:07:20,596 - INFO -   num_relation_heads: 2
+2026-05-07 17:07:20,596 - INFO -   num_workers: 4
+2026-05-07 17:07:20,596 - INFO -   patience: 5
+2026-05-07 17:07:20,596 - INFO -   personal_alpha_base_init: 0.05
+2026-05-07 17:07:20,596 - INFO -   personal_alpha_bias_scale: 0.0
+2026-05-07 17:07:20,596 - INFO -   personal_alpha_budget: 0.1
+2026-05-07 17:07:20,596 - INFO -   personal_alpha_temperature: 2.2
+2026-05-07 17:07:20,596 - INFO -   personal_delta_scale: 4.0
+2026-05-07 17:07:20,596 - INFO -   personal_disable_student_global_context: True
+2026-05-07 17:07:20,596 - INFO -   personal_id_lr_mult: 0.5
+2026-05-07 17:07:20,596 - INFO -   personal_include_neighbor_rows: False
+2026-05-07 17:07:20,596 - INFO -   personal_local_hops: 1
+2026-05-07 17:07:20,596 - INFO -   personal_max_alpha: 0.28
+2026-05-07 17:07:20,596 - INFO -   personal_message_alignment_gate: True
+2026-05-07 17:07:20,596 - INFO -   personal_neighbor_row_budget: 0.35
+2026-05-07 17:07:20,596 - INFO -   personal_projection_hidden_factor: 2
+2026-05-07 17:07:20,596 - INFO -   personal_query_correction_max_ratio: 0.05
+2026-05-07 17:07:20,596 - INFO -   personal_query_correction_min_graph_anchor: 0.02
+2026-05-07 17:07:20,596 - INFO -   personal_query_correction_scale: 0.2
+2026-05-07 17:07:20,596 - INFO -   personal_query_message_gain: 1.0
+2026-05-07 17:07:20,596 - INFO -   personal_query_residual_margin: 0.14
+2026-05-07 17:07:20,597 - INFO -   personal_query_row_budget: 1.0
+2026-05-07 17:07:20,597 - INFO -   personal_query_support_hops: 1
+2026-05-07 17:07:20,597 - INFO -   personal_rank: 8
+2026-05-07 17:07:20,597 - INFO -   personal_reg_warmup_epochs: 8
+2026-05-07 17:07:20,597 - INFO -   personal_state_lr_mult: 1.0
+2026-05-07 17:07:20,597 - INFO -   personal_student_dim: 32
+2026-05-07 17:07:20,597 - INFO -   personal_support_include_graph: True
+2026-05-07 17:07:20,597 - INFO -   personal_support_include_neighbors: False
+2026-05-07 17:07:20,597 - INFO -   personal_support_include_query_self: True
+2026-05-07 17:07:20,597 - INFO -   personal_support_only: True
+2026-05-07 17:07:20,597 - INFO -   personal_value_use_global_basis: True
+2026-05-07 17:07:20,597 - INFO -   personal_warmup_epochs: 8
+2026-05-07 17:07:20,597 - INFO -   prediction_l2_lambda: 1e-05
+2026-05-07 17:07:20,597 - INFO -   relation_theta_delta_clip: 2.0
+2026-05-07 17:07:20,597 - INFO -   relation_theta_scale: 0.0
+2026-05-07 17:07:20,597 - INFO -   save_dir: checkpoints/abce_diag/ae_reliability_gpu23_20260507_170717/assist_09/seed42/best_no_A
+2026-05-07 17:07:20,597 - INFO -   save_interval: 10
+2026-05-07 17:07:20,597 - INFO -   seed: 42
+2026-05-07 17:07:20,597 - INFO -   share_concept_embeddings: True
+2026-05-07 17:07:20,597 - INFO -   use_concept_graph: False
+2026-05-07 17:07:20,597 - INFO -   use_exercise_graph: False
+2026-05-07 17:07:20,597 - INFO -   use_personal_graph: True
+2026-05-07 17:07:20,597 - INFO -   weight_decay: 1e-05
+2026-05-07 17:07:20,683 - INFO - Using device: cuda:0 (physical gpu 3)
+2026-05-07 17:07:20,683 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Loading datasets...
+2026-05-07 17:07:20,683 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Regularization: graph_entropy(lambda_sparse)=0.200000, graph_diag=0.020000, graph_uniform=0.010000, personal_sparse=0.000500, personal_kl=0.040000, personal_query_residual=0.060000, alpha_penalty=0.000000, alpha_min=0.080000, prediction_l2=0.000010
+2026-05-07 17:07:20,684 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Graph controls: entropy_band=[0.25, 0.75], uniform_margin=0.10, warmup_epochs=4, cap_ratio=6.00, graph_dropout=0.000, graph_tau_init=0.550
+2026-05-07 17:07:20,684 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Personal controls: personal_max_alpha=0.280, personal_delta_scale=4.000, personal_warmup_epochs=8, personal_student_dim=32, alpha_min_target=0.0500, personal_local_hops=1, include_neighbor_rows=False, personal_support_only=True, personal_alpha_temperature=2.200, personal_alpha_budget=0.100, personal_query_row_budget=1.000, personal_neighbor_row_budget=0.350, personal_query_support_hops=1, personal_query_message_gain=1.000, personal_query_correction_scale=0.200, personal_state_lr_mult=1.000, personal_id_lr_mult=0.500, graph_propagation_alpha=0.020, graph_query_readout_scale=0.020, graph_query_readout_2hop_scale=0.010
+2026-05-07 17:07:20,783 - INFO - [assist_09] [数据清洗] 学生交互次数 < 15 次的学生：共移除 313 个学生（仅统计用户数）
+2026-05-07 17:07:20,800 - INFO - [assist_09] [数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 5118 条记录。
+2026-05-07 17:07:20,800 - INFO - [assist_09] [数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。
+2026-05-07 17:07:20,800 - INFO - [assist_09] [数据清洗] 跳过毒题清洗（min_poison_count <= 0）。
+2026-05-07 17:07:20,800 - INFO - [assist_09] 正在构建ID映射...
+2026-05-07 17:07:21,112 - INFO - [assist_09] 正在构建Q矩阵...
+2026-05-07 17:07:40,267 - INFO - [assist_09] [A Prior] train-only evidence: item_edges=130, item_density=0.0087, item_entropy=0.2363, seq_raw_mass=357357.3, seq_weighted_mass=1885.2, seq_students=2070, seq_edges=9654, seq_density=0.6433, seq_entropy=3.3646
+2026-05-07 17:07:40,280 - INFO - [assist_09] [数据清洗] Valid train-seen 过滤：before=20072, after=19875, dropped=197, coverage=99.02%
+2026-05-07 17:07:40,290 - INFO - [assist_09] [数据清洗] Test train-seen 过滤：before=51610, after=51090, dropped=520, coverage=98.99%
+2026-05-07 17:07:40,303 - INFO - [assist_09] [统计] 开始统计清洗后每道题的概念数量分布...
+2026-05-07 17:07:40,327 - INFO - [assist_09] [Train] 概念数统计：题目数=17057, 平均概念数=1.1995, min=1, max=4, 1概念=14129 (82.83%), ≥2概念=2928 (17.17%)
+2026-05-07 17:07:40,328 - INFO - [assist_09] [Train] 概念数直方图（概念数: 题目数量）: {1: 14129, 2: 2533, 3: 315, 4: 80}
+2026-05-07 17:07:40,354 - INFO - [assist_09] [Valid] 概念数统计：题目数=9034, 平均概念数=1.1996, min=1, max=4, 1概念=7500 (83.02%), ≥2概念=1534 (16.98%)
+2026-05-07 17:07:40,354 - INFO - [assist_09] [Valid] 概念数直方图（概念数: 题目数量）: {1: 7500, 2: 1314, 3: 171, 4: 49}
+2026-05-07 17:07:40,378 - INFO - [assist_09] [Test] 概念数统计：题目数=12825, 平均概念数=1.1994, min=1, max=4, 1概念=10661 (83.13%), ≥2概念=2164 (16.87%)
+2026-05-07 17:07:40,378 - INFO - [assist_09] [Test] 概念数直方图（概念数: 题目数量）: {1: 10661, 2: 1836, 3: 263, 4: 65}
+2026-05-07 17:07:40,378 - INFO - [assist_09] [统计] 概念数量统计完成。
+2026-05-07 17:07:40,382 - INFO - [assist_09] 正在加载数据集...
+2026-05-07 17:07:40,605 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Train samples: 190623, Val samples: 19875
+2026-05-07 17:07:40,614 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Number of students: 2180
+2026-05-07 17:07:40,614 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Number of exercises: 17057
+2026-05-07 17:07:40,614 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Number of concepts: 123
+2026-05-07 17:07:40,614 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [A Prior] item_edges=130 item_density=0.0087 item_entropy=0.2363 | seq_raw_mass=357357.3 seq_weighted_mass=1885.2 seq_students=2070 seq_edges=9654 seq_density=0.6433 seq_entropy=3.3646
+2026-05-07 17:07:40,614 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Creating model...
+2026-05-07 17:07:40,614 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Ablation switches: ablate_module1=False | enable_module1=True | use_concept_graph=False | effective(num_gnn_layers=2)
+2026-05-07 17:09:48,943 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] AE stat priors initialized: scale=1.000, train_global_rate=0.6584, student_absmean=0.5978, exercise_absmean=0.5573, concept_absmean=0.4792, student_concept_absmean=0.0481, reliability_absmean=0.7670
+2026-05-07 17:09:48,943 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Ablation runtime check: args(ablate_module1=False) | expect(use_concept_graph=False,use_personal_graph=True) | model(enable_module1=True,use_concept_graph=False,use_personal_graph=True) | physical(has_knowledge_encoder=True,has_relation_learning=False,has_adaptive_gate=True,has_personal_generator=True)
+2026-05-07 17:09:48,944 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Debug diagnostics enabled: diag_batches=1
+2026-05-07 17:09:48,944 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Graph Init] graph_tau_mean=0.0000, graph_tau_std=0.0000, graph_dropout=0.000, item_beta=0.0000±0.0000, seq_beta=0.0000±0.0000, self_loop_logit=0.0000, use_personal_graph=True
+2026-05-07 17:09:48,944 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Total parameters: 217,920
+2026-05-07 17:09:48,944 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Trainable parameters: 217,919
+2026-05-07 17:09:49,947 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Optimizer param groups: backbone@lr=0.0003, ae_joint@lr=0.009, personal_state@lr=0.0003
+2026-05-07 17:09:49,947 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Monitor config: scheduler=val_auc(max), best_checkpoint=val_auc(max), early_stop=val_auc(max)
+2026-05-07 17:09:49,947 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Starting training...
+2026-05-07 17:13:30,573 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Epoch [001/100] | Train: Loss=0.6104, BCE=0.6097, Reg=0.0007, AUC=0.6953, ACC=0.6711, RMSE=0.4590 | Val: Loss=0.6086, BCE=0.6079, Reg=0.0007, AUC=0.6816, ACC=0.6759, RMSE=0.4577
+2026-05-07 17:13:30,574 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Reg Terms] Epoch [001] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000002, alpha_var=0.000000, alpha_collapse=0.000500, reg_bce_ratio=0.0012 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000002, alpha_var=0.000000, alpha_collapse=0.000494, reg_bce_ratio=0.0012
+2026-05-07 17:13:30,699 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][AE] Epoch [001] | irt_abs_mean=0.0192, irt_std=0.0148, personal_warmup_scale=0.12, relation_theta_delta=0.0000, relation_theta_logit=0.0000, relation_theta_neighbor_mass=0.0000, relation_theta_personal_mass=0.0000, ae_posterior_prior_scale=1.0000, ae_posterior_prior_logit=0.0000, ae_posterior_prior_delta=0.0000, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.0695, alpha_std=0.0000, alpha_base_mean=0.0695, alpha_delta_absmean=0.0000, alpha_saturation_ratio=0.0000, alpha_bias_std=NA, alpha_state_path=0.0000, alpha_id_path=0.0000, alpha_bias_path=0.0000, head_bias_path=1.1080, personal_row_entropy=0.0715, personal_matrix_delta=0.0796, personal_matrix_student_std=0.1574, personal_delta_pre_softmax_norm=1.3107, personal_delta_student_std=0.4558, alpha_head_std=0.0000, query_row_global_readout_delta=0.0000, query_row_personal_message_delta=0.0006, ae_query_state_residual_delta=0.0000, ae_logit_residual_abs_mean=0.8124, query_row_posterior_delta_abs=0.0796, query_row_posterior_kl=0.0485, query_row_delta_local_rms_raw=0.0962, query_row_message_projection_gain=1.2079, personal_to_graph_query_ratio=0.0000, query_row_global_support_mass=0.0000, query_row_personal_support_mass=0.0000, neighbor_row_personal_delta=0.0000, personal_row_budget_mean=1.0000, personal_query_row_std=0.7152, readout_query_support_mass=0.0000, personal_student_mix=0.0000, personal_student_adapter=0.0000, local_row_ratio=0.0098, support_density=0.1840, readout_query_delta=0.0006, personal_bad_rows_active=0.00, personal_fallback_rows_active=0.00, personal_bad_row_rate_active=0.0000, personal_padded_rows=460.00, personal_logits_support_absmax=3.2711, personal_query_trust_scale_mean=0.8314, personal_bad_rows_all=0.00, personal_fallback_rows_all=0.00, personal_logits_absmax_all=30.0000
+2026-05-07 17:13:30,699 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][A] Epoch [001] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.089800, to_identity_l2=0.000000, relation_identity_delta=0.000000, knowledge_state_graph_delta=0.000000, knowledge_state_personal_delta=0.000000, share_concept_embeddings=True, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-05-07 17:13:30,699 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][A Support] Epoch [001] | candidate_size=0.00, final_size=0.00, item_survival=0.0000, seq_survival=0.0000, item_seq_overlap=0.0000, self_retention=0.0000
+2026-05-07 17:13:30,699 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][AE Components] Epoch [001] | student_prior=0.6529, exercise_prior=0.0000, concept_prior=0.0000, query_student_concept=0.0000, graph_student_concept=0.0000, posterior_prior=0.0000, reliability=0.0000, interpretable_bias=0.2437, explicit_feature=0.0000, interaction=0.0000, raw_before_clip=0.8223, raw_after_clip=0.8124
+2026-05-07 17:13:30,700 - WARNING - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag Warning][E] alpha_head_std is near zero: alpha_head_std=0.000000, alpha_std=0.000000
+2026-05-07 17:13:30,700 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Grad Norms] Epoch [001] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, prior_strength=0.000000e+00, receiver_bias=0.000000e+00, self_loop=0.000000e+00, gate_head_bias=0.000000e+00, gate_query_weight=0.000000e+00, gate_context_weight=0.000000e+00, generator_state_mix=0.000000e+00
+2026-05-07 17:13:30,942 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] -> New best AUC=0.6816 at epoch 1
+2026-05-07 17:17:07,448 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Epoch [002/100] | Train: Loss=0.5949, BCE=0.5935, Reg=0.0014, AUC=0.6946, ACC=0.6894, RMSE=0.4510 | Val: Loss=0.6010, BCE=0.5996, Reg=0.0014, AUC=0.6806, ACC=0.6821, RMSE=0.4536
+2026-05-07 17:17:07,449 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Reg Terms] Epoch [002] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000003, alpha_var=0.000000, alpha_collapse=0.001000, reg_bce_ratio=0.0024 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000003, alpha_var=0.000000, alpha_collapse=0.000987, reg_bce_ratio=0.0024
+2026-05-07 17:17:07,569 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][AE] Epoch [002] | irt_abs_mean=0.0007, irt_std=0.0015, personal_warmup_scale=0.25, relation_theta_delta=0.0000, relation_theta_logit=0.0000, relation_theta_neighbor_mass=0.0000, relation_theta_personal_mass=0.0000, ae_posterior_prior_scale=1.0000, ae_posterior_prior_logit=0.0000, ae_posterior_prior_delta=0.0000, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.0904, alpha_std=0.0000, alpha_base_mean=0.0904, alpha_delta_absmean=0.0000, alpha_saturation_ratio=0.0000, alpha_bias_std=NA, alpha_state_path=0.0000, alpha_id_path=0.0000, alpha_bias_path=0.0000, head_bias_path=0.7405, personal_row_entropy=0.0645, personal_matrix_delta=0.0809, personal_matrix_student_std=0.1564, personal_delta_pre_softmax_norm=1.1803, personal_delta_student_std=0.4063, alpha_head_std=0.0000, query_row_global_readout_delta=0.0000, query_row_personal_message_delta=0.0004, ae_query_state_residual_delta=0.0000, ae_logit_residual_abs_mean=0.9133, query_row_posterior_delta_abs=0.0809, query_row_posterior_kl=0.0480, query_row_delta_local_rms_raw=0.0132, query_row_message_projection_gain=0.1627, personal_to_graph_query_ratio=0.0000, query_row_global_support_mass=0.0000, query_row_personal_support_mass=0.0000, neighbor_row_personal_delta=0.0000, personal_row_budget_mean=1.0000, personal_query_row_std=0.6438, readout_query_support_mass=0.0000, personal_student_mix=0.0000, personal_student_adapter=0.0000, local_row_ratio=0.0098, support_density=0.1840, readout_query_delta=0.0004, personal_bad_rows_active=0.00, personal_fallback_rows_active=0.00, personal_bad_row_rate_active=0.0000, personal_padded_rows=460.00, personal_logits_support_absmax=3.0678, personal_query_trust_scale_mean=0.9568, personal_bad_rows_all=0.00, personal_fallback_rows_all=0.00, personal_logits_absmax_all=30.0000
+2026-05-07 17:17:07,569 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][A] Epoch [002] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.089800, to_identity_l2=0.000000, relation_identity_delta=0.000000, knowledge_state_graph_delta=0.000000, knowledge_state_personal_delta=0.000000, share_concept_embeddings=True, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-05-07 17:17:07,569 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][A Support] Epoch [002] | candidate_size=0.00, final_size=0.00, item_survival=0.0000, seq_survival=0.0000, item_seq_overlap=0.0000, self_retention=0.0000
+2026-05-07 17:17:07,569 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][AE Components] Epoch [002] | student_prior=0.6529, exercise_prior=0.0000, concept_prior=0.0000, query_student_concept=0.0000, graph_student_concept=0.0000, posterior_prior=0.0000, reliability=0.0000, interpretable_bias=0.3989, explicit_feature=0.0000, interaction=0.0000, raw_before_clip=0.9280, raw_after_clip=0.9133
+2026-05-07 17:17:07,569 - WARNING - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag Warning][E] alpha_head_std is near zero: alpha_head_std=0.000000, alpha_std=0.000000
+2026-05-07 17:17:07,569 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Grad Norms] Epoch [002] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, prior_strength=0.000000e+00, receiver_bias=0.000000e+00, self_loop=0.000000e+00, gate_head_bias=0.000000e+00, gate_query_weight=0.000000e+00, gate_context_weight=0.000000e+00, generator_state_mix=0.000000e+00
+2026-05-07 17:17:07,569 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] -> No improvement 1 epoch(s) (best AUC=0.6816 @ 1)
+2026-05-07 17:20:20,084 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Epoch [003/100] | Train: Loss=0.5888, BCE=0.5868, Reg=0.0019, AUC=0.6946, ACC=0.6953, RMSE=0.4478 | Val: Loss=0.5979, BCE=0.5961, Reg=0.0018, AUC=0.6808, ACC=0.6866, RMSE=0.4519
+2026-05-07 17:20:20,084 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Reg Terms] Epoch [003] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000008, alpha_var=0.000000, alpha_collapse=0.001500, reg_bce_ratio=0.0033 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000012, alpha_var=0.000000, alpha_collapse=0.001523, reg_bce_ratio=0.0030
+2026-05-07 17:20:20,229 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][AE] Epoch [003] | irt_abs_mean=0.0000, irt_std=0.0000, personal_warmup_scale=0.38, relation_theta_delta=0.0000, relation_theta_logit=0.0000, relation_theta_neighbor_mass=0.0000, relation_theta_personal_mass=0.0000, ae_posterior_prior_scale=1.0000, ae_posterior_prior_logit=0.0000, ae_posterior_prior_delta=0.0000, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.1108, alpha_std=0.0000, alpha_base_mean=0.1108, alpha_delta_absmean=0.0000, alpha_saturation_ratio=0.0000, alpha_bias_std=NA, alpha_state_path=0.0000, alpha_id_path=0.0000, alpha_bias_path=0.0000, head_bias_path=0.4232, personal_row_entropy=0.1563, personal_matrix_delta=0.0455, personal_matrix_student_std=0.1448, personal_delta_pre_softmax_norm=0.7711, personal_delta_student_std=0.2643, alpha_head_std=0.0000, query_row_global_readout_delta=0.0000, query_row_personal_message_delta=0.0000, ae_query_state_residual_delta=0.0000, ae_logit_residual_abs_mean=0.9789, query_row_posterior_delta_abs=0.0455, query_row_posterior_kl=0.0246, query_row_delta_local_rms_raw=0.0000, query_row_message_projection_gain=0.0001, personal_to_graph_query_ratio=0.0000, query_row_global_support_mass=0.0000, query_row_personal_support_mass=0.0000, neighbor_row_personal_delta=0.0000, personal_row_budget_mean=1.0000, personal_query_row_std=0.4506, readout_query_support_mass=0.0000, personal_student_mix=0.0000, personal_student_adapter=0.0000, local_row_ratio=0.0098, support_density=0.1840, readout_query_delta=0.0000, personal_bad_rows_active=0.00, personal_fallback_rows_active=0.00, personal_bad_row_rate_active=0.0000, personal_padded_rows=460.00, personal_logits_support_absmax=2.9037, personal_query_trust_scale_mean=1.0000, personal_bad_rows_all=0.00, personal_fallback_rows_all=0.00, personal_logits_absmax_all=30.0000
+2026-05-07 17:20:20,229 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][A] Epoch [003] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.089800, to_identity_l2=0.000000, relation_identity_delta=0.000000, knowledge_state_graph_delta=0.000000, knowledge_state_personal_delta=0.000000, share_concept_embeddings=True, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-05-07 17:20:20,229 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][A Support] Epoch [003] | candidate_size=0.00, final_size=0.00, item_survival=0.0000, seq_survival=0.0000, item_seq_overlap=0.0000, self_retention=0.0000
+2026-05-07 17:20:20,229 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][AE Components] Epoch [003] | student_prior=0.6529, exercise_prior=0.0000, concept_prior=0.0000, query_student_concept=0.0000, graph_student_concept=0.0000, posterior_prior=0.0000, reliability=0.0000, interpretable_bias=0.4979, explicit_feature=0.0000, interaction=0.0000, raw_before_clip=0.9967, raw_after_clip=0.9789
+2026-05-07 17:20:20,229 - WARNING - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag Warning] alpha_std has been near zero for 3 epoch(s) (alpha_std=0.000000, personal_row_entropy=0.1563). This indicates personal-graph mixing may be collapsed/trivial.
+2026-05-07 17:20:20,229 - WARNING - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag Warning][E] alpha_head_std is near zero: alpha_head_std=0.000000, alpha_std=0.000000
+2026-05-07 17:20:20,229 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Grad Norms] Epoch [003] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, prior_strength=0.000000e+00, receiver_bias=0.000000e+00, self_loop=0.000000e+00, gate_head_bias=0.000000e+00, gate_query_weight=0.000000e+00, gate_context_weight=0.000000e+00, generator_state_mix=0.000000e+00
+2026-05-07 17:20:20,229 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] -> No improvement 2 epoch(s) (best AUC=0.6816 @ 1)
+2026-05-07 17:23:38,749 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Epoch [004/100] | Train: Loss=0.5862, BCE=0.5837, Reg=0.0026, AUC=0.6950, ACC=0.6985, RMSE=0.4463 | Val: Loss=0.5972, BCE=0.5945, Reg=0.0027, AUC=0.6814, ACC=0.6884, RMSE=0.4511
+2026-05-07 17:23:38,749 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Reg Terms] Epoch [004] | Train: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000012, alpha_var=0.000000, alpha_collapse=0.002001, reg_bce_ratio=0.0044 | Val: graph_entropy=0.000000, graph_diag=0.000000, graph_uniform=0.000000, graph_reg_scale=1.0000, prediction_l2=0.000000, personal_sparse=0.000009, alpha_var=0.000000, alpha_collapse=0.001974, reg_bce_ratio=0.0046
+2026-05-07 17:23:38,815 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][AE] Epoch [004] | irt_abs_mean=0.0014, irt_std=0.0002, personal_warmup_scale=0.50, relation_theta_delta=0.0000, relation_theta_logit=0.0000, relation_theta_neighbor_mass=0.0000, relation_theta_personal_mass=0.0000, ae_posterior_prior_scale=1.0000, ae_posterior_prior_logit=0.0000, ae_posterior_prior_delta=0.0000, graph_row_entropy=0.0000, graph_entropy_ratio=0.0000, alpha_mean=0.1277, alpha_std=0.0000, alpha_base_mean=0.1277, alpha_delta_absmean=0.0000, alpha_saturation_ratio=0.0000, alpha_bias_std=NA, alpha_state_path=0.0000, alpha_id_path=0.0000, alpha_bias_path=0.0000, head_bias_path=0.1755, personal_row_entropy=0.0956, personal_matrix_delta=0.0756, personal_matrix_student_std=0.1521, personal_delta_pre_softmax_norm=1.0266, personal_delta_student_std=0.3490, alpha_head_std=0.0000, query_row_global_readout_delta=0.0000, query_row_personal_message_delta=0.0001, ae_query_state_residual_delta=0.0000, ae_logit_residual_abs_mean=1.0358, query_row_posterior_delta_abs=0.0756, query_row_posterior_kl=0.0415, query_row_delta_local_rms_raw=0.0011, query_row_message_projection_gain=0.0141, personal_to_graph_query_ratio=0.0000, query_row_global_support_mass=0.0000, query_row_personal_support_mass=0.0000, neighbor_row_personal_delta=0.0000, personal_row_budget_mean=1.0000, personal_query_row_std=0.5593, readout_query_support_mass=0.0000, personal_student_mix=0.0000, personal_student_adapter=0.0000, local_row_ratio=0.0098, support_density=0.1840, readout_query_delta=0.0001, personal_bad_rows_active=0.00, personal_fallback_rows_active=0.00, personal_bad_row_rate_active=0.0000, personal_padded_rows=460.00, personal_logits_support_absmax=2.8234, personal_query_trust_scale_mean=1.0000, personal_bad_rows_all=0.00, personal_fallback_rows_all=0.00, personal_logits_absmax_all=30.0000
+2026-05-07 17:23:38,816 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][A] Epoch [004] | entropy_ratio=0.0000, diag_mass=1.0000, to_uniform_l2=0.089800, to_identity_l2=0.000000, relation_identity_delta=0.000000, knowledge_state_graph_delta=0.000000, knowledge_state_personal_delta=0.000000, share_concept_embeddings=True, tau_mean=0.0000, tau_std=0.0000, graph_reg_scale(train/val)=1.0000/1.0000
+2026-05-07 17:23:38,816 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][A Support] Epoch [004] | candidate_size=0.00, final_size=0.00, item_survival=0.0000, seq_survival=0.0000, item_seq_overlap=0.0000, self_retention=0.0000
+2026-05-07 17:23:38,816 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag][AE Components] Epoch [004] | student_prior=0.6529, exercise_prior=0.0000, concept_prior=0.0000, query_student_concept=0.0000, graph_student_concept=0.0000, posterior_prior=0.0000, reliability=0.0000, interpretable_bias=0.5598, explicit_feature=0.0000, interaction=0.0000, raw_before_clip=1.0559, raw_after_clip=1.0358
+2026-05-07 17:23:38,816 - WARNING - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag Warning] alpha_std has been near zero for 4 epoch(s) (alpha_std=0.000000, personal_row_entropy=0.0956). This indicates personal-graph mixing may be collapsed/trivial.
+2026-05-07 17:23:38,816 - WARNING - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Diag Warning][E] alpha_head_std is near zero: alpha_head_std=0.000000, alpha_std=0.000000
+2026-05-07 17:23:38,816 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] [Grad Norms] Epoch [004] | relation_emb=0.000000e+00, relation_tau=0.000000e+00, prior_strength=0.000000e+00, receiver_bias=0.000000e+00, self_loop=0.000000e+00, gate_head_bias=0.000000e+00, gate_query_weight=0.000000e+00, gate_context_weight=0.000000e+00, generator_state_mix=0.000000e+00
+2026-05-07 17:23:38,816 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] -> No improvement 3 epoch(s) (best AUC=0.6816 @ 1)
+2026-05-07 17:23:38,816 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Early stopping at epoch 4 (best AUC=0.6816 @ 1)
+2026-05-07 17:23:38,821 - INFO - Epoch-wise metrics saved to checkpoints/abce_diag/ae_reliability_gpu23_20260507_170717/assist_09/seed42/best_no_A/metrics_history.csv
+2026-05-07 17:23:38,822 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Training completed! Best Val AUC=0.6816 @ epoch 1
+2026-05-07 17:23:39,005 - INFO - 
+============================================================
+         MODULE ACTIVITY REPORT
+============================================================
+Dataset: assist_09 | Seed: 42 | Epoch: 4
+
+1. Concept Graph Module (A):
+   - Status: DISABLED (use_concept_graph=False or no_A)
+
+2. Personal Graph Module (E):
+   - Alpha mean: 0.128
+   - Alpha std: 0.000
+   - Alpha bias std: 0.000
+   - Personal/global delta: 0.0619
+   - Inter-student matrix std: 0.1520
+   - Query personal message delta: 0.0001
+   - Query posterior KL: 0.0338
+   - Query message projection gain: 0.0142
+   - Query message alignment: 0.0000
+   - Query self support mass: 0.8470
+   - Query graph support mass: 0.0687
+   - Query personal std: 0.5196
+   - Personal/global query ratio: 0.0000
+   - Status: PROJ_COLLAPSE (posterior moves, but message projection is collapsing)
+   -> Consider: widen message basis or improve value-basis writer before enlarging posterior amplitude
+
+------------------------------------------------------------
+SUMMARY:
+   Inactive modules: Personal Graph (E)
+============================================================
+2026-05-07 17:23:39,006 - INFO - [assist_09|assist_09_abce_best_no_A|lr=0.0003|drop=0.20] Module activity saved to checkpoints/abce_diag/ae_reliability_gpu23_20260507_170717/assist_09/seed42/best_no_A/module_activity.json
+2026-05-07 17:23:39,143 - INFO - Using device: cuda:0 (physical gpu 3)
+2026-05-07 17:23:39,143 - INFO - Loading model from checkpoints/abce_diag/ae_reliability_gpu23_20260507_170717/assist_09/seed42/best_no_A/best_model.pth...
+2026-05-07 17:23:39,220 - INFO - [Inference Filter] before=52549, after=51090, dropped=1459, coverage=97.22% (train-only seen student/item support)
+2026-05-07 17:23:39,232 - INFO - Inference switches: ablate_module1=False | enable_module1=True | use_concept_graph=False | effective(num_gnn_layers=2)
+2026-05-07 17:23:39,240 - INFO - [Inference] Ablation runtime check: args(ablate_module1=False) | expect(use_concept_graph=False,use_personal_graph=True) | model(enable_module1=True,use_concept_graph=False,use_personal_graph=True) | physical(has_knowledge_encoder=True,has_relation_learning=False,has_adaptive_gate=True,has_personal_generator=True)
+2026-05-07 17:23:39,240 - INFO - [Inference] [Graph Init] graph_tau_mean=0.0000, graph_tau_std=0.0000, graph_dropout=0.000, item_beta=0.0000±0.0000, seq_beta=0.0000±0.0000, self_loop_logit=0.0000, use_personal_graph=True
+2026-05-07 17:23:39,241 - INFO - Model loaded from epoch 1. Start testing...
+2026-05-07 17:23:49,928 - INFO - [Test] 200/400 batches done, samples=25600
+2026-05-07 17:24:02,062 - INFO - [Test] 400/400 batches done, samples=51090
+2026-05-07 17:24:02,078 - INFO - 
+==================================================
+2026-05-07 17:24:02,079 - INFO - Test Results:
+2026-05-07 17:24:02,079 - INFO - AUC: 0.6817
+2026-05-07 17:24:02,079 - INFO - ACC: 0.6793
+2026-05-07 17:24:02,079 - INFO - RMSE: 0.4573
+2026-05-07 17:24:02,079 - INFO - ==================================================
+2026-05-07 17:24:02,091 - INFO - Summary appended to /home/zsh/ConceptSkillCDM/results/experiment_results.csv
+2026-05-07 17:24:02,091 - INFO - 
+Generating student diagnosis reports...
+2026-05-07 17:24:02,118 - INFO - Student diagnosis reports saved to checkpoints/abce_diag/ae_reliability_gpu23_20260507_170717/assist_09/seed42/best_no_A/student_diagnosis.json
+2026-05-07 17:24:02,173 - INFO - Run completed.
+2026-05-07 17:24:02,174 - INFO - Best validation AUC: 0.6816 at epoch 1
+2026-05-07 17:24:02,174 - INFO - Test metrics - AUC: 0.6817, ACC: 0.6793, RMSE: 0.4573
+2026-05-07 17:24:02,349 - INFO - [数据清洗] 学生交互次数 < 15 次的学生：共移除 313 个学生（仅统计用户数）
+2026-05-07 17:24:02,360 - INFO - [数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 5118 条记录。
+2026-05-07 17:24:02,361 - INFO - [数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。
+2026-05-07 17:24:02,361 - INFO - [数据清洗] 跳过毒题清洗（min_poison_count <= 0）。
+2026-05-07 17:24:02,361 - INFO - 正在构建ID映射...
+2026-05-07 17:24:02,620 - INFO - 正在构建Q矩阵...
+2026-05-07 17:24:17,588 - INFO - [A Prior] train-only evidence: item_edges=130, item_density=0.0087, item_entropy=0.2363, seq_raw_mass=357357.3, seq_weighted_mass=1885.2, seq_students=2070, seq_edges=9654, seq_density=0.6433, seq_entropy=3.3646
+2026-05-07 17:24:17,593 - INFO - [数据清洗] Valid train-seen 过滤：before=20072, after=19875, dropped=197, coverage=99.02%
+2026-05-07 17:24:17,598 - INFO - [数据清洗] Test train-seen 过滤：before=51610, after=51090, dropped=520, coverage=98.99%
+2026-05-07 17:24:17,598 - INFO - [统计] 开始统计清洗后每道题的概念数量分布...
+2026-05-07 17:24:17,606 - INFO - [Train] 概念数统计：题目数=17057, 平均概念数=1.1995, min=1, max=4, 1概念=14129 (82.83%), ≥2概念=2928 (17.17%)
+2026-05-07 17:24:17,606 - INFO - [Train] 概念数直方图（概念数: 题目数量）: {1: 14129, 2: 2533, 3: 315, 4: 80}
+2026-05-07 17:24:17,612 - INFO - [Valid] 概念数统计：题目数=9034, 平均概念数=1.1996, min=1, max=4, 1概念=7500 (83.02%), ≥2概念=1534 (16.98%)
+2026-05-07 17:24:17,612 - INFO - [Valid] 概念数直方图（概念数: 题目数量）: {1: 7500, 2: 1314, 3: 171, 4: 49}
+2026-05-07 17:24:17,619 - INFO - [Test] 概念数统计：题目数=12825, 平均概念数=1.1994, min=1, max=4, 1概念=10661 (83.13%), ≥2概念=2164 (16.87%)
+2026-05-07 17:24:17,619 - INFO - [Test] 概念数直方图（概念数: 题目数量）: {1: 10661, 2: 1836, 3: 263, 4: 65}
+2026-05-07 17:24:17,619 - INFO - [统计] 概念数量统计完成。
+2026-05-07 17:24:17,619 - INFO - 正在加载数据集...
+2026-05-07 17:24:17,963 - INFO - [Component Analysis] Gate alpha samples: 200
+2026-05-07 17:24:17,967 - INFO - [Component Analysis] Data saved to checkpoints/abce_diag/ae_reliability_gpu23_20260507_170717/assist_09/seed42/best_no_A/component_analysis_data.npz
+2026-05-07 17:24:18,386 - INFO - Generating component analysis visualizations...
+2026-05-07 17:24:18,563 - INFO - Visualizations saved to checkpoints/abce_diag/ae_reliability_gpu23_20260507_170717/assist_09/seed42/best_no_A
