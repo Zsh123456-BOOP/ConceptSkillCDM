@@ -28,12 +28,13 @@ class CognitiveDiagnosisHead(nn.Module):
     """
     固定预测头 D：2PL-IRT
     - theta_c：对每个概念的能力
-    - theta_e：按 Q-mask 聚合后的题目能力
+    - theta_e：按 Q-mask 聚合后的题目能力；多概念题可加入弱项惩罚
     - irt_logit = a * (theta_e - b)
     """
 
-    def __init__(self, knowledge_dim: int):
+    def __init__(self, knowledge_dim: int, concept_gap_scale: float = 0.0):
         super().__init__()
+        self.concept_gap_scale = max(0.0, float(concept_gap_scale))
         self.theta_proj = nn.Linear(knowledge_dim, 1, bias=True)
         nn.init.normal_(self.theta_proj.weight, mean=0.0, std=0.02)
         nn.init.zeros_(self.theta_proj.bias)
@@ -50,7 +51,11 @@ class CognitiveDiagnosisHead(nn.Module):
 
         mask = concept_mask.float()
         denom = mask.sum(dim=1).clamp(min=1.0)
-        theta_e = (theta_c * mask).sum(dim=1) / denom
+        theta_mean = (theta_c * mask).sum(dim=1) / denom
+        centered = (theta_c - theta_mean.unsqueeze(1)) * mask
+        theta_gap = torch.sqrt(centered.pow(2).sum(dim=1) / denom + 1e-12)
+        multi_mask = (denom > 1.0).to(theta_c.dtype)
+        theta_e = theta_mean - self.concept_gap_scale * theta_gap * multi_mask
 
         irt_logit = a * (theta_e - b)
 
@@ -59,7 +64,11 @@ class CognitiveDiagnosisHead(nn.Module):
 
         details = {
             "theta_c": theta_c.detach(),
+            "theta_mean": theta_mean.detach(),
+            "theta_gap": theta_gap.detach(),
+            "theta_multi_mask": multi_mask.detach(),
             "theta_e": theta_e.detach(),
+            "concept_gap_scale": torch.tensor(float(self.concept_gap_scale), device=theta_c.device),
             "irt_logit": irt_logit.detach(),
         }
         return irt_logit, details

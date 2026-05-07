@@ -213,6 +213,7 @@ def _build_config_hash(args) -> str:
         "ae_stat_prior_scale",
         "relation_theta_scale",
         "relation_theta_delta_clip",
+        "concept_gap_scale",
         "graph_query_adapter_enable",
         "lambda_personal_kl",
         "lambda_personal_query_residual",

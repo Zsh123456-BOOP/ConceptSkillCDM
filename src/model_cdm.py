@@ -109,6 +109,7 @@ class CognitiveDiagnosisModel(nn.Module):
         ae_logit_dim: int = 32,
         relation_theta_scale: float = 0.0,
         relation_theta_delta_clip: float = 2.0,
+        concept_gap_scale: float = 0.0,
         share_concept_embeddings: bool = False,
     ):
         super().__init__()
@@ -195,6 +196,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.ae_logit_dim = max(1, int(ae_logit_dim))
         self.relation_theta_scale = float(relation_theta_scale)
         self.relation_theta_delta_clip = max(1e-6, float(relation_theta_delta_clip))
+        self.concept_gap_scale = max(0.0, float(concept_gap_scale))
         self.share_concept_embeddings = bool(share_concept_embeddings)
 
         self.register_buffer("q_matrix", q_matrix)
@@ -289,7 +291,10 @@ class CognitiveDiagnosisModel(nn.Module):
         if self.share_concept_embeddings:
             self._tie_concept_embeddings()
 
-        self.diagnosis_head = CognitiveDiagnosisHead(knowledge_dim=knowledge_dim)
+        self.diagnosis_head = CognitiveDiagnosisHead(
+            knowledge_dim=knowledge_dim,
+            concept_gap_scale=self.concept_gap_scale,
+        )
         self.exercise_encoder = ExerciseDifficultyEncoder(num_exercises=num_exercises)
 
     @staticmethod

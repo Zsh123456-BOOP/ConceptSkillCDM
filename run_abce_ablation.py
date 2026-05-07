@@ -98,6 +98,7 @@ STRUCTURAL_SWITCH_KEYS = (
     "ae_stat_prior_scale",
     "relation_theta_scale",
     "relation_theta_delta_clip",
+    "concept_gap_scale",
     "graph_query_adapter_enable",
     "personal_delta_scale",
     "personal_warmup_epochs",

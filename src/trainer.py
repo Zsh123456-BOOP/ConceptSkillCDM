@@ -81,6 +81,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "ae_stat_prior_scale",
     "relation_theta_scale",
     "relation_theta_delta_clip",
+    "concept_gap_scale",
     "graph_query_adapter_enable",
     "personal_delta_scale",
     "personal_warmup_epochs",
@@ -1001,6 +1002,8 @@ def _collect_debug_forward_stats(
     relation_theta_logit_abs_vals: List[float] = []
     relation_theta_neighbor_mass_vals: List[float] = []
     relation_theta_personal_mass_vals: List[float] = []
+    theta_gap_vals: List[float] = []
+    theta_multi_mask_vals: List[float] = []
 
     graph_row_entropy_mean = 0.0
     graph_entropy_ratio = 0.0
@@ -1150,6 +1153,8 @@ def _collect_debug_forward_stats(
                 ("relation_theta_logit_abs_mean", relation_theta_logit_abs_vals),
                 ("relation_theta_neighbor_mass", relation_theta_neighbor_mass_vals),
                 ("relation_theta_personal_mass", relation_theta_personal_mass_vals),
+                ("theta_gap", theta_gap_vals),
+                ("theta_multi_mask", theta_multi_mask_vals),
             ):
                 val = details.get(detail_key)
                 if val is not None:
@@ -1246,6 +1251,8 @@ def _collect_debug_forward_stats(
     relation_theta_logit_abs_mean, _ = _safe_mean_std(relation_theta_logit_abs_vals)
     relation_theta_neighbor_mass_mean, _ = _safe_mean_std(relation_theta_neighbor_mass_vals)
     relation_theta_personal_mass_mean, _ = _safe_mean_std(relation_theta_personal_mass_vals)
+    theta_gap_mean, _ = _safe_mean_std(theta_gap_vals)
+    theta_multi_rate, _ = _safe_mean_std(theta_multi_mask_vals)
 
     return {
         "irt_abs_mean": irt_abs_mean,
@@ -1326,6 +1333,9 @@ def _collect_debug_forward_stats(
         "relation_theta_logit_abs_mean": relation_theta_logit_abs_mean,
         "relation_theta_neighbor_mass": relation_theta_neighbor_mass_mean,
         "relation_theta_personal_mass": relation_theta_personal_mass_mean,
+        "theta_gap_mean": theta_gap_mean,
+        "theta_multi_rate": theta_multi_rate,
+        "concept_gap_scale": float(getattr(base_model, "concept_gap_scale", 0.0)),
         "personal_warmup_scale": personal_warmup_scale,
         "share_concept_embeddings": share_concept_embeddings,
     }
@@ -1854,6 +1864,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         ae_logit_dim=getattr(args, "ae_logit_dim", 32),
         relation_theta_scale=getattr(args, "relation_theta_scale", 0.0),
         relation_theta_delta_clip=getattr(args, "relation_theta_delta_clip", 2.0),
+        concept_gap_scale=getattr(args, "concept_gap_scale", 0.0),
         graph_query_adapter_enable=getattr(args, "graph_query_adapter_enable", True),
         share_concept_embeddings=getattr(args, "share_concept_embeddings", False),
     ).to(device)
@@ -2014,6 +2025,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "irt_abs_mean=%.4f, irt_std=%.4f, personal_warmup_scale=%.2f, "
                 "relation_theta_delta=%.4f, relation_theta_logit=%.4f, "
                 "relation_theta_neighbor_mass=%.4f, relation_theta_personal_mass=%.4f, "
+                "concept_gap_scale=%.4f, theta_gap_mean=%.4f, theta_multi_rate=%.4f, "
                 "graph_row_entropy=%.4f, graph_entropy_ratio=%.4f, "
                 "alpha_mean=%.4f, alpha_std=%.4f, alpha_base_mean=%.4f, alpha_delta_absmean=%.4f, "
                 "alpha_saturation_ratio=%.4f, alpha_bias_std=%s, "
@@ -2042,6 +2054,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["relation_theta_logit_abs_mean"],
                 diag["relation_theta_neighbor_mass"],
                 diag["relation_theta_personal_mass"],
+                diag["concept_gap_scale"],
+                diag["theta_gap_mean"],
+                diag["theta_multi_rate"],
                 diag["graph_row_entropy_mean"],
                 diag["graph_entropy_ratio"],
                 diag["alpha_mean"],
@@ -2637,6 +2652,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         relation_theta_delta_clip=loaded_args.get(
             "relation_theta_delta_clip", getattr(args, "relation_theta_delta_clip", 2.0)
+        ),
+        concept_gap_scale=loaded_args.get(
+            "concept_gap_scale", getattr(args, "concept_gap_scale", 0.0)
         ),
         graph_query_adapter_enable=loaded_args.get(
             "graph_query_adapter_enable", getattr(args, "graph_query_adapter_enable", True)

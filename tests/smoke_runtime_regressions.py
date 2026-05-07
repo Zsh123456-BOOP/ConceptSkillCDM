@@ -48,6 +48,7 @@ def _build_model(
     use_concept_graph: bool = True,
     use_personal_graph: bool = True,
     relation_theta_scale: float = 0.0,
+    concept_gap_scale: float = 0.0,
 ):
     from src.model import CognitiveDiagnosisModel
 
@@ -77,6 +78,7 @@ def _build_model(
         graph_topk=2,
         allow_self_loop=True,
         relation_theta_scale=relation_theta_scale,
+        concept_gap_scale=concept_gap_scale,
     )
     model.eval()
     return model
@@ -304,6 +306,44 @@ def _check_relation_theta_readout_is_interpretable_and_ablatable() -> None:
     _assert(contrast_details["relation_theta_scale"].item() == -0.5, "Relation-theta scale should preserve sign.")
 
 
+def _check_concept_gap_penalty_only_affects_multi_concept_items() -> None:
+    torch.manual_seed(11)
+    plain = _build_model(use_concept_graph=True, use_personal_graph=True, concept_gap_scale=0.0)
+    gap = _build_model(use_concept_graph=True, use_personal_graph=True, concept_gap_scale=0.4)
+    gap.load_state_dict(plain.state_dict(), strict=True)
+    gap.diagnosis_head.concept_gap_scale = 0.4
+    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+
+    with torch.no_grad():
+        plain_logits, plain_details = plain(
+            student_ids=student_ids,
+            exercise_ids=exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+        gap_logits, gap_details = gap(
+            student_ids=student_ids,
+            exercise_ids=exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+
+    _assert_all_finite("concept_gap_logits", gap_logits)
+    single_mask = gap_details["theta_multi_mask"] <= 0.0
+    multi_mask = gap_details["theta_multi_mask"] > 0.0
+    _assert(single_mask.any().item(), "smoke setup should include single-concept items.")
+    _assert(multi_mask.any().item(), "smoke setup should include multi-concept items.")
+    _assert(
+        torch.allclose(gap_details["theta_e"][single_mask], plain_details["theta_e"][single_mask], atol=1e-6),
+        "single-concept theta_e should not change under concept_gap_scale.",
+    )
+    _assert(
+        (gap_details["theta_e"][multi_mask] <= plain_details["theta_e"][multi_mask] + 1e-6).all().item(),
+        "multi-concept theta_e should be weakly penalized by concept gap.",
+    )
+
+
 def _check_get_student_diagnosis() -> None:
     for ablate_module1 in (False, True):
         model = _build_model(ablate_module1=ablate_module1, use_personal_graph=True)
@@ -345,6 +385,7 @@ def main() -> None:
     _check_per_head_personal_graph()
     _check_removed_residual_artifacts()
     _check_relation_theta_readout_is_interpretable_and_ablatable()
+    _check_concept_gap_penalty_only_affects_multi_concept_items()
     _check_get_student_diagnosis()
     _check_grad_guard_keeps_nan_from_poisoning_group()
     print("OK: runtime regression smoke checks passed.")
