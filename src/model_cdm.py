@@ -1,5 +1,5 @@
 
-"""Top-level cognitive diagnosis model built on GLICR-AE + fixed prediction head."""
+"""Top-level cognitive diagnosis model built on the A/E structure module + fixed prediction head."""
 
 from typing import Any, Callable, Dict, Optional, Tuple, Union
 
@@ -21,7 +21,7 @@ from src.prediction_head import CognitiveDiagnosisHead, ExerciseDifficultyEncode
 class CognitiveDiagnosisModel(nn.Module):
     """
     主模型只保留两部分：
-    - Module 1: GLICR-AE / ConceptStructureModeling（A + E）
+    - Module 1: ConceptStructureModeling（A + E）
     - Fixed Prediction Head: CognitiveDiagnosisHead（D）
 
     仅支持 ablate_module1。
