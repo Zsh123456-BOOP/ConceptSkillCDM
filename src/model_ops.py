@@ -204,6 +204,97 @@ def _gather_row_support(
     }
 
 
+def _augment_support_cache_with_item_concepts(
+    support_row_cache: Dict[str, torch.Tensor],
+    concept_mask: Optional[torch.Tensor],
+    active_row_index: Optional[torch.Tensor],
+    active_row_valid_mask: Optional[torch.Tensor],
+    *,
+    item_support_mass: float,
+) -> Dict[str, torch.Tensor]:
+    """Add current-exercise concept columns to E's sparse support.
+
+    This keeps E interpretable for multi-concept exercises: the posterior can
+    reweight concepts that are jointly required by the same item, while
+    single-concept items naturally reduce to the original self/global support.
+    """
+    mass = max(0.0, float(item_support_mass))
+    if mass <= 0.0 or concept_mask is None:
+        return support_row_cache
+    if active_row_index is None or active_row_valid_mask is None or active_row_index.numel() == 0:
+        return support_row_cache
+
+    support_col_index = support_row_cache["support_col_index"]
+    support_valid_mask = support_row_cache["support_valid_mask"].bool()
+    global_support_prob = support_row_cache["global_support_prob"]
+    if support_col_index.dim() != 4:
+        return support_row_cache
+
+    device = support_col_index.device
+    dtype = global_support_prob.dtype
+    concept_mask = concept_mask.to(device=device).bool()
+    item_col_index, item_col_valid_mask = _pack_active_row_index(concept_mask)
+    if item_col_index is None or item_col_valid_mask is None or item_col_index.numel() == 0:
+        return support_row_cache
+
+    B, H, R, _ = support_col_index.shape
+    if item_col_index.size(0) != B:
+        return support_row_cache
+
+    Q = item_col_index.size(1)
+    item_cols = item_col_index.clamp(min=0).view(B, 1, 1, Q).expand(B, H, R, Q)
+    item_valid = item_col_valid_mask.view(B, 1, 1, Q).expand(B, H, R, Q)
+    row_valid = active_row_valid_mask.to(device=device).bool().view(B, 1, R, 1)
+
+    already_present = (
+        (support_col_index.unsqueeze(-1) == item_cols.unsqueeze(-2))
+        & support_valid_mask.unsqueeze(-1)
+    ).any(dim=-2)
+    append_valid = item_valid & row_valid & (~already_present)
+    append_cols = torch.where(append_valid, item_cols, torch.zeros_like(item_cols))
+
+    item_count = item_col_valid_mask.sum(dim=1).clamp(min=1).to(device=device, dtype=dtype).view(B, 1, 1, 1)
+    append_prob = torch.where(
+        append_valid,
+        torch.full_like(append_cols, mass, dtype=dtype) / item_count,
+        torch.zeros_like(append_cols, dtype=dtype),
+    )
+
+    old_prob = global_support_prob.to(dtype=dtype) * support_valid_mask.to(dtype=dtype)
+    augmented_cols = torch.cat([support_col_index, append_cols], dim=-1)
+    augmented_valid = torch.cat([support_valid_mask, append_valid], dim=-1)
+    augmented_prob = torch.cat([old_prob, append_prob], dim=-1)
+    augmented_prob = augmented_prob * augmented_valid.to(dtype=dtype)
+
+    denom = augmented_prob.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+    row_has_support = augmented_valid.any(dim=-1, keepdim=True)
+    augmented_prob = torch.where(row_has_support, augmented_prob / denom, augmented_prob)
+    augmented_logprob = torch.where(
+        augmented_valid,
+        augmented_prob.clamp(min=1e-8).log(),
+        torch.full_like(augmented_prob, -30.0),
+    )
+    added_slots = torch.cat([torch.zeros_like(support_valid_mask), append_valid], dim=-1)
+    active_denom = row_valid.expand(B, H, R, Q).float().sum().clamp(min=1.0)
+    added_rate = append_valid.float().sum() / active_denom
+    added_mass = (augmented_prob * added_slots.to(dtype=dtype)).sum(dim=-1)
+    added_mass = added_mass.sum() / row_has_support.float().sum().clamp(min=1.0)
+
+    out = dict(support_row_cache)
+    out.update(
+        {
+            "support_col_index": augmented_cols,
+            "support_valid_mask": augmented_valid,
+            "global_support_prob": augmented_prob,
+            "global_support_logprob": augmented_logprob,
+            "item_support_added_mask": added_slots,
+            "item_support_added_rate": added_rate.detach(),
+            "item_support_added_mass": added_mass.detach(),
+        }
+    )
+    return out
+
+
 def _gather_head_rows(x: torch.Tensor, row_index: torch.Tensor, row_valid_mask: torch.Tensor) -> torch.Tensor:
     if row_index is None:
         return x.new_zeros((x.size(0), x.size(1), 0, x.size(-1)))

@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 import torch
 
 from src.model_ops import (
+    _augment_support_cache_with_item_concepts,
     _build_no_a_query_support_cache,
     _build_support_cache,
     _gather_row_support,
@@ -103,6 +104,8 @@ def run_structure_forward(
     query_row_posterior_kl = None
     personal_row_budget_mean = None
     personal_query_row_std = None
+    personal_item_support_added_rate = None
+    personal_item_support_added_mass = None
     used_no_a_support_fallback_mode = None
     active_row_index = None
     active_row_valid_mask = None
@@ -233,6 +236,13 @@ def run_structure_forward(
                         force_self_support=module.personal_support_include_query_self,
                     )
                     support_row_cache = _gather_row_support(support_cache, active_row_index, active_row_valid_mask)
+                    support_row_cache = _augment_support_cache_with_item_concepts(
+                        support_row_cache,
+                        concept_mask,
+                        active_row_index,
+                        active_row_valid_mask,
+                        item_support_mass=module.personal_item_support_mass,
+                    )
                 else:
                     if module.personal_support_include_neighbors and local_row_mask is not None:
                         query_support_mask = local_row_mask.bool()
@@ -255,6 +265,14 @@ def run_structure_forward(
             support_col_index = support_row_cache["support_col_index"]
             support_valid_mask = support_row_cache["support_valid_mask"]
             global_support_prob = support_row_cache["global_support_prob"]
+            personal_item_support_added_rate = support_row_cache.get(
+                "item_support_added_rate",
+                relation_matrices.new_tensor(0.0),
+            )
+            personal_item_support_added_mass = support_row_cache.get(
+                "item_support_added_mass",
+                relation_matrices.new_tensor(0.0),
+            )
         has_personal_active_rows = (
             support_row_cache is not None
             and active_row_valid_mask is not None
@@ -453,6 +471,8 @@ def run_structure_forward(
         "query_row_posterior_kl": query_row_posterior_kl,
         "personal_row_budget_mean": personal_row_budget_mean,
         "personal_query_row_std": personal_query_row_std,
+        "personal_item_support_added_rate": personal_item_support_added_rate,
+        "personal_item_support_added_mass": personal_item_support_added_mass,
         "used_no_a_support_fallback_mode": used_no_a_support_fallback_mode,
         "active_row_index": active_row_index,
         "active_row_valid_mask": active_row_valid_mask,

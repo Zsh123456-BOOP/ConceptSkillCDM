@@ -272,6 +272,8 @@ def parse_args():
                         help="Include global graph support as part of E's sparse posterior support.")
     parser.add_argument("--personal_support_include_neighbors", action=bool_action, default=None,
                         help="Allow local-neighbor support columns in E's sparse support basis.")
+    parser.add_argument("--personal_item_support_mass", type=float, default=0.0,
+                        help="Total prior mass assigned to current-item co-required concepts added to E support.")
     parser.add_argument("--personal_query_row_budget", type=float, default=1.0,
                         help="Relative personalization budget assigned to queried concept rows.")
     parser.add_argument("--personal_neighbor_row_budget", type=float, default=0.30,

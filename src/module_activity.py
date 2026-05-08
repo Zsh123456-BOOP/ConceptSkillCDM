@@ -54,6 +54,8 @@ def compute_module_activity(
     query_row_global_head_vars: List[float] = []
     personal_query_writeback_deltas: List[float] = []
     personal_query_row_stds: List[float] = []
+    personal_item_support_added_rates: List[float] = []
+    personal_item_support_added_masses: List[float] = []
     personal_to_graph_query_ratios: List[float] = []
     personal_bad_row_rate_active_vals: List[float] = []
     personal_query_trust_scale_vals: List[float] = []
@@ -120,6 +122,16 @@ def compute_module_activity(
             q_std = details.get("personal_query_row_std")
             if q_std is not None:
                 personal_query_row_stds.extend(q_std.reshape(-1).detach().cpu().numpy().tolist())
+            item_support_rate = details.get("personal_item_support_added_rate")
+            if item_support_rate is not None:
+                personal_item_support_added_rates.extend(
+                    item_support_rate.reshape(-1).detach().cpu().numpy().tolist()
+                )
+            item_support_mass = details.get("personal_item_support_added_mass")
+            if item_support_mass is not None:
+                personal_item_support_added_masses.extend(
+                    item_support_mass.reshape(-1).detach().cpu().numpy().tolist()
+                )
             q_ratio = details.get("personal_to_graph_query_ratio_effective")
             if q_ratio is not None:
                 personal_to_graph_query_ratios.extend(q_ratio.reshape(-1).detach().cpu().numpy().tolist())
@@ -186,6 +198,12 @@ def compute_module_activity(
         query_graph_support_mass = float(np.mean(query_row_graph_support_masses)) if query_row_graph_support_masses else 0.0
         query_writeback = float(np.mean(personal_query_writeback_deltas)) if personal_query_writeback_deltas else query_personal_delta
         query_personal_std = float(np.mean(personal_query_row_stds)) if personal_query_row_stds else 0.0
+        item_support_added_rate = (
+            float(np.mean(personal_item_support_added_rates)) if personal_item_support_added_rates else 0.0
+        )
+        item_support_added_mass = (
+            float(np.mean(personal_item_support_added_masses)) if personal_item_support_added_masses else 0.0
+        )
         query_ratio = float(np.mean(personal_to_graph_query_ratios)) if personal_to_graph_query_ratios else 0.0
         bad_row_rate_active = (
             float(np.mean(personal_bad_row_rate_active_vals)) if personal_bad_row_rate_active_vals else 0.0
@@ -208,6 +226,8 @@ def compute_module_activity(
         results["query_row_graph_support_mass"] = query_graph_support_mass
         results["personal_query_writeback_delta"] = query_writeback
         results["personal_query_row_std"] = query_personal_std
+        results["personal_item_support_added_rate"] = item_support_added_rate
+        results["personal_item_support_added_mass"] = item_support_added_mass
         results["personal_to_graph_query_ratio"] = query_ratio
         results["personal_bad_row_rate_active"] = bad_row_rate_active
         results["personal_query_trust_scale_mean"] = trust_scale_mean
@@ -356,6 +376,8 @@ def format_activity_report(
         query_posterior_kl = activity.get("query_row_posterior_kl", 0.0)
         query_alignment = activity.get("query_row_message_alignment", 0.0)
         personal_query_row_std = activity.get("personal_query_row_std", 0.0)
+        item_support_rate = activity.get("personal_item_support_added_rate", 0.0)
+        item_support_mass = activity.get("personal_item_support_added_mass", 0.0)
         query_ratio = activity.get("personal_to_graph_query_ratio", 0.0)
         mode = str(activity.get("personal_graph_mode", "INACTIVE"))
         if mode == "LIVE":
@@ -392,6 +414,8 @@ def format_activity_report(
         lines.append(f"   - Query self support mass: {activity.get('query_row_self_support_mass', 0.0):.4f}")
         lines.append(f"   - Query graph support mass: {activity.get('query_row_graph_support_mass', 0.0):.4f}")
         lines.append(f"   - Query personal std: {personal_query_row_std:.4f}")
+        lines.append(f"   - Item-local support added rate: {item_support_rate:.4f}")
+        lines.append(f"   - Item-local support added mass: {item_support_mass:.4f}")
         lines.append(f"   - Personal/global query ratio: {query_ratio:.4f}")
         lines.append(f"   - Status: {status}")
         if advice:

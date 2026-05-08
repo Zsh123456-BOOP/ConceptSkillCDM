@@ -167,6 +167,7 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "personal_id_lr_mult",
         "personal_query_support_hops",
         "personal_query_message_gain",
+        "personal_item_support_mass",
         "personal_support_include_query_self",
         "personal_support_include_graph",
         "personal_value_use_global_basis",
@@ -959,6 +960,104 @@ def _check_theta_prior_alignment_is_full_only() -> None:
             _assert(details["theta_prior_align_loss"].item() > 0.0, "full A+E should expose theta alignment diagnostics.")
         else:
             _assert(align.item() == 0.0, f"{label} should not receive full-only theta prior alignment.")
+
+
+def _check_item_local_support_augments_e_support() -> None:
+    from src.model_ops import _augment_support_cache_with_item_concepts
+
+    support_cache = {
+        "support_col_index": torch.tensor([[[[0, 2], [1, 3]]]], dtype=torch.long),
+        "support_valid_mask": torch.tensor([[[[True, True], [True, True]]]], dtype=torch.bool),
+        "global_support_prob": torch.tensor([[[[0.80, 0.20], [0.70, 0.30]]]], dtype=torch.float32),
+        "global_support_logprob": torch.tensor([[[[0.80, 0.20], [0.70, 0.30]]]], dtype=torch.float32).log(),
+    }
+    active_row_index = torch.tensor([[0, 1]], dtype=torch.long)
+    active_row_valid_mask = torch.tensor([[True, True]], dtype=torch.bool)
+    item_concepts = torch.tensor([[1.0, 1.0, 0.0, 0.0]], dtype=torch.float32)
+
+    augmented = _augment_support_cache_with_item_concepts(
+        support_cache,
+        item_concepts,
+        active_row_index,
+        active_row_valid_mask,
+        item_support_mass=0.20,
+    )
+    support_valid = augmented["support_valid_mask"].bool()
+    support_cols = augmented["support_col_index"]
+    probs = augmented["global_support_prob"]
+
+    _assert(torch.allclose(probs.sum(dim=-1), torch.ones_like(probs.sum(dim=-1)), atol=1e-6), "增强后的 E support 概率必须逐行归一化。")
+    row0_cols = support_cols[0, 0, 0][support_valid[0, 0, 0]].tolist()
+    row1_cols = support_cols[0, 0, 1][support_valid[0, 0, 1]].tolist()
+    _assert(1 in row0_cols, f"row 0 必须补入同题概念 1，当前 cols={row0_cols}")
+    _assert(0 in row1_cols, f"row 1 必须补入同题概念 0，当前 cols={row1_cols}")
+    _assert(
+        float(probs[0, 0, 0][support_cols[0, 0, 0] == 1].sum().item()) > 0.0,
+        "补入的同题概念必须获得非零 global_support_prob。",
+    )
+
+    single = _augment_support_cache_with_item_concepts(
+        support_cache,
+        torch.tensor([[1.0, 0.0, 0.0, 0.0]], dtype=torch.float32),
+        active_row_index,
+        active_row_valid_mask,
+        item_support_mass=0.20,
+    )
+    single_cols = single["support_col_index"][0, 0, 0][single["support_valid_mask"][0, 0, 0]].tolist()
+    _assert(1 not in single_cols, f"single-concept item 不应凭空补入非题目概念，当前 cols={single_cols}")
+
+
+def _check_full_e_runtime_uses_item_local_support() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    torch.manual_seed(17)
+    q_matrix = torch.tensor(
+        [
+            [1.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 1.0],
+            [1.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    model = CognitiveDiagnosisModel(
+        num_students=3,
+        num_exercises=3,
+        num_concepts=4,
+        q_matrix=q_matrix,
+        knowledge_dim=8,
+        num_relation_heads=1,
+        num_gnn_layers=1,
+        dropout=0.0,
+        graph_topk=1,
+        use_concept_graph=True,
+        use_personal_graph=True,
+        personal_warmup_epochs=0,
+        personal_reg_warmup_epochs=0,
+        personal_item_support_mass=0.20,
+        personal_delta_scale=3.0,
+    )
+    model.eval()
+
+    with torch.no_grad():
+        _, details = model(
+            student_ids=torch.tensor([0], dtype=torch.long),
+            exercise_ids=torch.tensor([0], dtype=torch.long),
+            return_details=True,
+            return_logits=True,
+        )
+
+    support = details["personal_relation_spec"]
+    active_rows = support["active_row_index"][0][support["active_row_valid_mask"][0].bool()].tolist()
+    _assert(active_rows == [0, 1], f"测试前提失败：multi-concept item 应激活 row 0/1，当前 {active_rows}")
+    support_cols = support["support_col_index"]
+    support_valid = support["support_valid_mask"].bool()
+    for row_pos, expected_col in ((0, 1), (1, 0)):
+        cols = support_cols[0, 0, row_pos][support_valid[0, 0, row_pos]].tolist()
+        _assert(expected_col in cols, f"full E runtime support 应包含同题概念 {expected_col}，当前 row_pos={row_pos}, cols={cols}")
+    _assert(
+        float(details["personal_item_support_added_rate"].item()) > 0.0,
+        "full E runtime diagnostics 应记录同题 support 的新增比例。",
+    )
 
 
 def _check_no_a_personal_graph_is_not_identity_locked() -> None:
@@ -2032,6 +2131,7 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
         personal_include_neighbor_rows=False,
         personal_query_row_budget=1.0,
         personal_neighbor_row_budget=0.35,
+        personal_item_support_mass=0.20,
         personal_support_only=True,
         personal_query_correction_scale=0.10,
         share_concept_embeddings=True,
@@ -2067,6 +2167,7 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
     hash_ae_irt = _build_config_hash(SimpleNamespace(**{**base, "ae_irt_logit_scale": 0.0}))
     hash_ae_interaction = _build_config_hash(SimpleNamespace(**{**base, "ae_interaction_logit_scale": 0.0}))
     hash_ae_posterior_prior = _build_config_hash(SimpleNamespace(**{**base, "ae_posterior_prior_scale": 0.0}))
+    hash_item_support = _build_config_hash(SimpleNamespace(**{**base, "personal_item_support_mass": 0.0}))
 
     _assert(hash_base != hash_share, "config hash 必须区分 share_concept_embeddings 的结构差异。")
     _assert(hash_base != hash_alpha_bias, "config hash 必须区分 personal_alpha_bias_scale 的结构差异。")
@@ -2077,6 +2178,7 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
     _assert(hash_base != hash_ae_irt, "config hash 必须区分 ae_irt_logit_scale 的结构差异。")
     _assert(hash_base != hash_ae_interaction, "config hash 必须区分 ae_interaction_logit_scale 的结构差异。")
     _assert(hash_base != hash_ae_posterior_prior, "config hash 必须区分 ae_posterior_prior_scale 的结构差异。")
+    _assert(hash_base != hash_item_support, "config hash 必须区分 personal_item_support_mass 的 E support 结构差异。")
 
 
 def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
@@ -2942,6 +3044,9 @@ def _check_result_schema_regression() -> None:
             "full_personal_query_correction_min_graph_anchor",
             "full_personal_query_support_hops",
             "full_personal_query_message_gain",
+            "full_personal_item_support_mass",
+            "full_personal_item_support_added_rate",
+            "full_personal_item_support_added_mass",
         ):
             _assert(field in header, f"summary schema 必须包含新字段: {field}")
     for field in (
@@ -3470,6 +3575,8 @@ def main() -> None:
     _check_ae_interaction_logit_is_full_only()
     _check_e_posterior_prior_readout_is_full_only()
     _check_theta_prior_alignment_is_full_only()
+    _check_item_local_support_augments_e_support()
+    _check_full_e_runtime_uses_item_local_support()
     _check_dataset_defaults_respect_explicit_zero_overrides()
     _check_no_a_personal_graph_is_not_identity_locked()
     _check_no_a_support_semantics_regression()

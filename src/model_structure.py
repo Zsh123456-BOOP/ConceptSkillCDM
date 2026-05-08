@@ -71,6 +71,7 @@ class ConceptStructureModeling(nn.Module):
         personal_support_include_query_self: bool,
         personal_support_include_graph: bool,
         personal_support_include_neighbors: bool,
+        personal_item_support_mass: float,
         enable_personal_support_value_proj: bool,
         graph_edge_bias_rank: int,
         graph_prior_matrix: Optional[torch.Tensor] = None,
@@ -109,6 +110,7 @@ class ConceptStructureModeling(nn.Module):
         self.personal_support_include_query_self = bool(personal_support_include_query_self)
         self.personal_support_include_graph = bool(personal_support_include_graph)
         self.personal_support_include_neighbors = bool(personal_support_include_neighbors)
+        self.personal_item_support_mass = max(0.0, float(personal_item_support_mass))
         self.enable_personal_support_value_proj = bool(enable_personal_support_value_proj)
         self._current_epoch = 1
 

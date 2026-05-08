@@ -181,6 +181,7 @@ def _build_config_hash(args) -> str:
         "personal_support_include_query_self",
         "personal_support_include_graph",
         "personal_support_include_neighbors",
+        "personal_item_support_mass",
         "personal_query_row_budget",
         "personal_neighbor_row_budget",
         "personal_query_support_hops",

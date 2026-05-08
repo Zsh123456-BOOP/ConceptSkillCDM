@@ -94,6 +94,7 @@ class CognitiveDiagnosisModel(nn.Module):
         personal_support_include_query_self: bool = True,
         personal_support_include_graph: bool = True,
         personal_support_include_neighbors: bool = False,
+        personal_item_support_mass: float = 0.0,
         personal_value_use_global_basis: bool = True,
         personal_message_alignment_gate: bool = True,
         personal_projection_hidden_factor: int = 2,
@@ -182,6 +183,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_support_include_query_self = bool(personal_support_include_query_self)
         self.personal_support_include_graph = bool(personal_support_include_graph)
         self.personal_support_include_neighbors = bool(personal_support_include_neighbors)
+        self.personal_item_support_mass = max(0.0, float(personal_item_support_mass))
         self.personal_value_use_global_basis = bool(personal_value_use_global_basis)
         self.personal_message_alignment_gate = bool(personal_message_alignment_gate)
         self.personal_projection_hidden_factor = max(1, int(personal_projection_hidden_factor))
@@ -266,6 +268,7 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_support_include_query_self=self.personal_support_include_query_self,
             personal_support_include_graph=self.personal_support_include_graph,
             personal_support_include_neighbors=self.personal_support_include_neighbors,
+            personal_item_support_mass=self.personal_item_support_mass,
             enable_personal_support_value_proj=self.enable_personal_support_value_proj,
             graph_edge_bias_rank=self.graph_edge_bias_rank,
             graph_prior_matrix=self.item_prior_matrix,

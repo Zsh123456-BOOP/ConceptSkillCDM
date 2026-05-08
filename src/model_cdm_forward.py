@@ -335,6 +335,8 @@ def run_cdm_forward(
             "neighbor_row_posterior_logit_delta_abs",
             "personal_row_budget_mean",
             "personal_query_row_std",
+            "personal_item_support_added_rate",
+            "personal_item_support_added_mass",
             "used_no_a_support_fallback_mode",
             "local_row_mask",
             "active_row_index",

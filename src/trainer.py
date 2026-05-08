@@ -51,6 +51,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "personal_support_include_query_self",
     "personal_support_include_graph",
     "personal_support_include_neighbors",
+    "personal_item_support_mass",
     "personal_query_row_budget",
     "personal_neighbor_row_budget",
     "personal_query_support_hops",
@@ -1050,6 +1051,8 @@ def _collect_debug_forward_stats(
     neighbor_row_personal_delta_vals: List[float] = []
     personal_row_budget_mean_vals: List[float] = []
     personal_query_row_std_vals: List[float] = []
+    personal_item_support_added_rate_vals: List[float] = []
+    personal_item_support_added_mass_vals: List[float] = []
     readout_query_support_mass_vals: List[float] = []
     query_row_global_support_mass_vals: List[float] = []
     query_row_personal_support_mass_vals: List[float] = []
@@ -1213,6 +1216,8 @@ def _collect_debug_forward_stats(
                 ("neighbor_row_personal_delta", neighbor_row_personal_delta_vals),
                 ("personal_row_budget_mean", personal_row_budget_mean_vals),
                 ("personal_query_row_std", personal_query_row_std_vals),
+                ("personal_item_support_added_rate", personal_item_support_added_rate_vals),
+                ("personal_item_support_added_mass", personal_item_support_added_mass_vals),
             ):
                 val = details.get(detail_key)
                 if val is not None:
@@ -1321,6 +1326,8 @@ def _collect_debug_forward_stats(
     neighbor_row_personal_delta_mean, _ = _safe_mean_std(neighbor_row_personal_delta_vals)
     personal_row_budget_mean, _ = _safe_mean_std(personal_row_budget_mean_vals)
     personal_query_row_std_mean, _ = _safe_mean_std(personal_query_row_std_vals)
+    personal_item_support_added_rate_mean, _ = _safe_mean_std(personal_item_support_added_rate_vals)
+    personal_item_support_added_mass_mean, _ = _safe_mean_std(personal_item_support_added_mass_vals)
     readout_query_support_mass_mean, _ = _safe_mean_std(readout_query_support_mass_vals)
     query_row_global_support_mass_mean, _ = _safe_mean_std(query_row_global_support_mass_vals)
     query_row_personal_support_mass_mean, _ = _safe_mean_std(query_row_personal_support_mass_vals)
@@ -1414,6 +1421,8 @@ def _collect_debug_forward_stats(
         "neighbor_row_personal_delta": neighbor_row_personal_delta_mean,
         "personal_row_budget_mean": personal_row_budget_mean,
         "personal_query_row_std": personal_query_row_std_mean,
+        "personal_item_support_added_rate": personal_item_support_added_rate_mean,
+        "personal_item_support_added_mass": personal_item_support_added_mass_mean,
         "readout_query_support_mass": readout_query_support_mass_mean,
         "query_row_global_support_mass": query_row_global_support_mass_mean,
         "query_row_personal_support_mass": query_row_personal_support_mass_mean,
@@ -1794,7 +1803,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         "%s Personal controls: personal_max_alpha=%.3f, personal_delta_scale=%.3f, personal_warmup_epochs=%d, "
         "personal_student_dim=%s, alpha_min_target=%.4f, personal_local_hops=%s, include_neighbor_rows=%s, personal_support_only=%s, "
         "personal_alpha_temperature=%.3f, personal_alpha_budget=%.3f, personal_query_row_budget=%.3f, "
-        "personal_neighbor_row_budget=%.3f, personal_query_support_hops=%s, personal_query_message_gain=%.3f, "
+        "personal_neighbor_row_budget=%.3f, personal_query_support_hops=%s, personal_item_support_mass=%.3f, "
+        "personal_query_message_gain=%.3f, "
         "personal_query_correction_scale=%.3f, personal_state_lr_mult=%.3f, personal_id_lr_mult=%.3f, "
         "graph_propagation_alpha=%.3f, graph_query_readout_scale=%.3f, graph_query_readout_2hop_scale=%.3f",
         run_tag,
@@ -1811,6 +1821,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         float(getattr(args, "personal_query_row_budget", 1.0)),
         float(getattr(args, "personal_neighbor_row_budget", 0.30)),
         getattr(args, "personal_query_support_hops", None),
+        float(getattr(args, "personal_item_support_mass", 0.0)),
         float(getattr(args, "personal_query_message_gain", 1.0)),
         float(getattr(args, "personal_query_correction_scale", 0.15)),
         float(getattr(args, "personal_state_lr_mult", 1.0)),
@@ -1948,6 +1959,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         personal_support_include_query_self=getattr(args, "personal_support_include_query_self", True),
         personal_support_include_graph=getattr(args, "personal_support_include_graph", True),
         personal_support_include_neighbors=getattr(args, "personal_support_include_neighbors", False),
+        personal_item_support_mass=getattr(args, "personal_item_support_mass", 0.0),
         personal_query_row_budget=getattr(args, "personal_query_row_budget", 1.0),
         personal_neighbor_row_budget=getattr(args, "personal_neighbor_row_budget", 0.30),
         personal_query_support_hops=getattr(args, "personal_query_support_hops", 0),
@@ -2148,7 +2160,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "query_row_delta_local_rms_raw=%.4f, query_row_message_projection_gain=%.4f, "
                 "personal_to_graph_query_ratio=%.4f, query_row_global_support_mass=%.4f, "
                 "query_row_personal_support_mass=%.4f, neighbor_row_personal_delta=%.4f, "
-                "personal_row_budget_mean=%.4f, personal_query_row_std=%.4f, readout_query_support_mass=%.4f, "
+                "personal_row_budget_mean=%.4f, personal_query_row_std=%.4f, "
+                "personal_item_support_added_rate=%.4f, personal_item_support_added_mass=%.4f, "
+                "readout_query_support_mass=%.4f, "
                 "personal_student_mix=%.4f, personal_student_adapter=%.4f, "
                 "local_row_ratio=%.4f, support_density=%.4f, readout_query_delta=%.4f, "
                 "personal_bad_rows_active=%.2f, personal_fallback_rows_active=%.2f, "
@@ -2199,6 +2213,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["neighbor_row_personal_delta"],
                 diag["personal_row_budget_mean"],
                 diag["personal_query_row_std"],
+                diag["personal_item_support_added_rate"],
+                diag["personal_item_support_added_mass"],
                 diag["readout_query_support_mass"],
                 diag["personal_student_mix"],
                 diag["personal_student_adapter_scale"],
@@ -2711,6 +2727,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         personal_support_include_neighbors=loaded_args.get(
             "personal_support_include_neighbors", getattr(args, "personal_support_include_neighbors", False)
+        ),
+        personal_item_support_mass=loaded_args.get(
+            "personal_item_support_mass", getattr(args, "personal_item_support_mass", 0.0)
         ),
         personal_query_row_budget=loaded_args.get(
             "personal_query_row_budget", getattr(args, "personal_query_row_budget", 1.0)
