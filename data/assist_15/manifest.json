@@ -1,0 +1,67 @@
+{
+  "dataset": "assist_15",
+  "source": "USTC BASE ASSISTment mirror",
+  "source_urls": [
+    "https://base.ustc.edu.cn/data/ASSISTment/2015_100_skill_builders_main_problems.zip"
+  ],
+  "raw_files": {
+    "2015_100_skill_builders_main_problems.zip": {
+      "bytes": 2955801,
+      "human_size": "2.82 MB"
+    }
+  },
+  "raw_csv_member": "2015_100_skill_builders_main_problems.csv",
+  "split_policy": "per-student 80/10/10 sorted by log_id",
+  "has_true_temporal_order": true,
+  "concept_source": "sequence_id used as both exercise and concept because source has no problem_id/Q-matrix",
+  "dropped": {
+    "invalid_or_missing_rows": 0
+  },
+  "splits": {
+    "train": {
+      "rows": 556847,
+      "students": 19917,
+      "items": 100,
+      "concepts": 100,
+      "positive_rate": 0.6961211966662297
+    },
+    "valid": {
+      "rows": 71982,
+      "students": 19172,
+      "items": 100,
+      "concepts": 100,
+      "positive_rate": 0.714539746047623
+    },
+    "test": {
+      "rows": 79802,
+      "students": 19424,
+      "items": 100,
+      "concepts": 100,
+      "positive_rate": 0.7683015463271597
+    }
+  },
+  "notes": "ASSIST2015 is KC/sequence-level in this public file. It is usable as a KT-style benchmark, but exercise-level CD interpretation is weaker than datasets with explicit problem_id and Q-matrix.",
+  "output_format": [
+    "stu_id",
+    "exer_id",
+    "cpt_seq",
+    "label"
+  ],
+  "processed_files": {
+    "train": {
+      "path": "data/assist_15/train.csv",
+      "bytes": 11708882,
+      "human_size": "11.17 MB"
+    },
+    "valid": {
+      "path": "data/assist_15/valid.csv",
+      "bytes": 1521812,
+      "human_size": "1.45 MB"
+    },
+    "test": {
+      "path": "data/assist_15/test.csv",
+      "bytes": 1690787,
+      "human_size": "1.61 MB"
+    }
+  }
+}

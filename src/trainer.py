@@ -1938,6 +1938,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         min_poison_count=args.min_poison_count,
         logger=logger,
         dataset_name=args.dataset_name if hasattr(args, "dataset_name") else args.dataset,
+        disable_sequence_prior=bool(getattr(args, "disable_sequence_prior", False)),
     )
 
     logger.info(

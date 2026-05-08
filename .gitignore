@@ -30,3 +30,15 @@ results/
 
 # EduData 下载缓存只作为可复现来源，不提交原始副本
 data/_edudata_raw/
+
+# Public benchmark raw archives/cache. Processed CSVs and manifests live under
+# data/<dataset>/ and can be reviewed separately.
+data/_public_raw/
+
+# Generated public benchmark CSVs can be very large; keep only manifests in git.
+data/frcsub/*.csv
+data/math2/*.csv
+data/assist_12/*.csv
+data/assist_15/*.csv
+data/nips34/*.csv
+data/ednet_kt1/*.csv

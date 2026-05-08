@@ -1,0 +1,73 @@
+{
+  "dataset": "frcsub",
+  "source": "HuggingFace shenjunhao/mind-data",
+  "source_urls": [
+    "https://huggingface.co/datasets/shenjunhao/mind-data/resolve/main/FrcSub/response.csv",
+    "https://huggingface.co/datasets/shenjunhao/mind-data/resolve/main/FrcSub/q_matrix.csv"
+  ],
+  "raw_files": {
+    "response.csv": {
+      "bytes": 99640,
+      "human_size": "97.30 KB"
+    },
+    "q_matrix.csv": {
+      "bytes": 340,
+      "human_size": "340.00 B"
+    }
+  },
+  "split_policy": "per-student seeded random 80/10/10 because source has no true temporal order",
+  "has_true_temporal_order": false,
+  "concept_source": "q_matrix.csv binary item-concept rows",
+  "dropped": {
+    "missing_concepts": 0,
+    "bad_label": 0,
+    "bad_ids": 0
+  },
+  "splits": {
+    "train": {
+      "rows": 8576,
+      "students": 536,
+      "items": 20,
+      "concepts": 8,
+      "positive_rate": 0.5324160447761194
+    },
+    "valid": {
+      "rows": 1072,
+      "students": 536,
+      "items": 20,
+      "concepts": 8,
+      "positive_rate": 0.539179104477612
+    },
+    "test": {
+      "rows": 1072,
+      "students": 536,
+      "items": 20,
+      "concepts": 8,
+      "positive_rate": 0.5401119402985075
+    }
+  },
+  "notes": "The source provides response triples and a Q-matrix, but no timestamp. The output is model-ready for CD, while sequence-transition evidence should be interpreted cautiously or disabled in later training.",
+  "output_format": [
+    "stu_id",
+    "exer_id",
+    "cpt_seq",
+    "label"
+  ],
+  "processed_files": {
+    "train": {
+      "path": "data/frcsub/train.csv",
+      "bytes": 142357,
+      "human_size": "139.02 KB"
+    },
+    "valid": {
+      "path": "data/frcsub/valid.csv",
+      "bytes": 17768,
+      "human_size": "17.35 KB"
+    },
+    "test": {
+      "path": "data/frcsub/test.csv",
+      "bytes": 17861,
+      "human_size": "17.44 KB"
+    }
+  }
+}

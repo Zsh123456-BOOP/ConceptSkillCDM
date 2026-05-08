@@ -211,6 +211,11 @@ def parse_args():
     parser.add_argument("--min_stu_interactions", type=int, default=15)
     parser.add_argument("--min_exer_interactions", type=int, default=0)
     parser.add_argument("--min_poison_count", type=int, default=0)
+    parser.add_argument(
+        "--disable_sequence_prior",
+        action="store_true",
+        help="Disable train-order sequence transition evidence when a dataset has no real temporal order.",
+    )
 
     # ======================
     # Ablations
@@ -744,6 +749,7 @@ def main():
                 min_exer_interactions=args.min_exer_interactions,
                 min_poison_count=args.min_poison_count,
                 logger=logger,
+                disable_sequence_prior=bool(getattr(args, "disable_sequence_prior", False)),
             )
             
             # 

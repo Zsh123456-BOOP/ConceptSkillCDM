@@ -1,0 +1,73 @@
+{
+  "dataset": "math2",
+  "source": "HuggingFace shenjunhao/mind-data",
+  "source_urls": [
+    "https://huggingface.co/datasets/shenjunhao/mind-data/resolve/main/Math2/response.csv",
+    "https://huggingface.co/datasets/shenjunhao/mind-data/resolve/main/Math2/q_matrix.csv"
+  ],
+  "raw_files": {
+    "response.csv": {
+      "bytes": 631466,
+      "human_size": "616.67 KB"
+    },
+    "q_matrix.csv": {
+      "bytes": 528,
+      "human_size": "528.00 B"
+    }
+  },
+  "split_policy": "per-student seeded random 80/10/10 because source has no true temporal order",
+  "has_true_temporal_order": false,
+  "concept_source": "q_matrix.csv binary item-concept rows",
+  "dropped": {
+    "missing_concepts": 0,
+    "bad_label": 0,
+    "bad_ids": 0
+  },
+  "splits": {
+    "train": {
+      "rows": 46932,
+      "students": 3911,
+      "items": 16,
+      "concepts": 16,
+      "positive_rate": 0.4874499275547601
+    },
+    "valid": {
+      "rows": 7822,
+      "students": 3911,
+      "items": 16,
+      "concepts": 16,
+      "positive_rate": 0.4927128611608284
+    },
+    "test": {
+      "rows": 7822,
+      "students": 3911,
+      "items": 16,
+      "concepts": 16,
+      "positive_rate": 0.48657632319099975
+    }
+  },
+  "notes": "The source provides response triples and a Q-matrix, but no timestamp. The output is model-ready for CD, while sequence-transition evidence should be interpreted cautiously or disabled in later training.",
+  "output_format": [
+    "stu_id",
+    "exer_id",
+    "cpt_seq",
+    "label"
+  ],
+  "processed_files": {
+    "train": {
+      "path": "data/math2/train.csv",
+      "bytes": 972377,
+      "human_size": "949.59 KB"
+    },
+    "valid": {
+      "path": "data/math2/valid.csv",
+      "bytes": 161982,
+      "human_size": "158.19 KB"
+    },
+    "test": {
+      "path": "data/math2/test.csv",
+      "bytes": 162067,
+      "human_size": "158.27 KB"
+    }
+  }
+}

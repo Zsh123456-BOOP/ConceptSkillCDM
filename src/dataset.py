@@ -410,6 +410,7 @@ def create_dataloaders(
         min_poison_count: int = 0,
         logger=None,
         dataset_name: str = None,   # ★ 新增：数据集名字（assist_09 / junyi / assist_17）
+        disable_sequence_prior: bool = False,
 ) -> Tuple[DataLoader, DataLoader, DataLoader, dict]:
     """
     创建训练、验证和测试的数据加载器，并执行统一的数据清洗
@@ -545,13 +546,27 @@ def create_dataloaders(
     log("正在构建Q矩阵...")
     q_matrix = build_q_matrix(train_sources=train_sources, exer_id_map=exer_id_map, cpt_id_map=cpt_id_map)
     item_prior_matrix, item_prior_stats = build_item_cooccurrence_prior(q_matrix)
-    sequence_prior_matrix, sequence_prior_stats = build_sequence_transition_prior(
-        train_sources=train_sources,
-        cpt_id_map=cpt_id_map,
-        max_hops=3,
-        decay=0.70,
-        shrink=2.0,
-    )
+    if disable_sequence_prior:
+        num_concepts = len(cpt_id_map)
+        sequence_prior_matrix = torch.zeros(num_concepts, num_concepts, dtype=torch.float32)
+        sequence_prior_stats = {
+            "seq_raw_transition_mass": 0.0,
+            "seq_student_weighted_mass": 0.0,
+            "seq_student_count": 0.0,
+            "seq_reliability_lambda": 0.0,
+            "sequence_observed_edge_count": 0.0,
+            "sequence_prior_density": 0.0,
+            "sequence_prior_entropy": 0.0,
+        }
+        log("[A Prior] sequence evidence disabled for this dataset/config.")
+    else:
+        sequence_prior_matrix, sequence_prior_stats = build_sequence_transition_prior(
+            train_sources=train_sources,
+            cpt_id_map=cpt_id_map,
+            max_hops=3,
+            decay=0.70,
+            shrink=2.0,
+        )
     graph_prior_stats = {**item_prior_stats, **sequence_prior_stats}
     log(
         "[A Prior] train-only evidence: "
@@ -697,6 +712,7 @@ def create_dataloaders(
         'item_prior_matrix': item_prior_matrix,
         'sequence_prior_matrix': sequence_prior_matrix,
         'graph_prior_stats': graph_prior_stats,
+        'sequence_prior_disabled': bool(disable_sequence_prior),
         # 新增：每道题的“概念数量”，与 exer_id 内部索引对齐
         'concepts_per_exercise': concepts_per_exercise,
         'train_only_split_hygiene': True,

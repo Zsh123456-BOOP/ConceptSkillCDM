@@ -1,0 +1,76 @@
+{
+  "dataset": "nips34",
+  "source": "USTC BASE NIPS2020 public_data mirror",
+  "source_urls": [
+    "https://base.ustc.edu.cn/data/NIPS2020/public_data.zip"
+  ],
+  "raw_files": {
+    "public_data.zip": {
+      "bytes": 572456701,
+      "human_size": "545.94 MB"
+    }
+  },
+  "raw_csv_members": {
+    "train": "train_data/train_task_3_4.csv",
+    "question_metadata": "metadata/question_metadata_task_3_4.csv"
+  },
+  "source_columns": {
+    "student": "UserId",
+    "exercise": "QuestionId",
+    "concept": "SubjectId",
+    "label": "IsCorrect",
+    "order": "AnswerId"
+  },
+  "split_policy": "per-student 80/10/10 sorted by AnswerId",
+  "has_true_temporal_order": true,
+  "concept_source": "question_metadata_task_3_4 SubjectId",
+  "dropped": {
+    "invalid_or_missing_rows": 0
+  },
+  "splits": {
+    "train": {
+      "rows": 1104293,
+      "students": 4918,
+      "items": 948,
+      "concepts": 86,
+      "positive_rate": 0.5372786026896847
+    },
+    "valid": {
+      "rows": 137947,
+      "students": 4918,
+      "items": 924,
+      "concepts": 86,
+      "positive_rate": 0.5377717529195996
+    },
+    "test": {
+      "rows": 140487,
+      "students": 4918,
+      "items": 927,
+      "concepts": 86,
+      "positive_rate": 0.5373166200431356
+    }
+  },
+  "output_format": [
+    "stu_id",
+    "exer_id",
+    "cpt_seq",
+    "label"
+  ],
+  "processed_files": {
+    "train": {
+      "path": "data/nips34/train.csv",
+      "bytes": 28490272,
+      "human_size": "27.17 MB"
+    },
+    "valid": {
+      "path": "data/nips34/valid.csv",
+      "bytes": 3558877,
+      "human_size": "3.39 MB"
+    },
+    "test": {
+      "path": "data/nips34/test.csv",
+      "bytes": 3624447,
+      "human_size": "3.46 MB"
+    }
+  }
+}

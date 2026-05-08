@@ -279,6 +279,77 @@ DATASET_DEFAULTS["cdbd_a0910"] = {
     "data_dir": "./data/cdbd_a0910",
 }
 
+PUBLIC_BENCHMARK_DEFAULTS = {
+    **DATASET_DEFAULTS["assist_09"],
+    "min_stu_interactions": 0,
+    "min_exer_interactions": 0,
+    "min_poison_count": 0,
+}
+
+DATASET_DEFAULTS["frcsub"] = {
+    **PUBLIC_BENCHMARK_DEFAULTS,
+    "data_dir": "./data/frcsub",
+    "batch_size": 128,
+    "knowledge_dim": 32,
+    "num_relation_heads": 2,
+    "num_gnn_layers": 1,
+    "dropout": 0.10,
+    "learning_rate": 1e-3,
+    "graph_topk": 7,
+    "personal_student_dim": 16,
+    "personal_rank": 4,
+    "disable_sequence_prior": True,
+}
+
+DATASET_DEFAULTS["math2"] = {
+    **PUBLIC_BENCHMARK_DEFAULTS,
+    "data_dir": "./data/math2",
+    "batch_size": 256,
+    "knowledge_dim": 32,
+    "num_relation_heads": 2,
+    "num_gnn_layers": 1,
+    "dropout": 0.10,
+    "learning_rate": 1e-3,
+    "graph_topk": 8,
+    "personal_student_dim": 16,
+    "personal_rank": 4,
+    "disable_sequence_prior": True,
+}
+
+DATASET_DEFAULTS["assist_12"] = {
+    **PUBLIC_BENCHMARK_DEFAULTS,
+    "data_dir": "./data/assist_12",
+    "batch_size": 1024,
+    "graph_topk": 24,
+}
+
+DATASET_DEFAULTS["assist_15"] = {
+    **PUBLIC_BENCHMARK_DEFAULTS,
+    "data_dir": "./data/assist_15",
+    "batch_size": 1024,
+    "knowledge_dim": 64,
+    "num_relation_heads": 2,
+    "graph_topk": 24,
+}
+
+DATASET_DEFAULTS["nips34"] = {
+    **PUBLIC_BENCHMARK_DEFAULTS,
+    "data_dir": "./data/nips34",
+    "batch_size": 1024,
+    "graph_topk": 24,
+}
+
+DATASET_DEFAULTS["ednet_kt1"] = {
+    **PUBLIC_BENCHMARK_DEFAULTS,
+    "data_dir": "./data/ednet_kt1",
+    "batch_size": 4096,
+    "knowledge_dim": 64,
+    "num_relation_heads": 2,
+    "num_gnn_layers": 1,
+    "graph_topk": 24,
+    "personal_student_dim": 32,
+}
+
 GRID_SEARCH_SPACE = {
     "assist_09": {
         "base": {},

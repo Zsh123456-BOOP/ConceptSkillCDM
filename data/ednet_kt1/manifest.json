@@ -1,0 +1,79 @@
+{
+  "dataset": "ednet_kt1",
+  "source": "USTC BASE EdNet mirror",
+  "source_urls": [
+    "https://base.ustc.edu.cn/data/EdNet/EdNet-Contents.zip",
+    "https://base.ustc.edu.cn/data/EdNet/EdNet-KT1.zip"
+  ],
+  "raw_files": {
+    "EdNet-Contents.zip": {
+      "bytes": 173976,
+      "human_size": "169.90 KB"
+    },
+    "EdNet-KT1.zip": {
+      "bytes": 1218656153,
+      "human_size": "1.13 GB"
+    }
+  },
+  "raw_csv_members": {
+    "question_metadata": "contents/questions.csv",
+    "kt1_user_csv_files": 784309
+  },
+  "split_policy": "per-user 80/10/10 sorted by timestamp",
+  "has_true_temporal_order": true,
+  "concept_source": "contents/questions.csv tags",
+  "dropped": {
+    "missing_question_metadata": 0,
+    "bad_answer": 27646,
+    "bad_user_file": 0,
+    "empty_user_history": 5
+  },
+  "processed_user_files": 784304,
+  "splits": {
+    "train": {
+      "rows": 75835482,
+      "students": 784304,
+      "items": 12275,
+      "concepts": 189,
+      "positive_rate": 0.6526975064258179
+    },
+    "valid": {
+      "rows": 9611601,
+      "students": 735190,
+      "items": 12275,
+      "concepts": 189,
+      "positive_rate": 0.6625544485252769
+    },
+    "test": {
+      "rows": 9819197,
+      "students": 756936,
+      "items": 12276,
+      "concepts": 189,
+      "positive_rate": 0.6500371669903353
+    }
+  },
+  "notes": "EdNet-KT1 is large. Raw archive is not intended for git; processed CSVs may also be too large for normal commits.",
+  "output_format": [
+    "stu_id",
+    "exer_id",
+    "cpt_seq",
+    "label"
+  ],
+  "processed_files": {
+    "train": {
+      "path": "data/ednet_kt1/train.csv",
+      "bytes": 1789604710,
+      "human_size": "1.67 GB"
+    },
+    "valid": {
+      "path": "data/ednet_kt1/valid.csv",
+      "bytes": 225494879,
+      "human_size": "215.05 MB"
+    },
+    "test": {
+      "path": "data/ednet_kt1/test.csv",
+      "bytes": 230383138,
+      "human_size": "219.71 MB"
+    }
+  }
+}
