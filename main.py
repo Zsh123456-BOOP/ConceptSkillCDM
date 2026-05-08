@@ -274,6 +274,8 @@ def parse_args():
                         help="Allow local-neighbor support columns in E's sparse support basis.")
     parser.add_argument("--personal_item_support_mass", type=float, default=0.0,
                         help="Total prior mass assigned to current-item co-required concepts added to E support.")
+    parser.add_argument("--personal_mastery_prior_scale", type=float, default=0.0,
+                        help="Scale for train-only student-concept mastery contrast inside E posterior reweighting.")
     parser.add_argument("--personal_query_row_budget", type=float, default=1.0,
                         help="Relative personalization budget assigned to queried concept rows.")
     parser.add_argument("--personal_neighbor_row_budget", type=float, default=0.30,
@@ -636,6 +638,24 @@ def main():
                 ),
                 personal_include_neighbor_rows=loaded_args.get(
                     "personal_include_neighbor_rows", getattr(args, "personal_include_neighbor_rows", False)
+                ),
+                personal_support_include_query_self=loaded_args.get(
+                    "personal_support_include_query_self",
+                    getattr(args, "personal_support_include_query_self", True),
+                ),
+                personal_support_include_graph=loaded_args.get(
+                    "personal_support_include_graph",
+                    getattr(args, "personal_support_include_graph", True),
+                ),
+                personal_support_include_neighbors=loaded_args.get(
+                    "personal_support_include_neighbors",
+                    getattr(args, "personal_support_include_neighbors", False),
+                ),
+                personal_item_support_mass=loaded_args.get(
+                    "personal_item_support_mass", getattr(args, "personal_item_support_mass", 0.0)
+                ),
+                personal_mastery_prior_scale=loaded_args.get(
+                    "personal_mastery_prior_scale", getattr(args, "personal_mastery_prior_scale", 0.0)
                 ),
                 personal_query_row_budget=loaded_args.get(
                     "personal_query_row_budget", getattr(args, "personal_query_row_budget", 1.0)

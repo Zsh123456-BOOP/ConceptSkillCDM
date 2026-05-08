@@ -95,6 +95,7 @@ class CognitiveDiagnosisModel(nn.Module):
         personal_support_include_graph: bool = True,
         personal_support_include_neighbors: bool = False,
         personal_item_support_mass: float = 0.0,
+        personal_mastery_prior_scale: float = 0.0,
         personal_value_use_global_basis: bool = True,
         personal_message_alignment_gate: bool = True,
         personal_projection_hidden_factor: int = 2,
@@ -184,6 +185,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_support_include_graph = bool(personal_support_include_graph)
         self.personal_support_include_neighbors = bool(personal_support_include_neighbors)
         self.personal_item_support_mass = max(0.0, float(personal_item_support_mass))
+        self.personal_mastery_prior_scale = max(0.0, float(personal_mastery_prior_scale))
         self.personal_value_use_global_basis = bool(personal_value_use_global_basis)
         self.personal_message_alignment_gate = bool(personal_message_alignment_gate)
         self.personal_projection_hidden_factor = max(1, int(personal_projection_hidden_factor))
@@ -269,6 +271,7 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_support_include_graph=self.personal_support_include_graph,
             personal_support_include_neighbors=self.personal_support_include_neighbors,
             personal_item_support_mass=self.personal_item_support_mass,
+            personal_mastery_prior_scale=self.personal_mastery_prior_scale,
             enable_personal_support_value_proj=self.enable_personal_support_value_proj,
             graph_edge_bias_rank=self.graph_edge_bias_rank,
             graph_prior_matrix=self.item_prior_matrix,
@@ -843,13 +846,7 @@ class CognitiveDiagnosisModel(nn.Module):
         concept_count_features: Optional[torch.Tensor] = None,
         student_concept_count_features: Optional[torch.Tensor] = None,
     ) -> None:
-        if (
-            getattr(self, "ae_student_logit_bias", None) is None
-            or getattr(self, "ae_exercise_logit_bias", None) is None
-            or getattr(self, "ae_concept_logit_bias", None) is None
-            or not self.enable_module1
-            or not (self.use_concept_graph or self.use_personal_graph)
-        ):
+        if not self.enable_module1 or not (self.use_concept_graph or self.use_personal_graph):
             return
         scale = max(0.0, float(scale))
         with torch.no_grad():
@@ -932,9 +929,12 @@ class CognitiveDiagnosisModel(nn.Module):
                     self.ae_student_concept_count_feature[:rows, :cols].copy_(
                         target[:rows, :cols].clamp(min=-5.0, max=5.0)
                     )
-            self.ae_student_logit_bias.weight.zero_()
-            self.ae_exercise_logit_bias.weight.zero_()
-            self.ae_concept_logit_bias.weight.zero_()
+            if getattr(self, "ae_student_logit_bias", None) is not None:
+                self.ae_student_logit_bias.weight.zero_()
+            if getattr(self, "ae_exercise_logit_bias", None) is not None:
+                self.ae_exercise_logit_bias.weight.zero_()
+            if getattr(self, "ae_concept_logit_bias", None) is not None:
+                self.ae_concept_logit_bias.weight.zero_()
 
     def _apply_personal_query_trust_region(
         self,

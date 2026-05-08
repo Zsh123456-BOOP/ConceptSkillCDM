@@ -21,6 +21,7 @@ def run_structure_forward(
     student_ids: torch.Tensor,
     identity_relations: torch.Tensor,
     concept_mask: Optional[torch.Tensor] = None,
+    student_concept_prior: Optional[torch.Tensor] = None,
 ) -> Dict[str, Any]:
     """
     Execute the A+E structure forward pass.
@@ -71,6 +72,8 @@ def run_structure_forward(
     alpha_id_adapter_scale = None
     personal_state_mix = None
     personal_student_mix = None
+    personal_mastery_prior_scale = None
+    personal_mastery_scores_absmean = None
     personal_student_adapter_scale = None
     personal_context_adapter_scale = None
     personal_delta_nonfinite_count = None
@@ -315,10 +318,13 @@ def run_structure_forward(
                 active_row_valid_mask=active_row_valid_mask,
                 support_row_cache=support_row_cache,
                 row_budget_values=row_budget_values,
+                student_concept_prior=student_concept_prior,
                 return_diagnostics=True,
             )
             personal_state_mix = personal_diag["state_mix"]
             personal_student_mix = personal_diag["student_mix"]
+            personal_mastery_prior_scale = personal_diag["mastery_prior_scale"]
+            personal_mastery_scores_absmean = personal_diag["mastery_scores_absmean"]
             personal_student_adapter_scale = personal_diag["student_adapter_scale"]
             personal_context_adapter_scale = personal_diag["context_adapter_scale"]
             personal_delta_nonfinite_count = personal_diag["scores_nonfinite_count"]
@@ -484,6 +490,8 @@ def run_structure_forward(
         "posterior_prob": posterior_prob,
         "personal_state_mix": personal_state_mix,
         "personal_student_mix": personal_student_mix,
+        "personal_mastery_prior_scale": personal_mastery_prior_scale,
+        "personal_mastery_scores_absmean": personal_mastery_scores_absmean,
         "personal_student_adapter_scale": personal_student_adapter_scale,
         "personal_context_adapter_scale": personal_context_adapter_scale,
         "personal_delta_nonfinite_count": personal_delta_nonfinite_count,

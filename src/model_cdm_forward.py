@@ -24,6 +24,9 @@ def run_cdm_forward(
         student_ids,
         identity_relations=model.identity_relations,
         concept_mask=q_vector,
+        student_concept_prior=model.ae_student_concept_prior_logit[student_ids]
+        if getattr(model, "personal_mastery_prior_scale", 0.0) > 0.0
+        else None,
     )
     relation_matrices = s_out["relation_matrices"]
     relation_used = s_out["relation_used"]
@@ -313,6 +316,8 @@ def run_cdm_forward(
             "alpha_preclamp_nonfinite_count",
             "personal_state_mix",
             "personal_student_mix",
+            "personal_mastery_prior_scale",
+            "personal_mastery_scores_absmean",
             "personal_student_adapter_scale",
             "personal_context_adapter_scale",
             "personal_delta_nonfinite_count",

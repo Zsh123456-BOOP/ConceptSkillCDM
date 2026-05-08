@@ -52,6 +52,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "personal_support_include_graph",
     "personal_support_include_neighbors",
     "personal_item_support_mass",
+    "personal_mastery_prior_scale",
     "personal_query_row_budget",
     "personal_neighbor_row_budget",
     "personal_query_support_hops",
@@ -327,6 +328,8 @@ def _build_nonfinite_payload(
             "personal_padded_row_count": _to_int(details.get("personal_padded_row_count")),
             "personal_state_mix": _to_float(details.get("personal_state_mix")),
             "personal_student_mix": _to_float(details.get("personal_student_mix")),
+            "personal_mastery_prior_scale": _to_float(details.get("personal_mastery_prior_scale")),
+            "personal_mastery_scores_absmean": _to_float(details.get("personal_mastery_scores_absmean")),
             "personal_student_adapter_scale": _to_float(details.get("personal_student_adapter_scale")),
             "personal_context_adapter_scale": _to_float(details.get("personal_context_adapter_scale")),
             "personal_logits_support_absmax": _to_float(details.get("personal_logits_support_absmax")),
@@ -685,13 +688,10 @@ def _initialize_ae_stat_priors(
         return
     base_model = _get_base_model(model)
     if (
-        getattr(base_model, "ae_logit_feature_weight", None) is None
-        or getattr(base_model, "ae_student_logit_bias", None) is None
-        or getattr(base_model, "ae_exercise_logit_bias", None) is None
-        or getattr(base_model, "ae_concept_logit_bias", None) is None
-        or getattr(base_model, "ae_student_prior_logit", None) is None
+        getattr(base_model, "ae_student_prior_logit", None) is None
         or getattr(base_model, "ae_exercise_prior_logit", None) is None
         or getattr(base_model, "ae_concept_prior_logit", None) is None
+        or getattr(base_model, "ae_student_concept_prior_logit", None) is None
         or not (
             getattr(base_model, "use_concept_graph", False)
             or getattr(base_model, "use_personal_graph", False)
@@ -1022,6 +1022,8 @@ def _collect_debug_forward_stats(
     personal_bad_row_rate_active_vals: List[float] = []
     personal_padded_row_vals: List[float] = []
     personal_student_mix_vals: List[float] = []
+    personal_mastery_prior_scale_vals: List[float] = []
+    personal_mastery_scores_absmean_vals: List[float] = []
     personal_student_adapter_vals: List[float] = []
     personal_logits_absmax_vals: List[float] = []
     personal_logits_support_absmax_vals: List[float] = []
@@ -1177,6 +1179,8 @@ def _collect_debug_forward_stats(
                 ("personal_bad_row_rate_active", personal_bad_row_rate_active_vals),
                 ("personal_padded_row_count", personal_padded_row_vals),
                 ("personal_student_mix", personal_student_mix_vals),
+                ("personal_mastery_prior_scale", personal_mastery_prior_scale_vals),
+                ("personal_mastery_scores_absmean", personal_mastery_scores_absmean_vals),
                 ("personal_student_adapter_scale", personal_student_adapter_vals),
                 ("personal_logits_absmax", personal_logits_absmax_vals),
                 ("personal_logits_support_absmax", personal_logits_support_absmax_vals),
@@ -1297,6 +1301,8 @@ def _collect_debug_forward_stats(
     personal_bad_row_rate_active_mean, _ = _safe_mean_std(personal_bad_row_rate_active_vals)
     personal_padded_row_mean, _ = _safe_mean_std(personal_padded_row_vals)
     personal_student_mix_mean, _ = _safe_mean_std(personal_student_mix_vals)
+    personal_mastery_prior_scale_mean, _ = _safe_mean_std(personal_mastery_prior_scale_vals)
+    personal_mastery_scores_absmean, _ = _safe_mean_std(personal_mastery_scores_absmean_vals)
     personal_student_adapter_mean, _ = _safe_mean_std(personal_student_adapter_vals)
     personal_logits_absmax_mean, _ = _safe_mean_std(personal_logits_absmax_vals)
     personal_logits_support_absmax_mean, _ = _safe_mean_std(personal_logits_support_absmax_vals)
@@ -1391,6 +1397,8 @@ def _collect_debug_forward_stats(
         "personal_bad_row_rate_active": personal_bad_row_rate_active_mean,
         "personal_padded_row_count": personal_padded_row_mean,
         "personal_student_mix": personal_student_mix_mean,
+        "personal_mastery_prior_scale": personal_mastery_prior_scale_mean,
+        "personal_mastery_scores_absmean": personal_mastery_scores_absmean,
         "personal_student_adapter_scale": personal_student_adapter_mean,
         "personal_logits_absmax": personal_logits_absmax_mean,
         "personal_logits_support_absmax": personal_logits_support_absmax_mean,
@@ -1804,6 +1812,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         "personal_student_dim=%s, alpha_min_target=%.4f, personal_local_hops=%s, include_neighbor_rows=%s, personal_support_only=%s, "
         "personal_alpha_temperature=%.3f, personal_alpha_budget=%.3f, personal_query_row_budget=%.3f, "
         "personal_neighbor_row_budget=%.3f, personal_query_support_hops=%s, personal_item_support_mass=%.3f, "
+        "personal_mastery_prior_scale=%.3f, "
         "personal_query_message_gain=%.3f, "
         "personal_query_correction_scale=%.3f, personal_state_lr_mult=%.3f, personal_id_lr_mult=%.3f, "
         "graph_propagation_alpha=%.3f, graph_query_readout_scale=%.3f, graph_query_readout_2hop_scale=%.3f",
@@ -1822,6 +1831,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         float(getattr(args, "personal_neighbor_row_budget", 0.30)),
         getattr(args, "personal_query_support_hops", None),
         float(getattr(args, "personal_item_support_mass", 0.0)),
+        float(getattr(args, "personal_mastery_prior_scale", 0.0)),
         float(getattr(args, "personal_query_message_gain", 1.0)),
         float(getattr(args, "personal_query_correction_scale", 0.15)),
         float(getattr(args, "personal_state_lr_mult", 1.0)),
@@ -1960,6 +1970,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         personal_support_include_graph=getattr(args, "personal_support_include_graph", True),
         personal_support_include_neighbors=getattr(args, "personal_support_include_neighbors", False),
         personal_item_support_mass=getattr(args, "personal_item_support_mass", 0.0),
+        personal_mastery_prior_scale=getattr(args, "personal_mastery_prior_scale", 0.0),
         personal_query_row_budget=getattr(args, "personal_query_row_budget", 1.0),
         personal_neighbor_row_budget=getattr(args, "personal_neighbor_row_budget", 0.30),
         personal_query_support_hops=getattr(args, "personal_query_support_hops", 0),
@@ -2163,7 +2174,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "personal_row_budget_mean=%.4f, personal_query_row_std=%.4f, "
                 "personal_item_support_added_rate=%.4f, personal_item_support_added_mass=%.4f, "
                 "readout_query_support_mass=%.4f, "
-                "personal_student_mix=%.4f, personal_student_adapter=%.4f, "
+                "personal_student_mix=%.4f, personal_mastery_prior_scale=%.4f, "
+                "personal_mastery_scores_absmean=%.4f, personal_student_adapter=%.4f, "
                 "local_row_ratio=%.4f, support_density=%.4f, readout_query_delta=%.4f, "
                 "personal_bad_rows_active=%.2f, personal_fallback_rows_active=%.2f, "
                 "personal_bad_row_rate_active=%.4f, personal_padded_rows=%.2f, "
@@ -2217,6 +2229,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["personal_item_support_added_mass"],
                 diag["readout_query_support_mass"],
                 diag["personal_student_mix"],
+                diag["personal_mastery_prior_scale"],
+                diag["personal_mastery_scores_absmean"],
                 diag["personal_student_adapter_scale"],
                 diag["local_row_ratio"],
                 diag["personal_support_density"],
@@ -2730,6 +2744,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         personal_item_support_mass=loaded_args.get(
             "personal_item_support_mass", getattr(args, "personal_item_support_mass", 0.0)
+        ),
+        personal_mastery_prior_scale=loaded_args.get(
+            "personal_mastery_prior_scale", getattr(args, "personal_mastery_prior_scale", 0.0)
         ),
         personal_query_row_budget=loaded_args.get(
             "personal_query_row_budget", getattr(args, "personal_query_row_budget", 1.0)
