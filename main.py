@@ -276,6 +276,8 @@ def parse_args():
                         help="Total prior mass assigned to current-item co-required concepts added to E support.")
     parser.add_argument("--personal_mastery_prior_scale", type=float, default=0.0,
                         help="Scale for train-only student-concept mastery contrast inside E posterior reweighting.")
+    parser.add_argument("--personal_recent_mastery_prior_scale", type=float, default=0.0,
+                        help="Scale for train-only recent student-concept mastery contrast inside E posterior reweighting.")
     parser.add_argument("--personal_query_row_budget", type=float, default=1.0,
                         help="Relative personalization budget assigned to queried concept rows.")
     parser.add_argument("--personal_neighbor_row_budget", type=float, default=0.30,
@@ -656,6 +658,10 @@ def main():
                 ),
                 personal_mastery_prior_scale=loaded_args.get(
                     "personal_mastery_prior_scale", getattr(args, "personal_mastery_prior_scale", 0.0)
+                ),
+                personal_recent_mastery_prior_scale=loaded_args.get(
+                    "personal_recent_mastery_prior_scale",
+                    getattr(args, "personal_recent_mastery_prior_scale", 0.0),
                 ),
                 personal_query_row_budget=loaded_args.get(
                     "personal_query_row_budget", getattr(args, "personal_query_row_budget", 1.0)

@@ -53,6 +53,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "personal_support_include_neighbors",
     "personal_item_support_mass",
     "personal_mastery_prior_scale",
+    "personal_recent_mastery_prior_scale",
     "personal_query_row_budget",
     "personal_neighbor_row_budget",
     "personal_query_support_hops",
@@ -330,6 +331,8 @@ def _build_nonfinite_payload(
             "personal_student_mix": _to_float(details.get("personal_student_mix")),
             "personal_mastery_prior_scale": _to_float(details.get("personal_mastery_prior_scale")),
             "personal_mastery_scores_absmean": _to_float(details.get("personal_mastery_scores_absmean")),
+            "personal_recent_mastery_prior_scale": _to_float(details.get("personal_recent_mastery_prior_scale")),
+            "personal_recent_mastery_scores_absmean": _to_float(details.get("personal_recent_mastery_scores_absmean")),
             "personal_student_adapter_scale": _to_float(details.get("personal_student_adapter_scale")),
             "personal_context_adapter_scale": _to_float(details.get("personal_context_adapter_scale")),
             "personal_logits_support_absmax": _to_float(details.get("personal_logits_support_absmax")),
@@ -576,6 +579,55 @@ def _standardized_log_count_feature(counts: torch.Tensor) -> torch.Tensor:
     return torch.nan_to_num(scaled, nan=0.0, posinf=0.0, neginf=0.0).clamp(min=-5.0, max=5.0)
 
 
+def _compute_recent_student_concept_logits(
+    train_loader: DataLoader,
+    q_matrix: torch.Tensor,
+    concept_rate: torch.Tensor,
+    *,
+    num_students: int,
+    num_concepts: int,
+    decay: float = 0.85,
+    smoothing: float = 3.0,
+) -> torch.Tensor:
+    """Train-only recent student-concept mastery evidence.
+
+    This is an interpretable E prior: for each student/concept it keeps an
+    exponentially decayed correctness average over that concept's train rows in
+    dataset order. It never reads validation/test labels and falls back to the
+    train-only concept rate when the student has no concept history.
+    """
+    dataset = getattr(train_loader, "dataset", None)
+    student_ids = getattr(dataset, "student_ids", None)
+    exercise_ids = getattr(dataset, "exercise_ids", None)
+    labels = getattr(dataset, "labels", None)
+    if student_ids is None or exercise_ids is None or labels is None:
+        return torch.zeros(num_students, num_concepts, dtype=torch.float32)
+
+    q_cpu = q_matrix.detach().float().cpu()
+    recent_count = torch.zeros(num_students, num_concepts, dtype=torch.float32)
+    recent_correct = torch.zeros(num_students, num_concepts, dtype=torch.float32)
+    decay_value = max(0.0, min(0.999, float(decay)))
+    for sid_t, eid_t, label_t in zip(student_ids.long().cpu(), exercise_ids.long().cpu(), labels.float().cpu()):
+        sid = int(sid_t.item())
+        eid = int(eid_t.item())
+        if sid < 0 or sid >= num_students or eid < 0 or eid >= q_cpu.size(0):
+            continue
+        active = torch.nonzero(q_cpu[eid] > 0, as_tuple=False).reshape(-1)
+        if active.numel() == 0:
+            continue
+        y = float(label_t.item())
+        recent_count[sid, active] = recent_count[sid, active] * decay_value + 1.0
+        recent_correct[sid, active] = recent_correct[sid, active] * decay_value + y
+
+    concept_rate = concept_rate.detach().float().cpu().clamp(min=1e-4, max=1.0 - 1e-4)
+    smooth = max(0.0, float(smoothing))
+    recent_rate = (
+        recent_correct + smooth * concept_rate.view(1, -1)
+    ) / (recent_count + smooth).clamp(min=1e-6)
+    logits = (_safe_logit(recent_rate) - _safe_logit(concept_rate).view(1, -1)).clamp(min=-2.0, max=2.0)
+    return torch.nan_to_num(logits, nan=0.0, posinf=0.0, neginf=0.0)
+
+
 def _compute_train_stat_logits(
     train_loader: DataLoader,
     q_matrix: torch.Tensor,
@@ -583,7 +635,7 @@ def _compute_train_stat_logits(
     num_students: int,
     num_exercises: int,
     num_concepts: int,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float, Dict[str, torch.Tensor]]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float, Dict[str, torch.Tensor]]:
     q_cpu = q_matrix.detach().float().cpu()
     student_count = torch.zeros(num_students, dtype=torch.float32)
     student_correct = torch.zeros(num_students, dtype=torch.float32)
@@ -621,6 +673,7 @@ def _compute_train_stat_logits(
             torch.zeros(num_students, dtype=torch.float32),
             torch.zeros(num_exercises, dtype=torch.float32),
             torch.zeros(num_concepts, dtype=torch.float32),
+            torch.zeros(num_students, num_concepts, dtype=torch.float32),
             torch.zeros(num_students, num_concepts, dtype=torch.float32),
             0.5,
             {
@@ -672,7 +725,22 @@ def _compute_train_stat_logits(
         "concept": _standardized_log_count_feature(concept_count),
         "student_concept": _standardized_log_count_feature(student_concept_count),
     }
-    return student_logits, exercise_logits, concept_logits, student_concept_logits, float(global_rate), count_features
+    student_concept_recent_logits = _compute_recent_student_concept_logits(
+        train_loader,
+        q_cpu,
+        concept_rate,
+        num_students=num_students,
+        num_concepts=num_concepts,
+    )
+    return (
+        student_logits,
+        exercise_logits,
+        concept_logits,
+        student_concept_logits,
+        student_concept_recent_logits,
+        float(global_rate),
+        count_features,
+    )
 
 
 def _initialize_ae_stat_priors(
@@ -704,6 +772,7 @@ def _initialize_ae_stat_priors(
         exercise_logits,
         concept_logits,
         student_concept_logits,
+        student_concept_recent_logits,
         global_rate,
         count_features,
     ) = _compute_train_stat_logits(
@@ -718,6 +787,7 @@ def _initialize_ae_stat_priors(
         exercise_logits=exercise_logits,
         concept_logits=concept_logits,
         student_concept_logits=student_concept_logits,
+        student_concept_recent_logits=student_concept_recent_logits,
         scale=scale,
         student_count_features=count_features["student"],
         exercise_count_features=count_features["exercise"],
@@ -727,7 +797,7 @@ def _initialize_ae_stat_priors(
     logger.info(
         "%s AE stat priors initialized: scale=%.3f, train_global_rate=%.4f, "
         "student_absmean=%.4f, exercise_absmean=%.4f, concept_absmean=%.4f, "
-        "student_concept_absmean=%.4f, reliability_absmean=%.4f",
+        "student_concept_absmean=%.4f, recent_student_concept_absmean=%.4f, reliability_absmean=%.4f",
         run_tag,
         scale,
         global_rate,
@@ -735,6 +805,7 @@ def _initialize_ae_stat_priors(
         float(exercise_logits.abs().mean().item()),
         float(concept_logits.abs().mean().item()),
         float(student_concept_logits.abs().mean().item()),
+        float(student_concept_recent_logits.abs().mean().item()),
         float(
             torch.stack(
                 [
@@ -1024,6 +1095,8 @@ def _collect_debug_forward_stats(
     personal_student_mix_vals: List[float] = []
     personal_mastery_prior_scale_vals: List[float] = []
     personal_mastery_scores_absmean_vals: List[float] = []
+    personal_recent_mastery_prior_scale_vals: List[float] = []
+    personal_recent_mastery_scores_absmean_vals: List[float] = []
     personal_student_adapter_vals: List[float] = []
     personal_logits_absmax_vals: List[float] = []
     personal_logits_support_absmax_vals: List[float] = []
@@ -1181,6 +1254,8 @@ def _collect_debug_forward_stats(
                 ("personal_student_mix", personal_student_mix_vals),
                 ("personal_mastery_prior_scale", personal_mastery_prior_scale_vals),
                 ("personal_mastery_scores_absmean", personal_mastery_scores_absmean_vals),
+                ("personal_recent_mastery_prior_scale", personal_recent_mastery_prior_scale_vals),
+                ("personal_recent_mastery_scores_absmean", personal_recent_mastery_scores_absmean_vals),
                 ("personal_student_adapter_scale", personal_student_adapter_vals),
                 ("personal_logits_absmax", personal_logits_absmax_vals),
                 ("personal_logits_support_absmax", personal_logits_support_absmax_vals),
@@ -1303,6 +1378,8 @@ def _collect_debug_forward_stats(
     personal_student_mix_mean, _ = _safe_mean_std(personal_student_mix_vals)
     personal_mastery_prior_scale_mean, _ = _safe_mean_std(personal_mastery_prior_scale_vals)
     personal_mastery_scores_absmean, _ = _safe_mean_std(personal_mastery_scores_absmean_vals)
+    personal_recent_mastery_prior_scale_mean, _ = _safe_mean_std(personal_recent_mastery_prior_scale_vals)
+    personal_recent_mastery_scores_absmean, _ = _safe_mean_std(personal_recent_mastery_scores_absmean_vals)
     personal_student_adapter_mean, _ = _safe_mean_std(personal_student_adapter_vals)
     personal_logits_absmax_mean, _ = _safe_mean_std(personal_logits_absmax_vals)
     personal_logits_support_absmax_mean, _ = _safe_mean_std(personal_logits_support_absmax_vals)
@@ -1399,6 +1476,8 @@ def _collect_debug_forward_stats(
         "personal_student_mix": personal_student_mix_mean,
         "personal_mastery_prior_scale": personal_mastery_prior_scale_mean,
         "personal_mastery_scores_absmean": personal_mastery_scores_absmean,
+        "personal_recent_mastery_prior_scale": personal_recent_mastery_prior_scale_mean,
+        "personal_recent_mastery_scores_absmean": personal_recent_mastery_scores_absmean,
         "personal_student_adapter_scale": personal_student_adapter_mean,
         "personal_logits_absmax": personal_logits_absmax_mean,
         "personal_logits_support_absmax": personal_logits_support_absmax_mean,
@@ -1812,7 +1891,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         "personal_student_dim=%s, alpha_min_target=%.4f, personal_local_hops=%s, include_neighbor_rows=%s, personal_support_only=%s, "
         "personal_alpha_temperature=%.3f, personal_alpha_budget=%.3f, personal_query_row_budget=%.3f, "
         "personal_neighbor_row_budget=%.3f, personal_query_support_hops=%s, personal_item_support_mass=%.3f, "
-        "personal_mastery_prior_scale=%.3f, "
+        "personal_mastery_prior_scale=%.3f, personal_recent_mastery_prior_scale=%.3f, "
         "personal_query_message_gain=%.3f, "
         "personal_query_correction_scale=%.3f, personal_state_lr_mult=%.3f, personal_id_lr_mult=%.3f, "
         "graph_propagation_alpha=%.3f, graph_query_readout_scale=%.3f, graph_query_readout_2hop_scale=%.3f",
@@ -1832,6 +1911,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         getattr(args, "personal_query_support_hops", None),
         float(getattr(args, "personal_item_support_mass", 0.0)),
         float(getattr(args, "personal_mastery_prior_scale", 0.0)),
+        float(getattr(args, "personal_recent_mastery_prior_scale", 0.0)),
         float(getattr(args, "personal_query_message_gain", 1.0)),
         float(getattr(args, "personal_query_correction_scale", 0.15)),
         float(getattr(args, "personal_state_lr_mult", 1.0)),
@@ -1971,6 +2051,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         personal_support_include_neighbors=getattr(args, "personal_support_include_neighbors", False),
         personal_item_support_mass=getattr(args, "personal_item_support_mass", 0.0),
         personal_mastery_prior_scale=getattr(args, "personal_mastery_prior_scale", 0.0),
+        personal_recent_mastery_prior_scale=getattr(args, "personal_recent_mastery_prior_scale", 0.0),
         personal_query_row_budget=getattr(args, "personal_query_row_budget", 1.0),
         personal_neighbor_row_budget=getattr(args, "personal_neighbor_row_budget", 0.30),
         personal_query_support_hops=getattr(args, "personal_query_support_hops", 0),
@@ -2175,7 +2256,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "personal_item_support_added_rate=%.4f, personal_item_support_added_mass=%.4f, "
                 "readout_query_support_mass=%.4f, "
                 "personal_student_mix=%.4f, personal_mastery_prior_scale=%.4f, "
-                "personal_mastery_scores_absmean=%.4f, personal_student_adapter=%.4f, "
+                "personal_mastery_scores_absmean=%.4f, personal_recent_mastery_prior_scale=%.4f, "
+                "personal_recent_mastery_scores_absmean=%.4f, personal_student_adapter=%.4f, "
                 "local_row_ratio=%.4f, support_density=%.4f, readout_query_delta=%.4f, "
                 "personal_bad_rows_active=%.2f, personal_fallback_rows_active=%.2f, "
                 "personal_bad_row_rate_active=%.4f, personal_padded_rows=%.2f, "
@@ -2231,6 +2313,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["personal_student_mix"],
                 diag["personal_mastery_prior_scale"],
                 diag["personal_mastery_scores_absmean"],
+                diag["personal_recent_mastery_prior_scale"],
+                diag["personal_recent_mastery_scores_absmean"],
                 diag["personal_student_adapter_scale"],
                 diag["local_row_ratio"],
                 diag["personal_support_density"],
@@ -2747,6 +2831,10 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         personal_mastery_prior_scale=loaded_args.get(
             "personal_mastery_prior_scale", getattr(args, "personal_mastery_prior_scale", 0.0)
+        ),
+        personal_recent_mastery_prior_scale=loaded_args.get(
+            "personal_recent_mastery_prior_scale",
+            getattr(args, "personal_recent_mastery_prior_scale", 0.0),
         ),
         personal_query_row_budget=loaded_args.get(
             "personal_query_row_budget", getattr(args, "personal_query_row_budget", 1.0)

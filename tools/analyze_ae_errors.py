@@ -197,6 +197,7 @@ def _build_model(checkpoint: Mapping[str, Any], device: torch.device) -> Cogniti
         personal_support_include_neighbors=_get(loaded_args, "personal_support_include_neighbors", False),
         personal_item_support_mass=_get(loaded_args, "personal_item_support_mass", 0.0),
         personal_mastery_prior_scale=_get(loaded_args, "personal_mastery_prior_scale", 0.0),
+        personal_recent_mastery_prior_scale=_get(loaded_args, "personal_recent_mastery_prior_scale", 0.0),
         personal_value_use_global_basis=_get(loaded_args, "personal_value_use_global_basis", True),
         personal_message_alignment_gate=_get(loaded_args, "personal_message_alignment_gate", True),
         personal_projection_hidden_factor=_get(loaded_args, "personal_projection_hidden_factor", 2),

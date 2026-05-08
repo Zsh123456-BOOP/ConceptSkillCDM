@@ -2124,6 +2124,104 @@ def _check_generator_uses_train_only_mastery_contrast() -> None:
     )
 
 
+def _check_generator_uses_train_only_recent_mastery_contrast() -> None:
+    from src.model import PersonalRelationGenerator
+
+    torch.manual_seed(0)
+    generator_off = PersonalRelationGenerator(
+        student_dim=8,
+        context_dim=12,
+        knowledge_dim=6,
+        num_concepts=4,
+        num_heads=2,
+        rank=3,
+        recent_mastery_prior_scale=0.0,
+    )
+    generator_on = PersonalRelationGenerator(
+        student_dim=8,
+        context_dim=12,
+        knowledge_dim=6,
+        num_concepts=4,
+        num_heads=2,
+        rank=3,
+        recent_mastery_prior_scale=0.75,
+    )
+    generator_off.eval()
+    generator_on.eval()
+
+    student_state = torch.zeros(1, 8)
+    context = torch.zeros(1, 12)
+    knowledge_state = torch.tensor(
+        [[[0.2, -0.1, 0.0, 0.3, -0.2, 0.1],
+          [-0.3, 0.4, -0.2, 0.1, 0.0, -0.1],
+          [0.5, -0.4, 0.3, -0.2, 0.1, 0.0],
+          [-0.1, 0.2, -0.3, 0.4, -0.5, 0.6]]],
+        dtype=torch.float32,
+    )
+    active_row_index = torch.tensor([[0, 1]], dtype=torch.long)
+    active_row_valid_mask = torch.tensor([[True, True]], dtype=torch.bool)
+    support_cache = _build_test_sparse_support_cache(
+        batch_size=1,
+        num_heads=2,
+        active_row_index=active_row_index,
+        active_row_valid_mask=active_row_valid_mask,
+        support_columns=torch.tensor([[0, 1, 2, 3]], dtype=torch.long),
+    )
+    recent_a = torch.tensor([[1.8, -1.2, 0.6, -0.4]], dtype=torch.float32)
+    recent_b = torch.tensor([[-1.2, 1.8, -0.4, 0.6]], dtype=torch.float32)
+
+    with torch.no_grad():
+        off_a, off_diag = generator_off(
+            student_state,
+            context,
+            knowledge_state,
+            active_row_index=active_row_index,
+            active_row_valid_mask=active_row_valid_mask,
+            support_row_cache=support_cache,
+            student_concept_recent_prior=recent_a,
+            return_diagnostics=True,
+        )
+        on_a, on_diag_a = generator_on(
+            student_state,
+            context,
+            knowledge_state,
+            active_row_index=active_row_index,
+            active_row_valid_mask=active_row_valid_mask,
+            support_row_cache=support_cache,
+            student_concept_recent_prior=recent_a,
+            return_diagnostics=True,
+        )
+        on_b, on_diag_b = generator_on(
+            student_state,
+            context,
+            knowledge_state,
+            active_row_index=active_row_index,
+            active_row_valid_mask=active_row_valid_mask,
+            support_row_cache=support_cache,
+            student_concept_recent_prior=recent_b,
+            return_diagnostics=True,
+        )
+
+    _assert(
+        float(off_diag["recent_mastery_scores_absmean"].item()) == 0.0,
+        "recent_mastery_prior_scale=0 时不应注入 train-only recent mastery contrast。",
+    )
+    _assert(
+        float(on_diag_a["recent_mastery_scores_absmean"].item()) > 1e-4,
+        "开启 recent_mastery_prior_scale 后，E 需要产生非零 recent mastery contrast 诊断。",
+    )
+    prior_delta = float((on_a - on_b).abs().mean().item())
+    _assert(
+        prior_delta > 1e-3,
+        f"E posterior residual 应随 train-only recent student-concept prior 改变，当前 prior_delta={prior_delta:.6f}",
+    )
+    off_on_delta = float((off_a - on_a).abs().mean().item())
+    _assert(
+        off_on_delta > 1e-3,
+        f"recent_mastery_prior_scale 应实际改变 E residual，当前 off_on_delta={off_on_delta:.6f}",
+    )
+
+
 def _check_alpha_bias_shortcut_is_removed() -> None:
     torch.manual_seed(0)
     model_zero = _build_tiny_ae_model(personal_alpha_bias_scale=0.0)
@@ -2267,6 +2365,9 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
     hash_ae_posterior_prior = _build_config_hash(SimpleNamespace(**{**base, "ae_posterior_prior_scale": 0.0}))
     hash_item_support = _build_config_hash(SimpleNamespace(**{**base, "personal_item_support_mass": 0.0}))
     hash_mastery_prior = _build_config_hash(SimpleNamespace(**{**base, "personal_mastery_prior_scale": 0.35}))
+    hash_recent_mastery_prior = _build_config_hash(
+        SimpleNamespace(**{**base, "personal_recent_mastery_prior_scale": 0.35})
+    )
 
     _assert(hash_base != hash_share, "config hash 必须区分 share_concept_embeddings 的结构差异。")
     _assert(hash_base != hash_alpha_bias, "config hash 必须区分 personal_alpha_bias_scale 的结构差异。")
@@ -2279,6 +2380,10 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
     _assert(hash_base != hash_ae_posterior_prior, "config hash 必须区分 ae_posterior_prior_scale 的结构差异。")
     _assert(hash_base != hash_item_support, "config hash 必须区分 personal_item_support_mass 的 E support 结构差异。")
     _assert(hash_base != hash_mastery_prior, "config hash 必须区分 personal_mastery_prior_scale 的 E 后验结构差异。")
+    _assert(
+        hash_base != hash_recent_mastery_prior,
+        "config hash 必须区分 personal_recent_mastery_prior_scale 的 E 后验结构差异。",
+    )
 
 
 def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
@@ -3696,6 +3801,7 @@ def main() -> None:
     _check_runtime_ablation_guardrails_cover_no_a_and_no_e()
     _check_generator_uses_knowledge_state_not_id_shortcut()
     _check_generator_uses_train_only_mastery_contrast()
+    _check_generator_uses_train_only_recent_mastery_contrast()
     _check_alpha_bias_shortcut_is_removed()
     _check_alpha_bias_diagnostics_consistency()
     _check_config_hash_tracks_ae_structure_switches()

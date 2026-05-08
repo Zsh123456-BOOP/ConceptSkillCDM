@@ -96,6 +96,7 @@ class CognitiveDiagnosisModel(nn.Module):
         personal_support_include_neighbors: bool = False,
         personal_item_support_mass: float = 0.0,
         personal_mastery_prior_scale: float = 0.0,
+        personal_recent_mastery_prior_scale: float = 0.0,
         personal_value_use_global_basis: bool = True,
         personal_message_alignment_gate: bool = True,
         personal_projection_hidden_factor: int = 2,
@@ -186,6 +187,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_support_include_neighbors = bool(personal_support_include_neighbors)
         self.personal_item_support_mass = max(0.0, float(personal_item_support_mass))
         self.personal_mastery_prior_scale = max(0.0, float(personal_mastery_prior_scale))
+        self.personal_recent_mastery_prior_scale = max(0.0, float(personal_recent_mastery_prior_scale))
         self.personal_value_use_global_basis = bool(personal_value_use_global_basis)
         self.personal_message_alignment_gate = bool(personal_message_alignment_gate)
         self.personal_projection_hidden_factor = max(1, int(personal_projection_hidden_factor))
@@ -221,6 +223,10 @@ class CognitiveDiagnosisModel(nn.Module):
         self.register_buffer("ae_concept_prior_logit", torch.zeros(num_concepts, dtype=torch.float32))
         self.register_buffer(
             "ae_student_concept_prior_logit",
+            torch.zeros(num_students, num_concepts, dtype=torch.float32),
+        )
+        self.register_buffer(
+            "ae_student_concept_recent_logit",
             torch.zeros(num_students, num_concepts, dtype=torch.float32),
         )
         self.register_buffer("ae_student_count_feature", torch.zeros(num_students, dtype=torch.float32))
@@ -272,6 +278,7 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_support_include_neighbors=self.personal_support_include_neighbors,
             personal_item_support_mass=self.personal_item_support_mass,
             personal_mastery_prior_scale=self.personal_mastery_prior_scale,
+            personal_recent_mastery_prior_scale=self.personal_recent_mastery_prior_scale,
             enable_personal_support_value_proj=self.enable_personal_support_value_proj,
             graph_edge_bias_rank=self.graph_edge_bias_rank,
             graph_prior_matrix=self.item_prior_matrix,
@@ -841,6 +848,7 @@ class CognitiveDiagnosisModel(nn.Module):
         concept_logits: torch.Tensor,
         scale: float,
         student_concept_logits: Optional[torch.Tensor] = None,
+        student_concept_recent_logits: Optional[torch.Tensor] = None,
         student_count_features: Optional[torch.Tensor] = None,
         exercise_count_features: Optional[torch.Tensor] = None,
         concept_count_features: Optional[torch.Tensor] = None,
@@ -854,6 +862,7 @@ class CognitiveDiagnosisModel(nn.Module):
             exercise_target = torch.zeros_like(self.ae_exercise_prior_logit)
             concept_target = torch.zeros_like(self.ae_concept_prior_logit)
             student_concept_target = torch.zeros_like(self.ae_student_concept_prior_logit)
+            student_concept_recent_target = torch.zeros_like(self.ae_student_concept_recent_logit)
             s = student_logits.detach().to(
                 device=student_target.device,
                 dtype=student_target.dtype,
@@ -873,6 +882,13 @@ class CognitiveDiagnosisModel(nn.Module):
                 )
             else:
                 sc = torch.zeros_like(student_concept_target)
+            if student_concept_recent_logits is not None:
+                recent_sc = student_concept_recent_logits.detach().to(
+                    device=student_concept_recent_target.device,
+                    dtype=student_concept_recent_target.dtype,
+                )
+            else:
+                recent_sc = torch.zeros_like(student_concept_recent_target)
             student_target[: min(student_target.size(0), s.size(0))].copy_(
                 s[: student_target.size(0)] * scale
             )
@@ -886,10 +902,21 @@ class CognitiveDiagnosisModel(nn.Module):
             sc_cols = min(student_concept_target.size(1), sc.size(1)) if sc.dim() == 2 else 0
             if sc_rows > 0 and sc_cols > 0:
                 student_concept_target[:sc_rows, :sc_cols].copy_(sc[:sc_rows, :sc_cols] * scale)
+            recent_rows = min(student_concept_recent_target.size(0), recent_sc.size(0))
+            recent_cols = (
+                min(student_concept_recent_target.size(1), recent_sc.size(1))
+                if recent_sc.dim() == 2
+                else 0
+            )
+            if recent_rows > 0 and recent_cols > 0:
+                student_concept_recent_target[:recent_rows, :recent_cols].copy_(
+                    recent_sc[:recent_rows, :recent_cols] * scale
+                )
             self.ae_student_prior_logit.copy_(student_target.clamp(min=-3.0, max=3.0))
             self.ae_exercise_prior_logit.copy_(exercise_target.clamp(min=-3.0, max=3.0))
             self.ae_concept_prior_logit.copy_(concept_target.clamp(min=-3.0, max=3.0))
             self.ae_student_concept_prior_logit.copy_(student_concept_target.clamp(min=-2.0, max=2.0))
+            self.ae_student_concept_recent_logit.copy_(student_concept_recent_target.clamp(min=-2.0, max=2.0))
             if student_count_features is not None:
                 target = student_count_features.detach().to(
                     device=self.ae_student_count_feature.device,

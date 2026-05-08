@@ -57,6 +57,7 @@ def compute_module_activity(
     personal_item_support_added_rates: List[float] = []
     personal_item_support_added_masses: List[float] = []
     personal_mastery_scores_absmeans: List[float] = []
+    personal_recent_mastery_scores_absmeans: List[float] = []
     personal_to_graph_query_ratios: List[float] = []
     personal_bad_row_rate_active_vals: List[float] = []
     personal_query_trust_scale_vals: List[float] = []
@@ -138,6 +139,11 @@ def compute_module_activity(
                 personal_mastery_scores_absmeans.extend(
                     mastery_abs.reshape(-1).detach().cpu().numpy().tolist()
                 )
+            recent_mastery_abs = details.get("personal_recent_mastery_scores_absmean")
+            if recent_mastery_abs is not None:
+                personal_recent_mastery_scores_absmeans.extend(
+                    recent_mastery_abs.reshape(-1).detach().cpu().numpy().tolist()
+                )
             q_ratio = details.get("personal_to_graph_query_ratio_effective")
             if q_ratio is not None:
                 personal_to_graph_query_ratios.extend(q_ratio.reshape(-1).detach().cpu().numpy().tolist())
@@ -213,6 +219,11 @@ def compute_module_activity(
         mastery_scores_absmean = (
             float(np.mean(personal_mastery_scores_absmeans)) if personal_mastery_scores_absmeans else 0.0
         )
+        recent_mastery_scores_absmean = (
+            float(np.mean(personal_recent_mastery_scores_absmeans))
+            if personal_recent_mastery_scores_absmeans
+            else 0.0
+        )
         query_ratio = float(np.mean(personal_to_graph_query_ratios)) if personal_to_graph_query_ratios else 0.0
         bad_row_rate_active = (
             float(np.mean(personal_bad_row_rate_active_vals)) if personal_bad_row_rate_active_vals else 0.0
@@ -238,6 +249,7 @@ def compute_module_activity(
         results["personal_item_support_added_rate"] = item_support_added_rate
         results["personal_item_support_added_mass"] = item_support_added_mass
         results["personal_mastery_scores_absmean"] = mastery_scores_absmean
+        results["personal_recent_mastery_scores_absmean"] = recent_mastery_scores_absmean
         results["personal_to_graph_query_ratio"] = query_ratio
         results["personal_bad_row_rate_active"] = bad_row_rate_active
         results["personal_query_trust_scale_mean"] = trust_scale_mean
@@ -389,6 +401,7 @@ def format_activity_report(
         item_support_rate = activity.get("personal_item_support_added_rate", 0.0)
         item_support_mass = activity.get("personal_item_support_added_mass", 0.0)
         mastery_scores_absmean = activity.get("personal_mastery_scores_absmean", 0.0)
+        recent_mastery_scores_absmean = activity.get("personal_recent_mastery_scores_absmean", 0.0)
         query_ratio = activity.get("personal_to_graph_query_ratio", 0.0)
         mode = str(activity.get("personal_graph_mode", "INACTIVE"))
         if mode == "LIVE":
@@ -428,6 +441,7 @@ def format_activity_report(
         lines.append(f"   - Item-local support added rate: {item_support_rate:.4f}")
         lines.append(f"   - Item-local support added mass: {item_support_mass:.4f}")
         lines.append(f"   - Mastery-prior score absmean: {mastery_scores_absmean:.4f}")
+        lines.append(f"   - Recent-mastery-prior score absmean: {recent_mastery_scores_absmean:.4f}")
         lines.append(f"   - Personal/global query ratio: {query_ratio:.4f}")
         lines.append(f"   - Status: {status}")
         if advice:
