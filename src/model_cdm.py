@@ -108,6 +108,7 @@ class CognitiveDiagnosisModel(nn.Module):
         ae_interaction_logit_scale: float = 0.0,
         ae_logit_dim: int = 32,
         ae_posterior_prior_scale: float = 0.0,
+        lambda_theta_prior_align: float = 0.0,
         relation_theta_scale: float = 0.0,
         relation_theta_delta_clip: float = 2.0,
         share_concept_embeddings: bool = False,
@@ -195,6 +196,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.ae_interaction_logit_scale = max(0.0, float(ae_interaction_logit_scale))
         self.ae_logit_dim = max(1, int(ae_logit_dim))
         self.ae_posterior_prior_scale = max(0.0, float(ae_posterior_prior_scale))
+        self.lambda_theta_prior_align = max(0.0, float(lambda_theta_prior_align))
         self.relation_theta_scale = float(relation_theta_scale)
         self.relation_theta_delta_clip = max(1e-6, float(relation_theta_delta_clip))
         self.share_concept_embeddings = bool(share_concept_embeddings)
@@ -576,6 +578,42 @@ class CognitiveDiagnosisModel(nn.Module):
         zero = knowledge_state.new_tensor(0.0)
         return torch.zeros_like(knowledge_state), zero
 
+    def _build_theta_prior_alignment_loss(
+        self,
+        *,
+        prediction_state: torch.Tensor,
+        concept_mask: torch.Tensor,
+        student_ids: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        zero = prediction_state.new_tensor(0.0)
+        if (
+            self.lambda_theta_prior_align <= 0.0
+            or not self.enable_module1
+            or not self.use_concept_graph
+            or not self.use_personal_graph
+            or concept_mask is None
+        ):
+            return zero, zero
+
+        student_concept_prior = getattr(self, "ae_student_concept_prior_logit", None)
+        if student_concept_prior is None:
+            return zero, zero
+
+        mask = concept_mask.float()
+        active_count = mask.sum()
+        if active_count.item() <= 0:
+            return zero, zero
+
+        theta_c = self.diagnosis_head.theta_proj(prediction_state).squeeze(-1)
+        target = student_concept_prior[student_ids].to(dtype=theta_c.dtype, device=theta_c.device)
+        target = target.clamp(min=-2.0, max=2.0)
+        theta_score = torch.tanh(theta_c / 2.0)
+        target_score = torch.tanh(target / 2.0)
+        diff = (theta_score - target_score).pow(2) * mask
+        loss = diff.sum() / active_count.clamp(min=1.0)
+        abs_mean = ((theta_score - target_score).abs() * mask).sum() / active_count.clamp(min=1.0)
+        return loss, abs_mean
+
     def _build_ae_logit_residual(
         self,
         *,
@@ -695,7 +733,7 @@ class CognitiveDiagnosisModel(nn.Module):
                         personal_sc_prior - graph_sc_prior,
                         torch.zeros_like(personal_sc_prior),
                     )
-                    posterior_prior_logit = self.ae_posterior_prior_scale * posterior_prior_delta
+                    posterior_prior_logit = 0.40 * self.ae_posterior_prior_scale * posterior_prior_delta
                     stat_prior = stat_prior + posterior_prior_logit
                     posterior_prior_logit_abs_mean = posterior_prior_logit.detach().abs().mean()
                     posterior_prior_delta_abs_mean = posterior_prior_delta.detach().abs().mean()

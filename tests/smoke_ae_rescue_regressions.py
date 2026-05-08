@@ -867,6 +867,14 @@ def _check_e_posterior_prior_readout_is_full_only() -> None:
         full_details["ae_posterior_prior_logit_abs_mean"].item() > 1e-8,
         "E posterior prior readout should directly contribute to the AE logit in full.",
     )
+    ratio = (
+        full_details["ae_posterior_prior_logit_abs_mean"]
+        / full_details["ae_posterior_prior_delta_abs_mean"].clamp(min=1e-8)
+    ).item()
+    _assert(
+        abs(ratio - 0.40) < 1e-5,
+        "E posterior prior readout should be a 0.40-weighted support interpolation, not an unbounded delta.",
+    )
     _assert(
         no_a_details["ae_posterior_prior_logit_abs_mean"].item() == 0.0,
         "no_A must remove the E posterior prior readout because A support is absent.",
@@ -875,6 +883,82 @@ def _check_e_posterior_prior_readout_is_full_only() -> None:
         no_e_details["ae_posterior_prior_logit_abs_mean"].item() == 0.0,
         "no_E must remove the E posterior prior readout because E posterior is absent.",
     )
+
+
+def _check_theta_prior_alignment_is_full_only() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    torch.manual_seed(11)
+    q_matrix = torch.tensor(
+        [
+            [1.0, 1.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [0.0, 1.0, 1.0],
+        ],
+        dtype=torch.float32,
+    )
+    student_concept_prior = torch.tensor(
+        [
+            [0.9, -0.5, 0.2],
+            [-0.2, 0.8, -0.6],
+            [0.1, -0.4, 0.7],
+        ],
+        dtype=torch.float32,
+    )
+
+    def build_model(*, use_concept_graph: bool, use_personal_graph: bool) -> CognitiveDiagnosisModel:
+        model = CognitiveDiagnosisModel(
+            num_students=3,
+            num_exercises=3,
+            num_concepts=3,
+            q_matrix=q_matrix,
+            knowledge_dim=8,
+            num_relation_heads=1,
+            num_gnn_layers=1,
+            dropout=0.0,
+            graph_topk=2,
+            use_concept_graph=use_concept_graph,
+            use_personal_graph=use_personal_graph,
+            personal_warmup_epochs=0,
+            personal_reg_warmup_epochs=0,
+            ae_logit_residual_scale=1.0,
+            ae_logit_residual_clip=0.0,
+            lambda_theta_prior_align=0.2,
+        )
+        model.initialize_ae_logit_priors(
+            student_logits=torch.zeros(3),
+            exercise_logits=torch.zeros(3),
+            concept_logits=torch.zeros(3),
+            student_concept_logits=student_concept_prior,
+            scale=1.0,
+        )
+        model.train()
+        return model
+
+    student_ids = torch.tensor([0, 1, 2], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 1, 2], dtype=torch.long)
+    labels = torch.tensor([1.0, 0.0, 1.0], dtype=torch.float32)
+
+    for label, model, should_align in (
+        ("full", build_model(use_concept_graph=True, use_personal_graph=True), True),
+        ("no_A", build_model(use_concept_graph=False, use_personal_graph=True), False),
+        ("no_E", build_model(use_concept_graph=True, use_personal_graph=False), False),
+    ):
+        logits, details = model(
+            student_ids=student_ids,
+            exercise_ids=exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+        bce = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+        reg_terms = model.get_regularization_components(details["relation_matrices"], details, bce)
+        align = reg_terms["theta_prior_align"]
+        _assert(torch.isfinite(align).item(), f"{label} theta_prior_align must stay finite.")
+        if should_align:
+            _assert(align.item() > 0.0, "full A+E should align theta with train-only student-concept priors.")
+            _assert(details["theta_prior_align_loss"].item() > 0.0, "full A+E should expose theta alignment diagnostics.")
+        else:
+            _assert(align.item() == 0.0, f"{label} should not receive full-only theta prior alignment.")
 
 
 def _check_no_a_personal_graph_is_not_identity_locked() -> None:
@@ -3385,6 +3469,7 @@ def main() -> None:
     _check_graph_prior_anchors_a_relation_learning()
     _check_ae_interaction_logit_is_full_only()
     _check_e_posterior_prior_readout_is_full_only()
+    _check_theta_prior_alignment_is_full_only()
     _check_dataset_defaults_respect_explicit_zero_overrides()
     _check_no_a_personal_graph_is_not_identity_locked()
     _check_no_a_support_semantics_regression()

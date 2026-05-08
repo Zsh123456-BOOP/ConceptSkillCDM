@@ -46,6 +46,7 @@ def get_regularization_components(
         "personal_sparse": torch.tensor(0.0, device=device),
         "personal_kl": torch.tensor(0.0, device=device),
         "personal_query_residual": torch.tensor(0.0, device=device),
+        "theta_prior_align": torch.tensor(0.0, device=device),
         "alpha_var": torch.tensor(0.0, device=device),
         "alpha_collapse": torch.tensor(0.0, device=device),
     }
@@ -243,6 +244,11 @@ def get_regularization_components(
             details["personal_query_residual_runtime"] = residual.detach()
             details["personal_query_residual_pen"] = residual_pen.detach()
 
+        theta_align_loss = details.get("theta_prior_align_loss")
+        if theta_align_loss is not None and model.lambda_theta_prior_align > 0:
+            terms["theta_prior_align"] = model.lambda_theta_prior_align * theta_align_loss * personal_reg_ramp_t
+            details["theta_prior_align_runtime"] = theta_align_loss.detach()
+
     total = (
         terms["graph_entropy"]
         + terms["graph_diag"]
@@ -251,6 +257,7 @@ def get_regularization_components(
         + terms["personal_sparse"]
         + terms["personal_kl"]
         + terms["personal_query_residual"]
+        + terms["theta_prior_align"]
         + terms["alpha_var"]
         + terms["alpha_collapse"]
     )

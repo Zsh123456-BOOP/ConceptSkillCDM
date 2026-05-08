@@ -177,6 +177,12 @@ def run_cdm_forward(
     if not return_details:
         return out_main
 
+    theta_prior_align_loss, theta_prior_align_abs_mean = model._build_theta_prior_alignment_loss(
+        prediction_state=prediction_state,
+        concept_mask=q_vector,
+        student_ids=student_ids,
+    )
+
     details: Dict[str, torch.Tensor] = {
         "enable_module1": torch.tensor(int(model.enable_module1), device=device),
         "use_concept_graph": torch.tensor(int(model.use_concept_graph), device=device),
@@ -213,6 +219,8 @@ def run_cdm_forward(
         "ae_logit_residual_abs_mean": ae_logit_residual_abs_mean.detach(),
         "ae_posterior_prior_logit_abs_mean": ae_posterior_prior_logit_abs_mean.detach(),
         "ae_posterior_prior_delta_abs_mean": ae_posterior_prior_delta_abs_mean.detach(),
+        "theta_prior_align_loss": theta_prior_align_loss,
+        "theta_prior_align_abs_mean": theta_prior_align_abs_mean.detach(),
         "logits": total_logit.detach(),
         "relation_identity_delta": s_out["relation_identity_delta"].detach(),
         "knowledge_state_backbone_delta": s_out["knowledge_state_backbone_delta"].detach(),

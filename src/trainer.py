@@ -78,6 +78,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "ae_interaction_logit_scale",
     "ae_logit_dim",
     "ae_posterior_prior_scale",
+    "lambda_theta_prior_align",
     "ae_lr_mult",
     "ae_stat_prior_scale",
     "relation_theta_scale",
@@ -974,6 +975,7 @@ _REG_COMPONENT_KEYS: Tuple[str, ...] = (
     "personal_sparse",
     "personal_kl",
     "personal_query_residual",
+    "theta_prior_align",
     "alpha_var",
     "alpha_collapse",
 )
@@ -1763,8 +1765,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     logger.info("%s Loading datasets...", run_tag)
     logger.info(
         "%s Regularization: graph_entropy(lambda_sparse)=%.6f, graph_diag=%.6f, graph_uniform=%.6f, "
-        "personal_sparse=%.6f, personal_kl=%.6f, personal_query_residual=%.6f, alpha_penalty=%.6f, "
-        "alpha_min=%.6f, prediction_l2=%.6f",
+        "personal_sparse=%.6f, personal_kl=%.6f, personal_query_residual=%.6f, "
+        "theta_prior_align=%.6f, alpha_penalty=%.6f, alpha_min=%.6f, prediction_l2=%.6f",
         run_tag,
         args.lambda_sparse,
         getattr(args, "lambda_graph_diag", 0.10),
@@ -1772,6 +1774,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         args.lambda_sparse_personal,
         getattr(args, "lambda_personal_kl", 0.0),
         getattr(args, "lambda_personal_query_residual", 0.0),
+        getattr(args, "lambda_theta_prior_align", 0.0),
         args.lambda_alpha,
         getattr(args, "lambda_alpha_min", 0.0),
         getattr(args, "prediction_l2_lambda", 5e-5),
@@ -1966,6 +1969,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         ae_interaction_logit_scale=getattr(args, "ae_interaction_logit_scale", 0.0),
         ae_logit_dim=getattr(args, "ae_logit_dim", 32),
         ae_posterior_prior_scale=getattr(args, "ae_posterior_prior_scale", 0.0),
+        lambda_theta_prior_align=getattr(args, "lambda_theta_prior_align", 0.0),
         relation_theta_scale=getattr(args, "relation_theta_scale", 0.0),
         relation_theta_delta_clip=getattr(args, "relation_theta_delta_clip", 2.0),
         graph_query_adapter_enable=getattr(args, "graph_query_adapter_enable", True),
@@ -2082,10 +2086,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         logger.info(
             "%s [Reg Terms] Epoch [%03d] | "
             "Train: graph_entropy=%.6f, graph_diag=%.6f, graph_uniform=%.6f, graph_reg_scale=%.4f, "
-            "prediction_l2=%.6f, personal_sparse=%.6f, "
+            "prediction_l2=%.6f, personal_sparse=%.6f, theta_prior_align=%.6f, "
             "alpha_var=%.6f, alpha_collapse=%.6f, reg_bce_ratio=%.4f | "
             "Val: graph_entropy=%.6f, graph_diag=%.6f, graph_uniform=%.6f, graph_reg_scale=%.4f, "
-            "prediction_l2=%.6f, personal_sparse=%.6f, "
+            "prediction_l2=%.6f, personal_sparse=%.6f, theta_prior_align=%.6f, "
             "alpha_var=%.6f, alpha_collapse=%.6f, reg_bce_ratio=%.4f",
             run_tag,
             epoch,
@@ -2095,6 +2099,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             train_metrics.get("reg_graph_reg_scale", 1.0),
             train_metrics.get("reg_prediction_l2", 0.0),
             train_metrics.get("reg_personal_sparse", 0.0),
+            train_metrics.get("reg_theta_prior_align", 0.0),
             train_metrics.get("reg_alpha_var", 0.0),
             train_metrics.get("reg_alpha_collapse", 0.0),
             train_metrics.get("reg_bce_ratio", 0.0),
@@ -2104,6 +2109,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             val_metrics.get("reg_graph_reg_scale", 1.0),
             val_metrics.get("reg_prediction_l2", 0.0),
             val_metrics.get("reg_personal_sparse", 0.0),
+            val_metrics.get("reg_theta_prior_align", 0.0),
             val_metrics.get("reg_alpha_var", 0.0),
             val_metrics.get("reg_alpha_collapse", 0.0),
             val_metrics.get("reg_bce_ratio", 0.0),
@@ -2779,6 +2785,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         ae_posterior_prior_scale=loaded_args.get(
             "ae_posterior_prior_scale", getattr(args, "ae_posterior_prior_scale", 0.0)
+        ),
+        lambda_theta_prior_align=loaded_args.get(
+            "lambda_theta_prior_align", getattr(args, "lambda_theta_prior_align", 0.0)
         ),
         relation_theta_scale=loaded_args.get(
             "relation_theta_scale", getattr(args, "relation_theta_scale", 0.0)
