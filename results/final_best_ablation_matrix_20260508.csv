@@ -1,0 +1,4 @@
+dataset,seed,profile,full_auc,no_A_auc,no_E_auc,delta_A_full_minus_noA,delta_E_full_minus_noE,state_A,state_E,suggest_keep,diagnosis_reason
+assist_09,42,best,0.779645926749786,0.681722420344206,0.6927372871023953,0.0979235064055799,0.0869086396473906,useful,useful,"A,E",E-padded-row-artifact;E-query-correction-capped;A-readout-washed-out;A-adjacency-frozen
+junyi,42,best,0.8291350902738899,0.6355687301214205,0.7985598014795501,0.1935663601524694,0.0305752887943397,useful,useful,"A,E",E-query-correction-capped;A-live-but-collapsed;A-adjacency-frozen
+assist_17,42,best,0.7868486071059024,0.6807310148001218,0.7092845645618674,0.1061175923057806,0.077564042544035,useful,useful,"A,E",assist17-best-params-added-from-recent-mastery-full-and-matched-ablation
