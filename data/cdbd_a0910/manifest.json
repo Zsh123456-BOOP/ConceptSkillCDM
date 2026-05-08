@@ -1,0 +1,39 @@
+{
+  "dataset": "cdbd_a0910",
+  "source": "EduData CDBD",
+  "source_url": "http://base.ustc.edu.cn/data/cdbd/a0910",
+  "concept_source": "item.csv:knowledge_code",
+  "output_format": [
+    "stu_id",
+    "exer_id",
+    "cpt_seq",
+    "label"
+  ],
+  "splits": {
+    "train": {
+      "rows": 186049,
+      "students": 2493,
+      "items": 17051,
+      "concepts": 123,
+      "positive_rate": 0.6584770678692172,
+      "dropped_missing_concepts": 0
+    },
+    "valid": {
+      "rows": 25606,
+      "students": 2493,
+      "items": 10415,
+      "concepts": 119,
+      "positive_rate": 0.6598453487463876,
+      "dropped_missing_concepts": 0
+    },
+    "test": {
+      "rows": 55760,
+      "students": 2493,
+      "items": 13682,
+      "concepts": 121,
+      "positive_rate": 0.6543220946915351,
+      "dropped_missing_concepts": 0
+    }
+  },
+  "notes": "EduData CDBD ASSISTments 2009-2010 variant. This overlaps the repo's existing assist_09 family, but has EduData's CDBD split and explicit item.csv knowledge_code metadata."
+}

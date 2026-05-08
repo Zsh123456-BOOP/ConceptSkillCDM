@@ -1,0 +1,39 @@
+{
+  "dataset": "cdbd_lsat",
+  "source": "EduData CDBD",
+  "source_url": "http://base.ustc.edu.cn/data/cdbd/LSAT",
+  "concept_source": "item_id_as_concept",
+  "output_format": [
+    "stu_id",
+    "exer_id",
+    "cpt_seq",
+    "label"
+  ],
+  "splits": {
+    "train": {
+      "rows": 3375,
+      "students": 997,
+      "items": 5,
+      "concepts": 5,
+      "positive_rate": 0.7493333333333333,
+      "dropped_missing_concepts": 0
+    },
+    "valid": {
+      "rows": 375,
+      "students": 323,
+      "items": 5,
+      "concepts": 5,
+      "positive_rate": 0.8453333333333334,
+      "dropped_missing_concepts": 0
+    },
+    "test": {
+      "rows": 1250,
+      "students": 766,
+      "items": 5,
+      "concepts": 5,
+      "positive_rate": 0.7784,
+      "dropped_missing_concepts": 0
+    }
+  },
+  "notes": "EduData CDBD LSAT does not ship an item-to-concept metadata file. The adapter uses each item_id as its own cpt_seq so the dataset can enter the repo's Q-matrix pipeline; concept semantics should be reviewed before using it as a final CD benchmark."
+}

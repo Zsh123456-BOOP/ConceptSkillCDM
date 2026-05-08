@@ -27,3 +27,6 @@ logs/
 server_logs/
 results/
 .claude/
+
+# EduData 下载缓存只作为可复现来源，不提交原始副本
+data/_edudata_raw/

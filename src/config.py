@@ -260,6 +260,25 @@ DATASET_DEFAULTS = {
     },
 }
 
+DATASET_DEFAULTS["cdbd_lsat"] = {
+    **DATASET_DEFAULTS["assist_09"],
+    "data_dir": "./data/cdbd_lsat",
+    "batch_size": 32,
+    "knowledge_dim": 32,
+    "num_relation_heads": 2,
+    "num_gnn_layers": 1,
+    "dropout": 0.10,
+    "learning_rate": 1e-3,
+    "graph_topk": 4,
+    "personal_student_dim": 16,
+    "personal_rank": 4,
+}
+
+DATASET_DEFAULTS["cdbd_a0910"] = {
+    **DATASET_DEFAULTS["assist_09"],
+    "data_dir": "./data/cdbd_a0910",
+}
+
 GRID_SEARCH_SPACE = {
     "assist_09": {
         "base": {},
@@ -284,6 +303,24 @@ GRID_SEARCH_SPACE = {
             "dropout": [0.1, 0.2],
             "ablate_concept_graph": [False],
         },
+    },
+}
+
+GRID_SEARCH_SPACE["cdbd_lsat"] = {
+    "base": {},
+    "search": {
+        "learning_rate": [1e-3],
+        "dropout": [0.1],
+        "ablate_concept_graph": [False],
+    },
+}
+
+GRID_SEARCH_SPACE["cdbd_a0910"] = {
+    "base": {},
+    "search": {
+        "learning_rate": [1e-4, 3e-4],
+        "dropout": [0.1, 0.2],
+        "ablate_concept_graph": [False],
     },
 }
 

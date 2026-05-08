@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 from gpu_utils import configure_main_process_gpus, parse_gpu_ids
-from src.config import apply_dataset_defaults, collect_explicit_arg_dests
+from src.config import DATASET_DEFAULTS, apply_dataset_defaults, collect_explicit_arg_dests
 from src.experiment_utils import setup_logging
 from src.trainer import train_one_experiment, run_inference, save_component_analysis_data
 
@@ -40,7 +40,7 @@ def parse_args():
         "--dataset_name",
         type=str,
         default="assist_09",
-        choices=["assist_09", "assist_17", "junyi"],
+        choices=sorted(DATASET_DEFAULTS),
         help="Dataset name; controls data_dir and some defaults.",
     )
     parser.add_argument("--data_dir", type=str, default=None)
