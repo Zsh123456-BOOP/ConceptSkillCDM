@@ -17,6 +17,16 @@ GPUS_CSV="${GPUS:-0,2,3}"
 EPOCHS="${EPOCHS:-30}"
 PATIENCE="${PATIENCE:-5}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
+PYTHON_BIN="${PYTHON_BIN:-python}"
+
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  if [[ -x "/home/zsh/anaconda3/envs/xph_env/bin/python" ]]; then
+    PYTHON_BIN="/home/zsh/anaconda3/envs/xph_env/bin/python"
+  else
+    echo "Python interpreter not found: ${PYTHON_BIN}" >&2
+    exit 127
+  fi
+fi
 
 IFS=',' read -r -a GPUS_ARR <<< "$GPUS_CSV"
 DATASETS=(frcsub math2 assist_15 nips34 assist_12 ednet_kt1)
@@ -27,6 +37,7 @@ echo "run_id=${RUN_ID}"
 echo "gpus=${GPUS_CSV}"
 echo "datasets=${DATASETS[*]}"
 echo "epochs=${EPOCHS} patience=${PATIENCE} num_workers=${NUM_WORKERS}"
+echo "python=${PYTHON_BIN}"
 
 declare -A GPU_PID=()
 declare -A GPU_DATASET=()
@@ -56,7 +67,7 @@ launch_job() {
   local stdout_log="logs/${RUN_ID}/${dataset}_full.stdout.log"
   mkdir -p "$log_dir" "$ckpt_dir"
   echo "[launch] dataset=${dataset} gpu=${gpu} log=${stdout_log}"
-  CUDA_VISIBLE_DEVICES="$gpu" python main.py \
+  CUDA_VISIBLE_DEVICES="$gpu" "$PYTHON_BIN" main.py \
     --dataset_name "$dataset" \
     --model_variant full \
     --epochs "$EPOCHS" \
@@ -84,7 +95,7 @@ for gpu in "${GPUS_ARR[@]}"; do
   wait_for_gpu "$gpu"
 done
 
-python - <<'PY'
+"$PYTHON_BIN" - <<'PY'
 from pathlib import Path
 run_id = Path("logs").glob("public_full_*")
 print("[summary] runs are under logs/<RUN_ID>, checkpoints/<RUN_ID>, results/<RUN_ID>")

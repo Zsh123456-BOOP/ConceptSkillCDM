@@ -42,3 +42,4 @@ data/assist_12/*.csv
 data/assist_15/*.csv
 data/nips34/*.csv
 data/ednet_kt1/*.csv
+data/public_benchmarks_processed_*.tar.gz
