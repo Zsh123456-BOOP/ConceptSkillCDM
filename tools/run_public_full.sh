@@ -14,6 +14,7 @@ cd "$ROOT_DIR"
 
 RUN_ID="${RUN_ID:-public_full_$(date +%Y%m%d_%H%M%S)}"
 GPUS_CSV="${GPUS:-0,2,3}"
+DATASETS_CSV="${DATASETS:-frcsub,math2,assist_15,nips34,assist_12,ednet_kt1}"
 EPOCHS="${EPOCHS:-30}"
 PATIENCE="${PATIENCE:-5}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
@@ -29,7 +30,7 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
 fi
 
 IFS=',' read -r -a GPUS_ARR <<< "$GPUS_CSV"
-DATASETS=(frcsub math2 assist_15 nips34 assist_12 ednet_kt1)
+IFS=',' read -r -a DATASETS <<< "$DATASETS_CSV"
 
 mkdir -p "logs/${RUN_ID}" "checkpoints/${RUN_ID}" "results/${RUN_ID}"
 

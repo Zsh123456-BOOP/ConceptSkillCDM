@@ -10,64 +10,82 @@
       "human_size": "549.66 MB"
     }
   },
-  "raw_csv_member": "2012-2013-data-with-predictions-4-final.csv",
-  "source_columns": {
-    "student": "user_id",
-    "exercise": "problem_id",
-    "concept": "skill_id",
-    "label": "correct",
-    "order": "start_time"
-  },
+  "raw_csv_members": {},
   "split_policy": "per-student 80/10/10 sorted by start_time",
   "has_true_temporal_order": true,
   "concept_source": "skill_id",
-  "dropped": {
-    "invalid_or_missing_rows": 3411457
-  },
-  "splits": {
-    "train": {
-      "rows": 2155895,
-      "students": 29018,
-      "items": 51316,
-      "concepts": 264,
-      "positive_rate": 0.6968140841738582
-    },
-    "valid": {
-      "rows": 271843,
-      "students": 27485,
-      "items": 36623,
-      "concepts": 254,
-      "positive_rate": 0.68622329800657
-    },
-    "test": {
-      "rows": 284075,
-      "students": 28118,
-      "items": 36173,
-      "concepts": 258,
-      "positive_rate": 0.6930000880049283
-    }
-  },
   "output_format": [
     "stu_id",
     "exer_id",
     "cpt_seq",
     "label"
   ],
+  "filter": {
+    "method": "train-only high-interaction student/item filtering",
+    "reference_dataset": "junyi",
+    "reference_summary": {
+      "train": {
+        "rows": 262473,
+        "students": 10000,
+        "items": 702
+      },
+      "valid": {
+        "rows": 24299,
+        "students": 10000,
+        "items": 623
+      },
+      "test": {
+        "rows": 67063,
+        "students": 10000,
+        "items": 673
+      }
+    },
+    "source_dataset": "assist_12",
+    "original_train_rows": 2155895,
+    "target_train_rows": 262473,
+    "target_item_count": 702,
+    "min_item_interactions": 50,
+    "selected_students": 7215,
+    "selected_items": 702,
+    "student_interaction_cutoff": 11,
+    "estimated_filtered_train_rows": 262479
+  },
+  "splits": {
+    "train": {
+      "rows": 262479,
+      "students": 7215,
+      "items": 702,
+      "concepts": 68,
+      "positive_rate": 0.7434042342435014
+    },
+    "valid": {
+      "rows": 15017,
+      "students": 3812,
+      "items": 677,
+      "concepts": 65,
+      "positive_rate": 0.7501498301924485
+    },
+    "test": {
+      "rows": 14903,
+      "students": 3638,
+      "items": 671,
+      "concepts": 66,
+      "positive_rate": 0.7485070120110044
+    }
+  },
   "processed_files": {
     "train": {
       "path": "data/assist_12/train.csv",
-      "bytes": 43229872,
-      "human_size": "41.23 MB"
+      "bytes": 4953830
     },
     "valid": {
       "path": "data/assist_12/valid.csv",
-      "bytes": 5467806,
-      "human_size": "5.21 MB"
+      "bytes": 283328
     },
     "test": {
       "path": "data/assist_12/test.csv",
-      "bytes": 5717319,
-      "human_size": "5.45 MB"
+      "bytes": 280860
     }
-  }
+  },
+  "notes": "Filtered from the processed dataset to keep high-evidence train students/items. Selection uses train split interaction counts only; valid/test are filtered by the same IDs."
 }
