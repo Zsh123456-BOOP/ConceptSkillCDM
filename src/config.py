@@ -339,6 +339,11 @@ DATASET_DEFAULTS["nips34"] = {
     "graph_topk": 24,
 }
 
+DATASET_DEFAULTS["nips34_l3"] = {
+    **DATASET_DEFAULTS["nips34"],
+    "data_dir": "./data/nips34_l3",
+}
+
 DATASET_DEFAULTS["ednet_kt1"] = {
     **PUBLIC_BENCHMARK_DEFAULTS,
     "data_dir": "./data/ednet_kt1",
@@ -348,6 +353,16 @@ DATASET_DEFAULTS["ednet_kt1"] = {
     "num_gnn_layers": 1,
     "graph_topk": 24,
     "personal_student_dim": 32,
+}
+
+DATASET_DEFAULTS["assist_12_clean15_item50"] = {
+    **DATASET_DEFAULTS["assist_12"],
+    "data_dir": "./data/assist_12_clean15_item50",
+}
+
+DATASET_DEFAULTS["ednet_kt1_clean15_sample5000"] = {
+    **DATASET_DEFAULTS["ednet_kt1"],
+    "data_dir": "./data/ednet_kt1_clean15_sample5000",
 }
 
 GRID_SEARCH_SPACE = {

@@ -1,0 +1,136 @@
+{
+  "dataset": "assist_12_clean15_item50",
+  "source": "USTC BASE ASSISTment mirror",
+  "source_urls": [
+    "https://base.ustc.edu.cn/data/ASSISTment/2012-2013-data-with-predictions-4-final.zip"
+  ],
+  "raw_files": {
+    "2012-2013-data-with-predictions-4-final.zip": {
+      "bytes": 576365408,
+      "human_size": "549.66 MB"
+    }
+  },
+  "raw_csv_member": "2012-2013-data-with-predictions-4-final.csv",
+  "source_columns": {
+    "student": "user_id",
+    "exercise": "problem_id",
+    "concept": "skill_id",
+    "label": "correct",
+    "order": "start_time"
+  },
+  "split_policy": "per-student 80/10/10 sorted by start_time; train-only k-core filter",
+  "has_true_temporal_order": true,
+  "concept_source": "skill_id",
+  "dropped": {
+    "invalid_or_missing_rows": 3411457
+  },
+  "filter": {
+    "method": "train-only iterative k-core interaction filtering",
+    "min_student_interactions": 15,
+    "min_item_interactions": 50,
+    "iterations": [
+      {
+        "iteration": 1,
+        "rows": 2155895,
+        "students": 18686,
+        "items": 12300
+      },
+      {
+        "iteration": 2,
+        "rows": 1545540,
+        "students": 16647,
+        "items": 12049
+      },
+      {
+        "iteration": 3,
+        "rows": 1519231,
+        "students": 16524,
+        "items": 11820
+      },
+      {
+        "iteration": 4,
+        "rows": 1507363,
+        "students": 16406,
+        "items": 11798
+      },
+      {
+        "iteration": 5,
+        "rows": 1504778,
+        "students": 16389,
+        "items": 11770
+      },
+      {
+        "iteration": 6,
+        "rows": 1503211,
+        "students": 16364,
+        "items": 11769
+      },
+      {
+        "iteration": 7,
+        "rows": 1502827,
+        "students": 16364,
+        "items": 11756
+      },
+      {
+        "iteration": 8,
+        "rows": 1502208,
+        "students": 16358,
+        "items": 11756
+      },
+      {
+        "iteration": 9,
+        "rows": 1502148,
+        "students": 16358,
+        "items": 11756
+      }
+    ],
+    "selected_students": 16358,
+    "selected_items": 11756
+  },
+  "splits": {
+    "train": {
+      "rows": 1502148,
+      "students": 16358,
+      "items": 11756,
+      "concepts": 190,
+      "positive_rate": 0.7030079592689935
+    },
+    "valid": {
+      "rows": 134978,
+      "students": 14115,
+      "items": 10422,
+      "concepts": 177,
+      "positive_rate": 0.6898827957148572
+    },
+    "test": {
+      "rows": 130432,
+      "students": 13800,
+      "items": 10234,
+      "concepts": 174,
+      "positive_rate": 0.7013922963689893
+    }
+  },
+  "output_format": [
+    "stu_id",
+    "exer_id",
+    "cpt_seq",
+    "label"
+  ],
+  "processed_files": {
+    "train": {
+      "path": "data/assist_12_clean15_item50/train.csv",
+      "bytes": 30027035,
+      "human_size": "28.64 MB"
+    },
+    "valid": {
+      "path": "data/assist_12_clean15_item50/valid.csv",
+      "bytes": 2700150,
+      "human_size": "2.58 MB"
+    },
+    "test": {
+      "path": "data/assist_12_clean15_item50/test.csv",
+      "bytes": 2609946,
+      "human_size": "2.49 MB"
+    }
+  }
+}
