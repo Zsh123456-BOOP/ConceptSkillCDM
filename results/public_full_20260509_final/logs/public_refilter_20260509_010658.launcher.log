@@ -1,0 +1,14 @@
+run_id=public_refilter_20260509_010658
+gpus=0,2
+datasets=assist_12 ednet_kt1
+epochs=30 patience=5 num_workers=4
+python=/home/zsh/anaconda3/envs/xph_env/bin/python
+[launch] dataset=assist_12 gpu=0 log=logs/public_refilter_20260509_010658/assist_12_full.stdout.log
+[pid] dataset=assist_12 gpu=0 pid=363950
+[launch] dataset=ednet_kt1 gpu=2 log=logs/public_refilter_20260509_010658/ednet_kt1_full.stdout.log
+[pid] dataset=ednet_kt1 gpu=2 pid=363952
+[wait] gpu=0 dataset=assist_12 pid=363950
+[done] gpu=0 dataset=assist_12 pid=363950
+[wait] gpu=2 dataset=ednet_kt1 pid=363952
+[done] gpu=2 dataset=ednet_kt1 pid=363952
+[summary] runs are under logs/<RUN_ID>, checkpoints/<RUN_ID>, results/<RUN_ID>
