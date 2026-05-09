@@ -162,6 +162,15 @@ def copy_logs(output_dir: Path, rows: list[dict[str, str]], server_logs_dir: Pat
         launcher = server_logs_dir / f"{run_id}_launcher.log"
         if launcher.exists():
             shutil.copy2(launcher, log_out / f"{run_id}.launcher.log")
+            continue
+        for candidate in sorted(server_logs_dir.glob("*launcher.log")):
+            try:
+                content = candidate.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if f"run_id={run_id}" in content:
+                shutil.copy2(candidate, log_out / f"{run_id}.launcher.log")
+                break
 
 
 def main() -> None:
