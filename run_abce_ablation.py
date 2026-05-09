@@ -56,6 +56,9 @@ BOOLEAN_OPTIONAL_KEYS = {
     "graph_query_adapter_enable",
 }
 STRUCTURAL_SWITCH_KEYS = (
+    "graph_prior_mode",
+    "disable_item_prior",
+    "disable_sequence_prior",
     "share_concept_embeddings",
     "personal_alpha_temperature",
     "personal_alpha_budget",

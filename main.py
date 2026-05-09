@@ -216,6 +216,22 @@ def parse_args():
         action="store_true",
         help="Disable train-order sequence transition evidence when a dataset has no real temporal order.",
     )
+    parser.add_argument(
+        "--disable_item_prior",
+        action="store_true",
+        help="Disable train item co-occurrence evidence; mainly used for A evidence-source ablations.",
+    )
+    parser.add_argument(
+        "--graph_prior_mode",
+        type=str,
+        default="evidence",
+        choices=["evidence", "item_only", "seq_only", "self_only", "uniform"],
+        help=(
+            "Global A prior evidence mode. evidence uses item+sequence; item_only/seq_only isolate "
+            "one evidence source; self_only keeps only self-loop support; uniform is a train-independent "
+            "off-diagonal control."
+        ),
+    )
 
     # ======================
     # Ablations
@@ -750,6 +766,8 @@ def main():
                 min_poison_count=args.min_poison_count,
                 logger=logger,
                 disable_sequence_prior=bool(getattr(args, "disable_sequence_prior", False)),
+                disable_item_prior=bool(getattr(args, "disable_item_prior", False)),
+                graph_prior_mode=str(getattr(args, "graph_prior_mode", "evidence")),
             )
             
             # 

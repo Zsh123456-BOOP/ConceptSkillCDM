@@ -39,6 +39,9 @@ STRICT_CHECKPOINT_LOADING = True
 MONITOR_NAME = "val_auc"
 MONITOR_MODE = "max"
 STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
+    "graph_prior_mode",
+    "disable_item_prior",
+    "disable_sequence_prior",
     "share_concept_embeddings",
     "personal_alpha_temperature",
     "personal_alpha_budget",
@@ -1939,6 +1942,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         logger=logger,
         dataset_name=args.dataset_name if hasattr(args, "dataset_name") else args.dataset,
         disable_sequence_prior=bool(getattr(args, "disable_sequence_prior", False)),
+        disable_item_prior=bool(getattr(args, "disable_item_prior", False)),
+        graph_prior_mode=str(getattr(args, "graph_prior_mode", "evidence")),
     )
 
     logger.info(

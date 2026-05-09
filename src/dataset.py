@@ -411,6 +411,8 @@ def create_dataloaders(
         logger=None,
         dataset_name: str = None,   # ★ 新增：数据集名字（assist_09 / junyi / assist_17）
         disable_sequence_prior: bool = False,
+        disable_item_prior: bool = False,
+        graph_prior_mode: str = "evidence",
 ) -> Tuple[DataLoader, DataLoader, DataLoader, dict]:
     """
     创建训练、验证和测试的数据加载器，并执行统一的数据清洗
@@ -545,11 +547,16 @@ def create_dataloaders(
 
     log("正在构建Q矩阵...")
     q_matrix = build_q_matrix(train_sources=train_sources, exer_id_map=exer_id_map, cpt_id_map=cpt_id_map)
-    item_prior_matrix, item_prior_stats = build_item_cooccurrence_prior(q_matrix)
-    if disable_sequence_prior:
-        num_concepts = len(cpt_id_map)
-        sequence_prior_matrix = torch.zeros(num_concepts, num_concepts, dtype=torch.float32)
-        sequence_prior_stats = {
+
+    def _zero_item_prior(num_concepts: int) -> Tuple[torch.Tensor, Dict[str, float]]:
+        return torch.zeros(num_concepts, num_concepts, dtype=torch.float32), {
+            "item_observed_edge_count": 0.0,
+            "item_prior_density": 0.0,
+            "item_prior_entropy": 0.0,
+        }
+
+    def _zero_sequence_prior(num_concepts: int) -> Tuple[torch.Tensor, Dict[str, float]]:
+        return torch.zeros(num_concepts, num_concepts, dtype=torch.float32), {
             "seq_raw_transition_mass": 0.0,
             "seq_student_weighted_mass": 0.0,
             "seq_student_count": 0.0,
@@ -558,18 +565,65 @@ def create_dataloaders(
             "sequence_prior_density": 0.0,
             "sequence_prior_entropy": 0.0,
         }
-        log("[A Prior] sequence evidence disabled for this dataset/config.")
+
+    def _uniform_prior(num_concepts: int) -> Tuple[torch.Tensor, Dict[str, float]]:
+        if num_concepts == 1:
+            prior = torch.ones(1, 1, dtype=torch.float32)
+        else:
+            prior = _uniform_offdiag_prior(num_concepts)
+        possible = float(num_concepts * max(0, num_concepts - 1))
+        observed = possible
+        return prior, {
+            "item_observed_edge_count": 0.0,
+            "item_prior_density": 1.0 if possible > 0 else 0.0,
+            "item_prior_entropy": _prior_entropy(prior),
+            "uniform_prior_edge_count": observed,
+        }
+
+    prior_mode = str(graph_prior_mode or "evidence").strip().lower()
+    valid_prior_modes = {"evidence", "item_only", "seq_only", "self_only", "uniform"}
+    if prior_mode not in valid_prior_modes:
+        raise ValueError(f"graph_prior_mode must be one of {sorted(valid_prior_modes)}, got {graph_prior_mode!r}")
+    if prior_mode == "evidence":
+        if disable_item_prior and disable_sequence_prior:
+            prior_mode = "self_only"
+        elif disable_item_prior:
+            prior_mode = "seq_only"
+        elif disable_sequence_prior:
+            prior_mode = "item_only"
+    num_concepts = len(cpt_id_map)
+
+    if prior_mode == "uniform":
+        item_prior_matrix, item_prior_stats = _uniform_prior(num_concepts)
+        sequence_prior_matrix, sequence_prior_stats = _zero_sequence_prior(num_concepts)
+        log("[A Prior] mode=uniform: using train-independent uniform off-diagonal control prior.")
+    elif prior_mode == "self_only":
+        item_prior_matrix, item_prior_stats = _zero_item_prior(num_concepts)
+        sequence_prior_matrix, sequence_prior_stats = _zero_sequence_prior(num_concepts)
+        log("[A Prior] mode=self_only: disabling item and sequence evidence; only self-loop support remains.")
     else:
-        sequence_prior_matrix, sequence_prior_stats = build_sequence_transition_prior(
-            train_sources=train_sources,
-            cpt_id_map=cpt_id_map,
-            max_hops=3,
-            decay=0.70,
-            shrink=2.0,
-        )
+        if prior_mode == "seq_only":
+            item_prior_matrix, item_prior_stats = _zero_item_prior(num_concepts)
+            log("[A Prior] mode=seq_only: item co-occurrence evidence disabled.")
+        else:
+            item_prior_matrix, item_prior_stats = build_item_cooccurrence_prior(q_matrix)
+
+        if prior_mode == "item_only":
+            sequence_prior_matrix, sequence_prior_stats = _zero_sequence_prior(num_concepts)
+            log("[A Prior] mode=item_only: sequence transition evidence disabled.")
+        else:
+            sequence_prior_matrix, sequence_prior_stats = build_sequence_transition_prior(
+                train_sources=train_sources,
+                cpt_id_map=cpt_id_map,
+                max_hops=3,
+                decay=0.70,
+                shrink=2.0,
+            )
     graph_prior_stats = {**item_prior_stats, **sequence_prior_stats}
+    graph_prior_stats["graph_prior_mode"] = prior_mode
     log(
         "[A Prior] train-only evidence: "
+        f"mode={prior_mode}, "
         f"item_edges={graph_prior_stats['item_observed_edge_count']:.0f}, "
         f"item_density={graph_prior_stats['item_prior_density']:.4f}, "
         f"item_entropy={graph_prior_stats['item_prior_entropy']:.4f}, "
@@ -712,7 +766,9 @@ def create_dataloaders(
         'item_prior_matrix': item_prior_matrix,
         'sequence_prior_matrix': sequence_prior_matrix,
         'graph_prior_stats': graph_prior_stats,
-        'sequence_prior_disabled': bool(disable_sequence_prior),
+        'sequence_prior_disabled': bool(disable_sequence_prior or prior_mode in {"item_only", "self_only", "uniform"}),
+        'item_prior_disabled': bool(disable_item_prior or prior_mode in {"seq_only", "self_only"}),
+        'graph_prior_mode': prior_mode,
         # 新增：每道题的“概念数量”，与 exer_id 内部索引对齐
         'concepts_per_exercise': concepts_per_exercise,
         'train_only_split_hygiene': True,
