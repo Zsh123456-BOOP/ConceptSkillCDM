@@ -22,58 +22,78 @@
   "split_policy": "per-user 80/10/10 sorted by timestamp",
   "has_true_temporal_order": true,
   "concept_source": "contents/questions.csv tags",
-  "dropped": {
-    "missing_question_metadata": 0,
-    "bad_answer": 27646,
-    "bad_user_file": 0,
-    "empty_user_history": 5
-  },
-  "processed_user_files": 784304,
-  "splits": {
-    "train": {
-      "rows": 75835482,
-      "students": 784304,
-      "items": 12275,
-      "concepts": 189,
-      "positive_rate": 0.6526975064258179
-    },
-    "valid": {
-      "rows": 9611601,
-      "students": 735190,
-      "items": 12275,
-      "concepts": 189,
-      "positive_rate": 0.6625544485252769
-    },
-    "test": {
-      "rows": 9819197,
-      "students": 756936,
-      "items": 12276,
-      "concepts": 189,
-      "positive_rate": 0.6500371669903353
-    }
-  },
-  "notes": "EdNet-KT1 is large. Raw archive is not intended for git; processed CSVs may also be too large for normal commits.",
   "output_format": [
     "stu_id",
     "exer_id",
     "cpt_seq",
     "label"
   ],
+  "filter": {
+    "method": "train-only high-interaction student/item filtering",
+    "reference_dataset": "junyi",
+    "reference_summary": {
+      "train": {
+        "rows": 262473,
+        "students": 10000,
+        "items": 702
+      },
+      "valid": {
+        "rows": 24299,
+        "students": 10000,
+        "items": 623
+      },
+      "test": {
+        "rows": 67063,
+        "students": 10000,
+        "items": 673
+      }
+    },
+    "source_dataset": "ednet_kt1",
+    "original_train_rows": 75835482,
+    "target_train_rows": 262473,
+    "target_item_count": 702,
+    "min_item_interactions": 50,
+    "selected_students": 177,
+    "selected_items": 702,
+    "student_interaction_cutoff": 1155,
+    "estimated_filtered_train_rows": 263506
+  },
+  "splits": {
+    "train": {
+      "rows": 263506,
+      "students": 177,
+      "items": 702,
+      "concepts": 146,
+      "positive_rate": 0.6314846720757782
+    },
+    "valid": {
+      "rows": 23656,
+      "students": 177,
+      "items": 702,
+      "concepts": 146,
+      "positive_rate": 0.6818566114305039
+    },
+    "test": {
+      "rows": 20791,
+      "students": 177,
+      "items": 702,
+      "concepts": 146,
+      "positive_rate": 0.6693280746476841
+    }
+  },
   "processed_files": {
     "train": {
       "path": "data/ednet_kt1/train.csv",
-      "bytes": 1789604710,
-      "human_size": "1.67 GB"
+      "bytes": 5758264
     },
     "valid": {
       "path": "data/ednet_kt1/valid.csv",
-      "bytes": 225494879,
-      "human_size": "215.05 MB"
+      "bytes": 532615
     },
     "test": {
       "path": "data/ednet_kt1/test.csv",
-      "bytes": 230383138,
-      "human_size": "219.71 MB"
+      "bytes": 450222
     }
-  }
+  },
+  "notes": "Filtered from the processed dataset to keep high-evidence train students/items. Selection uses train split interaction counts only; valid/test are filtered by the same IDs."
 }
