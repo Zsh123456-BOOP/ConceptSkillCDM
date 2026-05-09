@@ -75,6 +75,7 @@ class CognitiveDiagnosisModel(nn.Module):
         personal_alpha_budget: float = 0.10,
         personal_alpha_base_init: float = 0.08,
         personal_alpha_bias_scale: float = 1.0,
+        personal_freeze_alpha_gate: bool = False,
         personal_disable_student_global_context: bool = False,
         personal_local_hops: int = 1,
         personal_include_neighbor_rows: bool = False,
@@ -166,6 +167,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_alpha_budget = max(0.0, float(personal_alpha_budget))
         self.personal_alpha_base_init = max(0.0, float(personal_alpha_base_init))
         self.personal_alpha_bias_scale = max(0.0, float(personal_alpha_bias_scale))
+        self.personal_freeze_alpha_gate = bool(personal_freeze_alpha_gate)
         self.personal_disable_student_global_context = bool(personal_disable_student_global_context)
         self.personal_local_hops = max(0, int(personal_local_hops))
         self.personal_include_neighbor_rows = bool(personal_include_neighbor_rows)
@@ -266,6 +268,7 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_alpha_budget=self.personal_alpha_budget,
             personal_alpha_base_init=self.personal_alpha_base_init,
             personal_alpha_bias_scale=self.personal_alpha_bias_scale,
+            personal_freeze_alpha_gate=self.personal_freeze_alpha_gate,
             personal_disable_student_global_context=self.personal_disable_student_global_context,
             personal_local_hops=self.personal_local_hops,
             personal_include_neighbor_rows=self.personal_include_neighbor_rows,

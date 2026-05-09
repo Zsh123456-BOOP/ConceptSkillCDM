@@ -281,6 +281,8 @@ def parse_args():
                         help="Initial alpha base level before state-driven delta.")
     parser.add_argument("--personal_alpha_bias_scale", type=float, default=0.0,
                         help="Max magnitude scale for bounded student-specific alpha bias.")
+    parser.add_argument("--personal_freeze_alpha_gate", action="store_true",
+                        help="Freeze the interpretable E alpha gate parameters for mechanism controls.")
     parser.add_argument("--personal_disable_student_global_context", action=bool_action, default=None,
                         help="Use state-primary personal context without raw student_global direct concatenation.")
     parser.add_argument("--personal_local_hops", type=int, default=1,
@@ -651,6 +653,9 @@ def main():
                 ),
                 personal_alpha_bias_scale=loaded_args.get(
                     "personal_alpha_bias_scale", getattr(args, "personal_alpha_bias_scale", 0.0)
+                ),
+                personal_freeze_alpha_gate=loaded_args.get(
+                    "personal_freeze_alpha_gate", getattr(args, "personal_freeze_alpha_gate", False)
                 ),
                 personal_disable_student_global_context=loaded_args.get(
                     "personal_disable_student_global_context",

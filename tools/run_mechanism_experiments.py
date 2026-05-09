@@ -66,6 +66,7 @@ RESULT_FIELD_HINTS = (
     "ablation_valid",
     "ablation_invalid_reason",
     "graph_prior_mode",
+    "personal_freeze_alpha_gate",
     "disable_item_prior",
     "disable_sequence_prior",
     "effective_use_concept_graph",
@@ -176,6 +177,7 @@ def _variant_spec(name: str) -> AblationSpec:
             overrides={
                 "personal_alpha_budget": 0.0,
                 "personal_alpha_bias_scale": 0.0,
+                "personal_freeze_alpha_gate": True,
                 "personal_warmup_epochs": 0,
                 "personal_reg_warmup_epochs": 0,
             },

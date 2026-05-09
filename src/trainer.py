@@ -47,6 +47,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "personal_alpha_budget",
     "personal_alpha_base_init",
     "personal_alpha_bias_scale",
+    "personal_freeze_alpha_gate",
     "personal_reg_warmup_epochs",
     "personal_disable_student_global_context",
     "personal_local_hops",
@@ -2047,6 +2048,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         personal_alpha_budget=getattr(args, "personal_alpha_budget", 0.10),
         personal_alpha_base_init=getattr(args, "personal_alpha_base_init", 0.08),
         personal_alpha_bias_scale=getattr(args, "personal_alpha_bias_scale", 1.0),
+        personal_freeze_alpha_gate=getattr(args, "personal_freeze_alpha_gate", False),
         personal_disable_student_global_context=getattr(
             args, "personal_disable_student_global_context", False
         ),
@@ -2812,6 +2814,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         personal_alpha_bias_scale=loaded_args.get(
             "personal_alpha_bias_scale", getattr(args, "personal_alpha_bias_scale", 1.0)
+        ),
+        personal_freeze_alpha_gate=loaded_args.get(
+            "personal_freeze_alpha_gate", getattr(args, "personal_freeze_alpha_gate", False)
         ),
         personal_disable_student_global_context=loaded_args.get(
             "personal_disable_student_global_context",

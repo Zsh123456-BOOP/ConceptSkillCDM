@@ -61,6 +61,7 @@ class ConceptStructureModeling(nn.Module):
         personal_alpha_budget: float,
         personal_alpha_base_init: float,
         personal_alpha_bias_scale: float,
+        personal_freeze_alpha_gate: bool,
         personal_disable_student_global_context: bool,
         personal_local_hops: int,
         personal_include_neighbor_rows: bool,
@@ -102,6 +103,7 @@ class ConceptStructureModeling(nn.Module):
         self.personal_alpha_budget = max(0.0, float(personal_alpha_budget))
         self.personal_alpha_base_init = max(0.0, float(personal_alpha_base_init))
         self.personal_alpha_bias_scale = max(0.0, float(personal_alpha_bias_scale))
+        self.personal_freeze_alpha_gate = bool(personal_freeze_alpha_gate)
         self.personal_disable_student_global_context = bool(personal_disable_student_global_context)
         self.personal_local_hops = max(0, int(personal_local_hops))
         self.personal_include_neighbor_rows = bool(personal_include_neighbor_rows)
@@ -177,6 +179,9 @@ class ConceptStructureModeling(nn.Module):
                 alpha_budget=self.personal_alpha_budget,
                 alpha_base_init=self.personal_alpha_base_init,
             )
+            if self.personal_freeze_alpha_gate:
+                for param in self.adaptive_gate.parameters():
+                    param.requires_grad_(False)
             self.personal_generator = PersonalRelationGenerator(
                 knowledge_dim,
                 context_dim,

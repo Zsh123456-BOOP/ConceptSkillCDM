@@ -176,6 +176,7 @@ def _build_model(checkpoint: Mapping[str, Any], device: torch.device) -> Cogniti
         personal_alpha_budget=_get(loaded_args, "personal_alpha_budget", 0.10),
         personal_alpha_base_init=_get(loaded_args, "personal_alpha_base_init", 0.08),
         personal_alpha_bias_scale=_get(loaded_args, "personal_alpha_bias_scale", 1.0),
+        personal_freeze_alpha_gate=_get(loaded_args, "personal_freeze_alpha_gate", False),
         personal_disable_student_global_context=_get(loaded_args, "personal_disable_student_global_context", False),
         personal_local_hops=_get(loaded_args, "personal_local_hops", 1),
         personal_include_neighbor_rows=_get(loaded_args, "personal_include_neighbor_rows", False),
