@@ -109,7 +109,7 @@ def _check_a_has_only_interpretable_graph_parameters() -> None:
     _assert((relation.sum(dim=-1) - 1.0).abs().max().item() < 1e-5, "A rows should sum to 1.")
 
 
-def _check_e_and_ae_logit_head_are_not_blackbox_modules() -> None:
+def _check_roadmap_and_tutor_are_not_blackbox_modules() -> None:
     model = _build_small_model()
     structure = model.structure_module
 
@@ -143,17 +143,16 @@ def _check_e_and_ae_logit_head_are_not_blackbox_modules() -> None:
     ):
         _assert(not hasattr(model, name), f"AE logit residual 不应保留旧黑箱校正参数: {name}")
     for name in (
-        "a_relation_concept_weight_raw",
-        "a_relation_count_weight_raw",
-        "e_student_global_weight_raw",
-        "e_query_mastery_weight_raw",
-        "e_query_recent_weight_raw",
-        "e_neighbor_mastery_weight_raw",
-        "e_neighbor_recent_weight_raw",
-        "e_mastery_gap_weight_raw",
+        "roadmap_difficulty_weight_raw",
+        "roadmap_reliability_weight_raw",
+        "tutor_current_mastery_weight_raw",
+        "tutor_current_recent_weight_raw",
+        "tutor_route_mastery_weight_raw",
+        "tutor_route_recent_weight_raw",
+        "tutor_gap_penalty_weight_raw",
     ):
         param = getattr(model, name, None)
-        _assert(isinstance(param, torch.nn.Parameter) and tuple(param.shape) == (), f"AE 应暴露标量可解释权重: {name}")
+        _assert(isinstance(param, torch.nn.Parameter) and tuple(param.shape) == (), f"地图模块应暴露标量可解释权重: {name}")
 
     with torch.no_grad():
         logits, details = model(
@@ -164,6 +163,8 @@ def _check_e_and_ae_logit_head_are_not_blackbox_modules() -> None:
         )
     _assert(torch.isfinite(logits).all().item(), "Interpretable AE logits should stay finite.")
     _assert(details["ae_logit_residual_abs_mean"].item() > 0.0, "Interpretable AE residual should be active.")
+    _assert(details["roadmap_macro_logit_abs_mean"].item() > 0.0, "A roadmap contribution should be active.")
+    _assert(details["tutor_local_navigation_logit_abs_mean"].item() > 0.0, "E tutoring contribution should be active.")
     _assert(isinstance(details["personal_relation_spec"], dict), "E should still expose sparse relation spec.")
     posterior = details["personal_relation_spec"]["posterior_prob"]
     support_valid = details["personal_relation_spec"]["support_valid_mask"].bool()
@@ -206,7 +207,7 @@ def _check_runner_keeps_three_patience_rounds() -> None:
 
 def main() -> None:
     _check_a_has_only_interpretable_graph_parameters()
-    _check_e_and_ae_logit_head_are_not_blackbox_modules()
+    _check_roadmap_and_tutor_are_not_blackbox_modules()
     _check_runner_keeps_three_patience_rounds()
     print("OK: interpretable AE smoke checks passed.")
 

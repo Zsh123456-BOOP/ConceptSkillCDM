@@ -75,8 +75,8 @@ def main() -> None:
         return_details=True,
         return_logits=True,
     )
-    rel = details.get("e_query_mastery_logit")
-    _assert(rel is not None, "forward details must expose E query mastery contribution")
+    rel = details.get("tutor_current_mastery_logit")
+    _assert(rel is not None, "forward details must expose tutoring current mastery contribution")
     _assert(
         float(rel[0].item()) > 0.0 and abs(float(rel[1].item())) < 1e-8,
         "observed student-concept counts must reliability-gate E query mastery evidence",

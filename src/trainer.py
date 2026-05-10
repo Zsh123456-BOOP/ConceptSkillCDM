@@ -525,14 +525,13 @@ def _build_optimizer(model: nn.Module, args) -> optim.Optimizer:
     state_params = _dedupe_params(state_params)
     ae_params: List[torch.nn.Parameter] = []
     for param_name in (
-        "a_relation_concept_weight_raw",
-        "a_relation_count_weight_raw",
-        "e_student_global_weight_raw",
-        "e_query_mastery_weight_raw",
-        "e_query_recent_weight_raw",
-        "e_neighbor_mastery_weight_raw",
-        "e_neighbor_recent_weight_raw",
-        "e_mastery_gap_weight_raw",
+        "roadmap_difficulty_weight_raw",
+        "roadmap_reliability_weight_raw",
+        "tutor_current_mastery_weight_raw",
+        "tutor_current_recent_weight_raw",
+        "tutor_route_mastery_weight_raw",
+        "tutor_route_recent_weight_raw",
+        "tutor_gap_penalty_weight_raw",
     ):
         param = getattr(base_model, param_name, None)
         if isinstance(param, torch.nn.Parameter):
@@ -1188,6 +1187,23 @@ def _collect_debug_forward_stats(
     ae_interaction_logit_abs_vals: List[float] = []
     ae_raw_logit_before_clip_abs_vals: List[float] = []
     ae_raw_logit_after_clip_abs_vals: List[float] = []
+    roadmap_difficulty_logit_abs_vals: List[float] = []
+    roadmap_reliability_logit_abs_vals: List[float] = []
+    roadmap_macro_logit_abs_vals: List[float] = []
+    roadmap_route_difficulty_delta_abs_vals: List[float] = []
+    roadmap_route_reliability_delta_abs_vals: List[float] = []
+    tutor_current_mastery_logit_abs_vals: List[float] = []
+    tutor_current_recent_logit_abs_vals: List[float] = []
+    tutor_route_mastery_logit_abs_vals: List[float] = []
+    tutor_route_recent_logit_abs_vals: List[float] = []
+    tutor_gap_penalty_logit_abs_vals: List[float] = []
+    tutor_local_navigation_logit_abs_vals: List[float] = []
+    tutor_route_mastery_delta_abs_vals: List[float] = []
+    tutor_route_recent_delta_abs_vals: List[float] = []
+    tutor_query_reliability_vals: List[float] = []
+    tutor_route_reliability_vals: List[float] = []
+    map_raw_logit_before_clip_abs_vals: List[float] = []
+    map_raw_logit_after_clip_abs_vals: List[float] = []
 
     graph_row_entropy_mean = 0.0
     graph_entropy_ratio = 0.0
@@ -1325,6 +1341,23 @@ def _collect_debug_forward_stats(
                 ("ae_interaction_logit_abs_mean", ae_interaction_logit_abs_vals),
                 ("ae_raw_logit_before_clip_abs_mean", ae_raw_logit_before_clip_abs_vals),
                 ("ae_raw_logit_after_clip_abs_mean", ae_raw_logit_after_clip_abs_vals),
+                ("roadmap_difficulty_logit_abs_mean", roadmap_difficulty_logit_abs_vals),
+                ("roadmap_reliability_logit_abs_mean", roadmap_reliability_logit_abs_vals),
+                ("roadmap_macro_logit_abs_mean", roadmap_macro_logit_abs_vals),
+                ("roadmap_route_difficulty_delta_abs_mean", roadmap_route_difficulty_delta_abs_vals),
+                ("roadmap_route_reliability_delta_abs_mean", roadmap_route_reliability_delta_abs_vals),
+                ("tutor_current_mastery_logit_abs_mean", tutor_current_mastery_logit_abs_vals),
+                ("tutor_current_recent_logit_abs_mean", tutor_current_recent_logit_abs_vals),
+                ("tutor_route_mastery_logit_abs_mean", tutor_route_mastery_logit_abs_vals),
+                ("tutor_route_recent_logit_abs_mean", tutor_route_recent_logit_abs_vals),
+                ("tutor_gap_penalty_logit_abs_mean", tutor_gap_penalty_logit_abs_vals),
+                ("tutor_local_navigation_logit_abs_mean", tutor_local_navigation_logit_abs_vals),
+                ("tutor_route_mastery_delta_abs_mean", tutor_route_mastery_delta_abs_vals),
+                ("tutor_route_recent_delta_abs_mean", tutor_route_recent_delta_abs_vals),
+                ("tutor_query_reliability_abs_mean", tutor_query_reliability_vals),
+                ("tutor_route_reliability_abs_mean", tutor_route_reliability_vals),
+                ("map_raw_logit_before_clip_abs_mean", map_raw_logit_before_clip_abs_vals),
+                ("map_raw_logit_after_clip_abs_mean", map_raw_logit_after_clip_abs_vals),
                 ("query_row_posterior_delta_abs", query_row_posterior_delta_abs_vals),
                 ("query_row_posterior_kl", query_row_posterior_kl_vals),
                 ("personal_to_graph_query_ratio_effective", personal_to_graph_query_ratio_vals),
@@ -1499,6 +1532,23 @@ def _collect_debug_forward_stats(
     ae_interaction_logit_abs_mean, _ = _safe_mean_std(ae_interaction_logit_abs_vals)
     ae_raw_logit_before_clip_abs_mean, _ = _safe_mean_std(ae_raw_logit_before_clip_abs_vals)
     ae_raw_logit_after_clip_abs_mean, _ = _safe_mean_std(ae_raw_logit_after_clip_abs_vals)
+    roadmap_difficulty_logit_abs_mean, _ = _safe_mean_std(roadmap_difficulty_logit_abs_vals)
+    roadmap_reliability_logit_abs_mean, _ = _safe_mean_std(roadmap_reliability_logit_abs_vals)
+    roadmap_macro_logit_abs_mean, _ = _safe_mean_std(roadmap_macro_logit_abs_vals)
+    roadmap_route_difficulty_delta_abs_mean, _ = _safe_mean_std(roadmap_route_difficulty_delta_abs_vals)
+    roadmap_route_reliability_delta_abs_mean, _ = _safe_mean_std(roadmap_route_reliability_delta_abs_vals)
+    tutor_current_mastery_logit_abs_mean, _ = _safe_mean_std(tutor_current_mastery_logit_abs_vals)
+    tutor_current_recent_logit_abs_mean, _ = _safe_mean_std(tutor_current_recent_logit_abs_vals)
+    tutor_route_mastery_logit_abs_mean, _ = _safe_mean_std(tutor_route_mastery_logit_abs_vals)
+    tutor_route_recent_logit_abs_mean, _ = _safe_mean_std(tutor_route_recent_logit_abs_vals)
+    tutor_gap_penalty_logit_abs_mean, _ = _safe_mean_std(tutor_gap_penalty_logit_abs_vals)
+    tutor_local_navigation_logit_abs_mean, _ = _safe_mean_std(tutor_local_navigation_logit_abs_vals)
+    tutor_route_mastery_delta_abs_mean, _ = _safe_mean_std(tutor_route_mastery_delta_abs_vals)
+    tutor_route_recent_delta_abs_mean, _ = _safe_mean_std(tutor_route_recent_delta_abs_vals)
+    tutor_query_reliability_mean, _ = _safe_mean_std(tutor_query_reliability_vals)
+    tutor_route_reliability_mean, _ = _safe_mean_std(tutor_route_reliability_vals)
+    map_raw_logit_before_clip_abs_mean, _ = _safe_mean_std(map_raw_logit_before_clip_abs_vals)
+    map_raw_logit_after_clip_abs_mean, _ = _safe_mean_std(map_raw_logit_after_clip_abs_vals)
 
     return {
         "irt_abs_mean": irt_abs_mean,
@@ -1612,6 +1662,23 @@ def _collect_debug_forward_stats(
         "ae_interaction_logit_abs_mean": ae_interaction_logit_abs_mean,
         "ae_raw_logit_before_clip_abs_mean": ae_raw_logit_before_clip_abs_mean,
         "ae_raw_logit_after_clip_abs_mean": ae_raw_logit_after_clip_abs_mean,
+        "roadmap_difficulty_logit_abs_mean": roadmap_difficulty_logit_abs_mean,
+        "roadmap_reliability_logit_abs_mean": roadmap_reliability_logit_abs_mean,
+        "roadmap_macro_logit_abs_mean": roadmap_macro_logit_abs_mean,
+        "roadmap_route_difficulty_delta_abs_mean": roadmap_route_difficulty_delta_abs_mean,
+        "roadmap_route_reliability_delta_abs_mean": roadmap_route_reliability_delta_abs_mean,
+        "tutor_current_mastery_logit_abs_mean": tutor_current_mastery_logit_abs_mean,
+        "tutor_current_recent_logit_abs_mean": tutor_current_recent_logit_abs_mean,
+        "tutor_route_mastery_logit_abs_mean": tutor_route_mastery_logit_abs_mean,
+        "tutor_route_recent_logit_abs_mean": tutor_route_recent_logit_abs_mean,
+        "tutor_gap_penalty_logit_abs_mean": tutor_gap_penalty_logit_abs_mean,
+        "tutor_local_navigation_logit_abs_mean": tutor_local_navigation_logit_abs_mean,
+        "tutor_route_mastery_delta_abs_mean": tutor_route_mastery_delta_abs_mean,
+        "tutor_route_recent_delta_abs_mean": tutor_route_recent_delta_abs_mean,
+        "tutor_query_reliability_mean": tutor_query_reliability_mean,
+        "tutor_route_reliability_mean": tutor_route_reliability_mean,
+        "map_raw_logit_before_clip_abs_mean": map_raw_logit_before_clip_abs_mean,
+        "map_raw_logit_after_clip_abs_mean": map_raw_logit_after_clip_abs_mean,
         "ae_posterior_prior_scale": float(getattr(base_model, "ae_posterior_prior_scale", 0.0)),
         "ae_posterior_theta_scale": float(getattr(base_model, "ae_posterior_theta_scale", 0.0)),
         "personal_warmup_scale": personal_warmup_scale,
@@ -2451,32 +2518,32 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["support_self_retention_rate"],
             )
             logger.info(
-                "%s [Diag][AE Components] Epoch [%03d] | "
-                "e_student_global=%.4f, exercise_prior=%.4f, concept_prior=%.4f, "
-                "a_relation=%.4f, a_relation_concept=%.4f, a_relation_count=%.4f, "
-                "query_student_concept=%.4f, graph_student_concept=%.4f, "
-                "e_mastery_gap=%.4f, e_local_mastery=%.4f, posterior_prior=%.4f, reliability=%.4f, "
-                "interpretable_bias=%.4f, explicit_feature=%.4f, "
-                "interaction=%.4f, raw_before_clip=%.4f, raw_after_clip=%.4f",
+                "%s [Diag][Roadmap/Tutor] Epoch [%03d] | "
+                "roadmap_macro=%.4f, difficulty=%.4f, reliability=%.4f, "
+                "route_diff_delta=%.4f, route_rel_delta=%.4f, "
+                "tutor_local=%.4f, current_mastery=%.4f, current_recent=%.4f, "
+                "route_mastery=%.4f, route_recent=%.4f, gap_penalty=%.4f, "
+                "route_mastery_delta=%.4f, route_recent_delta=%.4f, "
+                "query_rel=%.4f, route_rel=%.4f, raw_before_clip=%.4f, raw_after_clip=%.4f",
                 run_tag,
                 epoch,
-                diag["ae_stat_student_prior_abs_mean"],
-                diag["ae_stat_exercise_prior_abs_mean"],
-                diag["ae_stat_concept_prior_abs_mean"],
-                diag["a_relation_logit_abs_mean"],
-                diag["a_relation_concept_logit_abs_mean"],
-                diag["a_relation_count_logit_abs_mean"],
-                diag["ae_stat_query_student_concept_prior_abs_mean"],
-                diag["ae_stat_graph_student_concept_prior_abs_mean"],
-                diag["e_mastery_gap_logit_abs_mean"],
-                diag["e_local_mastery_logit_abs_mean"],
-                diag["ae_posterior_prior_logit_abs_mean"],
-                diag["ae_reliability_feature_logit_abs_mean"],
-                diag["ae_interpretable_bias_abs_mean"],
-                diag["ae_explicit_feature_logit_abs_mean"],
-                diag["ae_interaction_logit_abs_mean"],
-                diag["ae_raw_logit_before_clip_abs_mean"],
-                diag["ae_raw_logit_after_clip_abs_mean"],
+                diag["roadmap_macro_logit_abs_mean"],
+                diag["roadmap_difficulty_logit_abs_mean"],
+                diag["roadmap_reliability_logit_abs_mean"],
+                diag["roadmap_route_difficulty_delta_abs_mean"],
+                diag["roadmap_route_reliability_delta_abs_mean"],
+                diag["tutor_local_navigation_logit_abs_mean"],
+                diag["tutor_current_mastery_logit_abs_mean"],
+                diag["tutor_current_recent_logit_abs_mean"],
+                diag["tutor_route_mastery_logit_abs_mean"],
+                diag["tutor_route_recent_logit_abs_mean"],
+                diag["tutor_gap_penalty_logit_abs_mean"],
+                diag["tutor_route_mastery_delta_abs_mean"],
+                diag["tutor_route_recent_delta_abs_mean"],
+                diag["tutor_query_reliability_mean"],
+                diag["tutor_route_reliability_mean"],
+                diag["map_raw_logit_before_clip_abs_mean"],
+                diag["map_raw_logit_after_clip_abs_mean"],
             )
             last_diag = dict(diag)
 

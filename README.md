@@ -1,126 +1,107 @@
 # ConceptSkillCDM
 
-本仓库当前用于验证一个可解释的认知诊断模型：固定预测头作为主干，A/E 结构模块负责概念关系建模与个性化局部重加权。
+本仓库当前用于验证一个可解释认知诊断模型。最新结构不再把 A/E 当成两个松散 residual，而是明确成递进式地图系统：
 
-当前不要给 A/E 模块使用固定论文名。`A` 和 `E` 仍是临时占位符，后续需要结合代码、CD/KT 论文和真实教育场景重新命名。
+- **A：Global Curriculum Roadmap，全局学习路线图。**
+- **E：Personalized Tutoring Navigator，个性化辅导导航图。**
 
-## 1. 当前核心结果
+旧实验日志、结果表和 checkpoint 已按要求清理，不再作为当前代码说明的一部分保留。
 
-最近一次干净实验：
+## 1. 核心设计
 
-`ae_reliability_gpu23_20260507_170717`
+### A：全局学习路线图
 
-| Dataset | Variant | Test AUC | Best Val AUC | Epoch |
-| --- | --- | ---: | ---: | ---: |
-| assist_09 | full | 0.779646 | 0.778956 | 6 |
-| assist_09 | no_A | 0.681722 | 0.681624 | 1 |
-| assist_09 | no_E | 0.692737 | 0.693441 | 3 |
-| junyi | full | 0.829135 | 0.824817 | 20 |
-| junyi | no_A | 0.635569 | 0.641430 | 1 |
-| junyi | no_E | 0.798560 | 0.789544 | 1 |
+A 解决主问题：从训练集可观测证据中构建全体学生共享的概念路线图，给出某个知识点附近的可解释路线节点。
 
-目标检查：
+当前 A 的边权只来自 train-only evidence：
 
-- `assist_09` full test AUC 达到 `0.779646`，超过目标 `0.778`。
-- `junyi` full test AUC 达到 `0.829135`，超过目标 `0.823`。
+- item co-occurrence：同一题目中概念共同出现的关系；
+- sequence transition：同一学生训练序列中的概念接续关系；
+- self-retention：概念自身状态保持；
+- receiver/source reliability：概念作为路线节点的全局统计可靠性。
 
-归档产物：
+A 的输出是 row-stochastic concept relation graph。它负责定义大地图和候选 support，不再被解释成任意神经网络学出的黑盒图。
 
-- `results/experiment_results.csv`
-- `results/abce_ablation_diagnosis.csv`
-- `results/abce_ablation_summary.csv`
-- `results/abce_ablation_summary_mean.csv`
-- `logs/abce_diag/ae_reliability_gpu23_20260507_170717/`
-- `server_logs/ae_reliability_gpu23_20260507_170717.out`
+### E：个性化辅导导航图
 
-仓库外备份：
+E 解决副问题：在 A 给出的局部路线 support 内，根据当前学生的掌握状态选择更适合这个学生的局部辅导方向。
 
-`C:\Users\zsh\Desktop\test_xph\ConceptSkillCDM_artifact_backups\ae_reliability_gpu23_20260507_170717_20260508_073034.zip`
+当前 E 的局部打分来自：
 
-SHA256:
+- 当前题目概念的学生掌握度；
+- 当前题目概念的近期掌握度；
+- A 路线邻居概念的学生掌握度；
+- A 路线邻居概念的近期掌握度；
+- 当前概念与路线邻居之间的 readiness gap；
+- train-only 学生-概念观测次数形成的可靠性门控。
 
-`258E1A21860368B5B5A870EBB664494163BA62A92023E6689BCFD9306A57903E`
+E 不生成新边，不读 valid/test，不使用 student-id embedding 作为 shortcut，也不使用 MLP 生成任意个性化图。它只在 A 给出的“小地图”里做学生级导航。
 
-## 2. 模型结构
+## 2. 当前代码入口
 
-模型主入口是 `src/model.py` 暴露的 `CognitiveDiagnosisModel`。
+模型主入口：
 
-当前结构分为两层：
+- `src/model.py`：公开 `CognitiveDiagnosisModel`。
+- `src/model_cdm.py`：顶层 CDM 模型、路线图/辅导图 logit 组装。
+- `src/model_cdm_forward.py`：主 forward 路径。
+- `src/model_graph.py`：A，全局学习路线图。
+- `src/model_personal.py`：E，个性化辅导导航图。
+- `src/model_structure.py` / `src/model_structure_forward.py`：A/E 与 knowledge encoder 的装配。
+- `src/prediction_head.py`：固定认知诊断预测头。
 
-1. 固定认知诊断预测头  
-   `src/prediction_head.py` 中实现，保留 IRT/题目难度/概念掌握度等可解释预测路径。
+重要诊断键：
 
-2. A/E 结构模块  
-   `src/model_structure.py` 装配，具体由：
-   - `A`：全局概念关系图，使用 train-only item co-occurrence、sequence transition、自环保持和少量可解释校正。
-   - `E`：个性化局部 posterior reweighting，只在 A 给出的 support 上调整边权，不生成任意新边。
-   - AE joint residual：只在 A 与 E 同时启用时生效，使用 train-only evidence reliability 特征，不使用 valid/test 信息。
+- A：`roadmap_macro_logit_abs_mean`、`roadmap_difficulty_logit_abs_mean`、`roadmap_reliability_logit_abs_mean`。
+- E：`tutor_local_navigation_logit_abs_mean`、`tutor_current_mastery_logit_abs_mean`、`tutor_route_mastery_logit_abs_mean`、`tutor_gap_penalty_logit_abs_mean`。
+- Support：`support_item_survival_rate`、`support_seq_survival_rate`、`support_self_retention_rate`。
 
-预测头不是本轮达标的主要改动点；本轮有效增益来自 A/E 结构模块中的可解释 train-only reliability 信号。
+## 3. 消融语义
 
-## 3. src 目录是否都是有用的
+- `full`：A 全局路线图 + E 个性化辅导导航。
+- `no_A`：移除全局路线图，E 失去路线 support。
+- `no_E`：保留 A 的全局路线图，移除学生级局部导航。
+- `A_uniform`：保留图形态和参数量控制，但路线不使用 train-only evidence。
+- `E_shuffle_student`：打乱学生个性化证据，检查 E 是否真的依赖学生历史。
 
-基于当前 import 链、脚本入口和 smoke 验证，`src` 目录剩余文件在文件级都是有用途的，不建议继续删除。
+后续实验必须优先检查：
 
-已删除的旧文件：
-
-- `src/analysis.py`：没有当前入口、工具或测试引用；组件分析由 `plot_component_analysis.py` 和 `src/trainer.py::save_component_analysis_data` 负责。
-- `src/utils.py`：旧 logger/seed/device helper；当前入口使用 `src/experiment_utils.py`、`gpu_utils.py` 和训练流程内的显式设置。
-
-当前 `src` 文件职责：
-
-| File | Status | Role |
-| --- | --- | --- |
-| `src/config.py` | used | Dataset defaults and explicit CLI-argument tracking. |
-| `src/dataset.py` | used | Dataset objects, Q-matrix loading, train-only prior inputs, dataloaders. |
-| `src/experiment_utils.py` | used | Metrics, config hashes, summary CSV writing, logging helpers. |
-| `src/trainer.py` | used | Main training, validation, inference, ablation diagnostics, result persistence. It is long but live training code. |
-| `src/model.py` | used | Thin public re-export layer for tests, scripts, and external callers. |
-| `src/model_cdm.py` | used | Top-level CDM model: A/E structure module plus fixed prediction head and AE logit residual assembly. |
-| `src/model_cdm_forward.py` | used | Forward-pass helper for the top-level CDM model. |
-| `src/model_structure.py` | used | A/E assembly: wires A, E, and the student knowledge encoder together. |
-| `src/model_structure_forward.py` | used | Forward-pass helper for A/E. |
-| `src/model_graph.py` | used | A module: evidence-guided global concept relation graph and graph encoder. |
-| `src/model_personal.py` | used | E module: student-conditioned local posterior reweighting and gate logic. |
-| `src/model_ops.py` | used | Shared sparse-support tensor operations used by A/E. |
-| `src/model_regularization.py` | used | Graph and posterior regularization terms. |
-| `src/prediction_head.py` | used | Fixed cognitive diagnosis prediction head. Kept separate so A/E changes do not silently become prediction-head changes. |
-| `src/module_activity.py` | used | Diagnostic summaries showing which modules are active in each run. |
-
-需要注意：`src/trainer.py` 和 `src/model_cdm.py` 仍然较长，但它们是当前真实训练链路，不是垃圾代码。现在不建议为了“看起来短”继续大拆，否则会增加已经验证过的实验链路回归风险。
-
-## 4. 关键运行入口
-
-单次训练：
-
-```bash
-python main.py --dataset_name assist_09 --model_variant assist_09_abce_best_full
+```text
+full > no_A
+full > A_uniform
+full > no_E
+full > E_shuffle_student
 ```
 
-A/E 消融：
+如果 `E_shuffle_student` 接近或超过 `full`，说明 E 仍然不是有效的个性化小地图，不能只靠 full AUC 宣称 E 成立。
 
-```bash
-python run_abce_ablation.py --datasets assist_09,junyi --seeds 42 --profiles best --gpus 2,3 --max_concurrent 2 --max_per_gpu 1 --ablations full,no_A,no_E
-```
-
-错误分析：
-
-```bash
-python tools/analyze_ae_errors.py --help
-```
-
-## 5. 验证方式
+## 4. 验证方式
 
 本仓库 smoke 文件是可直接执行脚本，不以 pytest collection 为主。
 
 常用验证：
 
 ```bash
-python -m py_compile main.py run_abce_ablation.py src\config.py src\dataset.py src\experiment_utils.py src\model.py src\model_cdm.py src\model_cdm_forward.py src\model_graph.py src\model_ops.py src\model_personal.py src\model_regularization.py src\model_structure.py src\model_structure_forward.py src\module_activity.py src\prediction_head.py src\trainer.py
-python tests\smoke_ae_reliability_features.py
-python tests\smoke_interpretable_ae.py
-python tests\smoke_ablation_flags.py
-python tests\smoke_prediction_head.py
-python tests\smoke_sequence_prior.py
-python tests\smoke_runtime_regressions.py
-python tests\smoke_ae_rescue_regressions.py
+python -m py_compile main.py run_abce_ablation.py src/config.py src/dataset.py src/experiment_utils.py src/model.py src/model_cdm.py src/model_cdm_forward.py src/model_graph.py src/model_ops.py src/model_personal.py src/model_regularization.py src/model_structure.py src/model_structure_forward.py src/module_activity.py src/prediction_head.py src/trainer.py
+python tests/smoke_interpretable_ae.py
+python tests/smoke_ae_reliability_features.py
+python tests/smoke_runtime_regressions.py
+```
+
+最小真实训练 smoke：
+
+```bash
+python main.py --dataset_name assist_09 --model_variant assist_09_abce_best_full --epochs 1 --batch_size 128 --max_train_batches 2 --max_val_batches 1 --max_test_batches 1 --num_workers 0 --no_cuda --save_dir checkpoints/local_route_map_smoke --log_dir logs/local_route_map_smoke
+```
+
+该 smoke 只用于确认训练链路、日志和 checkpoint 写入正常，不代表正式指标。
+
+## 5. 远程服务器规范
+
+服务器 `10.154.22.11` 上的代码同步必须走 git：
+
+```bash
+cd /home/zsh/ConceptSkillCDM
+git pull
+```
+
+禁止使用 `echo <base64> | base64 -d | bash` 或其他不可审计的编码包装命令。临时命令必须是可读命令，清理 logs/results/checkpoints 前必须确认路径位于 `/home/zsh/ConceptSkillCDM` 内。

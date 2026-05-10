@@ -148,12 +148,12 @@ def run_cdm_forward(
         diag_details["relation_theta_logit"] = relation_theta_logit.detach()
 
     (
-        ae_logit_residual,
-        ae_logit_residual_abs_mean,
+        map_logit_residual,
+        map_logit_residual_abs_mean,
         ae_posterior_prior_logit_abs_mean,
         ae_posterior_prior_delta_abs_mean,
-        ae_logit_component_details,
-    ) = model._build_ae_logit_residual(
+        map_logit_component_details,
+    ) = model._build_route_map_logit_residual(
         student_ids=student_ids,
         exercise_ids=exercise_ids,
         knowledge_state=knowledge_state,
@@ -164,6 +164,8 @@ def run_cdm_forward(
         concept_mask=q_vector,
         ae_theta_state=knowledge_state + global_query_context,
     )
+    ae_logit_residual = map_logit_residual
+    ae_logit_residual_abs_mean = map_logit_residual_abs_mean
     ae_predictor_active = (
         model.enable_module1
         and model.ae_logit_residual_scale > 0.0
@@ -220,6 +222,8 @@ def run_cdm_forward(
         "irt_logit_for_total": irt_logit_for_total.detach(),
         "ae_logit_residual": ae_logit_residual.detach(),
         "ae_logit_residual_abs_mean": ae_logit_residual_abs_mean.detach(),
+        "map_logit_residual": map_logit_residual.detach(),
+        "map_logit_residual_abs_mean": map_logit_residual_abs_mean.detach(),
         "ae_posterior_prior_logit_abs_mean": ae_posterior_prior_logit_abs_mean.detach(),
         "ae_posterior_prior_delta_abs_mean": ae_posterior_prior_delta_abs_mean.detach(),
         "theta_prior_align_loss": theta_prior_align_loss,
@@ -276,7 +280,7 @@ def run_cdm_forward(
         "personal_query_support_hops": torch.tensor(model.personal_query_support_hops, device=device, dtype=torch.long),
         "personal_query_message_gain": torch.tensor(model.personal_query_message_gain, device=device, dtype=knowledge_state.dtype),
     }
-    for key, value in ae_logit_component_details.items():
+    for key, value in map_logit_component_details.items():
         details[key] = value.detach()
         if value.ndim > 0:
             details[f"{key}_abs_mean"] = value.detach().abs().mean()

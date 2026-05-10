@@ -1,4 +1,4 @@
-"""Interpretable E module: query-local posterior reweighting."""
+"""Personalized local tutoring map over the global curriculum roadmap."""
 
 import math
 from typing import Dict, Optional, Tuple, Union
@@ -118,17 +118,19 @@ class AdaptiveGate(nn.Module):
 
 
 class PersonalRelationGenerator(nn.Module):
-    """可解释的 E 后验生成器。
+    """Personalized Tutoring Navigator.
 
-    对每个 query concept row，仅在 A 提供的 support 上重加权：
-    residual(c -> k) = normalized_contrast(1 - cosine(state_c, state_k))
-        + gamma * normalized_contrast(train_mastery_u,k - train_mastery_u,c)
-        + eta * normalized_contrast(train_recent_mastery_u,k - train_recent_mastery_u,c)
+    E no longer behaves like a generic residual graph.  For every queried
+    concept row, it keeps the support provided by A and scores each candidate as
+    a local tutoring need:
 
-    因此 E 的含义是“根据当前学生在题目局部概念上的状态差异，以及 train-only
-    学生-概念掌握度对比和近期掌握度对比，调整 A 的邻接支持”。它不生成新边，
-    也不读取 student-id embedding 作为 shortcut。掌握度对比可由训练集观测次数
-    做可靠性门控，低证据学生-概念关系只产生弱后验扰动。
+        need(c -> k) = contrast(state_c, state_k)
+            + gamma * normalized_need(mastery_u,c - mastery_u,k)
+            + eta * normalized_need(recent_u,c - recent_u,k)
+
+    The support is fixed by the global roadmap A.  E only chooses where this
+    student should pay attention inside that small map, with reliability gating
+    from train-only student-concept observations.
     """
 
     def __init__(
@@ -180,9 +182,11 @@ class PersonalRelationGenerator(nn.Module):
             2,
             support_cols.reshape(B, H, R * K),
         ).reshape(B, H, R, K)
-        mastery_advantage = support_prior - row_prior
+        # Positive values mean the support concept is weaker than the queried
+        # concept for this student, so it is a better local tutoring target.
+        mastery_need = row_prior - support_prior
         scores = _normalize_sparse_scores(
-            mastery_advantage,
+            mastery_need,
             support_row_cache["support_valid_mask"],
             row_budget=row_budget_values,
         )
