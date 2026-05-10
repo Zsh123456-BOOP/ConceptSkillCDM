@@ -127,7 +127,8 @@ class PersonalRelationGenerator(nn.Module):
 
     因此 E 的含义是“根据当前学生在题目局部概念上的状态差异，以及 train-only
     学生-概念掌握度对比和近期掌握度对比，调整 A 的邻接支持”。它不生成新边，
-    也不读取 student-id embedding 作为 shortcut。
+    也不读取 student-id embedding 作为 shortcut。掌握度对比可由训练集观测次数
+    做可靠性门控，低证据学生-概念关系只产生弱后验扰动。
     """
 
     def __init__(
@@ -144,6 +145,7 @@ class PersonalRelationGenerator(nn.Module):
         max_id_adapter_scale: float = 0.0,
         mastery_prior_scale: float = 0.0,
         recent_mastery_prior_scale: float = 0.0,
+        mastery_count_smoothing: float = 0.0,
     ):
         super().__init__()
         self.num_concepts = int(num_concepts)
@@ -151,6 +153,7 @@ class PersonalRelationGenerator(nn.Module):
         self.rank = int(rank)
         self.mastery_prior_scale = max(0.0, float(mastery_prior_scale))
         self.recent_mastery_prior_scale = max(0.0, float(recent_mastery_prior_scale))
+        self.mastery_count_smoothing = max(0.0, float(mastery_count_smoothing))
         self.max_state_mix = 1.20
         self.max_student_mix = 0.0
         self.state_mix_logit = nn.Parameter(torch.tensor(1.0986123))
@@ -164,7 +167,8 @@ class PersonalRelationGenerator(nn.Module):
         active_row_index: torch.Tensor,
         support_row_cache: Dict[str, torch.Tensor],
         row_budget_values: Optional[torch.Tensor],
-    ) -> torch.Tensor:
+        prior_count: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         mastery = torch.tanh(prior.to(device=knowledge_state.device, dtype=knowledge_state.dtype) / 2.0)
         B, H, R, K = support_row_cache["support_col_index"].shape
         row_prior = torch.gather(mastery, 1, active_row_index.clamp(min=0))
@@ -177,11 +181,32 @@ class PersonalRelationGenerator(nn.Module):
             support_cols.reshape(B, H, R * K),
         ).reshape(B, H, R, K)
         mastery_advantage = support_prior - row_prior
-        return _normalize_sparse_scores(
+        scores = _normalize_sparse_scores(
             mastery_advantage,
             support_row_cache["support_valid_mask"],
             row_budget=row_budget_values,
         )
+        reliability_mean = scores.new_tensor(0.0)
+        if prior_count is not None and self.mastery_count_smoothing > 0.0:
+            counts = prior_count.to(device=knowledge_state.device, dtype=knowledge_state.dtype).clamp(min=0.0)
+            row_count = torch.gather(counts, 1, active_row_index.clamp(min=0))
+            row_count = row_count.view(B, 1, R, 1).expand(B, H, R, K)
+            count_heads = counts.unsqueeze(1).expand(B, H, self.num_concepts)
+            support_count = torch.gather(
+                count_heads,
+                2,
+                support_cols.reshape(B, H, R * K),
+            ).reshape(B, H, R, K)
+            smooth = scores.new_tensor(self.mastery_count_smoothing)
+            row_reliability = row_count / (row_count + smooth).clamp(min=1e-6)
+            support_reliability = support_count / (support_count + smooth).clamp(min=1e-6)
+            reliability = torch.sqrt((row_reliability * support_reliability).clamp(min=0.0))
+            valid = support_row_cache["support_valid_mask"].to(dtype=scores.dtype)
+            scores = scores * reliability.to(dtype=scores.dtype) * valid
+            denom = valid.sum(dim=-1, keepdim=True).clamp(min=1.0)
+            scores = (scores - (scores * valid).sum(dim=-1, keepdim=True) / denom) * valid
+            reliability_mean = (reliability.to(dtype=scores.dtype) * valid).sum() / valid.sum().clamp(min=1.0)
+        return scores, reliability_mean
 
     def forward(
         self,
@@ -196,6 +221,7 @@ class PersonalRelationGenerator(nn.Module):
         row_budget_values: Optional[torch.Tensor] = None,
         student_concept_prior: Optional[torch.Tensor] = None,
         student_concept_recent_prior: Optional[torch.Tensor] = None,
+        student_concept_count: Optional[torch.Tensor] = None,
         return_diagnostics: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         if support_row_cache is None:
@@ -221,33 +247,37 @@ class PersonalRelationGenerator(nn.Module):
             row_budget=row_budget_values,
         )
         mastery_scores = torch.zeros_like(residual)
+        mastery_reliability_mean = residual.new_tensor(0.0)
         if (
             self.mastery_prior_scale > 0.0
             and student_concept_prior is not None
             and student_concept_prior.dim() == 2
             and student_concept_prior.size(1) == self.num_concepts
         ):
-            mastery_scores = self._build_student_concept_prior_scores(
+            mastery_scores, mastery_reliability_mean = self._build_student_concept_prior_scores(
                 prior=student_concept_prior,
                 knowledge_state=knowledge_state,
                 active_row_index=active_row_index,
                 support_row_cache=support_row_cache,
                 row_budget_values=row_budget_values,
+                prior_count=student_concept_count,
             )
             residual = residual + self.mastery_prior_scale * mastery_scores
         recent_mastery_scores = torch.zeros_like(residual)
+        recent_mastery_reliability_mean = residual.new_tensor(0.0)
         if (
             self.recent_mastery_prior_scale > 0.0
             and student_concept_recent_prior is not None
             and student_concept_recent_prior.dim() == 2
             and student_concept_recent_prior.size(1) == self.num_concepts
         ):
-            recent_mastery_scores = self._build_student_concept_prior_scores(
+            recent_mastery_scores, recent_mastery_reliability_mean = self._build_student_concept_prior_scores(
                 prior=student_concept_recent_prior,
                 knowledge_state=knowledge_state,
                 active_row_index=active_row_index,
                 support_row_cache=support_row_cache,
                 row_budget_values=row_budget_values,
+                prior_count=student_concept_count,
             )
             residual = residual + self.recent_mastery_prior_scale * recent_mastery_scores
         state_mix = self.max_state_mix * torch.sigmoid(self.state_mix_logit)
@@ -269,8 +299,10 @@ class PersonalRelationGenerator(nn.Module):
             "state_scores_absmean": (scores.abs() * valid).sum() / valid.sum().clamp(min=1.0),
             "mastery_prior_scale": scores.new_tensor(self.mastery_prior_scale),
             "mastery_scores_absmean": (mastery_scores.abs() * valid).sum() / valid.sum().clamp(min=1.0),
+            "mastery_reliability_mean": mastery_reliability_mean,
             "recent_mastery_prior_scale": scores.new_tensor(self.recent_mastery_prior_scale),
             "recent_mastery_scores_absmean": (recent_mastery_scores.abs() * valid).sum() / valid.sum().clamp(min=1.0),
+            "recent_mastery_reliability_mean": recent_mastery_reliability_mean,
             "student_scores_absmean": scores.new_tensor(0.0),
             "scores_absmax": scores.abs().max(),
             "active_row_count_mean": active_count,

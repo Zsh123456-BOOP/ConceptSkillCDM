@@ -75,6 +75,7 @@ class ConceptStructureModeling(nn.Module):
         personal_item_support_mass: float,
         personal_mastery_prior_scale: float,
         personal_recent_mastery_prior_scale: float,
+        personal_mastery_count_smoothing: float,
         enable_personal_support_value_proj: bool,
         graph_edge_bias_rank: int,
         graph_prior_matrix: Optional[torch.Tensor] = None,
@@ -117,6 +118,7 @@ class ConceptStructureModeling(nn.Module):
         self.personal_item_support_mass = max(0.0, float(personal_item_support_mass))
         self.personal_mastery_prior_scale = max(0.0, float(personal_mastery_prior_scale))
         self.personal_recent_mastery_prior_scale = max(0.0, float(personal_recent_mastery_prior_scale))
+        self.personal_mastery_count_smoothing = max(0.0, float(personal_mastery_count_smoothing))
         self.enable_personal_support_value_proj = bool(enable_personal_support_value_proj)
         self._current_epoch = 1
 
@@ -192,6 +194,7 @@ class ConceptStructureModeling(nn.Module):
                 hidden_dim=None,
                 mastery_prior_scale=self.personal_mastery_prior_scale,
                 recent_mastery_prior_scale=self.personal_recent_mastery_prior_scale,
+                mastery_count_smoothing=self.personal_mastery_count_smoothing,
             )
         else:
             self.adaptive_gate = None
@@ -281,6 +284,7 @@ class ConceptStructureModeling(nn.Module):
         concept_mask: Optional[torch.Tensor] = None,
         student_concept_prior: Optional[torch.Tensor] = None,
         student_concept_recent_prior: Optional[torch.Tensor] = None,
+        student_concept_count: Optional[torch.Tensor] = None,
     ) -> Dict[str, Any]:
         """输出统一字典，便于主模型组装 details 与正则项。"""
         return run_structure_forward(
@@ -290,4 +294,5 @@ class ConceptStructureModeling(nn.Module):
             concept_mask,
             student_concept_prior=student_concept_prior,
             student_concept_recent_prior=student_concept_recent_prior,
+            student_concept_count=student_concept_count,
         )

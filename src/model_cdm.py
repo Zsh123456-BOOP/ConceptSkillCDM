@@ -98,6 +98,7 @@ class CognitiveDiagnosisModel(nn.Module):
         personal_item_support_mass: float = 0.0,
         personal_mastery_prior_scale: float = 0.0,
         personal_recent_mastery_prior_scale: float = 0.0,
+        personal_mastery_count_smoothing: float = 0.0,
         personal_value_use_global_basis: bool = True,
         personal_message_alignment_gate: bool = True,
         personal_projection_hidden_factor: int = 2,
@@ -190,6 +191,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_item_support_mass = max(0.0, float(personal_item_support_mass))
         self.personal_mastery_prior_scale = max(0.0, float(personal_mastery_prior_scale))
         self.personal_recent_mastery_prior_scale = max(0.0, float(personal_recent_mastery_prior_scale))
+        self.personal_mastery_count_smoothing = max(0.0, float(personal_mastery_count_smoothing))
         self.personal_value_use_global_basis = bool(personal_value_use_global_basis)
         self.personal_message_alignment_gate = bool(personal_message_alignment_gate)
         self.personal_projection_hidden_factor = max(1, int(personal_projection_hidden_factor))
@@ -238,6 +240,10 @@ class CognitiveDiagnosisModel(nn.Module):
             "ae_student_concept_count_feature",
             torch.zeros(num_students, num_concepts, dtype=torch.float32),
         )
+        self.register_buffer(
+            "ae_student_concept_observed_count",
+            torch.zeros(num_students, num_concepts, dtype=torch.float32),
+        )
 
         identity = torch.eye(num_concepts, dtype=torch.float32).unsqueeze(0).repeat(self.num_relation_heads, 1, 1)
         self.register_buffer("identity_relations", identity)
@@ -282,6 +288,7 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_item_support_mass=self.personal_item_support_mass,
             personal_mastery_prior_scale=self.personal_mastery_prior_scale,
             personal_recent_mastery_prior_scale=self.personal_recent_mastery_prior_scale,
+            personal_mastery_count_smoothing=self.personal_mastery_count_smoothing,
             enable_personal_support_value_proj=self.enable_personal_support_value_proj,
             graph_edge_bias_rank=self.graph_edge_bias_rank,
             graph_prior_matrix=self.item_prior_matrix,
@@ -847,6 +854,7 @@ class CognitiveDiagnosisModel(nn.Module):
         exercise_count_features: Optional[torch.Tensor] = None,
         concept_count_features: Optional[torch.Tensor] = None,
         student_concept_count_features: Optional[torch.Tensor] = None,
+        student_concept_observed_counts: Optional[torch.Tensor] = None,
     ) -> None:
         if not self.enable_module1:
             return
@@ -949,6 +957,18 @@ class CognitiveDiagnosisModel(nn.Module):
                 if rows > 0 and cols > 0:
                     self.ae_student_concept_count_feature[:rows, :cols].copy_(
                         target[:rows, :cols].clamp(min=-5.0, max=5.0)
+                    )
+            if student_concept_observed_counts is not None:
+                target = student_concept_observed_counts.detach().to(
+                    device=self.ae_student_concept_observed_count.device,
+                    dtype=self.ae_student_concept_observed_count.dtype,
+                )
+                self.ae_student_concept_observed_count.zero_()
+                rows = min(self.ae_student_concept_observed_count.size(0), target.size(0))
+                cols = min(self.ae_student_concept_observed_count.size(1), target.size(1)) if target.dim() == 2 else 0
+                if rows > 0 and cols > 0:
+                    self.ae_student_concept_observed_count[:rows, :cols].copy_(
+                        target[:rows, :cols].clamp(min=0.0)
                     )
             if getattr(self, "ae_student_logit_bias", None) is not None:
                 self.ae_student_logit_bias.weight.zero_()

@@ -30,6 +30,9 @@ def run_cdm_forward(
         student_concept_recent_prior=model.ae_student_concept_recent_logit[student_ids]
         if getattr(model, "personal_recent_mastery_prior_scale", 0.0) > 0.0
         else None,
+        student_concept_count=model.ae_student_concept_observed_count[student_ids]
+        if getattr(model, "personal_mastery_count_smoothing", 0.0) > 0.0
+        else None,
     )
     relation_matrices = s_out["relation_matrices"]
     relation_used = s_out["relation_used"]

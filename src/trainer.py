@@ -58,6 +58,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "personal_item_support_mass",
     "personal_mastery_prior_scale",
     "personal_recent_mastery_prior_scale",
+    "personal_mastery_count_smoothing",
     "personal_query_row_budget",
     "personal_neighbor_row_budget",
     "personal_query_support_hops",
@@ -728,6 +729,7 @@ def _compute_train_stat_logits(
         "exercise": _standardized_log_count_feature(exercise_count),
         "concept": _standardized_log_count_feature(concept_count),
         "student_concept": _standardized_log_count_feature(student_concept_count),
+        "student_concept_observed": student_concept_count.detach().clone(),
     }
     student_concept_recent_logits = _compute_recent_student_concept_logits(
         train_loader,
@@ -797,6 +799,7 @@ def _initialize_ae_stat_priors(
         exercise_count_features=count_features["exercise"],
         concept_count_features=count_features["concept"],
         student_concept_count_features=count_features["student_concept"],
+        student_concept_observed_counts=count_features["student_concept_observed"],
     )
     logger.info(
         "%s AE stat priors initialized: scale=%.3f, train_global_rate=%.4f, "
@@ -1099,8 +1102,10 @@ def _collect_debug_forward_stats(
     personal_student_mix_vals: List[float] = []
     personal_mastery_prior_scale_vals: List[float] = []
     personal_mastery_scores_absmean_vals: List[float] = []
+    personal_mastery_reliability_vals: List[float] = []
     personal_recent_mastery_prior_scale_vals: List[float] = []
     personal_recent_mastery_scores_absmean_vals: List[float] = []
+    personal_recent_mastery_reliability_vals: List[float] = []
     personal_student_adapter_vals: List[float] = []
     personal_logits_absmax_vals: List[float] = []
     personal_logits_support_absmax_vals: List[float] = []
@@ -1258,8 +1263,10 @@ def _collect_debug_forward_stats(
                 ("personal_student_mix", personal_student_mix_vals),
                 ("personal_mastery_prior_scale", personal_mastery_prior_scale_vals),
                 ("personal_mastery_scores_absmean", personal_mastery_scores_absmean_vals),
+                ("personal_mastery_reliability_mean", personal_mastery_reliability_vals),
                 ("personal_recent_mastery_prior_scale", personal_recent_mastery_prior_scale_vals),
                 ("personal_recent_mastery_scores_absmean", personal_recent_mastery_scores_absmean_vals),
+                ("personal_recent_mastery_reliability_mean", personal_recent_mastery_reliability_vals),
                 ("personal_student_adapter_scale", personal_student_adapter_vals),
                 ("personal_logits_absmax", personal_logits_absmax_vals),
                 ("personal_logits_support_absmax", personal_logits_support_absmax_vals),
@@ -1382,8 +1389,10 @@ def _collect_debug_forward_stats(
     personal_student_mix_mean, _ = _safe_mean_std(personal_student_mix_vals)
     personal_mastery_prior_scale_mean, _ = _safe_mean_std(personal_mastery_prior_scale_vals)
     personal_mastery_scores_absmean, _ = _safe_mean_std(personal_mastery_scores_absmean_vals)
+    personal_mastery_reliability_mean, _ = _safe_mean_std(personal_mastery_reliability_vals)
     personal_recent_mastery_prior_scale_mean, _ = _safe_mean_std(personal_recent_mastery_prior_scale_vals)
     personal_recent_mastery_scores_absmean, _ = _safe_mean_std(personal_recent_mastery_scores_absmean_vals)
+    personal_recent_mastery_reliability_mean, _ = _safe_mean_std(personal_recent_mastery_reliability_vals)
     personal_student_adapter_mean, _ = _safe_mean_std(personal_student_adapter_vals)
     personal_logits_absmax_mean, _ = _safe_mean_std(personal_logits_absmax_vals)
     personal_logits_support_absmax_mean, _ = _safe_mean_std(personal_logits_support_absmax_vals)
@@ -1480,8 +1489,10 @@ def _collect_debug_forward_stats(
         "personal_student_mix": personal_student_mix_mean,
         "personal_mastery_prior_scale": personal_mastery_prior_scale_mean,
         "personal_mastery_scores_absmean": personal_mastery_scores_absmean,
+        "personal_mastery_reliability_mean": personal_mastery_reliability_mean,
         "personal_recent_mastery_prior_scale": personal_recent_mastery_prior_scale_mean,
         "personal_recent_mastery_scores_absmean": personal_recent_mastery_scores_absmean,
+        "personal_recent_mastery_reliability_mean": personal_recent_mastery_reliability_mean,
         "personal_student_adapter_scale": personal_student_adapter_mean,
         "personal_logits_absmax": personal_logits_absmax_mean,
         "personal_logits_support_absmax": personal_logits_support_absmax_mean,
@@ -2060,6 +2071,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         personal_item_support_mass=getattr(args, "personal_item_support_mass", 0.0),
         personal_mastery_prior_scale=getattr(args, "personal_mastery_prior_scale", 0.0),
         personal_recent_mastery_prior_scale=getattr(args, "personal_recent_mastery_prior_scale", 0.0),
+        personal_mastery_count_smoothing=getattr(args, "personal_mastery_count_smoothing", 0.0),
         personal_query_row_budget=getattr(args, "personal_query_row_budget", 1.0),
         personal_neighbor_row_budget=getattr(args, "personal_neighbor_row_budget", 0.30),
         personal_query_support_hops=getattr(args, "personal_query_support_hops", 0),
@@ -2846,6 +2858,10 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         personal_recent_mastery_prior_scale=loaded_args.get(
             "personal_recent_mastery_prior_scale",
             getattr(args, "personal_recent_mastery_prior_scale", 0.0),
+        ),
+        personal_mastery_count_smoothing=loaded_args.get(
+            "personal_mastery_count_smoothing",
+            getattr(args, "personal_mastery_count_smoothing", 0.0),
         ),
         personal_query_row_budget=loaded_args.get(
             "personal_query_row_budget", getattr(args, "personal_query_row_budget", 1.0)
