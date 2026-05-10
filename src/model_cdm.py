@@ -731,7 +731,7 @@ class CognitiveDiagnosisModel(nn.Module):
         posterior_prior_logit_abs_mean = zero_scalar
         posterior_prior_delta_abs_mean = zero_scalar
         student_concept_prior = getattr(self, "ae_student_concept_prior_logit", None)
-        if student_concept_prior is not None:
+        if e_active and student_concept_prior is not None:
             sc_prior = student_concept_prior[student_ids].to(dtype=query_weight.dtype, device=device)
             query_sc_prior = (query_weight * sc_prior).sum(dim=1)
             stat_query_sc_prior = 0.60 * query_sc_prior
@@ -802,19 +802,24 @@ class CognitiveDiagnosisModel(nn.Module):
                 dtype=query_weight.dtype,
                 device=device,
             )
-            query_sc_count = (query_weight * sc_count).sum(dim=1)
-            graph_sc_count = (graph_query_weight * sc_count).sum(dim=1)
-            active_sc_count = torch.where(
-                query_mask > 0,
-                sc_count,
-                torch.full_like(sc_count, 1.0e4),
-            )
-            query_sc_min = active_sc_count.min(dim=1).values
-            query_sc_min = torch.where(
-                query_mask.sum(dim=1) > 0,
-                query_sc_min,
-                torch.zeros_like(query_sc_min),
-            )
+            if e_active:
+                query_sc_count = (query_weight * sc_count).sum(dim=1)
+                graph_sc_count = (graph_query_weight * sc_count).sum(dim=1)
+                active_sc_count = torch.where(
+                    query_mask > 0,
+                    sc_count,
+                    torch.full_like(sc_count, 1.0e4),
+                )
+                query_sc_min = active_sc_count.min(dim=1).values
+                query_sc_min = torch.where(
+                    query_mask.sum(dim=1) > 0,
+                    query_sc_min,
+                    torch.zeros_like(query_sc_min),
+                )
+            else:
+                query_sc_count = zero_vec
+                graph_sc_count = zero_vec
+                query_sc_min = zero_vec
             reliability_features = torch.stack(
                 [
                     student_count_feature,
