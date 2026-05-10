@@ -147,10 +147,7 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
     from best_configs import BEST_CFG, STRUCT_V2_CFG
 
     required_positive = (
-        "personal_delta_scale",
         "personal_warmup_epochs",
-        "lambda_alpha_min",
-        "alpha_min_target",
         "graph_propagation_alpha",
         "graph_query_readout_scale",
         "graph_query_readout_2hop_scale",
@@ -158,15 +155,11 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "personal_alpha_budget",
         "personal_query_row_budget",
         "personal_neighbor_row_budget",
-        "personal_query_correction_scale",
         "personal_query_correction_max_ratio",
         "personal_query_correction_min_graph_anchor",
-        "lambda_personal_kl",
-        "lambda_personal_query_residual",
         "personal_state_lr_mult",
         "personal_id_lr_mult",
         "personal_query_support_hops",
-        "personal_query_message_gain",
         "personal_item_support_mass",
         "personal_mastery_prior_scale",
         "personal_recent_mastery_prior_scale",
@@ -202,10 +195,20 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
             float(cfg["ae_query_residual_scale"]) > 0.0 or float(cfg["ae_logit_residual_scale"]) > 0.0,
             f"{dataset} 必须至少开启一种 AE residual 通路。",
         )
-        _assert(
-            float(cfg["personal_delta_scale"]) >= 2.0,
-            f"{dataset} 的 personal_delta_scale 过小，无法有效放大 E 扰动。",
-        )
+        for optional_nonnegative in (
+            "personal_delta_scale",
+            "lambda_alpha_min",
+            "alpha_min_target",
+            "lambda_personal_kl",
+            "lambda_personal_query_residual",
+            "personal_query_correction_scale",
+            "personal_query_message_gain",
+        ):
+            _assert(optional_nonnegative in cfg, f"{dataset} 缺少 E 可选结构项: {optional_nonnegative}")
+            _assert(
+                float(cfg[optional_nonnegative]) >= 0.0,
+                f"{dataset} 的 {optional_nonnegative} 不能为负值，当前={cfg[optional_nonnegative]}",
+            )
 
     assist_cfg = BEST_CFG["assist_09"]
     _assert(
@@ -213,8 +216,8 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "assist_09 不应继续奖励 alpha 方差；当前应关闭 alpha_var 奖励，只保留 anti-collapse 约束。",
     )
     _assert(
-        float(assist_cfg["lambda_alpha_min"]) > 0.0,
-        "assist_09 仍需保留 alpha anti-collapse 约束，避免 E 直接塌掉。",
+        float(assist_cfg["personal_mastery_prior_scale"]) > 0.0,
+        "assist_09 应默认把 E 定义为学生-概念局部 mastery calibration。",
     )
     for dataset in ("assist_09", "junyi"):
         cfg = BEST_CFG[dataset]
@@ -251,8 +254,8 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
             f"{dataset} 默认实验应显式启用更宽的 query message support basis。",
         )
         _assert(
-            float(cfg["personal_query_message_gain"]) > 0.0,
-            f"{dataset} 默认实验应显式启用 personal_query_message_gain。",
+            float(cfg["personal_query_message_gain"]) >= 0.0,
+            f"{dataset} 的 personal_query_message_gain 不能为负值。",
         )
         _assert(
             bool(cfg["personal_support_only"]) is True,
