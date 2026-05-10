@@ -213,6 +213,7 @@ def _build_model(checkpoint: Mapping[str, Any], device: torch.device) -> Cogniti
         ae_interaction_logit_scale=_get(loaded_args, "ae_interaction_logit_scale", 0.0),
         ae_logit_dim=_get(loaded_args, "ae_logit_dim", 32),
         ae_posterior_prior_scale=_get(loaded_args, "ae_posterior_prior_scale", 0.0),
+        ae_posterior_theta_scale=_get(loaded_args, "ae_posterior_theta_scale", 0.0),
         relation_theta_scale=_get(loaded_args, "relation_theta_scale", 0.0),
         relation_theta_delta_clip=_get(loaded_args, "relation_theta_delta_clip", 2.0),
         share_concept_embeddings=_get(loaded_args, "share_concept_embeddings", False),

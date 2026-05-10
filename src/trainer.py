@@ -86,6 +86,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "ae_interaction_logit_scale",
     "ae_logit_dim",
     "ae_posterior_prior_scale",
+    "ae_posterior_theta_scale",
     "lambda_theta_prior_align",
     "ae_lr_mult",
     "ae_stat_prior_scale",
@@ -1152,6 +1153,8 @@ def _collect_debug_forward_stats(
     relation_theta_personal_mass_vals: List[float] = []
     ae_posterior_prior_logit_abs_vals: List[float] = []
     ae_posterior_prior_delta_abs_vals: List[float] = []
+    ae_posterior_theta_logit_abs_vals: List[float] = []
+    ae_posterior_theta_delta_abs_vals: List[float] = []
     ae_stat_student_prior_abs_vals: List[float] = []
     ae_stat_exercise_prior_abs_vals: List[float] = []
     ae_stat_concept_prior_abs_vals: List[float] = []
@@ -1277,6 +1280,8 @@ def _collect_debug_forward_stats(
                 ("ae_logit_residual_abs_mean", ae_logit_residual_abs_mean_vals),
                 ("ae_posterior_prior_logit_abs_mean", ae_posterior_prior_logit_abs_vals),
                 ("ae_posterior_prior_delta_abs_mean", ae_posterior_prior_delta_abs_vals),
+                ("ae_posterior_theta_logit_abs_mean", ae_posterior_theta_logit_abs_vals),
+                ("ae_posterior_theta_delta_abs_mean", ae_posterior_theta_delta_abs_vals),
                 ("ae_stat_student_prior_abs_mean", ae_stat_student_prior_abs_vals),
                 ("ae_stat_exercise_prior_abs_mean", ae_stat_exercise_prior_abs_vals),
                 ("ae_stat_concept_prior_abs_mean", ae_stat_concept_prior_abs_vals),
@@ -1439,6 +1444,8 @@ def _collect_debug_forward_stats(
     relation_theta_personal_mass_mean, _ = _safe_mean_std(relation_theta_personal_mass_vals)
     ae_posterior_prior_logit_abs_mean, _ = _safe_mean_std(ae_posterior_prior_logit_abs_vals)
     ae_posterior_prior_delta_abs_mean, _ = _safe_mean_std(ae_posterior_prior_delta_abs_vals)
+    ae_posterior_theta_logit_abs_mean, _ = _safe_mean_std(ae_posterior_theta_logit_abs_vals)
+    ae_posterior_theta_delta_abs_mean, _ = _safe_mean_std(ae_posterior_theta_delta_abs_vals)
     ae_stat_student_prior_abs_mean, _ = _safe_mean_std(ae_stat_student_prior_abs_vals)
     ae_stat_exercise_prior_abs_mean, _ = _safe_mean_std(ae_stat_exercise_prior_abs_vals)
     ae_stat_concept_prior_abs_mean, _ = _safe_mean_std(ae_stat_concept_prior_abs_vals)
@@ -1540,6 +1547,8 @@ def _collect_debug_forward_stats(
         "relation_theta_personal_mass": relation_theta_personal_mass_mean,
         "ae_posterior_prior_logit_abs_mean": ae_posterior_prior_logit_abs_mean,
         "ae_posterior_prior_delta_abs_mean": ae_posterior_prior_delta_abs_mean,
+        "ae_posterior_theta_logit_abs_mean": ae_posterior_theta_logit_abs_mean,
+        "ae_posterior_theta_delta_abs_mean": ae_posterior_theta_delta_abs_mean,
         "ae_stat_student_prior_abs_mean": ae_stat_student_prior_abs_mean,
         "ae_stat_exercise_prior_abs_mean": ae_stat_exercise_prior_abs_mean,
         "ae_stat_concept_prior_abs_mean": ae_stat_concept_prior_abs_mean,
@@ -1552,6 +1561,7 @@ def _collect_debug_forward_stats(
         "ae_raw_logit_before_clip_abs_mean": ae_raw_logit_before_clip_abs_mean,
         "ae_raw_logit_after_clip_abs_mean": ae_raw_logit_after_clip_abs_mean,
         "ae_posterior_prior_scale": float(getattr(base_model, "ae_posterior_prior_scale", 0.0)),
+        "ae_posterior_theta_scale": float(getattr(base_model, "ae_posterior_theta_scale", 0.0)),
         "personal_warmup_scale": personal_warmup_scale,
         "share_concept_embeddings": share_concept_embeddings,
     }
@@ -2093,6 +2103,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         ae_interaction_logit_scale=getattr(args, "ae_interaction_logit_scale", 0.0),
         ae_logit_dim=getattr(args, "ae_logit_dim", 32),
         ae_posterior_prior_scale=getattr(args, "ae_posterior_prior_scale", 0.0),
+        ae_posterior_theta_scale=getattr(args, "ae_posterior_theta_scale", 0.0),
         lambda_theta_prior_align=getattr(args, "lambda_theta_prior_align", 0.0),
         relation_theta_scale=getattr(args, "relation_theta_scale", 0.0),
         relation_theta_delta_clip=getattr(args, "relation_theta_delta_clip", 2.0),
@@ -2259,7 +2270,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "relation_theta_delta=%.4f, relation_theta_logit=%.4f, "
                 "relation_theta_neighbor_mass=%.4f, relation_theta_personal_mass=%.4f, "
                 "ae_posterior_prior_scale=%.4f, ae_posterior_prior_logit=%.4f, "
-                "ae_posterior_prior_delta=%.4f, "
+                "ae_posterior_prior_delta=%.4f, ae_posterior_theta_scale=%.4f, "
+                "ae_posterior_theta_logit=%.4f, ae_posterior_theta_delta=%.4f, "
                 "graph_row_entropy=%.4f, graph_entropy_ratio=%.4f, "
                 "alpha_mean=%.4f, alpha_std=%.4f, alpha_base_mean=%.4f, alpha_delta_absmean=%.4f, "
                 "alpha_saturation_ratio=%.4f, alpha_bias_std=%s, "
@@ -2295,6 +2307,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["ae_posterior_prior_scale"],
                 diag["ae_posterior_prior_logit_abs_mean"],
                 diag["ae_posterior_prior_delta_abs_mean"],
+                diag["ae_posterior_theta_scale"],
+                diag["ae_posterior_theta_logit_abs_mean"],
+                diag["ae_posterior_theta_delta_abs_mean"],
                 diag["graph_row_entropy_mean"],
                 diag["graph_entropy_ratio"],
                 diag["alpha_mean"],
@@ -2936,6 +2951,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         ae_posterior_prior_scale=loaded_args.get(
             "ae_posterior_prior_scale", getattr(args, "ae_posterior_prior_scale", 0.0)
+        ),
+        ae_posterior_theta_scale=loaded_args.get(
+            "ae_posterior_theta_scale", getattr(args, "ae_posterior_theta_scale", 0.0)
         ),
         lambda_theta_prior_align=loaded_args.get(
             "lambda_theta_prior_align", getattr(args, "lambda_theta_prior_align", 0.0)

@@ -101,6 +101,7 @@ STRUCTURAL_SWITCH_KEYS = (
     "ae_interaction_logit_scale",
     "ae_logit_dim",
     "ae_posterior_prior_scale",
+    "ae_posterior_theta_scale",
     "lambda_theta_prior_align",
     "ae_lr_mult",
     "ae_stat_prior_scale",

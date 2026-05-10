@@ -2341,6 +2341,7 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
         ae_irt_logit_scale=0.2,
         ae_interaction_logit_scale=1.0,
         ae_posterior_prior_scale=1.0,
+        ae_posterior_theta_scale=0.0,
         lambda_personal_kl=0.02,
         lambda_personal_query_residual=0.05,
         personal_query_residual_margin=0.08,
@@ -2359,6 +2360,7 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
     hash_ae_irt = _build_config_hash(SimpleNamespace(**{**base, "ae_irt_logit_scale": 0.0}))
     hash_ae_interaction = _build_config_hash(SimpleNamespace(**{**base, "ae_interaction_logit_scale": 0.0}))
     hash_ae_posterior_prior = _build_config_hash(SimpleNamespace(**{**base, "ae_posterior_prior_scale": 0.0}))
+    hash_ae_posterior_theta = _build_config_hash(SimpleNamespace(**{**base, "ae_posterior_theta_scale": 0.5}))
     hash_item_support = _build_config_hash(SimpleNamespace(**{**base, "personal_item_support_mass": 0.0}))
     hash_mastery_prior = _build_config_hash(SimpleNamespace(**{**base, "personal_mastery_prior_scale": 0.35}))
     hash_recent_mastery_prior = _build_config_hash(
@@ -2374,6 +2376,7 @@ def _check_config_hash_tracks_ae_structure_switches() -> None:
     _assert(hash_base != hash_ae_irt, "config hash 必须区分 ae_irt_logit_scale 的结构差异。")
     _assert(hash_base != hash_ae_interaction, "config hash 必须区分 ae_interaction_logit_scale 的结构差异。")
     _assert(hash_base != hash_ae_posterior_prior, "config hash 必须区分 ae_posterior_prior_scale 的结构差异。")
+    _assert(hash_base != hash_ae_posterior_theta, "config hash 必须区分 ae_posterior_theta_scale 的结构差异。")
     _assert(hash_base != hash_item_support, "config hash 必须区分 personal_item_support_mass 的 E support 结构差异。")
     _assert(hash_base != hash_mastery_prior, "config hash 必须区分 personal_mastery_prior_scale 的 E 后验结构差异。")
     _assert(
@@ -2404,6 +2407,7 @@ def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
         ae_irt_logit_scale=0.2,
         ae_interaction_logit_scale=1.0,
         ae_posterior_prior_scale=1.0,
+        ae_posterior_theta_scale=0.5,
         personal_include_neighbor_rows=False,
         personal_query_correction_scale=0.10,
         lambda_personal_kl=0.02,
@@ -2456,6 +2460,7 @@ def _check_append_summary_csv_tracks_runtime_structure_fields() -> None:
         "ae_irt_logit_scale",
         "ae_interaction_logit_scale",
         "ae_posterior_prior_scale",
+        "ae_posterior_theta_scale",
         "personal_include_neighbor_rows",
         "personal_query_correction_scale",
         "lambda_personal_kl",

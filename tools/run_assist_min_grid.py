@@ -44,6 +44,7 @@ GRID_KEYS: Tuple[str, ...] = (
     "lambda_personal_query_residual",
     "relation_theta_scale",
     "ae_posterior_prior_scale",
+    "ae_posterior_theta_scale",
 )
 
 

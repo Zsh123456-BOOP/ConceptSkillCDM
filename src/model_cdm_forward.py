@@ -196,6 +196,7 @@ def run_cdm_forward(
         "ae_irt_logit_scale": torch.tensor(float(model.ae_irt_logit_scale), device=device),
         "ae_interaction_logit_scale": torch.tensor(float(model.ae_interaction_logit_scale), device=device),
         "ae_posterior_prior_scale": torch.tensor(float(model.ae_posterior_prior_scale), device=device),
+        "ae_posterior_theta_scale": torch.tensor(float(model.ae_posterior_theta_scale), device=device),
         "relation_theta_scale": torch.tensor(float(model.relation_theta_scale), device=device),
         "relation_theta_delta_clip": torch.tensor(float(model.relation_theta_delta_clip), device=device),
         "irt_logit_scale_used": torch.tensor(float(irt_logit_scale), device=device),

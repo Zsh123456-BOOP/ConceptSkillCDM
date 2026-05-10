@@ -347,6 +347,8 @@ def parse_args():
                         help="Embedding width for the A/E joint logit interaction head.")
     parser.add_argument("--ae_posterior_prior_scale", type=float, default=0.0,
                         help="Scale for full-only E-posterior readout over train-only student-concept priors.")
+    parser.add_argument("--ae_posterior_theta_scale", type=float, default=0.0,
+                        help="Scale for full-only E-posterior readout over interpretable concept ability theta.")
     parser.add_argument("--lambda_theta_prior_align", type=float, default=0.0,
                         help="Full-only regularization aligning theta_c with train-only student-concept mastery priors.")
     parser.add_argument("--ae_lr_mult", type=float, default=1.0,
@@ -744,6 +746,9 @@ def main():
                 ),
                 ae_posterior_prior_scale=loaded_args.get(
                     "ae_posterior_prior_scale", getattr(args, "ae_posterior_prior_scale", 0.0)
+                ),
+                ae_posterior_theta_scale=loaded_args.get(
+                    "ae_posterior_theta_scale", getattr(args, "ae_posterior_theta_scale", 0.0)
                 ),
                 lambda_theta_prior_align=loaded_args.get(
                     "lambda_theta_prior_align", getattr(args, "lambda_theta_prior_align", 0.0)

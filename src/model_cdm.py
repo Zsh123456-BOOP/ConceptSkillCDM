@@ -113,6 +113,7 @@ class CognitiveDiagnosisModel(nn.Module):
         ae_interaction_logit_scale: float = 0.0,
         ae_logit_dim: int = 32,
         ae_posterior_prior_scale: float = 0.0,
+        ae_posterior_theta_scale: float = 0.0,
         lambda_theta_prior_align: float = 0.0,
         relation_theta_scale: float = 0.0,
         relation_theta_delta_clip: float = 2.0,
@@ -206,6 +207,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.ae_interaction_logit_scale = max(0.0, float(ae_interaction_logit_scale))
         self.ae_logit_dim = max(1, int(ae_logit_dim))
         self.ae_posterior_prior_scale = max(0.0, float(ae_posterior_prior_scale))
+        self.ae_posterior_theta_scale = max(0.0, float(ae_posterior_theta_scale))
         self.lambda_theta_prior_align = max(0.0, float(lambda_theta_prior_align))
         self.relation_theta_scale = float(relation_theta_scale)
         self.relation_theta_delta_clip = max(1e-6, float(relation_theta_delta_clip))
@@ -501,6 +503,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self,
         query_weight: torch.Tensor,
         relation_spec: Optional[Dict[str, torch.Tensor]],
+        probability_key: str = "posterior_prob",
     ) -> torch.Tensor:
         if not isinstance(relation_spec, dict):
             return query_weight.new_zeros(query_weight.shape)
@@ -508,7 +511,7 @@ class CognitiveDiagnosisModel(nn.Module):
         active_row_valid_mask = relation_spec.get("active_row_valid_mask")
         support_col_index = relation_spec.get("support_col_index")
         support_valid_mask = relation_spec.get("support_valid_mask")
-        posterior_prob = relation_spec.get("posterior_prob")
+        posterior_prob = relation_spec.get(probability_key)
         if (
             active_row_index is None
             or active_row_valid_mask is None
@@ -657,6 +660,8 @@ class CognitiveDiagnosisModel(nn.Module):
             "ae_stat_query_student_concept_prior": zero_vec,
             "ae_stat_graph_student_concept_prior": zero_vec,
             "ae_posterior_prior_logit": zero_vec,
+            "ae_posterior_theta_logit": zero_vec,
+            "ae_posterior_theta_delta": zero_vec,
             "ae_reliability_feature_logit": zero_vec,
             "ae_interpretable_bias": zero_vec,
             "ae_explicit_feature_logit": zero_vec,
@@ -699,6 +704,8 @@ class CognitiveDiagnosisModel(nn.Module):
         stat_query_sc_prior = zero_vec
         stat_graph_sc_prior = zero_vec
         posterior_prior_logit = zero_vec
+        posterior_theta_logit = zero_vec
+        posterior_theta_delta = zero_vec
         reliability_feature_logit = zero_vec
         stat_prior = stat_student_prior + stat_exercise_prior + stat_concept_prior
         student_bias = student_logit_bias(student_ids).squeeze(-1)
@@ -732,25 +739,56 @@ class CognitiveDiagnosisModel(nn.Module):
                 graph_sc_prior = (graph_query_weight * sc_prior).sum(dim=1)
                 stat_graph_sc_prior = 0.40 * graph_sc_prior
                 stat_prior = stat_prior + stat_graph_sc_prior
-                if e_active and self.ae_posterior_prior_scale > 0.0 and isinstance(personal_relation_spec, dict):
-                    personal_support = self._query_sparse_support_distribution(query_weight, personal_relation_spec)
+                if e_active and isinstance(personal_relation_spec, dict):
+                    personal_support = self._query_sparse_support_distribution(
+                        query_weight,
+                        personal_relation_spec,
+                        probability_key="posterior_prob",
+                    )
+                    global_support = self._query_sparse_support_distribution(
+                        query_weight,
+                        personal_relation_spec,
+                        probability_key="global_support_prob",
+                    )
                     personal_mass = personal_support.sum(dim=1, keepdim=True)
+                    global_mass = global_support.sum(dim=1, keepdim=True)
                     has_personal = personal_mass.squeeze(-1) > 1e-12
                     normalized_personal_support = torch.where(
                         personal_mass > 1e-12,
                         personal_support / personal_mass.clamp(min=1e-12),
                         torch.zeros_like(personal_support),
                     )
-                    personal_sc_prior = (normalized_personal_support * sc_prior).sum(dim=1)
-                    posterior_prior_delta = torch.where(
-                        has_personal,
-                        personal_sc_prior - graph_sc_prior,
-                        torch.zeros_like(personal_sc_prior),
+                    normalized_global_support = torch.where(
+                        global_mass > 1e-12,
+                        global_support / global_mass.clamp(min=1e-12),
+                        torch.zeros_like(global_support),
                     )
-                    posterior_prior_logit = 0.40 * self.ae_posterior_prior_scale * posterior_prior_delta
-                    stat_prior = stat_prior + posterior_prior_logit
-                    posterior_prior_logit_abs_mean = posterior_prior_logit.detach().abs().mean()
-                    posterior_prior_delta_abs_mean = posterior_prior_delta.detach().abs().mean()
+                    has_global = global_mass.squeeze(-1) > 1e-12
+                    has_comparable_support = has_personal & has_global
+                    if self.ae_posterior_prior_scale > 0.0:
+                        personal_sc_prior = (normalized_personal_support * sc_prior).sum(dim=1)
+                        sparse_global_sc_prior = (normalized_global_support * sc_prior).sum(dim=1)
+                        posterior_prior_delta = torch.where(
+                            has_comparable_support,
+                            personal_sc_prior - sparse_global_sc_prior,
+                            torch.zeros_like(personal_sc_prior),
+                        )
+                        posterior_prior_logit = 0.40 * self.ae_posterior_prior_scale * posterior_prior_delta
+                        stat_prior = stat_prior + posterior_prior_logit
+                        posterior_prior_logit_abs_mean = posterior_prior_logit.detach().abs().mean()
+                        posterior_prior_delta_abs_mean = posterior_prior_delta.detach().abs().mean()
+                    if self.ae_posterior_theta_scale > 0.0:
+                        theta_c = self.diagnosis_head.theta_proj(knowledge_state).squeeze(-1)
+                        theta_score = torch.tanh(theta_c / 2.0)
+                        personal_theta = (normalized_personal_support * theta_score).sum(dim=1)
+                        global_theta = (normalized_global_support * theta_score).sum(dim=1)
+                        posterior_theta_delta = torch.where(
+                            has_comparable_support,
+                            personal_theta - global_theta,
+                            torch.zeros_like(personal_theta),
+                        )
+                        posterior_theta_logit = 0.40 * self.ae_posterior_theta_scale * posterior_theta_delta
+                        stat_prior = stat_prior + posterior_theta_logit
 
         if isinstance(reliability_feature_weight, nn.Parameter):
             student_count_feature = self.ae_student_count_feature[student_ids].to(dtype=dtype, device=device)
@@ -826,6 +864,8 @@ class CognitiveDiagnosisModel(nn.Module):
             "ae_stat_query_student_concept_prior": torch.where(active, stat_query_sc_prior, zero_vec),
             "ae_stat_graph_student_concept_prior": torch.where(active, stat_graph_sc_prior, zero_vec),
             "ae_posterior_prior_logit": torch.where(active, posterior_prior_logit, zero_vec),
+            "ae_posterior_theta_logit": torch.where(active, posterior_theta_logit, zero_vec),
+            "ae_posterior_theta_delta": torch.where(active, posterior_theta_delta, zero_vec),
             "ae_reliability_feature_logit": torch.where(active, reliability_feature_logit, zero_vec),
             "ae_interpretable_bias": torch.where(active, interpretable_bias, zero_vec),
             "ae_explicit_feature_logit": torch.where(active, explicit_feature_logit, zero_vec),
