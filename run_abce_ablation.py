@@ -74,6 +74,8 @@ STRUCTURAL_SWITCH_KEYS = (
     "personal_item_support_mass",
     "personal_mastery_prior_scale",
     "personal_recent_mastery_prior_scale",
+    "personal_mastery_count_smoothing",
+    "shuffle_student_concept_priors",
     "personal_query_row_budget",
     "personal_neighbor_row_budget",
     "personal_query_support_hops",

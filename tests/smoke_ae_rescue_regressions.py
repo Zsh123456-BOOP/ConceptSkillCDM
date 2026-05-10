@@ -168,6 +168,9 @@ def _check_best_configs_enable_e_rescue_knobs() -> None:
         "personal_query_support_hops",
         "personal_query_message_gain",
         "personal_item_support_mass",
+        "personal_mastery_prior_scale",
+        "personal_recent_mastery_prior_scale",
+        "personal_mastery_count_smoothing",
         "personal_support_include_query_self",
         "personal_support_include_graph",
         "personal_value_use_global_basis",
@@ -925,6 +928,8 @@ def _check_student_concept_train_priors_are_e_only() -> None:
             ae_logit_residual_scale=1.0,
             ae_logit_residual_clip=0.0,
             ae_posterior_prior_scale=0.0,
+            personal_mastery_prior_scale=1.0,
+            personal_recent_mastery_prior_scale=0.5,
         )
         with torch.no_grad():
             model.ae_logit_feature_weight.zero_()
@@ -938,6 +943,7 @@ def _check_student_concept_train_priors_are_e_only() -> None:
             exercise_logits=torch.zeros(2),
             concept_logits=torch.zeros(3),
             student_concept_logits=student_concept_prior,
+            student_concept_recent_logits=0.5 * student_concept_prior,
             student_concept_count_features=student_concept_counts,
             scale=1.0,
         )
@@ -955,6 +961,10 @@ def _check_student_concept_train_priors_are_e_only() -> None:
         "Full E should expose train-only student-concept mastery evidence on query concepts.",
     )
     _assert(
+        full_details["e_local_mastery_logit"].abs().mean().item() > 0.0,
+        "Full E should expose first-class local mastery logit evidence.",
+    )
+    _assert(
         full_details["ae_reliability_feature_logit"].abs().mean().item() > 0.0,
         "Full E should expose student-concept count reliability evidence.",
     )
@@ -965,6 +975,10 @@ def _check_student_concept_train_priors_are_e_only() -> None:
     _assert(
         no_e_details["ae_stat_graph_student_concept_prior"].abs().mean().item() == 0.0,
         "no_E must remove A-support student-concept train-prior evidence.",
+    )
+    _assert(
+        no_e_details["e_local_mastery_logit"].abs().mean().item() == 0.0,
+        "no_E must remove first-class E local mastery evidence.",
     )
     _assert(
         no_e_details["ae_reliability_feature_logit"].abs().mean().item() == 0.0,

@@ -121,6 +121,7 @@ RESULT_FIELD_HINTS = (
     "ablation_valid",
     "ablation_invalid_reason",
     "graph_prior_mode",
+    "shuffle_student_concept_priors",
     "personal_freeze_alpha_gate",
     "disable_item_prior",
     "disable_sequence_prior",
@@ -144,6 +145,11 @@ RESULT_FIELD_HINTS = (
     "ae_posterior_theta_scale",
     "ae_posterior_theta_logit_abs_mean",
     "ae_posterior_theta_delta_abs_mean",
+    "e_query_mastery_logit_abs_mean",
+    "e_graph_mastery_logit_abs_mean",
+    "e_query_recent_mastery_logit_abs_mean",
+    "e_graph_recent_mastery_logit_abs_mean",
+    "e_local_mastery_logit_abs_mean",
     "personal_mastery_reliability_mean",
     "personal_recent_mastery_reliability_mean",
     "personal_support_density",
@@ -274,6 +280,8 @@ def _variant_spec(name: str) -> AblationSpec:
         return AblationSpec(name=name, flags={}, overrides={})
     if name == "E_global_posterior":
         return AblationSpec(name=name, flags={}, overrides=dict(FAIR_GLOBAL_POSTERIOR_OVERRIDES))
+    if name == "E_shuffle_student":
+        return AblationSpec(name=name, flags={}, overrides={"shuffle_student_concept_priors": True})
     if name == "E_posterior_only":
         return AblationSpec(
             name=name,

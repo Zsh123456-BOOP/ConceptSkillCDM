@@ -660,6 +660,11 @@ class CognitiveDiagnosisModel(nn.Module):
             "ae_stat_concept_prior": zero_vec,
             "ae_stat_query_student_concept_prior": zero_vec,
             "ae_stat_graph_student_concept_prior": zero_vec,
+            "e_query_mastery_logit": zero_vec,
+            "e_graph_mastery_logit": zero_vec,
+            "e_query_recent_mastery_logit": zero_vec,
+            "e_graph_recent_mastery_logit": zero_vec,
+            "e_local_mastery_logit": zero_vec,
             "ae_posterior_prior_logit": zero_vec,
             "ae_posterior_theta_logit": zero_vec,
             "ae_posterior_theta_delta": zero_vec,
@@ -731,14 +736,32 @@ class CognitiveDiagnosisModel(nn.Module):
         posterior_prior_logit_abs_mean = zero_scalar
         posterior_prior_delta_abs_mean = zero_scalar
         student_concept_prior = getattr(self, "ae_student_concept_prior_logit", None)
+        student_concept_recent = getattr(self, "ae_student_concept_recent_logit", None)
+        e_query_mastery_logit = zero_vec
+        e_graph_mastery_logit = zero_vec
+        e_query_recent_mastery_logit = zero_vec
+        e_graph_recent_mastery_logit = zero_vec
         if e_active and student_concept_prior is not None:
             sc_prior = student_concept_prior[student_ids].to(dtype=query_weight.dtype, device=device)
+            sc_recent = (
+                student_concept_recent[student_ids].to(dtype=query_weight.dtype, device=device)
+                if student_concept_recent is not None
+                else torch.zeros_like(sc_prior)
+            )
             query_sc_prior = (query_weight * sc_prior).sum(dim=1)
-            stat_query_sc_prior = 0.60 * query_sc_prior
+            query_recent_prior = (query_weight * sc_recent).sum(dim=1)
+            mastery_scale = max(0.0, float(self.personal_mastery_prior_scale))
+            recent_scale = max(0.0, float(self.personal_recent_mastery_prior_scale))
+            e_query_mastery_logit = 0.45 * mastery_scale * query_sc_prior
+            e_query_recent_mastery_logit = 0.25 * recent_scale * query_recent_prior
+            stat_query_sc_prior = e_query_mastery_logit + e_query_recent_mastery_logit
             stat_prior = stat_prior + stat_query_sc_prior
             if a_active:
                 graph_sc_prior = (graph_query_weight * sc_prior).sum(dim=1)
-                stat_graph_sc_prior = 0.40 * graph_sc_prior
+                graph_recent_prior = (graph_query_weight * sc_recent).sum(dim=1)
+                e_graph_mastery_logit = 0.35 * mastery_scale * graph_sc_prior
+                e_graph_recent_mastery_logit = 0.20 * recent_scale * graph_recent_prior
+                stat_graph_sc_prior = e_graph_mastery_logit + e_graph_recent_mastery_logit
                 stat_prior = stat_prior + stat_graph_sc_prior
                 if e_active and isinstance(personal_relation_spec, dict):
                     personal_support = self._query_sparse_support_distribution(
@@ -870,6 +893,15 @@ class CognitiveDiagnosisModel(nn.Module):
             "ae_stat_concept_prior": torch.where(active, stat_concept_prior, zero_vec),
             "ae_stat_query_student_concept_prior": torch.where(active, stat_query_sc_prior, zero_vec),
             "ae_stat_graph_student_concept_prior": torch.where(active, stat_graph_sc_prior, zero_vec),
+            "e_query_mastery_logit": torch.where(active, e_query_mastery_logit, zero_vec),
+            "e_graph_mastery_logit": torch.where(active, e_graph_mastery_logit, zero_vec),
+            "e_query_recent_mastery_logit": torch.where(active, e_query_recent_mastery_logit, zero_vec),
+            "e_graph_recent_mastery_logit": torch.where(active, e_graph_recent_mastery_logit, zero_vec),
+            "e_local_mastery_logit": torch.where(
+                active,
+                stat_query_sc_prior + stat_graph_sc_prior,
+                zero_vec,
+            ),
             "ae_posterior_prior_logit": torch.where(active, posterior_prior_logit, zero_vec),
             "ae_posterior_theta_logit": torch.where(active, posterior_theta_logit, zero_vec),
             "ae_posterior_theta_delta": torch.where(active, posterior_theta_delta, zero_vec),

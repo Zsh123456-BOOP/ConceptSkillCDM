@@ -789,6 +789,19 @@ def _initialize_ae_stat_priors(
         num_exercises=info_dict["num_exercises"],
         num_concepts=info_dict["num_concepts"],
     )
+    if bool(getattr(args, "shuffle_student_concept_priors", False)):
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(int(getattr(args, "seed", 42)) + 7919)
+        perm = torch.randperm(student_concept_logits.size(0), generator=generator)
+        student_concept_logits = student_concept_logits[perm]
+        student_concept_recent_logits = student_concept_recent_logits[perm]
+        count_features["student_concept"] = count_features["student_concept"][perm]
+        count_features["student_concept_observed"] = count_features["student_concept_observed"][perm]
+        logger.info(
+            "%s E shuffle control enabled: student-concept mastery/count evidence is permuted with seed=%s.",
+            run_tag,
+            int(getattr(args, "seed", 42)) + 7919,
+        )
     base_model.initialize_ae_logit_priors(
         student_logits=student_logits,
         exercise_logits=exercise_logits,
@@ -1160,6 +1173,11 @@ def _collect_debug_forward_stats(
     ae_stat_concept_prior_abs_vals: List[float] = []
     ae_stat_query_sc_prior_abs_vals: List[float] = []
     ae_stat_graph_sc_prior_abs_vals: List[float] = []
+    e_query_mastery_logit_abs_vals: List[float] = []
+    e_graph_mastery_logit_abs_vals: List[float] = []
+    e_query_recent_mastery_logit_abs_vals: List[float] = []
+    e_graph_recent_mastery_logit_abs_vals: List[float] = []
+    e_local_mastery_logit_abs_vals: List[float] = []
     ae_reliability_feature_logit_abs_vals: List[float] = []
     ae_interpretable_bias_abs_vals: List[float] = []
     ae_explicit_feature_logit_abs_vals: List[float] = []
@@ -1287,6 +1305,11 @@ def _collect_debug_forward_stats(
                 ("ae_stat_concept_prior_abs_mean", ae_stat_concept_prior_abs_vals),
                 ("ae_stat_query_student_concept_prior_abs_mean", ae_stat_query_sc_prior_abs_vals),
                 ("ae_stat_graph_student_concept_prior_abs_mean", ae_stat_graph_sc_prior_abs_vals),
+                ("e_query_mastery_logit_abs_mean", e_query_mastery_logit_abs_vals),
+                ("e_graph_mastery_logit_abs_mean", e_graph_mastery_logit_abs_vals),
+                ("e_query_recent_mastery_logit_abs_mean", e_query_recent_mastery_logit_abs_vals),
+                ("e_graph_recent_mastery_logit_abs_mean", e_graph_recent_mastery_logit_abs_vals),
+                ("e_local_mastery_logit_abs_mean", e_local_mastery_logit_abs_vals),
                 ("ae_reliability_feature_logit_abs_mean", ae_reliability_feature_logit_abs_vals),
                 ("ae_interpretable_bias_abs_mean", ae_interpretable_bias_abs_vals),
                 ("ae_explicit_feature_logit_abs_mean", ae_explicit_feature_logit_abs_vals),
@@ -1451,6 +1474,11 @@ def _collect_debug_forward_stats(
     ae_stat_concept_prior_abs_mean, _ = _safe_mean_std(ae_stat_concept_prior_abs_vals)
     ae_stat_query_sc_prior_abs_mean, _ = _safe_mean_std(ae_stat_query_sc_prior_abs_vals)
     ae_stat_graph_sc_prior_abs_mean, _ = _safe_mean_std(ae_stat_graph_sc_prior_abs_vals)
+    e_query_mastery_logit_abs_mean, _ = _safe_mean_std(e_query_mastery_logit_abs_vals)
+    e_graph_mastery_logit_abs_mean, _ = _safe_mean_std(e_graph_mastery_logit_abs_vals)
+    e_query_recent_mastery_logit_abs_mean, _ = _safe_mean_std(e_query_recent_mastery_logit_abs_vals)
+    e_graph_recent_mastery_logit_abs_mean, _ = _safe_mean_std(e_graph_recent_mastery_logit_abs_vals)
+    e_local_mastery_logit_abs_mean, _ = _safe_mean_std(e_local_mastery_logit_abs_vals)
     ae_reliability_feature_logit_abs_mean, _ = _safe_mean_std(ae_reliability_feature_logit_abs_vals)
     ae_interpretable_bias_abs_mean, _ = _safe_mean_std(ae_interpretable_bias_abs_vals)
     ae_explicit_feature_logit_abs_mean, _ = _safe_mean_std(ae_explicit_feature_logit_abs_vals)
@@ -1554,6 +1582,11 @@ def _collect_debug_forward_stats(
         "ae_stat_concept_prior_abs_mean": ae_stat_concept_prior_abs_mean,
         "ae_stat_query_student_concept_prior_abs_mean": ae_stat_query_sc_prior_abs_mean,
         "ae_stat_graph_student_concept_prior_abs_mean": ae_stat_graph_sc_prior_abs_mean,
+        "e_query_mastery_logit_abs_mean": e_query_mastery_logit_abs_mean,
+        "e_graph_mastery_logit_abs_mean": e_graph_mastery_logit_abs_mean,
+        "e_query_recent_mastery_logit_abs_mean": e_query_recent_mastery_logit_abs_mean,
+        "e_graph_recent_mastery_logit_abs_mean": e_graph_recent_mastery_logit_abs_mean,
+        "e_local_mastery_logit_abs_mean": e_local_mastery_logit_abs_mean,
         "ae_reliability_feature_logit_abs_mean": ae_reliability_feature_logit_abs_mean,
         "ae_interpretable_bias_abs_mean": ae_interpretable_bias_abs_mean,
         "ae_explicit_feature_logit_abs_mean": ae_explicit_feature_logit_abs_mean,
@@ -2402,7 +2435,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "%s [Diag][AE Components] Epoch [%03d] | "
                 "student_prior=%.4f, exercise_prior=%.4f, concept_prior=%.4f, "
                 "query_student_concept=%.4f, graph_student_concept=%.4f, "
-                "posterior_prior=%.4f, reliability=%.4f, interpretable_bias=%.4f, explicit_feature=%.4f, "
+                "e_local_mastery=%.4f, posterior_prior=%.4f, reliability=%.4f, "
+                "interpretable_bias=%.4f, explicit_feature=%.4f, "
                 "interaction=%.4f, raw_before_clip=%.4f, raw_after_clip=%.4f",
                 run_tag,
                 epoch,
@@ -2411,6 +2445,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["ae_stat_concept_prior_abs_mean"],
                 diag["ae_stat_query_student_concept_prior_abs_mean"],
                 diag["ae_stat_graph_student_concept_prior_abs_mean"],
+                diag["e_local_mastery_logit_abs_mean"],
                 diag["ae_posterior_prior_logit_abs_mean"],
                 diag["ae_reliability_feature_logit_abs_mean"],
                 diag["ae_interpretable_bias_abs_mean"],

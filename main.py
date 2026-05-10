@@ -303,6 +303,8 @@ def parse_args():
                         help="Scale for train-only recent student-concept mastery contrast inside E posterior reweighting.")
     parser.add_argument("--personal_mastery_count_smoothing", type=float, default=0.0,
                         help="Reliability smoothing for train-only student-concept counts used to gate E mastery contrast; 0 disables count gating.")
+    parser.add_argument("--shuffle_student_concept_priors", action="store_true",
+                        help="Negative-control only: permute train-only student-concept E evidence across students.")
     parser.add_argument("--personal_query_row_budget", type=float, default=1.0,
                         help="Relative personalization budget assigned to queried concept rows.")
     parser.add_argument("--personal_neighbor_row_budget", type=float, default=0.30,
