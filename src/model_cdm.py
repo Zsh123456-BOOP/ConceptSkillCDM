@@ -650,6 +650,7 @@ class CognitiveDiagnosisModel(nn.Module):
         global_query_context: torch.Tensor,
         personal_query_correction: torch.Tensor,
         concept_mask: torch.Tensor,
+        ae_theta_state: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
         zero_vec = knowledge_state.new_zeros((knowledge_state.size(0),))
         zero_scalar = knowledge_state.new_tensor(0.0)
@@ -778,7 +779,8 @@ class CognitiveDiagnosisModel(nn.Module):
                         posterior_prior_logit_abs_mean = posterior_prior_logit.detach().abs().mean()
                         posterior_prior_delta_abs_mean = posterior_prior_delta.detach().abs().mean()
                     if self.ae_posterior_theta_scale > 0.0:
-                        theta_c = self.diagnosis_head.theta_proj(knowledge_state).squeeze(-1)
+                        theta_source_state = knowledge_state if ae_theta_state is None else ae_theta_state
+                        theta_c = self.diagnosis_head.theta_proj(theta_source_state).squeeze(-1)
                         theta_score = torch.tanh(theta_c / 2.0)
                         personal_theta = (normalized_personal_support * theta_score).sum(dim=1)
                         global_theta = (normalized_global_support * theta_score).sum(dim=1)

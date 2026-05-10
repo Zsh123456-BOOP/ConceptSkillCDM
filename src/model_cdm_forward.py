@@ -162,6 +162,7 @@ def run_cdm_forward(
         global_query_context=global_query_context,
         personal_query_correction=personal_query_correction,
         concept_mask=q_vector,
+        ae_theta_state=knowledge_state + global_query_context,
     )
     ae_predictor_active = (
         model.enable_module1

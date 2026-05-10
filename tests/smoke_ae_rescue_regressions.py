@@ -882,6 +882,108 @@ def _check_e_posterior_prior_readout_is_full_only() -> None:
     )
 
 
+def _check_e_posterior_theta_uses_a_conditioned_query_state() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    model = CognitiveDiagnosisModel(
+        num_students=1,
+        num_exercises=1,
+        num_concepts=3,
+        q_matrix=torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32),
+        knowledge_dim=4,
+        num_relation_heads=1,
+        num_gnn_layers=0,
+        dropout=0.0,
+        use_concept_graph=True,
+        use_personal_graph=True,
+        ae_logit_residual_scale=1.0,
+        ae_logit_residual_clip=0.0,
+        ae_posterior_prior_scale=0.0,
+        ae_posterior_theta_scale=1.0,
+    )
+    model.eval()
+    with torch.no_grad():
+        model.diagnosis_head.theta_proj.weight.zero_()
+        model.diagnosis_head.theta_proj.weight[0, 0] = 1.0
+        model.diagnosis_head.theta_proj.bias.zero_()
+        if getattr(model, "ae_logit_feature_weight", None) is not None:
+            model.ae_logit_feature_weight.zero_()
+        if getattr(model, "ae_reliability_feature_weight", None) is not None:
+            model.ae_reliability_feature_weight.zero_()
+        model.ae_student_logit_bias.weight.zero_()
+        model.ae_exercise_logit_bias.weight.zero_()
+        model.ae_concept_logit_bias.weight.zero_()
+
+    knowledge_state = torch.zeros(1, 3, 4)
+    global_query_context = torch.zeros_like(knowledge_state)
+    global_query_context[0, 0, 0] = 2.0
+    concept_mask = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32)
+    relation_spec = {
+        "global_matrices": torch.eye(3).view(1, 3, 3),
+        "active_row_index": torch.tensor([[0]], dtype=torch.long),
+        "active_row_valid_mask": torch.tensor([[True]]),
+        "query_row_active_mask": torch.tensor([[True]]),
+        "support_col_index": torch.tensor([[[[0, 1]]]], dtype=torch.long),
+        "support_valid_mask": torch.tensor([[[[True, True]]]]),
+        "global_support_prob": torch.tensor([[[[1.0, 0.0]]]], dtype=torch.float32),
+        "posterior_prob": torch.tensor([[[[0.0, 1.0]]]], dtype=torch.float32),
+    }
+
+    with torch.no_grad():
+        _, _, _, _, details = model._build_ae_logit_residual(
+            student_ids=torch.tensor([0], dtype=torch.long),
+            exercise_ids=torch.tensor([0], dtype=torch.long),
+            knowledge_state=knowledge_state,
+            relation_matrices=torch.eye(3).view(1, 3, 3),
+            personal_relation_spec=relation_spec,
+            global_query_context=global_query_context,
+            personal_query_correction=torch.zeros_like(knowledge_state),
+            concept_mask=concept_mask,
+            ae_theta_state=knowledge_state + global_query_context,
+        )
+
+    _assert(
+        details["ae_posterior_theta_logit"].abs().item() > 0.20,
+        "E posterior theta readout should use the A-conditioned query state, not the raw pre-A state.",
+    )
+
+
+def _check_e_stratified_comparison_reports_high_signal_help() -> None:
+    from tools.compare_e_stratified import _build_stratified_comparison
+
+    labels = [1, 1, 0, 0, 1, 0, 1, 0, 1, 0]
+    control_prob = [0.55, 0.52, 0.45, 0.47, 0.51, 0.49, 0.60, 0.40, 0.53, 0.46]
+    full_prob = [0.85, 0.82, 0.15, 0.18, 0.51, 0.49, 0.60, 0.40, 0.53, 0.46]
+    full = pd.DataFrame(
+        {
+            "stu_id": list(range(10)),
+            "exer_id": list(range(10)),
+            "label": labels,
+            "prob": full_prob,
+            "q_count": [2, 2, 2, 2, 1, 1, 1, 1, 1, 1],
+            "is_multi_concept": [1, 1, 1, 1, 0, 0, 0, 0, 0, 0],
+            "ae_logit_residual": [2.0, 1.8, -2.0, -1.8, 0.05, 0.02, 0.0, 0.0, 0.01, 0.03],
+            "ae_posterior_prior_logit": [1.5, 1.4, -1.5, -1.4, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "ae_posterior_theta_logit": [1.0, 0.9, -1.0, -0.9, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "query_row_posterior_kl": [0.8, 0.7, 0.8, 0.7, 0.01, 0.01, 0.0, 0.0, 0.01, 0.01],
+            "query_row_posterior_delta_abs": [0.9, 0.8, 0.9, 0.8, 0.01, 0.01, 0.0, 0.0, 0.01, 0.01],
+            "query_row_personal_message_delta": [0.6, 0.5, 0.6, 0.5, 0.01, 0.01, 0.0, 0.0, 0.01, 0.01],
+        }
+    )
+    control = full.copy()
+    control["prob"] = control_prob
+    summary = _build_stratified_comparison(full, control)
+    high = summary[summary["stratum"] == "signal:ae_abs:top20"].iloc[0]
+    _assert(
+        high["bce_delta_mean"] < 0.0,
+        "High-E-signal stratum should report that full lowers BCE versus the matched control.",
+    )
+    _assert(
+        high["full_help_rate"] > 0.5,
+        "High-E-signal stratum should expose where E helps, not only dataset-level averages.",
+    )
+
+
 def _check_theta_prior_alignment_is_full_only() -> None:
     from src.model import CognitiveDiagnosisModel
 
@@ -3780,6 +3882,8 @@ def main() -> None:
     _check_graph_prior_anchors_a_relation_learning()
     _check_ae_interaction_logit_is_full_only()
     _check_e_posterior_prior_readout_is_full_only()
+    _check_e_posterior_theta_uses_a_conditioned_query_state()
+    _check_e_stratified_comparison_reports_high_signal_help()
     _check_theta_prior_alignment_is_full_only()
     _check_item_local_support_augments_e_support()
     _check_full_e_runtime_uses_item_local_support()
