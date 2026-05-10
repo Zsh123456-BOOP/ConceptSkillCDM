@@ -163,20 +163,12 @@ def run_cdm_forward(
     ae_predictor_active = (
         model.enable_module1
         and model.ae_logit_residual_scale > 0.0
-        and (model.use_concept_graph or model.use_personal_graph)
     )
-    if ae_predictor_active and model.use_concept_graph and model.use_personal_graph:
+    if ae_predictor_active:
         irt_logit_scale = float(model.ae_irt_logit_scale)
-    elif ae_predictor_active:
-        irt_logit_scale = 0.0
     else:
         irt_logit_scale = 1.0
-    if irt_logit_scale == 0.0:
-        # Partial ablations use the interpretable AE residual only. Do not keep
-        # the disabled IRT branch in the backward graph through a numeric 0x.
-        irt_logit_for_total = torch.zeros_like(ae_logit_residual)
-    else:
-        irt_logit_for_total = irt_logit * irt_logit_scale
+    irt_logit_for_total = irt_logit * irt_logit_scale
     total_logit = irt_logit_for_total + ae_logit_residual + relation_theta_logit
     out_main = total_logit if return_logits else torch.sigmoid(total_logit)
 

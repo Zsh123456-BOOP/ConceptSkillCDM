@@ -48,6 +48,37 @@ DEFAULT_VARIANTS = (
     "E_frozen_alpha",
 )
 
+
+FAIR_NEUTRAL_E_OVERRIDES = {
+    # Keep use_personal_graph=True so the predictor/head path is identical to
+    # full, but make the local posterior and query writeback an identity
+    # control. This is the fair A substrate test: only A evidence changes.
+    "personal_delta_scale": 0.0,
+    "personal_query_correction_scale": 0.0,
+    "personal_query_message_gain": 0.0,
+    "personal_mastery_prior_scale": 0.0,
+    "personal_recent_mastery_prior_scale": 0.0,
+    "personal_item_support_mass": 0.0,
+    "ae_posterior_prior_scale": 0.0,
+    "lambda_personal_kl": 0.0,
+    "lambda_personal_query_residual": 0.0,
+    "lambda_alpha_min": 0.0,
+    "alpha_min_target": 0.0,
+}
+
+
+FAIR_GLOBAL_POSTERIOR_OVERRIDES = {
+    # Keep A, stat priors, AE residuals, and the E container active. Only force
+    # the student-conditioned posterior to equal the global support and remove
+    # the query-state writeback.
+    "personal_delta_scale": 0.0,
+    "personal_query_correction_scale": 0.0,
+    "personal_query_message_gain": 0.0,
+    "ae_posterior_prior_scale": 0.0,
+    "lambda_personal_kl": 0.0,
+    "lambda_personal_query_residual": 0.0,
+}
+
 RESULT_FIELD_HINTS = (
     "run_id",
     "phase",
@@ -151,6 +182,16 @@ def _variant_spec(name: str) -> AblationSpec:
                 "alpha_min_target": 0.0,
             },
         )
+    if name == "full_fair":
+        return AblationSpec(name=name, flags={}, overrides={})
+    if name == "no_A_fair":
+        return AblationSpec(
+            name=name,
+            flags={"ablate_concept_graph": True},
+            overrides=dict(FAIR_NEUTRAL_E_OVERRIDES),
+        )
+    if name == "no_E_fair":
+        return AblationSpec(name=name, flags={}, overrides=dict(FAIR_GLOBAL_POSTERIOR_OVERRIDES))
     if name == "A_item_only":
         return AblationSpec(name=name, flags={}, overrides={"graph_prior_mode": "item_only"})
     if name == "A_seq_only":
@@ -159,6 +200,24 @@ def _variant_spec(name: str) -> AblationSpec:
         return AblationSpec(name=name, flags={}, overrides={"graph_prior_mode": "uniform"})
     if name == "A_self_only":
         return AblationSpec(name=name, flags={}, overrides={"graph_prior_mode": "self_only"})
+    if name == "A_fused_neutralE":
+        return AblationSpec(name=name, flags={}, overrides=dict(FAIR_NEUTRAL_E_OVERRIDES))
+    if name == "A_item_neutralE":
+        overrides = dict(FAIR_NEUTRAL_E_OVERRIDES)
+        overrides["graph_prior_mode"] = "item_only"
+        return AblationSpec(name=name, flags={}, overrides=overrides)
+    if name == "A_seq_neutralE":
+        overrides = dict(FAIR_NEUTRAL_E_OVERRIDES)
+        overrides["graph_prior_mode"] = "seq_only"
+        return AblationSpec(name=name, flags={}, overrides=overrides)
+    if name == "A_uniform_neutralE":
+        overrides = dict(FAIR_NEUTRAL_E_OVERRIDES)
+        overrides["graph_prior_mode"] = "uniform"
+        return AblationSpec(name=name, flags={}, overrides=overrides)
+    if name == "A_self_neutralE":
+        overrides = dict(FAIR_NEUTRAL_E_OVERRIDES)
+        overrides["graph_prior_mode"] = "self_only"
+        return AblationSpec(name=name, flags={}, overrides=overrides)
     if name == "E_prior_only":
         return AblationSpec(
             name=name,
@@ -180,6 +239,30 @@ def _variant_spec(name: str) -> AblationSpec:
                 "personal_freeze_alpha_gate": True,
                 "personal_warmup_epochs": 0,
                 "personal_reg_warmup_epochs": 0,
+            },
+        )
+    if name == "E_full_fair":
+        return AblationSpec(name=name, flags={}, overrides={})
+    if name == "E_global_posterior":
+        return AblationSpec(name=name, flags={}, overrides=dict(FAIR_GLOBAL_POSTERIOR_OVERRIDES))
+    if name == "E_posterior_only":
+        return AblationSpec(
+            name=name,
+            flags={},
+            overrides={
+                "personal_query_correction_scale": 0.0,
+                "personal_query_message_gain": 0.0,
+                "lambda_personal_query_residual": 0.0,
+            },
+        )
+    if name == "E_query_only":
+        return AblationSpec(
+            name=name,
+            flags={},
+            overrides={
+                "personal_delta_scale": 0.0,
+                "ae_posterior_prior_scale": 0.0,
+                "lambda_personal_kl": 0.0,
             },
         )
     raise ValueError(f"Unknown mechanism variant: {name}")

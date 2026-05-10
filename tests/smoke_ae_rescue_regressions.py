@@ -624,15 +624,14 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
             return_details=True,
             return_logits=True,
         )
-    expected_no_a = student_prior[prior_student_ids]
+    expected_no_a = expected_prior
     _assert(
         torch.allclose(no_a_prior_details["ae_logit_residual"], expected_no_a, atol=1e-6),
-        "no_A should keep only the E(student) stat-prior component instead of falling back to IRT.",
+        "no_A_fair boundary should preserve the shared stat-prior predictor while removing A-specific graph evidence.",
     )
     _assert(
-        no_a_prior_details["irt_logit_scale_used"].item() == 0.0
-        and torch.allclose(no_a_prior_details["logits"], no_a_prior_details["ae_logit_residual"], atol=1e-6),
-        "no_A must suppress the IRT fallback so the ablation measures the remaining E path.",
+        abs(float(no_a_prior_details["irt_logit_scale_used"].item()) - 0.2) < 1e-8,
+        "no_A_fair boundary should keep the same configured IRT complement scale as full.",
     )
 
     no_e_prior_model = CognitiveDiagnosisModel(
@@ -667,17 +666,14 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
             return_details=True,
             return_logits=True,
         )
-    expected_no_e = 0.75 * exercise_prior[prior_exercise_ids] + 0.75 * prior_q_weight.matmul(
-        concept_prior.unsqueeze(-1)
-    ).squeeze(-1)
+    expected_no_e = expected_prior
     _assert(
         torch.allclose(no_e_prior_details["ae_logit_residual"], expected_no_e, atol=1e-6),
-        "no_E should keep only the A(exercise+concept) stat-prior component instead of falling back to IRT.",
+        "no_E_fair boundary should preserve the shared stat-prior predictor while removing E-specific posterior evidence.",
     )
     _assert(
-        no_e_prior_details["irt_logit_scale_used"].item() == 0.0
-        and torch.allclose(no_e_prior_details["logits"], no_e_prior_details["ae_logit_residual"], atol=1e-6),
-        "no_E must suppress the IRT fallback so the ablation measures the remaining A path.",
+        abs(float(no_e_prior_details["irt_logit_scale_used"].item()) - 0.2) < 1e-8,
+        "no_E_fair boundary should keep the same configured IRT complement scale as full.",
     )
 
     no_e_model = CognitiveDiagnosisModel(
@@ -703,8 +699,8 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
             return_logits=True,
         )
     _assert(
-        no_e_details["ae_logit_residual_abs_mean"].item() == 0.0,
-        "A-only AE logit residual should start at zero before train-stat priors are initialized.",
+        torch.isfinite(no_e_details["ae_logit_residual"]).all().item(),
+        "A-only fair boundary may expose shared/A explicit logits before train-stat priors, but they must remain finite.",
     )
     _assert(
         no_e_details["ae_query_state_residual_delta"].item() == 0.0,

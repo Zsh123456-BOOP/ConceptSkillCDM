@@ -20,7 +20,12 @@ rows$phase_dataset <- paste(rows$phase, rows$dataset, sep = " / ")
 
 variant_order <- c(
   "full", "no_A", "no_E", "A_item_only", "A_seq_only",
-  "A_uniform", "A_self_only", "E_prior_only", "E_frozen_alpha"
+  "A_uniform", "A_self_only",
+  "full_fair", "no_A_fair", "no_E_fair",
+  "A_fused_neutralE", "A_item_neutralE", "A_seq_neutralE",
+  "A_uniform_neutralE", "A_self_neutralE",
+  "E_prior_only", "E_frozen_alpha", "E_full_fair",
+  "E_global_posterior", "E_posterior_only", "E_query_only"
 )
 rows$variant <- factor(rows$variant, levels = variant_order)
 
