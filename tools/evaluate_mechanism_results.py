@@ -69,15 +69,27 @@ def _classify(
     drop_no_a: Optional[float],
     drop_no_e: Optional[float],
     evidence_gain: Optional[float],
+    drop_no_a_neutral: Optional[float] = None,
+    evidence_gain_neutral: Optional[float] = None,
+    drop_e_shuffle: Optional[float] = None,
     args: argparse.Namespace,
 ) -> Tuple[str, str, str]:
-    a_ok = (
-        drop_no_a is not None
-        and evidence_gain is not None
-        and drop_no_a >= float(args.min_a_drop)
-        and evidence_gain >= float(args.min_evidence_gain)
+    a_drop = drop_no_a_neutral if drop_no_a_neutral is not None else drop_no_a
+    a_gain = evidence_gain_neutral if evidence_gain_neutral is not None else evidence_gain
+    e_drop = max(
+        value
+        for value in (
+            drop_no_e if drop_no_e is not None else float("-inf"),
+            drop_e_shuffle if drop_e_shuffle is not None else float("-inf"),
+        )
     )
-    e_ok = drop_no_e is not None and drop_no_e >= float(args.min_e_drop)
+    a_ok = (
+        a_drop is not None
+        and a_gain is not None
+        and a_drop >= float(args.min_a_drop)
+        and a_gain >= float(args.min_evidence_gain)
+    )
+    e_ok = e_drop != float("-inf") and e_drop >= float(args.min_e_drop)
     if a_ok and e_ok:
         verdict = "A_and_E_effective"
     elif a_ok:
@@ -107,12 +119,19 @@ def write_summary(rows: List[Dict[str, Any]], out_dir: Path, args: argparse.Name
         seq_auc = _to_float(best.get("A_seq_only", {}).get("test_auc"))
         uniform_auc = _to_float(best.get("A_uniform", {}).get("test_auc"))
         self_auc = _to_float(best.get("A_self_only", {}).get("test_auc"))
+        a_fused_neutral_auc = _to_float(best.get("A_fused_neutralE", {}).get("test_auc"))
+        a_uniform_neutral_auc = _to_float(best.get("A_uniform_neutralE", {}).get("test_auc"))
+        no_a_fair_auc = _to_float(best.get("no_A_fair", {}).get("test_auc"))
         prior_auc = _to_float(best.get("E_prior_only", {}).get("test_auc"))
         frozen_auc = _to_float(best.get("E_frozen_alpha", {}).get("test_auc"))
+        e_shuffle_auc = _to_float(best.get("E_shuffle_student", {}).get("test_auc"))
 
         drop_no_a = _delta(full_auc, no_a_auc)
         drop_no_e = _delta(full_auc, no_e_auc)
         evidence_gain = _delta(full_auc, uniform_auc)
+        drop_no_a_neutral = _delta(a_fused_neutral_auc, no_a_fair_auc)
+        evidence_gain_neutral = _delta(a_fused_neutral_auc, a_uniform_neutral_auc)
+        drop_e_shuffle = _delta(full_auc, e_shuffle_auc)
         seq_minus_item = None if seq_auc is None or item_auc is None else seq_auc - item_auc
         e_posterior_gain = _delta(full_auc, prior_auc)
         e_gate_gain = _delta(full_auc, frozen_auc)
@@ -120,6 +139,9 @@ def write_summary(rows: List[Dict[str, Any]], out_dir: Path, args: argparse.Name
             drop_no_a=drop_no_a,
             drop_no_e=drop_no_e,
             evidence_gain=evidence_gain,
+            drop_no_a_neutral=drop_no_a_neutral,
+            evidence_gain_neutral=evidence_gain_neutral,
+            drop_e_shuffle=drop_e_shuffle,
             args=args,
         )
 
@@ -135,10 +157,17 @@ def write_summary(rows: List[Dict[str, Any]], out_dir: Path, args: argparse.Name
                 "A_seq_only_auc": _fmt(seq_auc),
                 "A_uniform_auc": _fmt(uniform_auc),
                 "A_self_only_auc": _fmt(self_auc),
+                "A_fused_neutralE_auc": _fmt(a_fused_neutral_auc),
+                "A_uniform_neutralE_auc": _fmt(a_uniform_neutral_auc),
+                "no_A_fair_auc": _fmt(no_a_fair_auc),
                 "E_prior_only_auc": _fmt(prior_auc),
                 "E_frozen_alpha_auc": _fmt(frozen_auc),
+                "E_shuffle_student_auc": _fmt(e_shuffle_auc),
                 "drop_no_A": _fmt(drop_no_a),
                 "drop_no_E": _fmt(drop_no_e),
+                "drop_no_A_neutralE": _fmt(drop_no_a_neutral),
+                "evidence_gain_neutralE": _fmt(evidence_gain_neutral),
+                "drop_E_shuffle_student": _fmt(drop_e_shuffle),
                 "evidence_gain_vs_uniform": _fmt(evidence_gain),
                 "seq_minus_item": _fmt(seq_minus_item),
                 "E_posterior_gain_vs_prior_only": _fmt(e_posterior_gain),
@@ -170,14 +199,16 @@ def write_summary(rows: List[Dict[str, Any]], out_dir: Path, args: argparse.Name
         "",
         f"- A effective threshold: no_A drop >= {args.min_a_drop:.4f} and full - A_uniform >= {args.min_evidence_gain:.4f}",
         f"- E effective threshold: no_E drop >= {args.min_e_drop:.4f}",
+        "- If neutral-E A controls exist, A is judged by A_fused_neutralE - no_A_fair and A_fused_neutralE - A_uniform_neutralE.",
+        "- If E_shuffle_student exists, E is also judged by full - E_shuffle_student.",
         "",
-        "| phase | dataset | full | drop_no_A | drop_no_E | evidence_gain | seq-item | verdict |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| phase | dataset | full | drop_no_A | drop_no_E | drop_E_shuffle | A_neutral_drop | A_neutral_gain | verdict |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for row in summary_rows:
         lines.append(
             "| {phase} | {dataset} | {full_auc} | {drop_no_A} | {drop_no_E} | "
-            "{evidence_gain_vs_uniform} | {seq_minus_item} | {verdict} |".format(**row)
+            "{drop_E_shuffle_student} | {drop_no_A_neutralE} | {evidence_gain_neutralE} | {verdict} |".format(**row)
         )
     summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return summary_csv, summary_md
