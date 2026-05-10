@@ -949,7 +949,13 @@ def _check_e_posterior_theta_uses_a_conditioned_query_state() -> None:
 
 
 def _check_e_stratified_comparison_reports_high_signal_help() -> None:
+    from tools.analyze_ae_errors import AE_COMPONENT_KEYS
     from tools.compare_e_stratified import _build_stratified_comparison
+
+    _assert(
+        "ae_posterior_theta_logit" in AE_COMPONENT_KEYS,
+        "逐样本 E 诊断必须导出 posterior theta logit，才能判断 E 方向是否和标签一致。",
+    )
 
     labels = [1, 1, 0, 0, 1, 0, 1, 0, 1, 0]
     control_prob = [0.55, 0.52, 0.45, 0.47, 0.51, 0.49, 0.60, 0.40, 0.53, 0.46]

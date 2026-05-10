@@ -38,6 +38,8 @@ AE_COMPONENT_KEYS = (
     "ae_stat_query_student_concept_prior",
     "ae_stat_graph_student_concept_prior",
     "ae_posterior_prior_logit",
+    "ae_posterior_theta_logit",
+    "ae_posterior_theta_delta",
     "ae_reliability_feature_logit",
     "ae_interpretable_bias",
     "ae_explicit_feature_logit",
