@@ -26,6 +26,11 @@ from tools.analyze_ae_errors import analyze  # noqa: E402
 
 
 SIGNAL_SPECS: Tuple[Tuple[str, str], ...] = (
+    ("e_local_mastery_abs", "e_local_mastery_logit"),
+    ("e_query_mastery_abs", "e_query_mastery_logit"),
+    ("e_graph_mastery_abs", "e_graph_mastery_logit"),
+    ("e_query_recent_mastery_abs", "e_query_recent_mastery_logit"),
+    ("e_graph_recent_mastery_abs", "e_graph_recent_mastery_logit"),
     ("ae_abs", "ae_logit_residual"),
     ("posterior_prior_abs", "ae_posterior_prior_logit"),
     ("posterior_theta_abs", "ae_posterior_theta_logit"),
@@ -73,7 +78,7 @@ def _metrics_for(frame: pd.DataFrame) -> Dict[str, Any]:
     control_pred = (control_probs > 0.5).astype(np.float32)
     full_auc = _safe_auc(labels, full_probs)
     control_auc = _safe_auc(labels, control_probs)
-    return {
+    metrics = {
         "n": int(len(frame)),
         "positive_rate": _safe_mean(frame["label"]),
         "full_auc": full_auc,
@@ -88,6 +93,10 @@ def _metrics_for(frame: pd.DataFrame) -> Dict[str, Any]:
         "abs_prob_delta_mean": _safe_mean(frame["prob_delta"].abs()),
         "full_ae_abs_mean": _safe_mean(frame["full_ae_logit_residual"].abs()),
     }
+    for signal_name, _ in SIGNAL_SPECS:
+        if signal_name in frame:
+            metrics[f"{signal_name}_mean"] = _safe_mean(frame[signal_name])
+    return metrics
 
 
 def _add_stratum(rows: List[Dict[str, Any]], name: str, frame: pd.DataFrame) -> None:
