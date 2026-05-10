@@ -79,6 +79,12 @@ FAIR_GLOBAL_POSTERIOR_OVERRIDES = {
     "lambda_personal_query_residual": 0.0,
 }
 
+
+def _with_relation_theta(base: Optional[Dict[str, Any]] = None, *, scale: float) -> Dict[str, Any]:
+    overrides = dict(base or {})
+    overrides["relation_theta_scale"] = float(scale)
+    return overrides
+
 RESULT_FIELD_HINTS = (
     "run_id",
     "phase",
@@ -264,6 +270,48 @@ def _variant_spec(name: str) -> AblationSpec:
                 "ae_posterior_prior_scale": 0.0,
                 "lambda_personal_kl": 0.0,
             },
+        )
+    if name == "E_theta025_full":
+        return AblationSpec(name=name, flags={}, overrides=_with_relation_theta(scale=0.25))
+    if name == "E_theta025_global":
+        return AblationSpec(
+            name=name,
+            flags={},
+            overrides=_with_relation_theta(FAIR_GLOBAL_POSTERIOR_OVERRIDES, scale=0.25),
+        )
+    if name == "E_theta025_posterior_only":
+        return AblationSpec(
+            name=name,
+            flags={},
+            overrides=_with_relation_theta(
+                {
+                    "personal_query_correction_scale": 0.0,
+                    "personal_query_message_gain": 0.0,
+                    "lambda_personal_query_residual": 0.0,
+                },
+                scale=0.25,
+            ),
+        )
+    if name == "E_theta050_full":
+        return AblationSpec(name=name, flags={}, overrides=_with_relation_theta(scale=0.50))
+    if name == "E_theta050_global":
+        return AblationSpec(
+            name=name,
+            flags={},
+            overrides=_with_relation_theta(FAIR_GLOBAL_POSTERIOR_OVERRIDES, scale=0.50),
+        )
+    if name == "E_theta050_posterior_only":
+        return AblationSpec(
+            name=name,
+            flags={},
+            overrides=_with_relation_theta(
+                {
+                    "personal_query_correction_scale": 0.0,
+                    "personal_query_message_gain": 0.0,
+                    "lambda_personal_query_residual": 0.0,
+                },
+                scale=0.50,
+            ),
         )
     raise ValueError(f"Unknown mechanism variant: {name}")
 
