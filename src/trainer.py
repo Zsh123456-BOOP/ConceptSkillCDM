@@ -524,20 +524,19 @@ def _build_optimizer(model: nn.Module, args) -> optim.Optimizer:
 
     state_params = _dedupe_params(state_params)
     ae_params: List[torch.nn.Parameter] = []
-    for module_name in (
-        "ae_student_logit_bias",
-        "ae_exercise_logit_bias",
-        "ae_concept_logit_bias",
+    for param_name in (
+        "a_relation_concept_weight_raw",
+        "a_relation_count_weight_raw",
+        "e_student_global_weight_raw",
+        "e_query_mastery_weight_raw",
+        "e_query_recent_weight_raw",
+        "e_neighbor_mastery_weight_raw",
+        "e_neighbor_recent_weight_raw",
+        "e_mastery_gap_weight_raw",
     ):
-        module = getattr(base_model, module_name, None)
-        if module is not None:
-            ae_params.extend(list(module.parameters()))
-    ae_logit_feature_weight = getattr(base_model, "ae_logit_feature_weight", None)
-    if isinstance(ae_logit_feature_weight, torch.nn.Parameter):
-        ae_params.append(ae_logit_feature_weight)
-    ae_reliability_feature_weight = getattr(base_model, "ae_reliability_feature_weight", None)
-    if isinstance(ae_reliability_feature_weight, torch.nn.Parameter):
-        ae_params.append(ae_reliability_feature_weight)
+        param = getattr(base_model, param_name, None)
+        if isinstance(param, torch.nn.Parameter):
+            ae_params.append(param)
     ae_params = _dedupe_params(ae_params)
     grouped_ids = {id(p) for p in state_params}
     grouped_ids.update(id(p) for p in ae_params)
@@ -1179,6 +1178,10 @@ def _collect_debug_forward_stats(
     e_query_recent_mastery_logit_abs_vals: List[float] = []
     e_graph_recent_mastery_logit_abs_vals: List[float] = []
     e_local_mastery_logit_abs_vals: List[float] = []
+    a_relation_concept_logit_abs_vals: List[float] = []
+    a_relation_count_logit_abs_vals: List[float] = []
+    a_relation_logit_abs_vals: List[float] = []
+    e_mastery_gap_logit_abs_vals: List[float] = []
     ae_reliability_feature_logit_abs_vals: List[float] = []
     ae_interpretable_bias_abs_vals: List[float] = []
     ae_explicit_feature_logit_abs_vals: List[float] = []
@@ -1312,6 +1315,10 @@ def _collect_debug_forward_stats(
                 ("e_query_recent_mastery_logit_abs_mean", e_query_recent_mastery_logit_abs_vals),
                 ("e_graph_recent_mastery_logit_abs_mean", e_graph_recent_mastery_logit_abs_vals),
                 ("e_local_mastery_logit_abs_mean", e_local_mastery_logit_abs_vals),
+                ("a_relation_concept_logit_abs_mean", a_relation_concept_logit_abs_vals),
+                ("a_relation_count_logit_abs_mean", a_relation_count_logit_abs_vals),
+                ("a_relation_logit_abs_mean", a_relation_logit_abs_vals),
+                ("e_mastery_gap_logit_abs_mean", e_mastery_gap_logit_abs_vals),
                 ("ae_reliability_feature_logit_abs_mean", ae_reliability_feature_logit_abs_vals),
                 ("ae_interpretable_bias_abs_mean", ae_interpretable_bias_abs_vals),
                 ("ae_explicit_feature_logit_abs_mean", ae_explicit_feature_logit_abs_vals),
@@ -1482,6 +1489,10 @@ def _collect_debug_forward_stats(
     e_query_recent_mastery_logit_abs_mean, _ = _safe_mean_std(e_query_recent_mastery_logit_abs_vals)
     e_graph_recent_mastery_logit_abs_mean, _ = _safe_mean_std(e_graph_recent_mastery_logit_abs_vals)
     e_local_mastery_logit_abs_mean, _ = _safe_mean_std(e_local_mastery_logit_abs_vals)
+    a_relation_concept_logit_abs_mean, _ = _safe_mean_std(a_relation_concept_logit_abs_vals)
+    a_relation_count_logit_abs_mean, _ = _safe_mean_std(a_relation_count_logit_abs_vals)
+    a_relation_logit_abs_mean, _ = _safe_mean_std(a_relation_logit_abs_vals)
+    e_mastery_gap_logit_abs_mean, _ = _safe_mean_std(e_mastery_gap_logit_abs_vals)
     ae_reliability_feature_logit_abs_mean, _ = _safe_mean_std(ae_reliability_feature_logit_abs_vals)
     ae_interpretable_bias_abs_mean, _ = _safe_mean_std(ae_interpretable_bias_abs_vals)
     ae_explicit_feature_logit_abs_mean, _ = _safe_mean_std(ae_explicit_feature_logit_abs_vals)
@@ -1591,6 +1602,10 @@ def _collect_debug_forward_stats(
         "e_query_recent_mastery_logit_abs_mean": e_query_recent_mastery_logit_abs_mean,
         "e_graph_recent_mastery_logit_abs_mean": e_graph_recent_mastery_logit_abs_mean,
         "e_local_mastery_logit_abs_mean": e_local_mastery_logit_abs_mean,
+        "a_relation_concept_logit_abs_mean": a_relation_concept_logit_abs_mean,
+        "a_relation_count_logit_abs_mean": a_relation_count_logit_abs_mean,
+        "a_relation_logit_abs_mean": a_relation_logit_abs_mean,
+        "e_mastery_gap_logit_abs_mean": e_mastery_gap_logit_abs_mean,
         "ae_reliability_feature_logit_abs_mean": ae_reliability_feature_logit_abs_mean,
         "ae_interpretable_bias_abs_mean": ae_interpretable_bias_abs_mean,
         "ae_explicit_feature_logit_abs_mean": ae_explicit_feature_logit_abs_mean,
@@ -2438,8 +2453,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             logger.info(
                 "%s [Diag][AE Components] Epoch [%03d] | "
                 "e_student_global=%.4f, exercise_prior=%.4f, concept_prior=%.4f, "
+                "a_relation=%.4f, a_relation_concept=%.4f, a_relation_count=%.4f, "
                 "query_student_concept=%.4f, graph_student_concept=%.4f, "
-                "e_local_mastery=%.4f, posterior_prior=%.4f, reliability=%.4f, "
+                "e_mastery_gap=%.4f, e_local_mastery=%.4f, posterior_prior=%.4f, reliability=%.4f, "
                 "interpretable_bias=%.4f, explicit_feature=%.4f, "
                 "interaction=%.4f, raw_before_clip=%.4f, raw_after_clip=%.4f",
                 run_tag,
@@ -2447,8 +2463,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["ae_stat_student_prior_abs_mean"],
                 diag["ae_stat_exercise_prior_abs_mean"],
                 diag["ae_stat_concept_prior_abs_mean"],
+                diag["a_relation_logit_abs_mean"],
+                diag["a_relation_concept_logit_abs_mean"],
+                diag["a_relation_count_logit_abs_mean"],
                 diag["ae_stat_query_student_concept_prior_abs_mean"],
                 diag["ae_stat_graph_student_concept_prior_abs_mean"],
+                diag["e_mastery_gap_logit_abs_mean"],
                 diag["e_local_mastery_logit_abs_mean"],
                 diag["ae_posterior_prior_logit_abs_mean"],
                 diag["ae_reliability_feature_logit_abs_mean"],

@@ -224,6 +224,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.register_buffer("item_prior_matrix", item_prior, persistent=False)
         self.register_buffer("sequence_prior_matrix", sequence_prior, persistent=False)
         self.register_buffer("graph_prior_matrix", graph_prior_matrix, persistent=False)
+        self.register_buffer("uniform_relation_matrix", self._build_uniform_relation_matrix(num_concepts), persistent=False)
         self.register_buffer("ae_student_prior_logit", torch.zeros(num_students, dtype=torch.float32))
         self.register_buffer("ae_exercise_prior_logit", torch.zeros(num_exercises, dtype=torch.float32))
         self.register_buffer("ae_concept_prior_logit", torch.zeros(num_concepts, dtype=torch.float32))
@@ -310,16 +311,14 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_query_adapter = None
         ae_predictor_enabled = self.enable_module1 and self.ae_logit_residual_scale > 0.0
         if ae_predictor_enabled:
-            self.ae_student_logit_bias = nn.Embedding(num_students, 1)
-            self.ae_exercise_logit_bias = nn.Embedding(num_exercises, 1)
-            self.ae_concept_logit_bias = nn.Embedding(num_concepts, 1)
-            self.ae_logit_feature_weight = nn.Parameter(
-                torch.tensor([0.05, 0.05, 0.05, 0.02], dtype=torch.float32)
-            )
-            self.ae_reliability_feature_weight = nn.Parameter(torch.zeros(7, dtype=torch.float32))
-            nn.init.zeros_(self.ae_student_logit_bias.weight)
-            nn.init.zeros_(self.ae_exercise_logit_bias.weight)
-            nn.init.zeros_(self.ae_concept_logit_bias.weight)
+            self.a_relation_concept_weight_raw = nn.Parameter(self._inverse_softplus_value(0.35))
+            self.a_relation_count_weight_raw = nn.Parameter(self._inverse_softplus_value(0.03))
+            self.e_student_global_weight_raw = nn.Parameter(self._inverse_softplus_value(0.30))
+            self.e_query_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.55))
+            self.e_query_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.35))
+            self.e_neighbor_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.45))
+            self.e_neighbor_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.25))
+            self.e_mastery_gap_weight_raw = nn.Parameter(self._inverse_softplus_value(0.20))
 
         self._initialize_graph_prior_concept_embeddings()
         if self.share_concept_embeddings:
@@ -327,6 +326,27 @@ class CognitiveDiagnosisModel(nn.Module):
 
         self.diagnosis_head = CognitiveDiagnosisHead(knowledge_dim=knowledge_dim)
         self.exercise_encoder = ExerciseDifficultyEncoder(num_exercises=num_exercises)
+
+    @staticmethod
+    def _inverse_softplus_value(value: float) -> torch.Tensor:
+        value_t = torch.tensor(float(max(value, 1e-4)), dtype=torch.float32)
+        return torch.log(torch.expm1(value_t).clamp(min=1e-12))
+
+    @staticmethod
+    def _positive_weight(raw: Optional[torch.Tensor], reference: torch.Tensor) -> torch.Tensor:
+        if raw is None:
+            return reference.new_tensor(0.0)
+        return F.softplus(raw.to(device=reference.device, dtype=reference.dtype))
+
+    @staticmethod
+    def _build_uniform_relation_matrix(num_concepts: int) -> torch.Tensor:
+        C = int(num_concepts)
+        if C <= 0:
+            raise ValueError(f"num_concepts must be positive, got {num_concepts}")
+        if C == 1:
+            return torch.ones(1, 1, dtype=torch.float32)
+        eye = torch.eye(C, dtype=torch.float32)
+        return (1.0 - eye) / float(C - 1)
 
     @staticmethod
     def _build_graph_prior_matrix(q_matrix: torch.Tensor, num_concepts: int) -> torch.Tensor:
@@ -666,6 +686,10 @@ class CognitiveDiagnosisModel(nn.Module):
             "e_query_recent_mastery_logit": zero_vec,
             "e_graph_recent_mastery_logit": zero_vec,
             "e_local_mastery_logit": zero_vec,
+            "a_relation_concept_logit": zero_vec,
+            "a_relation_count_logit": zero_vec,
+            "a_relation_logit": zero_vec,
+            "e_mastery_gap_logit": zero_vec,
             "ae_posterior_prior_logit": zero_vec,
             "ae_posterior_theta_logit": zero_vec,
             "ae_posterior_theta_delta": zero_vec,
@@ -676,19 +700,7 @@ class CognitiveDiagnosisModel(nn.Module):
             "ae_raw_logit_before_clip": zero_vec,
             "ae_raw_logit_after_clip": zero_vec,
         }
-        feature_weight = getattr(self, "ae_logit_feature_weight", None)
-        reliability_feature_weight = getattr(self, "ae_reliability_feature_weight", None)
-        student_logit_bias = getattr(self, "ae_student_logit_bias", None)
-        exercise_logit_bias = getattr(self, "ae_exercise_logit_bias", None)
-        concept_logit_bias = getattr(self, "ae_concept_logit_bias", None)
-        if (
-            feature_weight is None
-            or student_logit_bias is None
-            or exercise_logit_bias is None
-            or concept_logit_bias is None
-            or self.ae_logit_residual_scale <= 0.0
-            or not self.enable_module1
-        ):
+        if self.ae_logit_residual_scale <= 0.0 or not self.enable_module1:
             return zero_vec, zero_scalar, zero_scalar, zero_scalar, zero_components
 
         dtype = knowledge_state.dtype
@@ -709,23 +721,31 @@ class CognitiveDiagnosisModel(nn.Module):
         recent_scale = max(0.0, float(self.personal_recent_mastery_prior_scale))
         e_student_global_logit = zero_vec
         if e_active and mastery_scale > 0.0:
-            e_student_global_logit = 0.30 * mastery_scale * student_prior
+            e_student_global_logit = (
+                mastery_scale
+                * self._positive_weight(getattr(self, "e_student_global_weight_raw", None), student_prior)
+                * student_prior
+            )
         stat_student_prior = e_student_global_logit
         stat_exercise_prior = 0.75 * exercise_prior
         stat_concept_prior = 0.75 * query_concept_prior
         stat_query_sc_prior = zero_vec
         stat_graph_sc_prior = zero_vec
+        a_relation_concept_logit = zero_vec
+        a_relation_count_logit = zero_vec
+        a_relation_logit = zero_vec
+        e_mastery_gap_logit = zero_vec
         posterior_prior_logit = zero_vec
         posterior_theta_logit = zero_vec
         posterior_theta_delta = zero_vec
         reliability_feature_logit = zero_vec
         stat_prior = stat_student_prior + stat_exercise_prior + stat_concept_prior
-        student_bias = student_logit_bias(student_ids).squeeze(-1)
-        exercise_bias = exercise_logit_bias(exercise_ids).squeeze(-1)
-        query_concept_bias = query_weight.matmul(concept_logit_bias.weight).squeeze(-1)
 
-        concept_bias = query_concept_bias
         graph_query_weight = query_weight
+        uniform_relation = self.uniform_relation_matrix.to(dtype=query_weight.dtype, device=device)
+        uniform_query_weight = query_weight.matmul(uniform_relation)
+        concept_prior_vec = self.ae_concept_prior_logit.to(dtype=query_weight.dtype, device=device)
+        concept_count_vec = self.ae_concept_count_feature.to(dtype=query_weight.dtype, device=device)
         if a_active:
             if isinstance(relation_matrices, dict):
                 global_relation = relation_matrices["global_matrices"]
@@ -734,8 +754,19 @@ class CognitiveDiagnosisModel(nn.Module):
             A = global_relation.mean(dim=0).to(dtype=query_weight.dtype)
             A = A / A.sum(dim=-1, keepdim=True).clamp(min=1e-12)
             graph_query_weight = query_weight.matmul(A)
-            graph_concept_bias = graph_query_weight.matmul(concept_logit_bias.weight).squeeze(-1)
-            concept_bias = 0.65 * query_concept_bias + 0.35 * graph_concept_bias
+            relation_weight_delta = graph_query_weight - uniform_query_weight
+            relation_concept_delta = relation_weight_delta.matmul(concept_prior_vec)
+            relation_count_delta = relation_weight_delta.matmul(concept_count_vec)
+            a_relation_concept_logit = (
+                self._positive_weight(getattr(self, "a_relation_concept_weight_raw", None), relation_concept_delta)
+                * relation_concept_delta
+            )
+            a_relation_count_logit = (
+                self._positive_weight(getattr(self, "a_relation_count_weight_raw", None), relation_count_delta)
+                * relation_count_delta
+            )
+            a_relation_logit = a_relation_concept_logit + a_relation_count_logit
+            stat_prior = stat_prior + a_relation_logit
 
         explicit_feature_logit = zero_vec
         interaction_logit = zero_vec
@@ -754,18 +785,62 @@ class CognitiveDiagnosisModel(nn.Module):
                 if student_concept_recent is not None
                 else torch.zeros_like(sc_prior)
             )
+            observed_counts = self.ae_student_concept_observed_count[student_ids].to(
+                dtype=query_weight.dtype,
+                device=device,
+            )
+            smoothing = max(0.0, float(self.personal_mastery_count_smoothing))
+            query_observed_count = (query_weight * observed_counts).sum(dim=1)
+            graph_observed_count = (graph_query_weight * observed_counts).sum(dim=1)
+            if smoothing > 0.0:
+                query_reliability = query_observed_count / (query_observed_count + smoothing).clamp(min=1e-6)
+                graph_reliability = graph_observed_count / (graph_observed_count + smoothing).clamp(min=1e-6)
+            else:
+                query_reliability = (query_observed_count > 0).to(dtype=query_weight.dtype)
+                graph_reliability = (graph_observed_count > 0).to(dtype=query_weight.dtype)
+            paired_reliability = torch.sqrt((query_reliability * graph_reliability).clamp(min=0.0))
             query_sc_prior = (query_weight * sc_prior).sum(dim=1)
             query_recent_prior = (query_weight * sc_recent).sum(dim=1)
-            e_query_mastery_logit = 0.45 * mastery_scale * query_sc_prior
-            e_query_recent_mastery_logit = 0.25 * recent_scale * query_recent_prior
+            e_query_mastery_logit = (
+                mastery_scale
+                * self._positive_weight(getattr(self, "e_query_mastery_weight_raw", None), query_sc_prior)
+                * query_reliability
+                * query_sc_prior
+            )
+            e_query_recent_mastery_logit = (
+                recent_scale
+                * self._positive_weight(getattr(self, "e_query_recent_weight_raw", None), query_recent_prior)
+                * query_reliability
+                * query_recent_prior
+            )
             stat_query_sc_prior = e_query_mastery_logit + e_query_recent_mastery_logit
             stat_prior = stat_prior + stat_query_sc_prior
             if a_active:
                 graph_sc_prior = (graph_query_weight * sc_prior).sum(dim=1)
                 graph_recent_prior = (graph_query_weight * sc_recent).sum(dim=1)
-                e_graph_mastery_logit = 0.35 * mastery_scale * graph_sc_prior
-                e_graph_recent_mastery_logit = 0.20 * recent_scale * graph_recent_prior
-                stat_graph_sc_prior = e_graph_mastery_logit + e_graph_recent_mastery_logit
+                uniform_sc_prior = (uniform_query_weight * sc_prior).sum(dim=1)
+                uniform_recent_prior = (uniform_query_weight * sc_recent).sum(dim=1)
+                graph_sc_delta = graph_sc_prior - uniform_sc_prior
+                graph_recent_delta = graph_recent_prior - uniform_recent_prior
+                e_graph_mastery_logit = (
+                    mastery_scale
+                    * self._positive_weight(getattr(self, "e_neighbor_mastery_weight_raw", None), graph_sc_delta)
+                    * graph_reliability
+                    * graph_sc_delta
+                )
+                e_graph_recent_mastery_logit = (
+                    recent_scale
+                    * self._positive_weight(getattr(self, "e_neighbor_recent_weight_raw", None), graph_recent_delta)
+                    * graph_reliability
+                    * graph_recent_delta
+                )
+                e_mastery_gap_logit = (
+                    mastery_scale
+                    * self._positive_weight(getattr(self, "e_mastery_gap_weight_raw", None), graph_sc_delta)
+                    * paired_reliability
+                    * (query_sc_prior - graph_sc_prior)
+                )
+                stat_graph_sc_prior = e_graph_mastery_logit + e_graph_recent_mastery_logit + e_mastery_gap_logit
                 stat_prior = stat_prior + stat_graph_sc_prior
                 if e_active and isinstance(personal_relation_spec, dict):
                     personal_support = self._query_sparse_support_distribution(
@@ -819,70 +894,9 @@ class CognitiveDiagnosisModel(nn.Module):
                         posterior_theta_logit = 0.40 * self.ae_posterior_theta_scale * posterior_theta_delta
                         stat_prior = stat_prior + posterior_theta_logit
 
-        if isinstance(reliability_feature_weight, nn.Parameter):
-            student_count_feature = self.ae_student_count_feature[student_ids].to(dtype=dtype, device=device)
-            exercise_count_feature = self.ae_exercise_count_feature[exercise_ids].to(dtype=dtype, device=device)
-            concept_count = self.ae_concept_count_feature.to(dtype=query_weight.dtype, device=device)
-            query_concept_count = query_weight.matmul(concept_count)
-            graph_concept_count = graph_query_weight.matmul(concept_count)
-            sc_count = self.ae_student_concept_count_feature[student_ids].to(
-                dtype=query_weight.dtype,
-                device=device,
-            )
-            if e_active:
-                query_sc_count = (query_weight * sc_count).sum(dim=1)
-                graph_sc_count = (graph_query_weight * sc_count).sum(dim=1)
-                active_sc_count = torch.where(
-                    query_mask > 0,
-                    sc_count,
-                    torch.full_like(sc_count, 1.0e4),
-                )
-                query_sc_min = active_sc_count.min(dim=1).values
-                query_sc_min = torch.where(
-                    query_mask.sum(dim=1) > 0,
-                    query_sc_min,
-                    torch.zeros_like(query_sc_min),
-                )
-            else:
-                query_sc_count = zero_vec
-                graph_sc_count = zero_vec
-                query_sc_min = zero_vec
-            reliability_features = torch.stack(
-                [
-                    student_count_feature,
-                    exercise_count_feature,
-                    query_concept_count,
-                    graph_concept_count,
-                    query_sc_count,
-                    graph_sc_count,
-                    query_sc_min,
-                ],
-                dim=1,
-            ).to(dtype=dtype)
-            reliability_weights = reliability_feature_weight.to(dtype=dtype, device=device)
-            reliability_feature_logit = (reliability_features * reliability_weights.view(1, -1)).sum(dim=1)
-
-        graph_rms = self._masked_query_rms_per_sample(global_query_context, concept_mask)
-        personal_rms = self._masked_query_rms_per_sample(personal_query_correction, concept_mask)
-        query_count = concept_mask.float().sum(dim=1, keepdim=True)
-        query_density = (query_count / float(max(1, self.num_concepts))).squeeze(-1)
-        graph_neighbor_mass = (graph_query_weight * (1.0 - query_mask)).sum(dim=1, keepdim=True).squeeze(-1)
-        scalar_feats = torch.stack(
-            [
-                graph_rms,
-                personal_rms,
-                graph_rms * personal_rms,
-                query_density + graph_neighbor_mass,
-            ],
-            dim=1,
-        )
-        feature_weight_t = feature_weight.to(device=device, dtype=dtype)
-        explicit_feature_logit = (scalar_feats.to(dtype=dtype) * feature_weight_t.view(1, -1)).sum(dim=1)
-        interaction_logit = self.ae_interaction_logit_scale * graph_rms * personal_rms
-
-        interpretable_bias = 0.20 * (
-            student_bias + 0.75 * exercise_bias + 0.75 * concept_bias
-        )
+        explicit_feature_logit = zero_vec
+        interaction_logit = zero_vec
+        interpretable_bias = zero_vec
         raw = stat_prior + reliability_feature_logit + interpretable_bias + explicit_feature_logit + interaction_logit
         raw_before_clip = raw
         if self.ae_logit_residual_clip > 0.0:
@@ -907,6 +921,10 @@ class CognitiveDiagnosisModel(nn.Module):
                 e_student_global_logit + stat_query_sc_prior + stat_graph_sc_prior,
                 zero_vec,
             ),
+            "a_relation_concept_logit": torch.where(active, a_relation_concept_logit, zero_vec),
+            "a_relation_count_logit": torch.where(active, a_relation_count_logit, zero_vec),
+            "a_relation_logit": torch.where(active, a_relation_logit, zero_vec),
+            "e_mastery_gap_logit": torch.where(active, e_mastery_gap_logit, zero_vec),
             "ae_posterior_prior_logit": torch.where(active, posterior_prior_logit, zero_vec),
             "ae_posterior_theta_logit": torch.where(active, posterior_theta_logit, zero_vec),
             "ae_posterior_theta_delta": torch.where(active, posterior_theta_delta, zero_vec),
@@ -1054,12 +1072,6 @@ class CognitiveDiagnosisModel(nn.Module):
                     self.ae_student_concept_observed_count[:rows, :cols].copy_(
                         target[:rows, :cols].clamp(min=0.0)
                     )
-            if getattr(self, "ae_student_logit_bias", None) is not None:
-                self.ae_student_logit_bias.weight.zero_()
-            if getattr(self, "ae_exercise_logit_bias", None) is not None:
-                self.ae_exercise_logit_bias.weight.zero_()
-            if getattr(self, "ae_concept_logit_bias", None) is not None:
-                self.ae_concept_logit_bias.weight.zero_()
 
     def _apply_personal_query_trust_region(
         self,

@@ -529,8 +529,8 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         "可解释 AE 不应再通过 query-state MLP residual 改写知识状态。",
     )
     _assert(
-        ae_details["ae_logit_residual_abs_mean"].item() > 1e-8,
-        "AE logit residual should be active only when A and E both provide query signals.",
+        ae_details["ae_logit_residual_abs_mean"].item() == 0.0,
+        "AE logit residual must stay zero before train-only A/E evidence priors are initialized.",
     )
 
     prior_model = CognitiveDiagnosisModel(
@@ -551,8 +551,6 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         personal_delta_scale=3.0,
         personal_mastery_prior_scale=1.0,
     )
-    with torch.no_grad():
-        prior_model.ae_logit_feature_weight.zero_()
     student_prior = torch.tensor([0.10, -0.20, 0.30, -0.40], dtype=torch.float32)
     exercise_prior = torch.tensor([0.50, -0.10, 0.20], dtype=torch.float32)
     concept_prior = torch.tensor([0.40, -0.30, 0.10], dtype=torch.float32)
@@ -569,10 +567,12 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         "AE stat priors must be fixed buffers, not trainable bias parameters.",
     )
     _assert(
-        prior_model.ae_student_logit_bias.weight.abs().max().item() == 0.0
-        and prior_model.ae_exercise_logit_bias.weight.abs().max().item() == 0.0
-        and prior_model.ae_concept_logit_bias.weight.abs().max().item() == 0.0,
-        "AE trainable bias correction must start at zero after stat-prior initialization.",
+        not hasattr(prior_model, "ae_student_logit_bias")
+        and not hasattr(prior_model, "ae_exercise_logit_bias")
+        and not hasattr(prior_model, "ae_concept_logit_bias")
+        and not hasattr(prior_model, "ae_logit_feature_weight")
+        and not hasattr(prior_model, "ae_reliability_feature_weight"),
+        "AE logit residual must not retain deprecated trainable bias/feature correction parameters.",
     )
     prior_student_ids = torch.tensor([0, 1, 2], dtype=torch.long)
     prior_exercise_ids = torch.tensor([0, 1, 2], dtype=torch.long)
@@ -585,14 +585,19 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         )
     prior_q = q_matrix[prior_exercise_ids].float()
     prior_q_weight = prior_q / prior_q.sum(dim=1, keepdim=True).clamp(min=1.0)
-    expected_prior = (
+    expected_shared_prior = (
         0.30 * student_prior[prior_student_ids]
         + 0.75 * exercise_prior[prior_exercise_ids]
         + 0.75 * prior_q_weight.matmul(concept_prior.unsqueeze(-1)).squeeze(-1)
     )
+    expected_full_prior = expected_shared_prior + prior_details["a_relation_logit"]
     _assert(
-        torch.allclose(prior_details["ae_logit_residual"], expected_prior, atol=1e-6),
-        "AE logit residual should preserve the fixed E(student)+A(exercise+concept) prior exactly.",
+        torch.allclose(prior_details["ae_logit_residual"], expected_full_prior, atol=1e-6),
+        "full AE logit residual should equal shared stat priors plus the A relation evidence logit.",
+    )
+    _assert(
+        prior_details["a_relation_logit"].abs().max().item() > 1e-8,
+        "full AE should expose a non-zero A relation logit when train-only graph evidence differs from uniform support.",
     )
     _assert(
         abs(float(prior_details["irt_logit_scale_used"].item()) - 0.2) < 1e-8,
@@ -617,8 +622,6 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         personal_delta_scale=3.0,
         personal_mastery_prior_scale=1.0,
     )
-    with torch.no_grad():
-        no_a_prior_model.ae_logit_feature_weight.zero_()
     no_a_prior_model.initialize_ae_logit_priors(
         student_logits=student_prior,
         exercise_logits=exercise_prior,
@@ -632,10 +635,14 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
             return_details=True,
             return_logits=True,
         )
-    expected_no_a = expected_prior
+    expected_no_a = expected_shared_prior
     _assert(
         torch.allclose(no_a_prior_details["ae_logit_residual"], expected_no_a, atol=1e-6),
         "no_A_fair boundary should preserve the shared stat-prior predictor while removing A-specific graph evidence.",
+    )
+    _assert(
+        no_a_prior_details["a_relation_logit"].abs().max().item() == 0.0,
+        "no_A_fair boundary must remove the A relation evidence logit.",
     )
     _assert(
         abs(float(no_a_prior_details["irt_logit_scale_used"].item()) - 0.2) < 1e-8,
@@ -659,8 +666,6 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         use_personal_graph=False,
         personal_delta_scale=3.0,
     )
-    with torch.no_grad():
-        no_e_prior_model.ae_logit_feature_weight.zero_()
     no_e_prior_model.initialize_ae_logit_priors(
         student_logits=student_prior,
         exercise_logits=exercise_prior,
@@ -674,13 +679,17 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
             return_details=True,
             return_logits=True,
         )
-    expected_no_e = (
-        0.75 * exercise_prior[prior_exercise_ids]
-        + 0.75 * prior_q_weight.matmul(concept_prior.unsqueeze(-1)).squeeze(-1)
-    )
+    expected_no_e = no_e_prior_details["ae_stat_exercise_prior"] + no_e_prior_details["ae_stat_concept_prior"] + no_e_prior_details[
+        "a_relation_logit"
+    ]
     _assert(
         torch.allclose(no_e_prior_details["ae_logit_residual"], expected_no_e, atol=1e-6),
-        "no_E_fair boundary should preserve non-student stat priors while removing E student mastery calibration.",
+        "no_E_fair boundary should preserve exercise/concept/A relation evidence while removing E student mastery calibration.",
+    )
+    _assert(
+        no_e_prior_details["e_local_mastery_logit"].abs().max().item() == 0.0
+        and no_e_prior_details["ae_stat_student_prior"].abs().max().item() == 0.0,
+        "no_E_fair boundary must remove all E student-level mastery logits.",
     )
     _assert(
         abs(float(no_e_prior_details["irt_logit_scale_used"].item()) - 0.2) < 1e-8,
@@ -754,11 +763,6 @@ def _check_ae_interaction_logit_is_full_only() -> None:
             use_personal_graph=use_personal_graph,
             personal_delta_scale=3.0,
         )
-        with torch.no_grad():
-            model.ae_student_logit_bias.weight.zero_()
-            model.ae_exercise_logit_bias.weight.zero_()
-            model.ae_concept_logit_bias.weight.zero_()
-            model.ae_logit_feature_weight.zero_()
         return model
 
     full_model = build_model(use_concept_graph=True, use_personal_graph=True)
@@ -770,8 +774,9 @@ def _check_ae_interaction_logit_is_full_only() -> None:
             return_logits=True,
         )
     _assert(
-        full_details["ae_logit_residual"].abs().mean().item() > 1e-8,
-        "full 应使用显式 A(global query strength) x E(personal query strength) 交互 logit。",
+        full_details["ae_interaction_logit"].abs().max().item() == 0.0
+        and full_details["ae_logit_residual"].abs().max().item() == 0.0,
+        "full 不应再使用隐式 A(global query strength) x E(personal query strength) 交互 logit。",
     )
     _assert(
         abs(float(full_details["ae_interaction_logit_scale"].item()) - 2.0) < 1e-8,
@@ -794,8 +799,9 @@ def _check_ae_interaction_logit_is_full_only() -> None:
                 return_logits=True,
             )
         _assert(
-            torch.allclose(details["ae_logit_residual"], torch.zeros_like(details["ae_logit_residual"]), atol=1e-8),
-            f"{label} 必须关闭 full-only A x E 交互，否则消融不再是单模块消融。",
+            details["ae_interaction_logit"].abs().max().item() == 0.0
+            and torch.allclose(details["ae_logit_residual"], torch.zeros_like(details["ae_logit_residual"]), atol=1e-8),
+            f"{label} 必须保持隐式 A x E 交互关闭，否则消融不再干净。",
         )
 
 
@@ -845,9 +851,6 @@ def _check_e_posterior_prior_readout_is_full_only() -> None:
             ae_logit_residual_clip=0.0,
             ae_posterior_prior_scale=1.0,
         )
-        if getattr(model, "ae_logit_feature_weight", None) is not None:
-            with torch.no_grad():
-                model.ae_logit_feature_weight.zero_()
         model.initialize_ae_logit_priors(
             student_logits=torch.zeros(4),
             exercise_logits=torch.zeros(4),
@@ -938,14 +941,8 @@ def _check_student_concept_train_priors_are_e_only() -> None:
             ae_posterior_prior_scale=0.0,
             personal_mastery_prior_scale=1.0,
             personal_recent_mastery_prior_scale=0.5,
+            personal_mastery_count_smoothing=1.0,
         )
-        with torch.no_grad():
-            model.ae_logit_feature_weight.zero_()
-            model.ae_reliability_feature_weight.zero_()
-            model.ae_reliability_feature_weight[4] = 1.0
-            model.ae_student_logit_bias.weight.zero_()
-            model.ae_exercise_logit_bias.weight.zero_()
-            model.ae_concept_logit_bias.weight.zero_()
         model.initialize_ae_logit_priors(
             student_logits=torch.zeros(2),
             exercise_logits=torch.zeros(2),
@@ -953,6 +950,7 @@ def _check_student_concept_train_priors_are_e_only() -> None:
             student_concept_logits=student_concept_prior,
             student_concept_recent_logits=0.5 * student_concept_prior,
             student_concept_count_features=student_concept_counts,
+            student_concept_observed_counts=student_concept_counts,
             scale=1.0,
         )
         model.eval()
@@ -973,8 +971,9 @@ def _check_student_concept_train_priors_are_e_only() -> None:
         "Full E should expose first-class local mastery logit evidence.",
     )
     _assert(
-        full_details["ae_reliability_feature_logit"].abs().mean().item() > 0.0,
-        "Full E should expose student-concept count reliability evidence.",
+        full_details["e_query_mastery_logit"].abs().mean().item() > 0.0
+        and full_details["e_query_recent_mastery_logit"].abs().mean().item() > 0.0,
+        "Full E should expose reliability-gated student-concept mastery evidence.",
     )
     _assert(
         no_e_details["ae_stat_query_student_concept_prior"].abs().mean().item() == 0.0,
@@ -990,7 +989,7 @@ def _check_student_concept_train_priors_are_e_only() -> None:
     )
     _assert(
         no_e_details["ae_reliability_feature_logit"].abs().mean().item() == 0.0,
-        "no_E must remove student-concept count reliability evidence.",
+        "no_E must keep the deprecated additive reliability feature disabled.",
     )
     _assert(
         full_details["ae_logit_residual"].abs().mean().item() > no_e_details["ae_logit_residual"].abs().mean().item(),
@@ -1024,12 +1023,6 @@ def _check_student_global_mastery_prior_is_e_only() -> None:
             personal_mastery_prior_scale=1.0,
             personal_recent_mastery_prior_scale=0.0,
         )
-        with torch.no_grad():
-            model.ae_logit_feature_weight.zero_()
-            model.ae_reliability_feature_weight.zero_()
-            model.ae_student_logit_bias.weight.zero_()
-            model.ae_exercise_logit_bias.weight.zero_()
-            model.ae_concept_logit_bias.weight.zero_()
         model.initialize_ae_logit_priors(
             student_logits=torch.tensor([1.2, -1.2], dtype=torch.float32),
             exercise_logits=torch.zeros(2),
@@ -1085,13 +1078,6 @@ def _check_e_posterior_theta_uses_a_conditioned_query_state() -> None:
         model.diagnosis_head.theta_proj.weight.zero_()
         model.diagnosis_head.theta_proj.weight[0, 0] = 1.0
         model.diagnosis_head.theta_proj.bias.zero_()
-        if getattr(model, "ae_logit_feature_weight", None) is not None:
-            model.ae_logit_feature_weight.zero_()
-        if getattr(model, "ae_reliability_feature_weight", None) is not None:
-            model.ae_reliability_feature_weight.zero_()
-        model.ae_student_logit_bias.weight.zero_()
-        model.ae_exercise_logit_bias.weight.zero_()
-        model.ae_concept_logit_bias.weight.zero_()
 
     knowledge_state = torch.zeros(1, 3, 4)
     global_query_context = torch.zeros_like(knowledge_state)

@@ -42,29 +42,45 @@ def main() -> None:
         graph_query_readout_2hop_scale=0.01,
         ae_logit_residual_scale=1.0,
         ae_posterior_prior_scale=1.0,
+        personal_mastery_prior_scale=1.0,
+        personal_mastery_count_smoothing=8.0,
     )
     model.initialize_ae_logit_priors(
         student_logits=torch.zeros(2),
         exercise_logits=torch.zeros(3),
         concept_logits=torch.zeros(3),
-        student_concept_logits=torch.zeros(2, 3),
+        student_concept_logits=torch.tensor(
+            [
+                [1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+            ],
+            dtype=torch.float32,
+        ),
         scale=1.0,
-        student_count_features=torch.tensor([1.0, -1.0]),
+        student_count_features=torch.zeros(2),
         exercise_count_features=torch.zeros(3),
         concept_count_features=torch.zeros(3),
         student_concept_count_features=torch.zeros(2, 3),
+        student_concept_observed_counts=torch.tensor(
+            [
+                [20.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0],
+            ],
+            dtype=torch.float32,
+        ),
     )
-    with torch.no_grad():
-        model.ae_reliability_feature_weight.copy_(torch.tensor([0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
     logits, details = model(
         torch.tensor([0, 1], dtype=torch.long),
-        torch.tensor([0, 1], dtype=torch.long),
+        torch.tensor([0, 0], dtype=torch.long),
         return_details=True,
         return_logits=True,
     )
-    rel = details.get("ae_reliability_feature_logit")
-    _assert(rel is not None, "forward details must expose AE reliability feature contribution")
-    _assert(float(rel[0].item()) > 0.0 and float(rel[1].item()) < 0.0, "student count reliability must affect AE logit with sign")
+    rel = details.get("e_query_mastery_logit")
+    _assert(rel is not None, "forward details must expose E query mastery contribution")
+    _assert(
+        float(rel[0].item()) > 0.0 and abs(float(rel[1].item())) < 1e-8,
+        "observed student-concept counts must reliability-gate E query mastery evidence",
+    )
     _assert(torch.isfinite(logits).all().item(), "logits must remain finite with reliability features")
     print("smoke_ae_reliability_features passed")
 

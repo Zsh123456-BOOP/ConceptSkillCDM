@@ -44,8 +44,38 @@ def _build_small_model():
         ae_interaction_logit_scale=0.5,
         ae_query_residual_scale=0.2,
         personal_delta_scale=3.0,
+        personal_mastery_prior_scale=1.0,
+        personal_recent_mastery_prior_scale=0.5,
+        personal_mastery_count_smoothing=1.0,
         personal_warmup_epochs=0,
         personal_reg_warmup_epochs=0,
+    )
+    model.initialize_ae_logit_priors(
+        student_logits=torch.tensor([0.4, -0.3, 0.2, -0.1, 0.1], dtype=torch.float32),
+        exercise_logits=torch.tensor([0.3, -0.2, 0.1, -0.1], dtype=torch.float32),
+        concept_logits=torch.tensor([0.2, -0.1, 0.3], dtype=torch.float32),
+        student_concept_logits=torch.tensor(
+            [
+                [0.6, -0.2, 0.1],
+                [-0.1, 0.5, 0.2],
+                [0.2, -0.3, 0.4],
+                [0.1, 0.2, -0.5],
+                [0.3, 0.1, -0.2],
+            ],
+            dtype=torch.float32,
+        ),
+        student_concept_recent_logits=torch.tensor(
+            [
+                [0.2, -0.1, 0.1],
+                [-0.1, 0.2, 0.0],
+                [0.1, -0.2, 0.3],
+                [0.0, 0.1, -0.2],
+                [0.2, 0.0, -0.1],
+            ],
+            dtype=torch.float32,
+        ),
+        student_concept_observed_counts=torch.full((5, 3), 4.0, dtype=torch.float32),
+        scale=1.0,
     )
     model.eval()
     return model
@@ -104,8 +134,26 @@ def _check_e_and_ae_logit_head_are_not_blackbox_modules() -> None:
     ):
         _assert(not hasattr(model, name), f"AE logit residual 不应再保留黑箱模块: {name}")
 
-    _assert(hasattr(model, "ae_logit_feature_weight"), "AE logit residual 应使用显式 feature 权重。")
-    _assert(tuple(model.ae_logit_feature_weight.shape) == (4,), "AE feature 权重应只对应 4 个可解释标量。")
+    for name in (
+        "ae_logit_feature_weight",
+        "ae_reliability_feature_weight",
+        "ae_student_logit_bias",
+        "ae_exercise_logit_bias",
+        "ae_concept_logit_bias",
+    ):
+        _assert(not hasattr(model, name), f"AE logit residual 不应保留旧黑箱校正参数: {name}")
+    for name in (
+        "a_relation_concept_weight_raw",
+        "a_relation_count_weight_raw",
+        "e_student_global_weight_raw",
+        "e_query_mastery_weight_raw",
+        "e_query_recent_weight_raw",
+        "e_neighbor_mastery_weight_raw",
+        "e_neighbor_recent_weight_raw",
+        "e_mastery_gap_weight_raw",
+    ):
+        param = getattr(model, name, None)
+        _assert(isinstance(param, torch.nn.Parameter) and tuple(param.shape) == (), f"AE 应暴露标量可解释权重: {name}")
 
     with torch.no_grad():
         logits, details = model(
