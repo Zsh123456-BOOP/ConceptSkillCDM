@@ -660,6 +660,7 @@ class CognitiveDiagnosisModel(nn.Module):
             "ae_stat_concept_prior": zero_vec,
             "ae_stat_query_student_concept_prior": zero_vec,
             "ae_stat_graph_student_concept_prior": zero_vec,
+            "e_student_global_logit": zero_vec,
             "e_query_mastery_logit": zero_vec,
             "e_graph_mastery_logit": zero_vec,
             "e_query_recent_mastery_logit": zero_vec,
@@ -704,7 +705,12 @@ class CognitiveDiagnosisModel(nn.Module):
         query_concept_prior = query_weight.matmul(
             self.ae_concept_prior_logit.to(dtype=query_weight.dtype, device=query_weight.device).unsqueeze(-1)
         ).squeeze(-1)
-        stat_student_prior = student_prior
+        mastery_scale = max(0.0, float(self.personal_mastery_prior_scale))
+        recent_scale = max(0.0, float(self.personal_recent_mastery_prior_scale))
+        e_student_global_logit = zero_vec
+        if e_active and mastery_scale > 0.0:
+            e_student_global_logit = 0.30 * mastery_scale * student_prior
+        stat_student_prior = e_student_global_logit
         stat_exercise_prior = 0.75 * exercise_prior
         stat_concept_prior = 0.75 * query_concept_prior
         stat_query_sc_prior = zero_vec
@@ -750,8 +756,6 @@ class CognitiveDiagnosisModel(nn.Module):
             )
             query_sc_prior = (query_weight * sc_prior).sum(dim=1)
             query_recent_prior = (query_weight * sc_recent).sum(dim=1)
-            mastery_scale = max(0.0, float(self.personal_mastery_prior_scale))
-            recent_scale = max(0.0, float(self.personal_recent_mastery_prior_scale))
             e_query_mastery_logit = 0.45 * mastery_scale * query_sc_prior
             e_query_recent_mastery_logit = 0.25 * recent_scale * query_recent_prior
             stat_query_sc_prior = e_query_mastery_logit + e_query_recent_mastery_logit
@@ -893,13 +897,14 @@ class CognitiveDiagnosisModel(nn.Module):
             "ae_stat_concept_prior": torch.where(active, stat_concept_prior, zero_vec),
             "ae_stat_query_student_concept_prior": torch.where(active, stat_query_sc_prior, zero_vec),
             "ae_stat_graph_student_concept_prior": torch.where(active, stat_graph_sc_prior, zero_vec),
+            "e_student_global_logit": torch.where(active, e_student_global_logit, zero_vec),
             "e_query_mastery_logit": torch.where(active, e_query_mastery_logit, zero_vec),
             "e_graph_mastery_logit": torch.where(active, e_graph_mastery_logit, zero_vec),
             "e_query_recent_mastery_logit": torch.where(active, e_query_recent_mastery_logit, zero_vec),
             "e_graph_recent_mastery_logit": torch.where(active, e_graph_recent_mastery_logit, zero_vec),
             "e_local_mastery_logit": torch.where(
                 active,
-                stat_query_sc_prior + stat_graph_sc_prior,
+                e_student_global_logit + stat_query_sc_prior + stat_graph_sc_prior,
                 zero_vec,
             ),
             "ae_posterior_prior_logit": torch.where(active, posterior_prior_logit, zero_vec),

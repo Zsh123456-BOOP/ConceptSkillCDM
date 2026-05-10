@@ -549,6 +549,7 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         use_concept_graph=True,
         use_personal_graph=True,
         personal_delta_scale=3.0,
+        personal_mastery_prior_scale=1.0,
     )
     with torch.no_grad():
         prior_model.ae_logit_feature_weight.zero_()
@@ -585,7 +586,7 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
     prior_q = q_matrix[prior_exercise_ids].float()
     prior_q_weight = prior_q / prior_q.sum(dim=1, keepdim=True).clamp(min=1.0)
     expected_prior = (
-        student_prior[prior_student_ids]
+        0.30 * student_prior[prior_student_ids]
         + 0.75 * exercise_prior[prior_exercise_ids]
         + 0.75 * prior_q_weight.matmul(concept_prior.unsqueeze(-1)).squeeze(-1)
     )
@@ -614,6 +615,7 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
         use_concept_graph=False,
         use_personal_graph=True,
         personal_delta_scale=3.0,
+        personal_mastery_prior_scale=1.0,
     )
     with torch.no_grad():
         no_a_prior_model.ae_logit_feature_weight.zero_()
@@ -672,10 +674,13 @@ def _check_graph_prior_anchors_a_relation_learning() -> None:
             return_details=True,
             return_logits=True,
         )
-    expected_no_e = expected_prior
+    expected_no_e = (
+        0.75 * exercise_prior[prior_exercise_ids]
+        + 0.75 * prior_q_weight.matmul(concept_prior.unsqueeze(-1)).squeeze(-1)
+    )
     _assert(
         torch.allclose(no_e_prior_details["ae_logit_residual"], expected_no_e, atol=1e-6),
-        "no_E_fair boundary should preserve the shared stat-prior predictor while removing E-specific posterior evidence.",
+        "no_E_fair boundary should preserve non-student stat priors while removing E student mastery calibration.",
     )
     _assert(
         abs(float(no_e_prior_details["irt_logit_scale_used"].item()) - 0.2) < 1e-8,
@@ -990,6 +995,69 @@ def _check_student_concept_train_priors_are_e_only() -> None:
     _assert(
         full_details["ae_logit_residual"].abs().mean().item() > no_e_details["ae_logit_residual"].abs().mean().item(),
         "E train-prior evidence should be visible in the full logit residual but absent from no_E.",
+    )
+
+
+def _check_student_global_mastery_prior_is_e_only() -> None:
+    from src.model import CognitiveDiagnosisModel
+
+    q_matrix = torch.eye(2, dtype=torch.float32)
+    student_ids = torch.tensor([0, 1], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 1], dtype=torch.long)
+
+    def build_model(*, use_personal_graph: bool) -> CognitiveDiagnosisModel:
+        model = CognitiveDiagnosisModel(
+            num_students=2,
+            num_exercises=2,
+            num_concepts=2,
+            q_matrix=q_matrix,
+            knowledge_dim=8,
+            num_relation_heads=1,
+            num_gnn_layers=1,
+            dropout=0.0,
+            graph_prior_logit_scale=0.5,
+            use_concept_graph=True,
+            use_personal_graph=use_personal_graph,
+            ae_logit_residual_scale=1.0,
+            ae_logit_residual_clip=0.0,
+            ae_posterior_prior_scale=0.0,
+            personal_mastery_prior_scale=1.0,
+            personal_recent_mastery_prior_scale=0.0,
+        )
+        with torch.no_grad():
+            model.ae_logit_feature_weight.zero_()
+            model.ae_reliability_feature_weight.zero_()
+            model.ae_student_logit_bias.weight.zero_()
+            model.ae_exercise_logit_bias.weight.zero_()
+            model.ae_concept_logit_bias.weight.zero_()
+        model.initialize_ae_logit_priors(
+            student_logits=torch.tensor([1.2, -1.2], dtype=torch.float32),
+            exercise_logits=torch.zeros(2),
+            concept_logits=torch.zeros(2),
+            student_concept_logits=torch.zeros(2, 2),
+            student_concept_recent_logits=torch.zeros(2, 2),
+            scale=1.0,
+        )
+        model.eval()
+        return model
+
+    full = build_model(use_personal_graph=True)
+    no_e = build_model(use_personal_graph=False)
+    with torch.no_grad():
+        _, full_details = full(student_ids, exercise_ids, return_details=True, return_logits=True)
+        _, no_e_details = no_e(student_ids, exercise_ids, return_details=True, return_logits=True)
+
+    _assert(
+        full_details["e_student_global_logit"].abs().mean().item() > 0.0,
+        "Full E should expose train-only student global mastery calibration.",
+    )
+    _assert(
+        no_e_details["e_student_global_logit"].abs().mean().item() == 0.0,
+        "no_E must remove train-only student global mastery calibration.",
+    )
+    _assert(
+        no_e_details["ae_stat_student_prior"].abs().mean().item() == 0.0,
+        "no_E must not keep student global mastery under a non-E residual path.",
     )
 
 
@@ -4000,6 +4068,7 @@ def main() -> None:
     _check_ae_interaction_logit_is_full_only()
     _check_e_posterior_prior_readout_is_full_only()
     _check_student_concept_train_priors_are_e_only()
+    _check_student_global_mastery_prior_is_e_only()
     _check_e_posterior_theta_uses_a_conditioned_query_state()
     _check_e_stratified_comparison_reports_high_signal_help()
     _check_theta_prior_alignment_is_full_only()

@@ -37,6 +37,7 @@ AE_COMPONENT_KEYS = (
     "ae_stat_concept_prior",
     "ae_stat_query_student_concept_prior",
     "ae_stat_graph_student_concept_prior",
+    "e_student_global_logit",
     "e_query_mastery_logit",
     "e_graph_mastery_logit",
     "e_query_recent_mastery_logit",

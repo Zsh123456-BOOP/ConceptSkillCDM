@@ -58,6 +58,8 @@ def compute_module_activity(
     personal_item_support_added_masses: List[float] = []
     personal_mastery_scores_absmeans: List[float] = []
     personal_recent_mastery_scores_absmeans: List[float] = []
+    e_student_global_absmeans: List[float] = []
+    e_local_mastery_absmeans: List[float] = []
     personal_to_graph_query_ratios: List[float] = []
     personal_bad_row_rate_active_vals: List[float] = []
     personal_query_trust_scale_vals: List[float] = []
@@ -144,6 +146,16 @@ def compute_module_activity(
                 personal_recent_mastery_scores_absmeans.extend(
                     recent_mastery_abs.reshape(-1).detach().cpu().numpy().tolist()
                 )
+            e_student_global = details.get("e_student_global_logit")
+            if e_student_global is not None:
+                e_student_global_absmeans.extend(
+                    e_student_global.detach().abs().reshape(-1).cpu().numpy().tolist()
+                )
+            e_local_mastery = details.get("e_local_mastery_logit")
+            if e_local_mastery is not None:
+                e_local_mastery_absmeans.extend(
+                    e_local_mastery.detach().abs().reshape(-1).cpu().numpy().tolist()
+                )
             q_ratio = details.get("personal_to_graph_query_ratio_effective")
             if q_ratio is not None:
                 personal_to_graph_query_ratios.extend(q_ratio.reshape(-1).detach().cpu().numpy().tolist())
@@ -224,6 +236,12 @@ def compute_module_activity(
             if personal_recent_mastery_scores_absmeans
             else 0.0
         )
+        e_student_global_absmean = (
+            float(np.mean(e_student_global_absmeans)) if e_student_global_absmeans else 0.0
+        )
+        e_local_mastery_absmean = (
+            float(np.mean(e_local_mastery_absmeans)) if e_local_mastery_absmeans else 0.0
+        )
         query_ratio = float(np.mean(personal_to_graph_query_ratios)) if personal_to_graph_query_ratios else 0.0
         bad_row_rate_active = (
             float(np.mean(personal_bad_row_rate_active_vals)) if personal_bad_row_rate_active_vals else 0.0
@@ -250,20 +268,28 @@ def compute_module_activity(
         results["personal_item_support_added_mass"] = item_support_added_mass
         results["personal_mastery_scores_absmean"] = mastery_scores_absmean
         results["personal_recent_mastery_scores_absmean"] = recent_mastery_scores_absmean
+        results["e_student_global_absmean"] = e_student_global_absmean
+        results["e_local_mastery_absmean"] = e_local_mastery_absmean
         results["personal_to_graph_query_ratio"] = query_ratio
         results["personal_bad_row_rate_active"] = bad_row_rate_active
         results["personal_query_trust_scale_mean"] = trust_scale_mean
-        results["personal_graph_trivial"] = bool(query_personal_delta < 0.002 and query_posterior_kl < 0.002)
+        local_calibration_active = e_local_mastery_absmean > 1e-3
+        results["personal_graph_trivial"] = bool(
+            query_personal_delta < 0.002
+            and query_posterior_kl < 0.002
+            and not local_calibration_active
+        )
         results["personal_graph_weak"] = bool(
             query_posterior_kl > 1e-4
             and (query_personal_delta <= 0.002 or query_message_gain < 0.05)
         )
-        results["personal_graph_active"] = bool(
+        relation_posterior_active = bool(
             query_personal_delta > 0.002
             and query_posterior_kl > 1e-4
             and query_personal_std > 1e-4
             and query_message_gain >= 0.05
         )
+        results["personal_graph_active"] = bool(relation_posterior_active or local_calibration_active)
         results["personal_graph_risk"] = bool(
             results["personal_graph_active"]
             and (
@@ -284,8 +310,10 @@ def compute_module_activity(
             results["personal_graph_mode"] = "MISALIGNED"
         elif query_writeback > 0.002 and trust_scale_mean < 0.98:
             results["personal_graph_mode"] = "TRUST_CLIPPED"
-        elif results["personal_graph_active"]:
+        elif relation_posterior_active:
             results["personal_graph_mode"] = "LIVE"
+        elif local_calibration_active:
+            results["personal_graph_mode"] = "LIVE_CALIBRATION"
         elif results["personal_graph_weak"]:
             results["personal_graph_mode"] = "WEAK"
         else:
@@ -407,6 +435,9 @@ def format_activity_report(
         if mode == "LIVE":
             status = "LIVE (state-driven personalization is visible at query stage)"
             advice = ""
+        elif mode == "LIVE_CALIBRATION":
+            status = "LIVE_CALIBRATION (student evidence calibration is active in the prediction logit)"
+            advice = ""
         elif mode == "PROJ_COLLAPSE":
             status = "PROJ_COLLAPSE (posterior moves, but message projection is collapsing)"
             advice = "   -> Consider: widen message basis or improve value-basis writer before enlarging posterior amplitude"
@@ -442,6 +473,8 @@ def format_activity_report(
         lines.append(f"   - Item-local support added mass: {item_support_mass:.4f}")
         lines.append(f"   - Mastery-prior score absmean: {mastery_scores_absmean:.4f}")
         lines.append(f"   - Recent-mastery-prior score absmean: {recent_mastery_scores_absmean:.4f}")
+        lines.append(f"   - E student-global logit absmean: {activity.get('e_student_global_absmean', 0.0):.4f}")
+        lines.append(f"   - E local mastery logit absmean: {activity.get('e_local_mastery_absmean', 0.0):.4f}")
         lines.append(f"   - Personal/global query ratio: {query_ratio:.4f}")
         lines.append(f"   - Status: {status}")
         if advice:

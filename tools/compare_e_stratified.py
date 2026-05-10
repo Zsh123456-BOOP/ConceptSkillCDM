@@ -27,6 +27,7 @@ from tools.analyze_ae_errors import analyze  # noqa: E402
 
 SIGNAL_SPECS: Tuple[Tuple[str, str], ...] = (
     ("e_local_mastery_abs", "e_local_mastery_logit"),
+    ("e_student_global_abs", "e_student_global_logit"),
     ("e_query_mastery_abs", "e_query_mastery_logit"),
     ("e_graph_mastery_abs", "e_graph_mastery_logit"),
     ("e_query_recent_mastery_abs", "e_query_recent_mastery_logit"),

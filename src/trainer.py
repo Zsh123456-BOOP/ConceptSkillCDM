@@ -1173,6 +1173,7 @@ def _collect_debug_forward_stats(
     ae_stat_concept_prior_abs_vals: List[float] = []
     ae_stat_query_sc_prior_abs_vals: List[float] = []
     ae_stat_graph_sc_prior_abs_vals: List[float] = []
+    e_student_global_logit_abs_vals: List[float] = []
     e_query_mastery_logit_abs_vals: List[float] = []
     e_graph_mastery_logit_abs_vals: List[float] = []
     e_query_recent_mastery_logit_abs_vals: List[float] = []
@@ -1305,6 +1306,7 @@ def _collect_debug_forward_stats(
                 ("ae_stat_concept_prior_abs_mean", ae_stat_concept_prior_abs_vals),
                 ("ae_stat_query_student_concept_prior_abs_mean", ae_stat_query_sc_prior_abs_vals),
                 ("ae_stat_graph_student_concept_prior_abs_mean", ae_stat_graph_sc_prior_abs_vals),
+                ("e_student_global_logit_abs_mean", e_student_global_logit_abs_vals),
                 ("e_query_mastery_logit_abs_mean", e_query_mastery_logit_abs_vals),
                 ("e_graph_mastery_logit_abs_mean", e_graph_mastery_logit_abs_vals),
                 ("e_query_recent_mastery_logit_abs_mean", e_query_recent_mastery_logit_abs_vals),
@@ -1474,6 +1476,7 @@ def _collect_debug_forward_stats(
     ae_stat_concept_prior_abs_mean, _ = _safe_mean_std(ae_stat_concept_prior_abs_vals)
     ae_stat_query_sc_prior_abs_mean, _ = _safe_mean_std(ae_stat_query_sc_prior_abs_vals)
     ae_stat_graph_sc_prior_abs_mean, _ = _safe_mean_std(ae_stat_graph_sc_prior_abs_vals)
+    e_student_global_logit_abs_mean, _ = _safe_mean_std(e_student_global_logit_abs_vals)
     e_query_mastery_logit_abs_mean, _ = _safe_mean_std(e_query_mastery_logit_abs_vals)
     e_graph_mastery_logit_abs_mean, _ = _safe_mean_std(e_graph_mastery_logit_abs_vals)
     e_query_recent_mastery_logit_abs_mean, _ = _safe_mean_std(e_query_recent_mastery_logit_abs_vals)
@@ -1582,6 +1585,7 @@ def _collect_debug_forward_stats(
         "ae_stat_concept_prior_abs_mean": ae_stat_concept_prior_abs_mean,
         "ae_stat_query_student_concept_prior_abs_mean": ae_stat_query_sc_prior_abs_mean,
         "ae_stat_graph_student_concept_prior_abs_mean": ae_stat_graph_sc_prior_abs_mean,
+        "e_student_global_logit_abs_mean": e_student_global_logit_abs_mean,
         "e_query_mastery_logit_abs_mean": e_query_mastery_logit_abs_mean,
         "e_graph_mastery_logit_abs_mean": e_graph_mastery_logit_abs_mean,
         "e_query_recent_mastery_logit_abs_mean": e_query_recent_mastery_logit_abs_mean,
@@ -2433,7 +2437,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             )
             logger.info(
                 "%s [Diag][AE Components] Epoch [%03d] | "
-                "student_prior=%.4f, exercise_prior=%.4f, concept_prior=%.4f, "
+                "e_student_global=%.4f, exercise_prior=%.4f, concept_prior=%.4f, "
                 "query_student_concept=%.4f, graph_student_concept=%.4f, "
                 "e_local_mastery=%.4f, posterior_prior=%.4f, reliability=%.4f, "
                 "interpretable_bias=%.4f, explicit_feature=%.4f, "

@@ -145,6 +145,7 @@ RESULT_FIELD_HINTS = (
     "ae_posterior_theta_scale",
     "ae_posterior_theta_logit_abs_mean",
     "ae_posterior_theta_delta_abs_mean",
+    "e_student_global_logit_abs_mean",
     "e_query_mastery_logit_abs_mean",
     "e_graph_mastery_logit_abs_mean",
     "e_query_recent_mastery_logit_abs_mean",
