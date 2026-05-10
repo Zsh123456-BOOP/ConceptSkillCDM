@@ -27,7 +27,9 @@ variant_order <- c(
   "E_prior_only", "E_frozen_alpha", "E_full_fair",
   "E_global_posterior", "E_posterior_only", "E_query_only",
   "E_theta025_full", "E_theta025_global", "E_theta025_posterior_only",
-  "E_theta050_full", "E_theta050_global", "E_theta050_posterior_only"
+  "E_theta050_full", "E_theta050_global", "E_theta050_posterior_only",
+  "E_mastery05_full", "E_mastery05_global", "E_mastery05_posterior_only",
+  "E_mastery10_full", "E_mastery10_global", "E_mastery10_posterior_only"
 )
 rows$variant <- factor(rows$variant, levels = variant_order)
 

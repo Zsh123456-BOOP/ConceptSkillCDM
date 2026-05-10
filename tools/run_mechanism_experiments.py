@@ -85,6 +85,20 @@ def _with_relation_theta(base: Optional[Dict[str, Any]] = None, *, scale: float)
     overrides["relation_theta_scale"] = float(scale)
     return overrides
 
+
+def _with_mastery_prior(
+    base: Optional[Dict[str, Any]] = None,
+    *,
+    mastery: float,
+    recent: float,
+    posterior_scale: float = 1.0,
+) -> Dict[str, Any]:
+    overrides = dict(base or {})
+    overrides["personal_mastery_prior_scale"] = float(mastery)
+    overrides["personal_recent_mastery_prior_scale"] = float(recent)
+    overrides["ae_posterior_prior_scale"] = float(posterior_scale)
+    return overrides
+
 RESULT_FIELD_HINTS = (
     "run_id",
     "phase",
@@ -311,6 +325,58 @@ def _variant_spec(name: str) -> AblationSpec:
                     "lambda_personal_query_residual": 0.0,
                 },
                 scale=0.50,
+            ),
+        )
+    if name == "E_mastery05_full":
+        return AblationSpec(
+            name=name,
+            flags={},
+            overrides=_with_mastery_prior(mastery=0.5, recent=0.25),
+        )
+    if name == "E_mastery05_global":
+        return AblationSpec(
+            name=name,
+            flags={},
+            overrides=_with_mastery_prior(FAIR_GLOBAL_POSTERIOR_OVERRIDES, mastery=0.5, recent=0.25),
+        )
+    if name == "E_mastery05_posterior_only":
+        return AblationSpec(
+            name=name,
+            flags={},
+            overrides=_with_mastery_prior(
+                {
+                    "personal_query_correction_scale": 0.0,
+                    "personal_query_message_gain": 0.0,
+                    "lambda_personal_query_residual": 0.0,
+                },
+                mastery=0.5,
+                recent=0.25,
+            ),
+        )
+    if name == "E_mastery10_full":
+        return AblationSpec(
+            name=name,
+            flags={},
+            overrides=_with_mastery_prior(mastery=1.0, recent=0.5),
+        )
+    if name == "E_mastery10_global":
+        return AblationSpec(
+            name=name,
+            flags={},
+            overrides=_with_mastery_prior(FAIR_GLOBAL_POSTERIOR_OVERRIDES, mastery=1.0, recent=0.5),
+        )
+    if name == "E_mastery10_posterior_only":
+        return AblationSpec(
+            name=name,
+            flags={},
+            overrides=_with_mastery_prior(
+                {
+                    "personal_query_correction_scale": 0.0,
+                    "personal_query_message_gain": 0.0,
+                    "lambda_personal_query_residual": 0.0,
+                },
+                mastery=1.0,
+                recent=0.5,
             ),
         )
     raise ValueError(f"Unknown mechanism variant: {name}")
