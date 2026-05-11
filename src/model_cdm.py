@@ -315,11 +315,11 @@ class CognitiveDiagnosisModel(nn.Module):
             self.roadmap_reliability_weight_raw = nn.Parameter(self._inverse_softplus_value(0.04))
             self.roadmap_item_weight_raw = nn.Parameter(self._inverse_softplus_value(0.10))
             self.roadmap_sequence_weight_raw = nn.Parameter(self._inverse_softplus_value(0.12))
-            self.tutor_current_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.55))
-            self.tutor_current_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.35))
-            self.tutor_route_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.45))
-            self.tutor_route_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.25))
-            self.tutor_gap_penalty_weight_raw = nn.Parameter(self._inverse_softplus_value(0.20))
+            self.tutor_current_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.24))
+            self.tutor_current_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.12))
+            self.tutor_route_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.12))
+            self.tutor_route_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.06))
+            self.tutor_gap_penalty_weight_raw = nn.Parameter(self._inverse_softplus_value(0.08))
 
         self._initialize_graph_prior_concept_embeddings()
         if self.share_concept_embeddings:
@@ -863,6 +863,13 @@ class CognitiveDiagnosisModel(nn.Module):
                 + tutor_route_mastery_logit
                 + tutor_route_recent_logit
                 + tutor_gap_penalty_logit
+            )
+            # E is a local tutoring hint, not a replacement for the diagnostic
+            # head. Keep the student-specific route bounded so early epochs do
+            # not overfit train-only mastery priors.
+            local_clip = query_weight.new_tensor(0.45)
+            tutor_local_navigation_logit = local_clip * torch.tanh(
+                tutor_local_navigation_logit / local_clip
             )
 
         raw = roadmap_macro_logit + tutor_local_navigation_logit

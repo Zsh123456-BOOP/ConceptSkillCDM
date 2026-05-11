@@ -90,6 +90,7 @@ PHASE1_PERSONAL_ACTIVE_DEFAULTS = {
 }
 
 PHASE1_MAX_PERSONAL_WARMUP_EPOCHS = 2
+PHASE1_MAX_AE_LR_MULT = 5.0
 
 NEUTRAL_E_VARIANTS = {
     "no_E",
@@ -161,6 +162,8 @@ def _cap_phase1_personal_warmup(params: Dict[str, Any], phase_epochs: int) -> No
 
 
 def _apply_phase1_personal_activation(params: Dict[str, Any], variant: str, phase_epochs: int) -> None:
+    if _as_float(params, "ae_lr_mult", 1.0) > PHASE1_MAX_AE_LR_MULT:
+        params["ae_lr_mult"] = PHASE1_MAX_AE_LR_MULT
     if not bool(params.get("use_personal_graph", True)):
         return
     _cap_phase1_personal_warmup(params, phase_epochs)

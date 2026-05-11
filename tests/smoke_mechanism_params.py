@@ -59,6 +59,10 @@ def _check_phase1_full_activates_e_writing() -> None:
         int(params["personal_reg_warmup_epochs"]) <= 2,
         "phase1 should not hide E regularization behind a long warmup.",
     )
+    _assert(
+        float(params["ae_lr_mult"]) <= 5.0,
+        "phase1 should cap fast AE scalar learning so E mechanism tests do not become train-prior overfit tests.",
+    )
 
 
 def _check_controls_keep_their_semantics() -> None:
