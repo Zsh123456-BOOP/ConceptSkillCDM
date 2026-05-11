@@ -80,6 +80,106 @@ FAIR_GLOBAL_POSTERIOR_OVERRIDES = {
 }
 
 
+PHASE1_PERSONAL_ACTIVE_DEFAULTS = {
+    # The BEST_CFG files preserve some high-AUC runs where the old E writeback
+    # path was intentionally muted.  Phase1 is a mechanism test, so full-like E
+    # variants must exercise the posterior and bounded query writeback.
+    "personal_delta_scale": 1.0,
+    "personal_query_correction_scale": 0.15,
+    "personal_query_message_gain": 1.0,
+}
+
+PHASE1_MAX_PERSONAL_WARMUP_EPOCHS = 2
+
+NEUTRAL_E_VARIANTS = {
+    "no_E",
+    "no_E_fair",
+    "A_fused_neutralE",
+    "A_item_neutralE",
+    "A_seq_neutralE",
+    "A_uniform_neutralE",
+    "A_self_neutralE",
+    "E_global_posterior",
+    "E_prior_only",
+    "E_theta025_global",
+    "E_theta050_global",
+    "E_mastery05_global",
+    "E_mastery10_global",
+    "E_readout_global",
+    "E_theta_readout_global",
+    "E_mastery10_gate8_global",
+    "E_mastery10_gate8_pp2_global",
+}
+
+POSTERIOR_ONLY_E_VARIANTS = {
+    "E_posterior_only",
+    "E_theta025_posterior_only",
+    "E_theta050_posterior_only",
+    "E_mastery05_posterior_only",
+    "E_mastery10_posterior_only",
+    "E_readout_posterior_only",
+    "E_theta_readout_posterior_only",
+    "E_mastery10_gate8_posterior_only",
+    "E_mastery10_gate8_pp2_posterior_only",
+}
+
+QUERY_ONLY_E_VARIANTS = {
+    "E_query_only",
+}
+
+
+def _as_float(params: Dict[str, Any], key: str, default: float = 0.0) -> float:
+    try:
+        return float(params.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _raise_if_personal_writes_all_zero(params: Dict[str, Any], variant: str) -> None:
+    if not bool(params.get("use_personal_graph", True)):
+        return
+    if variant in NEUTRAL_E_VARIANTS:
+        return
+    active = any(_as_float(params, key) > 0.0 for key in PHASE1_PERSONAL_ACTIVE_DEFAULTS)
+    if not active:
+        raise ValueError(
+            f"{variant} keeps use_personal_graph=True but all E write paths are zero. "
+            "Use no_E/neutral controls for an intentionally inactive E."
+        )
+
+
+def _ensure_positive(params: Dict[str, Any], key: str) -> None:
+    if _as_float(params, key) <= 0.0:
+        params[key] = PHASE1_PERSONAL_ACTIVE_DEFAULTS[key]
+
+
+def _cap_phase1_personal_warmup(params: Dict[str, Any], phase_epochs: int) -> None:
+    max_warmup = min(PHASE1_MAX_PERSONAL_WARMUP_EPOCHS, max(0, int(phase_epochs) // 2))
+    for key in ("personal_warmup_epochs", "personal_reg_warmup_epochs"):
+        if key in params:
+            params[key] = min(int(params.get(key, max_warmup)), max_warmup)
+
+
+def _apply_phase1_personal_activation(params: Dict[str, Any], variant: str, phase_epochs: int) -> None:
+    if not bool(params.get("use_personal_graph", True)):
+        return
+    _cap_phase1_personal_warmup(params, phase_epochs)
+    if variant in NEUTRAL_E_VARIANTS:
+        return
+    if variant in POSTERIOR_ONLY_E_VARIANTS:
+        _ensure_positive(params, "personal_delta_scale")
+        _raise_if_personal_writes_all_zero(params, variant)
+        return
+    if variant in QUERY_ONLY_E_VARIANTS:
+        _ensure_positive(params, "personal_query_correction_scale")
+        _ensure_positive(params, "personal_query_message_gain")
+        _raise_if_personal_writes_all_zero(params, variant)
+        return
+    for key in PHASE1_PERSONAL_ACTIVE_DEFAULTS:
+        _ensure_positive(params, key)
+    _raise_if_personal_writes_all_zero(params, variant)
+
+
 def _with_relation_theta(base: Optional[Dict[str, Any]] = None, *, scale: float) -> Dict[str, Any]:
     overrides = dict(base or {})
     overrides["relation_theta_scale"] = float(scale)
@@ -646,6 +746,12 @@ def build_jobs(args: argparse.Namespace, run_id: str) -> List[MechanismJob]:
                 spec = _variant_spec(variant)
                 params = dict(base)
                 params.update(spec.overrides)
+                if phase == "phase1":
+                    _apply_phase1_personal_activation(
+                        params,
+                        variant,
+                        int(args.phase1_epochs),
+                    )
                 save_dir = Path("checkpoints") / "mechanism" / run_id / phase / dataset / variant
                 log_dir = Path("logs") / "mechanism" / run_id / phase / dataset / variant
                 if (not args.rerun_existing) and (save_dir / "test_results.json").exists():
