@@ -317,9 +317,9 @@ class CognitiveDiagnosisModel(nn.Module):
             self.roadmap_sequence_weight_raw = nn.Parameter(self._inverse_softplus_value(0.12))
             self.tutor_current_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.24))
             self.tutor_current_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.12))
-            self.tutor_route_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.12))
-            self.tutor_route_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.06))
-            self.tutor_student_readiness_weight_raw = nn.Parameter(self._inverse_softplus_value(0.08))
+            self.tutor_route_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.30))
+            self.tutor_route_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.15))
+            self.tutor_student_readiness_weight_raw = nn.Parameter(self._inverse_softplus_value(0.20))
             self.tutor_gap_penalty_weight_raw = nn.Parameter(self._inverse_softplus_value(0.08))
 
         self._initialize_graph_prior_concept_embeddings()
@@ -705,6 +705,7 @@ class CognitiveDiagnosisModel(nn.Module):
             "tutor_student_readiness_confidence": zero_vec,
             "tutor_query_reliability": zero_vec,
             "tutor_route_reliability": zero_vec,
+            "tutor_route_transfer_reliability": zero_vec,
             "tutor_personal_route_mass": zero_vec,
             "tutor_personal_route_delta": zero_vec,
             "map_raw_logit_before_clip": zero_vec,
@@ -803,6 +804,7 @@ class CognitiveDiagnosisModel(nn.Module):
         tutor_student_readiness_confidence = zero_vec
         tutor_query_reliability = zero_vec
         tutor_route_reliability = zero_vec
+        tutor_route_transfer_reliability = zero_vec
         tutor_personal_route_mass = zero_vec
         tutor_personal_route_delta = zero_vec
         ae_posterior_prior_logit = zero_vec
@@ -843,6 +845,8 @@ class CognitiveDiagnosisModel(nn.Module):
             else:
                 tutor_query_reliability = (query_observed_count > 0).to(dtype=query_weight.dtype)
                 tutor_route_reliability = (graph_observed_count > 0).to(dtype=query_weight.dtype)
+            has_route_evidence = (graph_observed_count > 0).to(dtype=query_weight.dtype)
+            tutor_route_transfer_reliability = has_route_evidence * (0.25 + 0.75 * tutor_route_reliability)
             paired_reliability = torch.sqrt((tutor_query_reliability * tutor_route_reliability).clamp(min=0.0))
             query_sc_prior = (query_weight * sc_prior).sum(dim=1)
             query_recent_prior = (query_weight * sc_recent).sum(dim=1)
@@ -889,13 +893,13 @@ class CognitiveDiagnosisModel(nn.Module):
             tutor_route_mastery_logit = (
                 mastery_scale
                 * self._positive_weight(getattr(self, "tutor_route_mastery_weight_raw", None), tutor_route_mastery_delta)
-                * tutor_route_reliability
+                * tutor_route_transfer_reliability
                 * route_sc_prior
             )
             tutor_route_recent_logit = (
                 recent_scale
                 * self._positive_weight(getattr(self, "tutor_route_recent_weight_raw", None), tutor_route_recent_delta)
-                * tutor_route_reliability
+                * tutor_route_transfer_reliability
                 * route_recent_prior
             )
             route_gap_penalty = torch.relu(query_sc_prior - route_sc_prior)
@@ -987,6 +991,7 @@ class CognitiveDiagnosisModel(nn.Module):
             "tutor_student_readiness_confidence": torch.where(active, tutor_student_readiness_confidence, zero_vec),
             "tutor_query_reliability": torch.where(active, tutor_query_reliability, zero_vec),
             "tutor_route_reliability": torch.where(active, tutor_route_reliability, zero_vec),
+            "tutor_route_transfer_reliability": torch.where(active, tutor_route_transfer_reliability, zero_vec),
             "tutor_personal_route_mass": torch.where(active, tutor_personal_route_mass, zero_vec),
             "tutor_personal_route_delta": torch.where(active, tutor_personal_route_delta, zero_vec),
             "map_raw_logit_before_clip": torch.where(active, raw_before_clip, zero_vec),

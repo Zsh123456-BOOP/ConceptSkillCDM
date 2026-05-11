@@ -1200,12 +1200,14 @@ def _collect_debug_forward_stats(
     tutor_current_recent_logit_abs_vals: List[float] = []
     tutor_route_mastery_logit_abs_vals: List[float] = []
     tutor_route_recent_logit_abs_vals: List[float] = []
+    tutor_student_readiness_logit_abs_vals: List[float] = []
     tutor_gap_penalty_logit_abs_vals: List[float] = []
     tutor_local_navigation_logit_abs_vals: List[float] = []
     tutor_route_mastery_delta_abs_vals: List[float] = []
     tutor_route_recent_delta_abs_vals: List[float] = []
     tutor_query_reliability_vals: List[float] = []
     tutor_route_reliability_vals: List[float] = []
+    tutor_route_transfer_reliability_vals: List[float] = []
     tutor_personal_route_mass_vals: List[float] = []
     tutor_personal_route_delta_vals: List[float] = []
     map_raw_logit_before_clip_abs_vals: List[float] = []
@@ -1360,12 +1362,14 @@ def _collect_debug_forward_stats(
                 ("tutor_current_recent_logit_abs_mean", tutor_current_recent_logit_abs_vals),
                 ("tutor_route_mastery_logit_abs_mean", tutor_route_mastery_logit_abs_vals),
                 ("tutor_route_recent_logit_abs_mean", tutor_route_recent_logit_abs_vals),
+                ("tutor_student_readiness_logit_abs_mean", tutor_student_readiness_logit_abs_vals),
                 ("tutor_gap_penalty_logit_abs_mean", tutor_gap_penalty_logit_abs_vals),
                 ("tutor_local_navigation_logit_abs_mean", tutor_local_navigation_logit_abs_vals),
                 ("tutor_route_mastery_delta_abs_mean", tutor_route_mastery_delta_abs_vals),
                 ("tutor_route_recent_delta_abs_mean", tutor_route_recent_delta_abs_vals),
                 ("tutor_query_reliability_abs_mean", tutor_query_reliability_vals),
                 ("tutor_route_reliability_abs_mean", tutor_route_reliability_vals),
+                ("tutor_route_transfer_reliability_abs_mean", tutor_route_transfer_reliability_vals),
                 ("tutor_personal_route_mass_abs_mean", tutor_personal_route_mass_vals),
                 ("tutor_personal_route_delta_abs_mean", tutor_personal_route_delta_vals),
                 ("map_raw_logit_before_clip_abs_mean", map_raw_logit_before_clip_abs_vals),
@@ -1557,12 +1561,14 @@ def _collect_debug_forward_stats(
     tutor_current_recent_logit_abs_mean, _ = _safe_mean_std(tutor_current_recent_logit_abs_vals)
     tutor_route_mastery_logit_abs_mean, _ = _safe_mean_std(tutor_route_mastery_logit_abs_vals)
     tutor_route_recent_logit_abs_mean, _ = _safe_mean_std(tutor_route_recent_logit_abs_vals)
+    tutor_student_readiness_logit_abs_mean, _ = _safe_mean_std(tutor_student_readiness_logit_abs_vals)
     tutor_gap_penalty_logit_abs_mean, _ = _safe_mean_std(tutor_gap_penalty_logit_abs_vals)
     tutor_local_navigation_logit_abs_mean, _ = _safe_mean_std(tutor_local_navigation_logit_abs_vals)
     tutor_route_mastery_delta_abs_mean, _ = _safe_mean_std(tutor_route_mastery_delta_abs_vals)
     tutor_route_recent_delta_abs_mean, _ = _safe_mean_std(tutor_route_recent_delta_abs_vals)
     tutor_query_reliability_mean, _ = _safe_mean_std(tutor_query_reliability_vals)
     tutor_route_reliability_mean, _ = _safe_mean_std(tutor_route_reliability_vals)
+    tutor_route_transfer_reliability_mean, _ = _safe_mean_std(tutor_route_transfer_reliability_vals)
     tutor_personal_route_mass_mean, _ = _safe_mean_std(tutor_personal_route_mass_vals)
     tutor_personal_route_delta_abs_mean, _ = _safe_mean_std(tutor_personal_route_delta_vals)
     map_raw_logit_before_clip_abs_mean, _ = _safe_mean_std(map_raw_logit_before_clip_abs_vals)
@@ -1693,12 +1699,14 @@ def _collect_debug_forward_stats(
         "tutor_current_recent_logit_abs_mean": tutor_current_recent_logit_abs_mean,
         "tutor_route_mastery_logit_abs_mean": tutor_route_mastery_logit_abs_mean,
         "tutor_route_recent_logit_abs_mean": tutor_route_recent_logit_abs_mean,
+        "tutor_student_readiness_logit_abs_mean": tutor_student_readiness_logit_abs_mean,
         "tutor_gap_penalty_logit_abs_mean": tutor_gap_penalty_logit_abs_mean,
         "tutor_local_navigation_logit_abs_mean": tutor_local_navigation_logit_abs_mean,
         "tutor_route_mastery_delta_abs_mean": tutor_route_mastery_delta_abs_mean,
         "tutor_route_recent_delta_abs_mean": tutor_route_recent_delta_abs_mean,
         "tutor_query_reliability_mean": tutor_query_reliability_mean,
         "tutor_route_reliability_mean": tutor_route_reliability_mean,
+        "tutor_route_transfer_reliability_mean": tutor_route_transfer_reliability_mean,
         "tutor_personal_route_mass_mean": tutor_personal_route_mass_mean,
         "tutor_personal_route_delta_abs_mean": tutor_personal_route_delta_abs_mean,
         "map_raw_logit_before_clip_abs_mean": map_raw_logit_before_clip_abs_mean,
@@ -2546,9 +2554,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "roadmap_macro=%.4f, difficulty=%.4f, reliability=%.4f, "
                 "route_diff_delta=%.4f, route_rel_delta=%.4f, "
                 "tutor_local=%.4f, current_mastery=%.4f, current_recent=%.4f, "
-                "route_mastery=%.4f, route_recent=%.4f, gap_penalty=%.4f, "
+                "route_mastery=%.4f, route_recent=%.4f, student_readiness=%.4f, gap_penalty=%.4f, "
                 "route_mastery_delta=%.4f, route_recent_delta=%.4f, "
-                "query_rel=%.4f, route_rel=%.4f, raw_before_clip=%.4f, raw_after_clip=%.4f",
+                "query_rel=%.4f, route_rel=%.4f, route_transfer_rel=%.4f, "
+                "raw_before_clip=%.4f, raw_after_clip=%.4f",
                 run_tag,
                 epoch,
                 diag["roadmap_macro_logit_abs_mean"],
@@ -2561,11 +2570,13 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["tutor_current_recent_logit_abs_mean"],
                 diag["tutor_route_mastery_logit_abs_mean"],
                 diag["tutor_route_recent_logit_abs_mean"],
+                diag["tutor_student_readiness_logit_abs_mean"],
                 diag["tutor_gap_penalty_logit_abs_mean"],
                 diag["tutor_route_mastery_delta_abs_mean"],
                 diag["tutor_route_recent_delta_abs_mean"],
                 diag["tutor_query_reliability_mean"],
                 diag["tutor_route_reliability_mean"],
+                diag["tutor_route_transfer_reliability_mean"],
                 diag["map_raw_logit_before_clip_abs_mean"],
                 diag["map_raw_logit_after_clip_abs_mean"],
             )

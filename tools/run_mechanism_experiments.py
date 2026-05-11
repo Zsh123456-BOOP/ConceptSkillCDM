@@ -293,6 +293,7 @@ RESULT_FIELD_HINTS = (
     "tutor_gap_penalty_logit_abs_mean",
     "tutor_query_reliability_mean",
     "tutor_route_reliability_mean",
+    "tutor_route_transfer_reliability_mean",
     "tutor_personal_route_mass_mean",
     "tutor_personal_route_delta_abs_mean",
     "personal_mastery_reliability_mean",
