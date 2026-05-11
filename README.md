@@ -35,7 +35,7 @@ E 解决副问题：在 A 给出的局部路线 support 内，根据当前学生
 - 当前概念与路线邻居之间的 readiness gap；
 - train-only 学生-概念观测次数形成的可靠性门控。
 
-E 不生成新边，不读 valid/test，不使用 student-id embedding 作为 shortcut，也不使用 MLP 生成任意个性化图。它只在 A 给出的“小地图”里做学生级导航。
+E 不生成新边，不读 valid/test，不使用 student-id embedding 作为 shortcut，也不使用 MLP 生成任意个性化图。它只在 A 给出的“小地图”里做学生级导航。当前实现会显式记录并使用 `personal posterior - global A route` 的路线偏移：如果 E 把当前学生从 A 的平均路线导向更薄弱的支撑概念，预测 logit 会受到有界惩罚；如果导向更稳的支撑概念，则会给出有界加成。
 
 ## 2. 当前代码入口
 
@@ -53,6 +53,7 @@ E 不生成新边，不读 valid/test，不使用 student-id embedding 作为 sh
 
 - A：`roadmap_macro_logit_abs_mean`、`roadmap_difficulty_logit_abs_mean`、`roadmap_reliability_logit_abs_mean`。
 - E：`tutor_local_navigation_logit_abs_mean`、`tutor_current_mastery_logit_abs_mean`、`tutor_route_mastery_logit_abs_mean`、`tutor_gap_penalty_logit_abs_mean`。
+- E posterior：`ae_posterior_prior_logit_abs_mean`、`ae_posterior_prior_delta_abs_mean`、`tutor_posterior_mastery_shift_logit_abs_mean`。
 - Support：`support_item_survival_rate`、`support_seq_survival_rate`、`support_self_retention_rate`。
 
 ## 3. 消融语义

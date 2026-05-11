@@ -58,6 +58,8 @@ def compute_module_activity(
     personal_item_support_added_masses: List[float] = []
     personal_mastery_scores_absmeans: List[float] = []
     personal_recent_mastery_scores_absmeans: List[float] = []
+    ae_posterior_prior_logit_absmeans: List[float] = []
+    tutor_local_navigation_absmeans: List[float] = []
     e_student_global_absmeans: List[float] = []
     e_local_mastery_absmeans: List[float] = []
     personal_to_graph_query_ratios: List[float] = []
@@ -145,6 +147,16 @@ def compute_module_activity(
             if recent_mastery_abs is not None:
                 personal_recent_mastery_scores_absmeans.extend(
                     recent_mastery_abs.reshape(-1).detach().cpu().numpy().tolist()
+                )
+            posterior_prior_logit = details.get("ae_posterior_prior_logit_abs_mean")
+            if posterior_prior_logit is not None:
+                ae_posterior_prior_logit_absmeans.extend(
+                    posterior_prior_logit.reshape(-1).detach().cpu().numpy().tolist()
+                )
+            tutor_local = details.get("tutor_local_navigation_logit_abs_mean")
+            if tutor_local is not None:
+                tutor_local_navigation_absmeans.extend(
+                    tutor_local.reshape(-1).detach().cpu().numpy().tolist()
                 )
             e_student_global = details.get("e_student_global_logit")
             if e_student_global is not None:
@@ -236,6 +248,16 @@ def compute_module_activity(
             if personal_recent_mastery_scores_absmeans
             else 0.0
         )
+        posterior_prior_logit_absmean = (
+            float(np.mean(ae_posterior_prior_logit_absmeans))
+            if ae_posterior_prior_logit_absmeans
+            else 0.0
+        )
+        tutor_local_navigation_absmean = (
+            float(np.mean(tutor_local_navigation_absmeans))
+            if tutor_local_navigation_absmeans
+            else 0.0
+        )
         e_student_global_absmean = (
             float(np.mean(e_student_global_absmeans)) if e_student_global_absmeans else 0.0
         )
@@ -268,20 +290,29 @@ def compute_module_activity(
         results["personal_item_support_added_mass"] = item_support_added_mass
         results["personal_mastery_scores_absmean"] = mastery_scores_absmean
         results["personal_recent_mastery_scores_absmean"] = recent_mastery_scores_absmean
+        results["ae_posterior_prior_logit_absmean"] = posterior_prior_logit_absmean
+        results["tutor_local_navigation_absmean"] = tutor_local_navigation_absmean
         results["e_student_global_absmean"] = e_student_global_absmean
         results["e_local_mastery_absmean"] = e_local_mastery_absmean
         results["personal_to_graph_query_ratio"] = query_ratio
         results["personal_bad_row_rate_active"] = bad_row_rate_active
         results["personal_query_trust_scale_mean"] = trust_scale_mean
         local_calibration_active = e_local_mastery_absmean > 1e-3
+        local_navigation_active = bool(
+            tutor_local_navigation_absmean > 1e-3
+            and posterior_prior_logit_absmean > 1e-3
+            and query_posterior_kl > 1e-4
+        )
         results["personal_graph_trivial"] = bool(
             query_personal_delta < 0.002
             and query_posterior_kl < 0.002
             and not local_calibration_active
+            and not local_navigation_active
         )
         results["personal_graph_weak"] = bool(
             query_posterior_kl > 1e-4
             and (query_personal_delta <= 0.002 or query_message_gain < 0.05)
+            and not local_navigation_active
         )
         relation_posterior_active = bool(
             query_personal_delta > 0.002
@@ -289,7 +320,11 @@ def compute_module_activity(
             and query_personal_std > 1e-4
             and query_message_gain >= 0.05
         )
-        results["personal_graph_active"] = bool(relation_posterior_active or local_calibration_active)
+        results["personal_graph_active"] = bool(
+            relation_posterior_active
+            or local_calibration_active
+            or local_navigation_active
+        )
         results["personal_graph_risk"] = bool(
             results["personal_graph_active"]
             and (
@@ -312,6 +347,8 @@ def compute_module_activity(
             results["personal_graph_mode"] = "TRUST_CLIPPED"
         elif relation_posterior_active:
             results["personal_graph_mode"] = "LIVE"
+        elif local_navigation_active:
+            results["personal_graph_mode"] = "LIVE_NAVIGATION"
         elif local_calibration_active:
             results["personal_graph_mode"] = "LIVE_CALIBRATION"
         elif results["personal_graph_weak"]:
@@ -438,6 +475,9 @@ def format_activity_report(
         elif mode == "LIVE_CALIBRATION":
             status = "LIVE_CALIBRATION (student evidence calibration is active in the prediction logit)"
             advice = ""
+        elif mode == "LIVE_NAVIGATION":
+            status = "LIVE_NAVIGATION (student posterior route changes the bounded tutoring logit)"
+            advice = ""
         elif mode == "PROJ_COLLAPSE":
             status = "PROJ_COLLAPSE (posterior moves, but message projection is collapsing)"
             advice = "   -> Consider: widen message basis or improve value-basis writer before enlarging posterior amplitude"
@@ -473,6 +513,14 @@ def format_activity_report(
         lines.append(f"   - Item-local support added mass: {item_support_mass:.4f}")
         lines.append(f"   - Mastery-prior score absmean: {mastery_scores_absmean:.4f}")
         lines.append(f"   - Recent-mastery-prior score absmean: {recent_mastery_scores_absmean:.4f}")
+        lines.append(
+            f"   - Posterior-prior route logit absmean: "
+            f"{activity.get('ae_posterior_prior_logit_absmean', 0.0):.4f}"
+        )
+        lines.append(
+            f"   - Tutor local navigation logit absmean: "
+            f"{activity.get('tutor_local_navigation_absmean', 0.0):.4f}"
+        )
         lines.append(f"   - E student-global logit absmean: {activity.get('e_student_global_absmean', 0.0):.4f}")
         lines.append(f"   - E local mastery logit absmean: {activity.get('e_local_mastery_absmean', 0.0):.4f}")
         lines.append(f"   - Personal/global query ratio: {query_ratio:.4f}")

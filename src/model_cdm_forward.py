@@ -284,6 +284,15 @@ def run_cdm_forward(
         details[key] = value.detach()
         if value.ndim > 0:
             details[f"{key}_abs_mean"] = value.detach().abs().mean()
+    zero_detail = knowledge_state.new_tensor(0.0)
+    details["ae_posterior_theta_logit_abs_mean"] = details.get(
+        "tutor_posterior_theta_shift_logit_abs_mean",
+        zero_detail,
+    )
+    details["ae_posterior_theta_delta_abs_mean"] = details.get(
+        "tutor_posterior_theta_shift_delta_abs_mean",
+        zero_detail,
+    )
     details["irt_logit_for_reg"] = irt_logit
     details["readout_local_row_ratio"] = q_vector.float().mean().detach()
 

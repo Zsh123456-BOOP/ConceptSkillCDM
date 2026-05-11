@@ -690,9 +690,15 @@ class CognitiveDiagnosisModel(nn.Module):
             "tutor_route_mastery_logit": zero_vec,
             "tutor_route_recent_logit": zero_vec,
             "tutor_gap_penalty_logit": zero_vec,
+            "tutor_posterior_mastery_shift_logit": zero_vec,
+            "tutor_posterior_recent_shift_logit": zero_vec,
+            "tutor_posterior_theta_shift_logit": zero_vec,
             "tutor_local_navigation_logit": zero_vec,
             "tutor_route_mastery_delta": zero_vec,
             "tutor_route_recent_delta": zero_vec,
+            "tutor_posterior_mastery_shift_delta": zero_vec,
+            "tutor_posterior_recent_shift_delta": zero_vec,
+            "tutor_posterior_theta_shift_delta": zero_vec,
             "tutor_query_reliability": zero_vec,
             "tutor_route_reliability": zero_vec,
             "tutor_personal_route_mass": zero_vec,
@@ -779,13 +785,23 @@ class CognitiveDiagnosisModel(nn.Module):
         tutor_route_mastery_logit = zero_vec
         tutor_route_recent_logit = zero_vec
         tutor_gap_penalty_logit = zero_vec
+        tutor_posterior_mastery_shift_logit = zero_vec
+        tutor_posterior_recent_shift_logit = zero_vec
+        tutor_posterior_theta_shift_logit = zero_vec
         tutor_local_navigation_logit = zero_vec
         tutor_route_mastery_delta = zero_vec
         tutor_route_recent_delta = zero_vec
+        tutor_posterior_mastery_shift_delta = zero_vec
+        tutor_posterior_recent_shift_delta = zero_vec
+        tutor_posterior_theta_shift_delta = zero_vec
         tutor_query_reliability = zero_vec
         tutor_route_reliability = zero_vec
         tutor_personal_route_mass = zero_vec
         tutor_personal_route_delta = zero_vec
+        ae_posterior_prior_logit = zero_vec
+        ae_posterior_prior_delta = zero_vec
+        ae_posterior_theta_logit = zero_vec
+        ae_posterior_theta_delta = zero_vec
         if self.use_personal_graph and student_concept_prior is not None:
             personal_route_weight = graph_query_weight
             if isinstance(personal_relation_spec, dict):
@@ -800,6 +816,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 personal_route_weight = torch.where(has_candidate, normalized_candidate, graph_query_weight)
                 tutor_personal_route_mass = candidate_mass.squeeze(-1)
                 tutor_personal_route_delta = (personal_route_weight - graph_query_weight).abs().sum(dim=1)
+            posterior_route_shift = personal_route_weight - graph_query_weight
             sc_prior = student_concept_prior[student_ids].to(dtype=query_weight.dtype, device=device)
             sc_recent = (
                 student_concept_recent[student_ids].to(dtype=query_weight.dtype, device=device)
@@ -824,6 +841,8 @@ class CognitiveDiagnosisModel(nn.Module):
             query_recent_prior = (query_weight * sc_recent).sum(dim=1)
             route_sc_prior = (personal_route_weight * sc_prior).sum(dim=1)
             route_recent_prior = (personal_route_weight * sc_recent).sum(dim=1)
+            tutor_posterior_mastery_shift_delta = (posterior_route_shift * sc_prior).sum(dim=1)
+            tutor_posterior_recent_shift_delta = (posterior_route_shift * sc_recent).sum(dim=1)
             tutor_route_mastery_delta = route_sc_prior - query_sc_prior
             tutor_route_recent_delta = route_recent_prior - query_recent_prior
             tutor_current_mastery_logit = (
@@ -857,17 +876,42 @@ class CognitiveDiagnosisModel(nn.Module):
                 * paired_reliability
                 * route_gap_penalty
             )
+            tutor_posterior_mastery_shift_logit = (
+                self.ae_posterior_prior_scale
+                * paired_reliability
+                * tutor_posterior_mastery_shift_delta
+            )
+            tutor_posterior_recent_shift_logit = (
+                self.ae_posterior_prior_scale
+                * paired_reliability
+                * tutor_posterior_recent_shift_delta
+            )
+            ae_posterior_prior_delta = tutor_posterior_mastery_shift_delta + 0.5 * tutor_posterior_recent_shift_delta
+            ae_posterior_prior_logit = tutor_posterior_mastery_shift_logit + 0.5 * tutor_posterior_recent_shift_logit
+            if self.ae_posterior_theta_scale > 0.0 and ae_theta_state is not None:
+                theta_c = self.diagnosis_head.theta_proj(ae_theta_state).squeeze(-1)
+                tutor_posterior_theta_shift_delta = (posterior_route_shift * theta_c).sum(dim=1)
+                theta_clip = query_weight.new_tensor(self.relation_theta_delta_clip)
+                ae_posterior_theta_delta = torch.tanh(tutor_posterior_theta_shift_delta / theta_clip) * theta_clip
+                tutor_posterior_theta_shift_logit = (
+                    self.ae_posterior_theta_scale
+                    * paired_reliability
+                    * ae_posterior_theta_delta
+                )
+                ae_posterior_theta_logit = tutor_posterior_theta_shift_logit
             tutor_local_navigation_logit = (
                 tutor_current_mastery_logit
                 + tutor_current_recent_logit
                 + tutor_route_mastery_logit
                 + tutor_route_recent_logit
                 + tutor_gap_penalty_logit
+                + ae_posterior_prior_logit
+                + ae_posterior_theta_logit
             )
             # E is a local tutoring hint, not a replacement for the diagnostic
             # head. Keep the student-specific route bounded so early epochs do
             # not overfit train-only mastery priors.
-            local_clip = query_weight.new_tensor(0.45)
+            local_clip = query_weight.new_tensor(0.75)
             tutor_local_navigation_logit = local_clip * torch.tanh(
                 tutor_local_navigation_logit / local_clip
             )
@@ -895,9 +939,15 @@ class CognitiveDiagnosisModel(nn.Module):
             "tutor_route_mastery_logit": torch.where(active, tutor_route_mastery_logit, zero_vec),
             "tutor_route_recent_logit": torch.where(active, tutor_route_recent_logit, zero_vec),
             "tutor_gap_penalty_logit": torch.where(active, tutor_gap_penalty_logit, zero_vec),
+            "tutor_posterior_mastery_shift_logit": torch.where(active, tutor_posterior_mastery_shift_logit, zero_vec),
+            "tutor_posterior_recent_shift_logit": torch.where(active, tutor_posterior_recent_shift_logit, zero_vec),
+            "tutor_posterior_theta_shift_logit": torch.where(active, tutor_posterior_theta_shift_logit, zero_vec),
             "tutor_local_navigation_logit": torch.where(active, tutor_local_navigation_logit, zero_vec),
             "tutor_route_mastery_delta": torch.where(active, tutor_route_mastery_delta, zero_vec),
             "tutor_route_recent_delta": torch.where(active, tutor_route_recent_delta, zero_vec),
+            "tutor_posterior_mastery_shift_delta": torch.where(active, tutor_posterior_mastery_shift_delta, zero_vec),
+            "tutor_posterior_recent_shift_delta": torch.where(active, tutor_posterior_recent_shift_delta, zero_vec),
+            "tutor_posterior_theta_shift_delta": torch.where(active, tutor_posterior_theta_shift_delta, zero_vec),
             "tutor_query_reliability": torch.where(active, tutor_query_reliability, zero_vec),
             "tutor_route_reliability": torch.where(active, tutor_route_reliability, zero_vec),
             "tutor_personal_route_mass": torch.where(active, tutor_personal_route_mass, zero_vec),
@@ -908,8 +958,8 @@ class CognitiveDiagnosisModel(nn.Module):
         return (
             residual,
             residual.detach().abs().mean(),
-            zero_scalar,
-            zero_scalar,
+            ae_posterior_prior_logit.detach().abs().mean(),
+            ae_posterior_prior_delta.detach().abs().mean(),
             component_details,
         )
 
