@@ -85,6 +85,7 @@ PHASE1_PERSONAL_ACTIVE_DEFAULTS = {
     # path was intentionally muted.  Phase1 is a mechanism test, so full-like E
     # variants must exercise the posterior and bounded query writeback.
     "personal_delta_scale": 1.0,
+    "ae_posterior_prior_scale": 1.0,
     "personal_query_correction_scale": 0.15,
     "personal_query_message_gain": 1.0,
 }
@@ -141,7 +142,18 @@ def _raise_if_personal_writes_all_zero(params: Dict[str, Any], variant: str) -> 
         return
     if variant in NEUTRAL_E_VARIANTS:
         return
-    active = any(_as_float(params, key) > 0.0 for key in PHASE1_PERSONAL_ACTIVE_DEFAULTS)
+    posterior_route_active = (
+        _as_float(params, "personal_delta_scale") > 0.0
+        and (
+            _as_float(params, "ae_posterior_prior_scale") > 0.0
+            or _as_float(params, "ae_posterior_theta_scale") > 0.0
+        )
+    )
+    query_writeback_active = (
+        _as_float(params, "personal_query_correction_scale") > 0.0
+        and _as_float(params, "personal_query_message_gain") > 0.0
+    )
+    active = posterior_route_active or query_writeback_active
     if not active:
         raise ValueError(
             f"{variant} keeps use_personal_graph=True but all E write paths are zero. "
@@ -180,6 +192,24 @@ def _apply_phase1_personal_activation(params: Dict[str, Any], variant: str, phas
         return
     for key in PHASE1_PERSONAL_ACTIVE_DEFAULTS:
         _ensure_positive(params, key)
+    _raise_if_personal_writes_all_zero(params, variant)
+
+
+def _apply_phase_personal_guard(params: Dict[str, Any], variant: str, phase: str, phase_epochs: int) -> None:
+    if phase == "phase1":
+        _apply_phase1_personal_activation(params, variant, phase_epochs)
+        return
+    if not bool(params.get("use_personal_graph", True)):
+        return
+    if variant in NEUTRAL_E_VARIANTS:
+        return
+    if _as_float(params, "personal_delta_scale") <= 0.0:
+        params["personal_delta_scale"] = PHASE1_PERSONAL_ACTIVE_DEFAULTS["personal_delta_scale"]
+    if (
+        _as_float(params, "ae_posterior_prior_scale") <= 0.0
+        and _as_float(params, "ae_posterior_theta_scale") <= 0.0
+    ):
+        params["ae_posterior_prior_scale"] = PHASE1_PERSONAL_ACTIVE_DEFAULTS["ae_posterior_prior_scale"]
     _raise_if_personal_writes_all_zero(params, variant)
 
 
@@ -259,6 +289,7 @@ RESULT_FIELD_HINTS = (
     "tutor_current_recent_logit_abs_mean",
     "tutor_route_mastery_logit_abs_mean",
     "tutor_route_recent_logit_abs_mean",
+    "tutor_student_readiness_logit_abs_mean",
     "tutor_gap_penalty_logit_abs_mean",
     "tutor_query_reliability_mean",
     "tutor_route_reliability_mean",
@@ -300,6 +331,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--poll_interval", type=int, default=30)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--cpu_threads_per_job", type=int, default=2)
     parser.add_argument("--phase1_epochs", type=int, default=6)
     parser.add_argument("--phase1_max_train_batches", type=int, default=120)
     parser.add_argument("--phase1_max_val_batches", type=int, default=60)
@@ -742,6 +774,14 @@ def update_status(path: Path, payload: Dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def apply_cpu_thread_limits(env: Dict[str, str], threads: int) -> Dict[str, str]:
+    threads = max(1, int(threads))
+    value = str(threads)
+    for key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        env[key] = value
+    return env
+
+
 def build_jobs(args: argparse.Namespace, run_id: str) -> List[MechanismJob]:
     phases = ["phase1", "phase2"] if args.phase == "both" else [args.phase]
     datasets = parse_csv_tokens(args.datasets)
@@ -755,12 +795,12 @@ def build_jobs(args: argparse.Namespace, run_id: str) -> List[MechanismJob]:
                 spec = _variant_spec(variant)
                 params = dict(base)
                 params.update(spec.overrides)
-                if phase == "phase1":
-                    _apply_phase1_personal_activation(
-                        params,
-                        variant,
-                        int(args.phase1_epochs),
-                    )
+                _apply_phase_personal_guard(
+                    params,
+                    variant,
+                    phase,
+                    int(args.phase1_epochs),
+                )
                 save_dir = Path("checkpoints") / "mechanism" / run_id / phase / dataset / variant
                 log_dir = Path("logs") / "mechanism" / run_id / phase / dataset / variant
                 if (not args.rerun_existing) and (save_dir / "test_results.json").exists():
@@ -865,6 +905,7 @@ def main() -> None:
             print(f"[PLAN] {mech_job.phase}/{mech_job.job.dataset}/{mech_job.variant} gpu={gpu_id}")
             print("       CMD:", " ".join(mech_job.job.cmd))
             env = _build_job_env(os.environ.copy(), gpu_id)
+            env = apply_cpu_thread_limits(env, args.cpu_threads_per_job)
             proc = subprocess.Popen(mech_job.job.cmd, env=env)
             running.append((proc, gpu_id, mech_job))
             gpu_load[gpu_id] = gpu_load.get(gpu_id, 0) + 1

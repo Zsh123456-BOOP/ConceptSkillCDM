@@ -319,6 +319,7 @@ class CognitiveDiagnosisModel(nn.Module):
             self.tutor_current_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.12))
             self.tutor_route_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.12))
             self.tutor_route_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.06))
+            self.tutor_student_readiness_weight_raw = nn.Parameter(self._inverse_softplus_value(0.08))
             self.tutor_gap_penalty_weight_raw = nn.Parameter(self._inverse_softplus_value(0.08))
 
         self._initialize_graph_prior_concept_embeddings()
@@ -693,12 +694,15 @@ class CognitiveDiagnosisModel(nn.Module):
             "tutor_posterior_mastery_shift_logit": zero_vec,
             "tutor_posterior_recent_shift_logit": zero_vec,
             "tutor_posterior_theta_shift_logit": zero_vec,
+            "tutor_student_readiness_logit": zero_vec,
             "tutor_local_navigation_logit": zero_vec,
             "tutor_route_mastery_delta": zero_vec,
             "tutor_route_recent_delta": zero_vec,
             "tutor_posterior_mastery_shift_delta": zero_vec,
             "tutor_posterior_recent_shift_delta": zero_vec,
             "tutor_posterior_theta_shift_delta": zero_vec,
+            "tutor_student_readiness_delta": zero_vec,
+            "tutor_student_readiness_confidence": zero_vec,
             "tutor_query_reliability": zero_vec,
             "tutor_route_reliability": zero_vec,
             "tutor_personal_route_mass": zero_vec,
@@ -788,12 +792,15 @@ class CognitiveDiagnosisModel(nn.Module):
         tutor_posterior_mastery_shift_logit = zero_vec
         tutor_posterior_recent_shift_logit = zero_vec
         tutor_posterior_theta_shift_logit = zero_vec
+        tutor_student_readiness_logit = zero_vec
         tutor_local_navigation_logit = zero_vec
         tutor_route_mastery_delta = zero_vec
         tutor_route_recent_delta = zero_vec
         tutor_posterior_mastery_shift_delta = zero_vec
         tutor_posterior_recent_shift_delta = zero_vec
         tutor_posterior_theta_shift_delta = zero_vec
+        tutor_student_readiness_delta = zero_vec
+        tutor_student_readiness_confidence = zero_vec
         tutor_query_reliability = zero_vec
         tutor_route_reliability = zero_vec
         tutor_personal_route_mass = zero_vec
@@ -845,6 +852,28 @@ class CognitiveDiagnosisModel(nn.Module):
             tutor_posterior_recent_shift_delta = (posterior_route_shift * sc_recent).sum(dim=1)
             tutor_route_mastery_delta = route_sc_prior - query_sc_prior
             tutor_route_recent_delta = route_recent_prior - query_recent_prior
+            student_prior = self.ae_student_prior_logit[student_ids].to(
+                dtype=query_weight.dtype,
+                device=device,
+            )
+            student_count_feature = self.ae_student_count_feature[student_ids].to(
+                dtype=query_weight.dtype,
+                device=device,
+            )
+            concept_prior_shift = (posterior_route_shift * concept_prior_vec.view(1, -1)).sum(dim=1)
+            missing_local_evidence = (1.0 - tutor_query_reliability).clamp(min=0.0, max=1.0)
+            tutor_student_readiness_confidence = torch.sigmoid(student_count_feature)
+            tutor_student_readiness_delta = student_prior * concept_prior_shift
+            tutor_student_readiness_logit = (
+                self.ae_posterior_prior_scale
+                * self._positive_weight(
+                    getattr(self, "tutor_student_readiness_weight_raw", None),
+                    tutor_student_readiness_delta,
+                )
+                * missing_local_evidence
+                * tutor_student_readiness_confidence
+                * tutor_student_readiness_delta
+            )
             tutor_current_mastery_logit = (
                 mastery_scale
                 * self._positive_weight(getattr(self, "tutor_current_mastery_weight_raw", None), query_sc_prior)
@@ -887,7 +916,12 @@ class CognitiveDiagnosisModel(nn.Module):
                 * tutor_posterior_recent_shift_delta
             )
             ae_posterior_prior_delta = tutor_posterior_mastery_shift_delta + 0.5 * tutor_posterior_recent_shift_delta
-            ae_posterior_prior_logit = tutor_posterior_mastery_shift_logit + 0.5 * tutor_posterior_recent_shift_logit
+            ae_posterior_prior_delta = ae_posterior_prior_delta + tutor_student_readiness_delta
+            ae_posterior_prior_logit = (
+                tutor_posterior_mastery_shift_logit
+                + 0.5 * tutor_posterior_recent_shift_logit
+                + tutor_student_readiness_logit
+            )
             if self.ae_posterior_theta_scale > 0.0 and ae_theta_state is not None:
                 theta_c = self.diagnosis_head.theta_proj(ae_theta_state).squeeze(-1)
                 tutor_posterior_theta_shift_delta = (posterior_route_shift * theta_c).sum(dim=1)
@@ -942,12 +976,15 @@ class CognitiveDiagnosisModel(nn.Module):
             "tutor_posterior_mastery_shift_logit": torch.where(active, tutor_posterior_mastery_shift_logit, zero_vec),
             "tutor_posterior_recent_shift_logit": torch.where(active, tutor_posterior_recent_shift_logit, zero_vec),
             "tutor_posterior_theta_shift_logit": torch.where(active, tutor_posterior_theta_shift_logit, zero_vec),
+            "tutor_student_readiness_logit": torch.where(active, tutor_student_readiness_logit, zero_vec),
             "tutor_local_navigation_logit": torch.where(active, tutor_local_navigation_logit, zero_vec),
             "tutor_route_mastery_delta": torch.where(active, tutor_route_mastery_delta, zero_vec),
             "tutor_route_recent_delta": torch.where(active, tutor_route_recent_delta, zero_vec),
             "tutor_posterior_mastery_shift_delta": torch.where(active, tutor_posterior_mastery_shift_delta, zero_vec),
             "tutor_posterior_recent_shift_delta": torch.where(active, tutor_posterior_recent_shift_delta, zero_vec),
             "tutor_posterior_theta_shift_delta": torch.where(active, tutor_posterior_theta_shift_delta, zero_vec),
+            "tutor_student_readiness_delta": torch.where(active, tutor_student_readiness_delta, zero_vec),
+            "tutor_student_readiness_confidence": torch.where(active, tutor_student_readiness_confidence, zero_vec),
             "tutor_query_reliability": torch.where(active, tutor_query_reliability, zero_vec),
             "tutor_route_reliability": torch.where(active, tutor_route_reliability, zero_vec),
             "tutor_personal_route_mass": torch.where(active, tutor_personal_route_mass, zero_vec),

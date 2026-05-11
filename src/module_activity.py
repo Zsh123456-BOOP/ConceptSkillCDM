@@ -60,6 +60,7 @@ def compute_module_activity(
     personal_recent_mastery_scores_absmeans: List[float] = []
     ae_posterior_prior_logit_absmeans: List[float] = []
     tutor_local_navigation_absmeans: List[float] = []
+    tutor_student_readiness_absmeans: List[float] = []
     e_student_global_absmeans: List[float] = []
     e_local_mastery_absmeans: List[float] = []
     personal_to_graph_query_ratios: List[float] = []
@@ -157,6 +158,11 @@ def compute_module_activity(
             if tutor_local is not None:
                 tutor_local_navigation_absmeans.extend(
                     tutor_local.reshape(-1).detach().cpu().numpy().tolist()
+                )
+            tutor_student_readiness = details.get("tutor_student_readiness_logit_abs_mean")
+            if tutor_student_readiness is not None:
+                tutor_student_readiness_absmeans.extend(
+                    tutor_student_readiness.reshape(-1).detach().cpu().numpy().tolist()
                 )
             e_student_global = details.get("e_student_global_logit")
             if e_student_global is not None:
@@ -258,6 +264,11 @@ def compute_module_activity(
             if tutor_local_navigation_absmeans
             else 0.0
         )
+        tutor_student_readiness_absmean = (
+            float(np.mean(tutor_student_readiness_absmeans))
+            if tutor_student_readiness_absmeans
+            else 0.0
+        )
         e_student_global_absmean = (
             float(np.mean(e_student_global_absmeans)) if e_student_global_absmeans else 0.0
         )
@@ -292,6 +303,7 @@ def compute_module_activity(
         results["personal_recent_mastery_scores_absmean"] = recent_mastery_scores_absmean
         results["ae_posterior_prior_logit_absmean"] = posterior_prior_logit_absmean
         results["tutor_local_navigation_absmean"] = tutor_local_navigation_absmean
+        results["tutor_student_readiness_absmean"] = tutor_student_readiness_absmean
         results["e_student_global_absmean"] = e_student_global_absmean
         results["e_local_mastery_absmean"] = e_local_mastery_absmean
         results["personal_to_graph_query_ratio"] = query_ratio
@@ -520,6 +532,10 @@ def format_activity_report(
         lines.append(
             f"   - Tutor local navigation logit absmean: "
             f"{activity.get('tutor_local_navigation_absmean', 0.0):.4f}"
+        )
+        lines.append(
+            f"   - Tutor student-readiness logit absmean: "
+            f"{activity.get('tutor_student_readiness_absmean', 0.0):.4f}"
         )
         lines.append(f"   - E student-global logit absmean: {activity.get('e_student_global_absmean', 0.0):.4f}")
         lines.append(f"   - E local mastery logit absmean: {activity.get('e_local_mastery_absmean', 0.0):.4f}")

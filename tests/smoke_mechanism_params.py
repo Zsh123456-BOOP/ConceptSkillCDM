@@ -13,13 +13,14 @@ def _assert(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def _args(*, variants: str, phase1_epochs: int = 6) -> SimpleNamespace:
+def _args(*, variants: str, phase: str = "phase1", phase1_epochs: int = 6) -> SimpleNamespace:
     return SimpleNamespace(
-        phase="phase1",
+        phase=phase,
         datasets="assist_09",
         variants=variants,
         seed=42,
         num_workers=0,
+        cpu_threads_per_job=2,
         phase1_epochs=phase1_epochs,
         phase1_max_train_batches=4,
         phase1_max_val_batches=2,
@@ -32,10 +33,10 @@ def _args(*, variants: str, phase1_epochs: int = 6) -> SimpleNamespace:
     )
 
 
-def _params_by_variant(variants: str):
+def _params_by_variant(variants: str, *, phase: str = "phase1"):
     from tools.run_mechanism_experiments import build_jobs
 
-    jobs = build_jobs(_args(variants=variants), run_id="smoke_mechanism_params")
+    jobs = build_jobs(_args(variants=variants, phase=phase), run_id="smoke_mechanism_params")
     return {job.variant: job.params for job in jobs}
 
 
@@ -84,10 +85,24 @@ def _check_controls_keep_their_semantics() -> None:
     _assert(float(query_only["personal_query_message_gain"]) > 0.0, "query-only should keep query message active.")
 
 
+def _check_phase2_full_cannot_mute_posterior_route() -> None:
+    params_by_variant = _params_by_variant("full,E_shuffle_student,no_E", phase="phase2")
+    for variant in ("full", "E_shuffle_student"):
+        params = params_by_variant[variant]
+        _assert(bool(params["use_personal_graph"]), f"{variant} should keep E enabled.")
+        _assert(float(params["personal_delta_scale"]) > 0.0, f"{variant} should keep posterior route movable.")
+        _assert(
+            float(params["ae_posterior_prior_scale"]) > 0.0 or float(params["ae_posterior_theta_scale"]) > 0.0,
+            f"{variant} should keep an E posterior write path active.",
+        )
+    _assert(not bool(params_by_variant["no_E"]["use_personal_graph"]), "phase2 no_E should disable E.")
+
+
 def main() -> None:
     _check_phase1_full_activates_e_writing()
     _check_controls_keep_their_semantics()
-    print("OK: mechanism phase1 params keep E active only where intended.")
+    _check_phase2_full_cannot_mute_posterior_route()
+    print("OK: mechanism params keep E active only where intended.")
 
 
 if __name__ == "__main__":
