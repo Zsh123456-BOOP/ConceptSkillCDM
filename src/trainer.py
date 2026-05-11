@@ -1189,9 +1189,13 @@ def _collect_debug_forward_stats(
     ae_raw_logit_after_clip_abs_vals: List[float] = []
     roadmap_difficulty_logit_abs_vals: List[float] = []
     roadmap_reliability_logit_abs_vals: List[float] = []
+    roadmap_item_logit_abs_vals: List[float] = []
+    roadmap_sequence_logit_abs_vals: List[float] = []
     roadmap_macro_logit_abs_vals: List[float] = []
     roadmap_route_difficulty_delta_abs_vals: List[float] = []
     roadmap_route_reliability_delta_abs_vals: List[float] = []
+    roadmap_item_difficulty_delta_abs_vals: List[float] = []
+    roadmap_sequence_difficulty_delta_abs_vals: List[float] = []
     tutor_current_mastery_logit_abs_vals: List[float] = []
     tutor_current_recent_logit_abs_vals: List[float] = []
     tutor_route_mastery_logit_abs_vals: List[float] = []
@@ -1202,6 +1206,8 @@ def _collect_debug_forward_stats(
     tutor_route_recent_delta_abs_vals: List[float] = []
     tutor_query_reliability_vals: List[float] = []
     tutor_route_reliability_vals: List[float] = []
+    tutor_personal_route_mass_vals: List[float] = []
+    tutor_personal_route_delta_vals: List[float] = []
     map_raw_logit_before_clip_abs_vals: List[float] = []
     map_raw_logit_after_clip_abs_vals: List[float] = []
 
@@ -1343,9 +1349,13 @@ def _collect_debug_forward_stats(
                 ("ae_raw_logit_after_clip_abs_mean", ae_raw_logit_after_clip_abs_vals),
                 ("roadmap_difficulty_logit_abs_mean", roadmap_difficulty_logit_abs_vals),
                 ("roadmap_reliability_logit_abs_mean", roadmap_reliability_logit_abs_vals),
+                ("roadmap_item_logit_abs_mean", roadmap_item_logit_abs_vals),
+                ("roadmap_sequence_logit_abs_mean", roadmap_sequence_logit_abs_vals),
                 ("roadmap_macro_logit_abs_mean", roadmap_macro_logit_abs_vals),
                 ("roadmap_route_difficulty_delta_abs_mean", roadmap_route_difficulty_delta_abs_vals),
                 ("roadmap_route_reliability_delta_abs_mean", roadmap_route_reliability_delta_abs_vals),
+                ("roadmap_item_difficulty_delta_abs_mean", roadmap_item_difficulty_delta_abs_vals),
+                ("roadmap_sequence_difficulty_delta_abs_mean", roadmap_sequence_difficulty_delta_abs_vals),
                 ("tutor_current_mastery_logit_abs_mean", tutor_current_mastery_logit_abs_vals),
                 ("tutor_current_recent_logit_abs_mean", tutor_current_recent_logit_abs_vals),
                 ("tutor_route_mastery_logit_abs_mean", tutor_route_mastery_logit_abs_vals),
@@ -1356,6 +1366,8 @@ def _collect_debug_forward_stats(
                 ("tutor_route_recent_delta_abs_mean", tutor_route_recent_delta_abs_vals),
                 ("tutor_query_reliability_abs_mean", tutor_query_reliability_vals),
                 ("tutor_route_reliability_abs_mean", tutor_route_reliability_vals),
+                ("tutor_personal_route_mass_abs_mean", tutor_personal_route_mass_vals),
+                ("tutor_personal_route_delta_abs_mean", tutor_personal_route_delta_vals),
                 ("map_raw_logit_before_clip_abs_mean", map_raw_logit_before_clip_abs_vals),
                 ("map_raw_logit_after_clip_abs_mean", map_raw_logit_after_clip_abs_vals),
                 ("query_row_posterior_delta_abs", query_row_posterior_delta_abs_vals),
@@ -1534,9 +1546,13 @@ def _collect_debug_forward_stats(
     ae_raw_logit_after_clip_abs_mean, _ = _safe_mean_std(ae_raw_logit_after_clip_abs_vals)
     roadmap_difficulty_logit_abs_mean, _ = _safe_mean_std(roadmap_difficulty_logit_abs_vals)
     roadmap_reliability_logit_abs_mean, _ = _safe_mean_std(roadmap_reliability_logit_abs_vals)
+    roadmap_item_logit_abs_mean, _ = _safe_mean_std(roadmap_item_logit_abs_vals)
+    roadmap_sequence_logit_abs_mean, _ = _safe_mean_std(roadmap_sequence_logit_abs_vals)
     roadmap_macro_logit_abs_mean, _ = _safe_mean_std(roadmap_macro_logit_abs_vals)
     roadmap_route_difficulty_delta_abs_mean, _ = _safe_mean_std(roadmap_route_difficulty_delta_abs_vals)
     roadmap_route_reliability_delta_abs_mean, _ = _safe_mean_std(roadmap_route_reliability_delta_abs_vals)
+    roadmap_item_difficulty_delta_abs_mean, _ = _safe_mean_std(roadmap_item_difficulty_delta_abs_vals)
+    roadmap_sequence_difficulty_delta_abs_mean, _ = _safe_mean_std(roadmap_sequence_difficulty_delta_abs_vals)
     tutor_current_mastery_logit_abs_mean, _ = _safe_mean_std(tutor_current_mastery_logit_abs_vals)
     tutor_current_recent_logit_abs_mean, _ = _safe_mean_std(tutor_current_recent_logit_abs_vals)
     tutor_route_mastery_logit_abs_mean, _ = _safe_mean_std(tutor_route_mastery_logit_abs_vals)
@@ -1547,6 +1563,8 @@ def _collect_debug_forward_stats(
     tutor_route_recent_delta_abs_mean, _ = _safe_mean_std(tutor_route_recent_delta_abs_vals)
     tutor_query_reliability_mean, _ = _safe_mean_std(tutor_query_reliability_vals)
     tutor_route_reliability_mean, _ = _safe_mean_std(tutor_route_reliability_vals)
+    tutor_personal_route_mass_mean, _ = _safe_mean_std(tutor_personal_route_mass_vals)
+    tutor_personal_route_delta_abs_mean, _ = _safe_mean_std(tutor_personal_route_delta_vals)
     map_raw_logit_before_clip_abs_mean, _ = _safe_mean_std(map_raw_logit_before_clip_abs_vals)
     map_raw_logit_after_clip_abs_mean, _ = _safe_mean_std(map_raw_logit_after_clip_abs_vals)
 
@@ -1664,9 +1682,13 @@ def _collect_debug_forward_stats(
         "ae_raw_logit_after_clip_abs_mean": ae_raw_logit_after_clip_abs_mean,
         "roadmap_difficulty_logit_abs_mean": roadmap_difficulty_logit_abs_mean,
         "roadmap_reliability_logit_abs_mean": roadmap_reliability_logit_abs_mean,
+        "roadmap_item_logit_abs_mean": roadmap_item_logit_abs_mean,
+        "roadmap_sequence_logit_abs_mean": roadmap_sequence_logit_abs_mean,
         "roadmap_macro_logit_abs_mean": roadmap_macro_logit_abs_mean,
         "roadmap_route_difficulty_delta_abs_mean": roadmap_route_difficulty_delta_abs_mean,
         "roadmap_route_reliability_delta_abs_mean": roadmap_route_reliability_delta_abs_mean,
+        "roadmap_item_difficulty_delta_abs_mean": roadmap_item_difficulty_delta_abs_mean,
+        "roadmap_sequence_difficulty_delta_abs_mean": roadmap_sequence_difficulty_delta_abs_mean,
         "tutor_current_mastery_logit_abs_mean": tutor_current_mastery_logit_abs_mean,
         "tutor_current_recent_logit_abs_mean": tutor_current_recent_logit_abs_mean,
         "tutor_route_mastery_logit_abs_mean": tutor_route_mastery_logit_abs_mean,
@@ -1677,6 +1699,8 @@ def _collect_debug_forward_stats(
         "tutor_route_recent_delta_abs_mean": tutor_route_recent_delta_abs_mean,
         "tutor_query_reliability_mean": tutor_query_reliability_mean,
         "tutor_route_reliability_mean": tutor_route_reliability_mean,
+        "tutor_personal_route_mass_mean": tutor_personal_route_mass_mean,
+        "tutor_personal_route_delta_abs_mean": tutor_personal_route_delta_abs_mean,
         "map_raw_logit_before_clip_abs_mean": map_raw_logit_before_clip_abs_mean,
         "map_raw_logit_after_clip_abs_mean": map_raw_logit_after_clip_abs_mean,
         "ae_posterior_prior_scale": float(getattr(base_model, "ae_posterior_prior_scale", 0.0)),

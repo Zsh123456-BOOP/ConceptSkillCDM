@@ -313,6 +313,8 @@ class CognitiveDiagnosisModel(nn.Module):
         if map_predictor_enabled:
             self.roadmap_difficulty_weight_raw = nn.Parameter(self._inverse_softplus_value(0.18))
             self.roadmap_reliability_weight_raw = nn.Parameter(self._inverse_softplus_value(0.04))
+            self.roadmap_item_weight_raw = nn.Parameter(self._inverse_softplus_value(0.10))
+            self.roadmap_sequence_weight_raw = nn.Parameter(self._inverse_softplus_value(0.12))
             self.tutor_current_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.55))
             self.tutor_current_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.35))
             self.tutor_route_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.45))
@@ -676,9 +678,13 @@ class CognitiveDiagnosisModel(nn.Module):
         zero_components: Dict[str, torch.Tensor] = {
             "roadmap_difficulty_logit": zero_vec,
             "roadmap_reliability_logit": zero_vec,
+            "roadmap_item_logit": zero_vec,
+            "roadmap_sequence_logit": zero_vec,
             "roadmap_macro_logit": zero_vec,
             "roadmap_route_difficulty_delta": zero_vec,
             "roadmap_route_reliability_delta": zero_vec,
+            "roadmap_item_difficulty_delta": zero_vec,
+            "roadmap_sequence_difficulty_delta": zero_vec,
             "tutor_current_mastery_logit": zero_vec,
             "tutor_current_recent_logit": zero_vec,
             "tutor_route_mastery_logit": zero_vec,
@@ -689,6 +695,8 @@ class CognitiveDiagnosisModel(nn.Module):
             "tutor_route_recent_delta": zero_vec,
             "tutor_query_reliability": zero_vec,
             "tutor_route_reliability": zero_vec,
+            "tutor_personal_route_mass": zero_vec,
+            "tutor_personal_route_delta": zero_vec,
             "map_raw_logit_before_clip": zero_vec,
             "map_raw_logit_after_clip": zero_vec,
         }
@@ -709,11 +717,23 @@ class CognitiveDiagnosisModel(nn.Module):
         concept_prior_vec = self.ae_concept_prior_logit.to(dtype=query_weight.dtype, device=device)
         concept_count_vec = self.ae_concept_count_feature.to(dtype=query_weight.dtype, device=device)
 
+        def _source_route_weight(prior_matrix: torch.Tensor) -> torch.Tensor:
+            """Use source evidence when present; empty rows fall back to uniform control."""
+            prior = prior_matrix.to(dtype=query_weight.dtype, device=device).clamp(min=0.0)
+            row_sum = prior.sum(dim=-1, keepdim=True)
+            fallback = uniform_relation
+            route_matrix = torch.where(row_sum > 1e-12, prior / row_sum.clamp(min=1e-12), fallback)
+            return query_weight.matmul(route_matrix)
+
         roadmap_difficulty_logit = zero_vec
         roadmap_reliability_logit = zero_vec
+        roadmap_item_logit = zero_vec
+        roadmap_sequence_logit = zero_vec
         roadmap_macro_logit = zero_vec
         roadmap_route_difficulty_delta = zero_vec
         roadmap_route_reliability_delta = zero_vec
+        roadmap_item_difficulty_delta = zero_vec
+        roadmap_sequence_difficulty_delta = zero_vec
         if self.use_concept_graph:
             if isinstance(relation_matrices, dict):
                 global_relation = relation_matrices["global_matrices"]
@@ -733,7 +753,24 @@ class CognitiveDiagnosisModel(nn.Module):
                 self._positive_weight(getattr(self, "roadmap_reliability_weight_raw", None), roadmap_route_reliability_delta)
                 * roadmap_route_reliability_delta
             )
-            roadmap_macro_logit = roadmap_difficulty_logit + roadmap_reliability_logit
+            item_query_weight = _source_route_weight(self.item_prior_matrix)
+            sequence_query_weight = _source_route_weight(self.sequence_prior_matrix)
+            roadmap_item_difficulty_delta = (item_query_weight - uniform_query_weight).matmul(concept_prior_vec)
+            roadmap_sequence_difficulty_delta = (sequence_query_weight - uniform_query_weight).matmul(concept_prior_vec)
+            roadmap_item_logit = (
+                self._positive_weight(getattr(self, "roadmap_item_weight_raw", None), roadmap_item_difficulty_delta)
+                * roadmap_item_difficulty_delta
+            )
+            roadmap_sequence_logit = (
+                self._positive_weight(getattr(self, "roadmap_sequence_weight_raw", None), roadmap_sequence_difficulty_delta)
+                * roadmap_sequence_difficulty_delta
+            )
+            roadmap_macro_logit = (
+                roadmap_difficulty_logit
+                + roadmap_reliability_logit
+                + roadmap_item_logit
+                + roadmap_sequence_logit
+            )
 
         student_concept_prior = getattr(self, "ae_student_concept_prior_logit", None)
         student_concept_recent = getattr(self, "ae_student_concept_recent_logit", None)
@@ -747,7 +784,22 @@ class CognitiveDiagnosisModel(nn.Module):
         tutor_route_recent_delta = zero_vec
         tutor_query_reliability = zero_vec
         tutor_route_reliability = zero_vec
+        tutor_personal_route_mass = zero_vec
+        tutor_personal_route_delta = zero_vec
         if self.use_personal_graph and student_concept_prior is not None:
+            personal_route_weight = graph_query_weight
+            if isinstance(personal_relation_spec, dict):
+                candidate_route = self._query_sparse_support_distribution(
+                    query_weight,
+                    personal_relation_spec,
+                    probability_key="posterior_prob",
+                )
+                candidate_mass = candidate_route.sum(dim=1, keepdim=True)
+                has_candidate = candidate_mass > 1e-12
+                normalized_candidate = candidate_route / candidate_mass.clamp(min=1e-12)
+                personal_route_weight = torch.where(has_candidate, normalized_candidate, graph_query_weight)
+                tutor_personal_route_mass = candidate_mass.squeeze(-1)
+                tutor_personal_route_delta = (personal_route_weight - graph_query_weight).abs().sum(dim=1)
             sc_prior = student_concept_prior[student_ids].to(dtype=query_weight.dtype, device=device)
             sc_recent = (
                 student_concept_recent[student_ids].to(dtype=query_weight.dtype, device=device)
@@ -760,7 +812,7 @@ class CognitiveDiagnosisModel(nn.Module):
             )
             smoothing = max(0.0, float(self.personal_mastery_count_smoothing))
             query_observed_count = (query_weight * observed_counts).sum(dim=1)
-            graph_observed_count = (graph_query_weight * observed_counts).sum(dim=1)
+            graph_observed_count = (personal_route_weight * observed_counts).sum(dim=1)
             if smoothing > 0.0:
                 tutor_query_reliability = query_observed_count / (query_observed_count + smoothing).clamp(min=1e-6)
                 tutor_route_reliability = graph_observed_count / (graph_observed_count + smoothing).clamp(min=1e-6)
@@ -770,8 +822,8 @@ class CognitiveDiagnosisModel(nn.Module):
             paired_reliability = torch.sqrt((tutor_query_reliability * tutor_route_reliability).clamp(min=0.0))
             query_sc_prior = (query_weight * sc_prior).sum(dim=1)
             query_recent_prior = (query_weight * sc_recent).sum(dim=1)
-            route_sc_prior = (graph_query_weight * sc_prior).sum(dim=1)
-            route_recent_prior = (graph_query_weight * sc_recent).sum(dim=1)
+            route_sc_prior = (personal_route_weight * sc_prior).sum(dim=1)
+            route_recent_prior = (personal_route_weight * sc_recent).sum(dim=1)
             tutor_route_mastery_delta = route_sc_prior - query_sc_prior
             tutor_route_recent_delta = route_recent_prior - query_recent_prior
             tutor_current_mastery_logit = (
@@ -824,9 +876,13 @@ class CognitiveDiagnosisModel(nn.Module):
         component_details: Dict[str, torch.Tensor] = {
             "roadmap_difficulty_logit": torch.where(active, roadmap_difficulty_logit, zero_vec),
             "roadmap_reliability_logit": torch.where(active, roadmap_reliability_logit, zero_vec),
+            "roadmap_item_logit": torch.where(active, roadmap_item_logit, zero_vec),
+            "roadmap_sequence_logit": torch.where(active, roadmap_sequence_logit, zero_vec),
             "roadmap_macro_logit": torch.where(active, roadmap_macro_logit, zero_vec),
             "roadmap_route_difficulty_delta": torch.where(active, roadmap_route_difficulty_delta, zero_vec),
             "roadmap_route_reliability_delta": torch.where(active, roadmap_route_reliability_delta, zero_vec),
+            "roadmap_item_difficulty_delta": torch.where(active, roadmap_item_difficulty_delta, zero_vec),
+            "roadmap_sequence_difficulty_delta": torch.where(active, roadmap_sequence_difficulty_delta, zero_vec),
             "tutor_current_mastery_logit": torch.where(active, tutor_current_mastery_logit, zero_vec),
             "tutor_current_recent_logit": torch.where(active, tutor_current_recent_logit, zero_vec),
             "tutor_route_mastery_logit": torch.where(active, tutor_route_mastery_logit, zero_vec),
@@ -837,6 +893,8 @@ class CognitiveDiagnosisModel(nn.Module):
             "tutor_route_recent_delta": torch.where(active, tutor_route_recent_delta, zero_vec),
             "tutor_query_reliability": torch.where(active, tutor_query_reliability, zero_vec),
             "tutor_route_reliability": torch.where(active, tutor_route_reliability, zero_vec),
+            "tutor_personal_route_mass": torch.where(active, tutor_personal_route_mass, zero_vec),
+            "tutor_personal_route_delta": torch.where(active, tutor_personal_route_delta, zero_vec),
             "map_raw_logit_before_clip": torch.where(active, raw_before_clip, zero_vec),
             "map_raw_logit_after_clip": torch.where(active, raw, zero_vec),
         }

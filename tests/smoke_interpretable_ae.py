@@ -145,6 +145,8 @@ def _check_roadmap_and_tutor_are_not_blackbox_modules() -> None:
     for name in (
         "roadmap_difficulty_weight_raw",
         "roadmap_reliability_weight_raw",
+        "roadmap_item_weight_raw",
+        "roadmap_sequence_weight_raw",
         "tutor_current_mastery_weight_raw",
         "tutor_current_recent_weight_raw",
         "tutor_route_mastery_weight_raw",
@@ -165,6 +167,10 @@ def _check_roadmap_and_tutor_are_not_blackbox_modules() -> None:
     _assert(details["ae_logit_residual_abs_mean"].item() > 0.0, "Interpretable AE residual should be active.")
     _assert(details["roadmap_macro_logit_abs_mean"].item() > 0.0, "A roadmap contribution should be active.")
     _assert(details["tutor_local_navigation_logit_abs_mean"].item() > 0.0, "E tutoring contribution should be active.")
+    _assert(
+        details["tutor_personal_route_delta_abs_mean"].item() > 0.0,
+        "E local navigation should use the personalized posterior route, not only the global A route.",
+    )
     _assert(isinstance(details["personal_relation_spec"], dict), "E should still expose sparse relation spec.")
     posterior = details["personal_relation_spec"]["posterior_prob"]
     support_valid = details["personal_relation_spec"]["support_valid_mask"].bool()
