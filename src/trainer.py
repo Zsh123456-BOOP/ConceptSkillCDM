@@ -793,10 +793,9 @@ def _initialize_ae_stat_priors(
         perm = torch.randperm(student_concept_logits.size(0), generator=generator)
         student_concept_logits = student_concept_logits[perm]
         student_concept_recent_logits = student_concept_recent_logits[perm]
-        count_features["student_concept"] = count_features["student_concept"][perm]
-        count_features["student_concept_observed"] = count_features["student_concept_observed"][perm]
         logger.info(
-            "%s E shuffle control enabled: student-concept mastery/count evidence is permuted with seed=%s.",
+            "%s E shuffle control enabled: student-concept mastery evidence is permuted with seed=%s; "
+            "reliability counts remain tied to the actual student to avoid an adversarial count mismatch.",
             run_tag,
             int(getattr(args, "seed", 42)) + 7919,
         )
