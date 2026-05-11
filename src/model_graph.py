@@ -473,9 +473,8 @@ class StudentKnowledgeEncoder(nn.Module):
 
         for gnn, ln in zip(self.gnn_layers, self.layer_norms):
             propagated = gnn(h, relation_matrices)
-            residual = h + self.gnn_residual_weight * propagated
-            h = ln((1.0 - self.propagation_alpha) * residual + self.propagation_alpha * h0)
-            h = F.relu(h)
+            candidate = F.relu(ln(h + self.gnn_residual_weight * propagated))
+            h = (1.0 - self.propagation_alpha) * h + self.propagation_alpha * candidate
             hop_states.append(h)
 
         hop_weights = F.softmax(self.hop_mix_logits[: len(hop_states)], dim=0)
