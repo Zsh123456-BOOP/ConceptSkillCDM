@@ -157,7 +157,15 @@ BASE_SINGLE_ABLATIONS: Tuple[AblationSpec, ...] = (
     AblationSpec(
         name="no_A",
         flags={"ablate_concept_graph": True},
-        overrides={},
+        overrides={
+            "use_personal_graph": False,
+            "lambda_sparse_personal": 0.0,
+            "lambda_alpha": 0.0,
+            "lambda_alpha_min": 0.0,
+            "alpha_min_target": 0.0,
+            "personal_mastery_prior_scale": 0.0,
+            "personal_recent_mastery_prior_scale": 0.0,
+        },
     ),
     AblationSpec(
         name="no_E",
@@ -220,6 +228,8 @@ def append_arg(cmd: List[str], key: str, value: Any) -> None:
 
 
 def _job_uses_personal_graph(params: Dict[str, Any], ablation: AblationSpec) -> bool:
+    if bool(ablation.flags.get("ablate_concept_graph", False)):
+        return False
     if "use_personal_graph" in params:
         return bool(params["use_personal_graph"])
     return ablation.name != "no_E"
@@ -439,6 +449,8 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
 def _expected_runtime_flags(job: JobSpec) -> Dict[str, Any]:
     use_concept_graph = not bool(job.ablation.flags.get("ablate_concept_graph", False))
     use_personal_graph = bool(job.params.get("use_personal_graph", job.ablation.name != "no_E"))
+    if not use_concept_graph:
+        use_personal_graph = False
     return {
         "enable_module1": True,
         "use_concept_graph": use_concept_graph,

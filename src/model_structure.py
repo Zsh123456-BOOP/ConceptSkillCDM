@@ -134,7 +134,9 @@ class ConceptStructureModeling(nn.Module):
 
         # -------- 正常启用：A/E 可选 --------
         self.use_concept_graph = bool(use_concept_graph)
-        self.use_personal_graph = bool(use_personal_graph)
+        # E is a student-conditioned reweighting of A support. Without A there
+        # is no interpretable support substrate to personalize.
+        self.use_personal_graph = bool(use_personal_graph and self.use_concept_graph)
 
         # A) 全局概念图学习
         if self.use_concept_graph:

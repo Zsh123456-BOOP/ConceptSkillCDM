@@ -454,6 +454,14 @@ def main():
         args.lambda_sparse = 0.0
         args.lambda_sparse_personal = 0.0
         args.lambda_alpha = 0.0
+    elif not use_concept_graph:
+        # E is only interpretable as a posterior over A support. no_A therefore
+        # removes the personalized support space as well.
+        use_personal_graph = False
+        args.lambda_sparse_personal = 0.0
+        args.lambda_alpha = 0.0
+        args.lambda_alpha_min = 0.0
+        args.alpha_min_target = 0.0
 
     args.use_concept_graph = bool(use_concept_graph)
     args.use_personal_graph = bool(use_personal_graph)

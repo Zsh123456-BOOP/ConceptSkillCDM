@@ -132,7 +132,10 @@ class CognitiveDiagnosisModel(nn.Module):
             use_personal_graph = False
 
         self.use_concept_graph = bool(use_concept_graph)
-        self.use_personal_graph = bool(use_personal_graph)
+        # E is defined as a local posterior over A's global support. Keeping E
+        # alive when A is ablated creates an unowned fallback map and makes no_A
+        # an incomplete ablation.
+        self.use_personal_graph = bool(use_personal_graph and self.use_concept_graph)
 
         self.lambda_graph_entropy = float(lambda_graph_entropy)
         self.graph_entropy_min = float(graph_entropy_min)

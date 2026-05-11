@@ -213,31 +213,7 @@ def run_structure_forward(
                 )
         support_row_cache = None
         if active_row_index is not None and active_row_valid_mask is not None:
-            if not module.use_concept_graph:
-                if module.personal_support_include_neighbors and local_row_mask is not None:
-                    query_support_mask = local_row_mask.bool()
-                elif query_row_mask is not None:
-                    query_support_mask = query_row_mask.bool()
-                elif active_source_mask is not None:
-                    query_support_mask = active_source_mask.bool()
-                else:
-                    query_support_mask = torch.zeros(
-                        (knowledge_state.size(0), module.num_concepts),
-                        device=knowledge_state.device,
-                        dtype=torch.bool,
-                    )
-                support_row_cache = _build_no_a_query_support_cache(
-                    query_support_mask,
-                    module.num_concepts,
-                    include_neighbor_rows=module.personal_include_neighbor_rows,
-                    local_hops=module.personal_query_support_hops,
-                    num_heads=module.num_relation_heads,
-                    active_row_index=active_row_index,
-                    active_row_valid_mask=active_row_valid_mask,
-                    dtype=knowledge_state.dtype,
-                )
-                used_no_a_support_fallback_mode = relation_matrices.new_tensor(1, dtype=torch.long)
-            else:
+            if module.use_concept_graph:
                 if module.personal_support_include_graph:
                     support_cache = _build_support_cache(
                         relation_matrices,

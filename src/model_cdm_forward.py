@@ -25,13 +25,13 @@ def run_cdm_forward(
         identity_relations=model.identity_relations,
         concept_mask=q_vector,
         student_concept_prior=model.ae_student_concept_prior_logit[student_ids]
-        if getattr(model, "personal_mastery_prior_scale", 0.0) > 0.0
+        if model.use_personal_graph and getattr(model, "personal_mastery_prior_scale", 0.0) > 0.0
         else None,
         student_concept_recent_prior=model.ae_student_concept_recent_logit[student_ids]
-        if getattr(model, "personal_recent_mastery_prior_scale", 0.0) > 0.0
+        if model.use_personal_graph and getattr(model, "personal_recent_mastery_prior_scale", 0.0) > 0.0
         else None,
         student_concept_count=model.ae_student_concept_observed_count[student_ids]
-        if getattr(model, "personal_mastery_count_smoothing", 0.0) > 0.0
+        if model.use_personal_graph and getattr(model, "personal_mastery_count_smoothing", 0.0) > 0.0
         else None,
     )
     relation_matrices = s_out["relation_matrices"]

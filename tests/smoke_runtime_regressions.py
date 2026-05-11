@@ -240,6 +240,45 @@ def _check_per_head_personal_graph() -> None:
         _assert(key in details, f"Expected detail key: {key}.")
 
 
+def _check_no_a_removes_personal_support_space() -> None:
+    model = _build_model(ablate_module1=False, use_concept_graph=False, use_personal_graph=True)
+    _assert(not model.use_concept_graph, "Smoke setup should disable the global concept graph.")
+    _assert(
+        not model.use_personal_graph,
+        "E must be disabled when A is disabled; personalized support is defined inside A support.",
+    )
+    _assert(
+        not model.structure_module.use_personal_graph,
+        "Structure module must not keep E alive under no_A.",
+    )
+    _assert(model.structure_module.adaptive_gate is None, "no_A should not instantiate the E gate.")
+    _assert(model.structure_module.personal_generator is None, "no_A should not instantiate the E generator.")
+
+    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    with torch.no_grad():
+        _, details = model(
+            student_ids=student_ids,
+            exercise_ids=exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+
+    _assert(details.get("personal_relation_spec") is None, "no_A should not expose an E posterior.")
+    _assert(
+        not isinstance(details.get("relation_used"), dict),
+        "no_A should not expose sparse personalized relation_used.",
+    )
+    _assert(
+        int(details.get("used_no_a_support_fallback_mode", torch.tensor(0)).item()) == 0,
+        "no_A must not build a fallback support space for E.",
+    )
+    _assert(
+        details.get("query_row_posterior_delta_abs", torch.tensor(0.0)).item() == 0.0,
+        "no_A should have zero E posterior delta.",
+    )
+
+
 def _check_removed_residual_artifacts() -> None:
     model = _build_model(ablate_module1=False, use_personal_graph=True)
     student_ids = torch.tensor([0, 1], dtype=torch.long)
@@ -343,6 +382,7 @@ def main() -> None:
     _check_module1_ae_numerics_and_signals()
     _check_graph_query_adapter_is_initially_residual()
     _check_per_head_personal_graph()
+    _check_no_a_removes_personal_support_space()
     _check_removed_residual_artifacts()
     _check_relation_theta_readout_is_interpretable_and_ablatable()
     _check_get_student_diagnosis()
