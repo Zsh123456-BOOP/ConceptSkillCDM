@@ -48,6 +48,7 @@ def _build_model(
     use_concept_graph: bool = True,
     use_personal_graph: bool = True,
     relation_theta_scale: float = 0.0,
+    **overrides,
 ):
     from src.model import CognitiveDiagnosisModel
 
@@ -60,7 +61,7 @@ def _build_model(
         ],
         dtype=torch.float32,
     )
-    model = CognitiveDiagnosisModel(
+    params = dict(
         num_students=5,
         num_exercises=4,
         num_concepts=3,
@@ -78,6 +79,8 @@ def _build_model(
         allow_self_loop=True,
         relation_theta_scale=relation_theta_scale,
     )
+    params.update(overrides)
+    model = CognitiveDiagnosisModel(**params)
     model.eval()
     return model
 
@@ -279,6 +282,61 @@ def _check_no_a_removes_personal_support_space() -> None:
     )
 
 
+def _check_e_does_not_create_direct_logit_bypass() -> None:
+    model = _build_model(
+        ablate_module1=False,
+        use_concept_graph=True,
+        use_personal_graph=True,
+        ae_logit_residual_scale=1.0,
+        ae_posterior_prior_scale=2.0,
+        personal_mastery_prior_scale=1.0,
+        personal_recent_mastery_prior_scale=0.5,
+        personal_mastery_count_smoothing=1.0,
+        personal_delta_scale=3.0,
+        personal_query_correction_scale=0.15,
+        personal_query_message_gain=1.0,
+        personal_warmup_epochs=0,
+        personal_reg_warmup_epochs=0,
+    )
+    model.eval()
+    with torch.no_grad():
+        model.ae_student_concept_prior_logit.copy_(
+            torch.tensor(
+                [
+                    [1.5, -1.0, 0.4],
+                    [-0.8, 1.2, -0.2],
+                    [0.6, -0.4, 1.0],
+                    [1.0, 0.2, -1.2],
+                    [-1.0, 0.8, 0.3],
+                ],
+                dtype=model.ae_student_concept_prior_logit.dtype,
+            )
+        )
+        model.ae_student_concept_recent_logit.copy_(0.5 * model.ae_student_concept_prior_logit)
+        model.ae_student_concept_observed_count.fill_(12.0)
+        model.ae_concept_prior_logit.copy_(torch.tensor([0.6, -0.2, 0.3]))
+        model.ae_concept_count_feature.copy_(torch.tensor([1.0, 0.5, 0.8]))
+
+    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    with torch.no_grad():
+        _, details = model(
+            student_ids=student_ids,
+            exercise_ids=exercise_ids,
+            return_details=True,
+            return_logits=True,
+        )
+
+    _assert(
+        details["query_row_personal_message_delta"].item() > 0.0,
+        "E should still write a bounded query-state correction.",
+    )
+    _assert(
+        details["tutor_local_navigation_logit_abs_mean"].item() == 0.0,
+        "E should not create a direct final-logit bypass; prediction should go through the CD head.",
+    )
+
+
 def _check_removed_residual_artifacts() -> None:
     model = _build_model(ablate_module1=False, use_personal_graph=True)
     student_ids = torch.tensor([0, 1], dtype=torch.long)
@@ -383,6 +441,7 @@ def main() -> None:
     _check_graph_query_adapter_is_initially_residual()
     _check_per_head_personal_graph()
     _check_no_a_removes_personal_support_space()
+    _check_e_does_not_create_direct_logit_bypass()
     _check_removed_residual_artifacts()
     _check_relation_theta_readout_is_interpretable_and_ablatable()
     _check_get_student_diagnosis()

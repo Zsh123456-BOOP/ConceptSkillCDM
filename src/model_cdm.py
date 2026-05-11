@@ -940,22 +940,21 @@ class CognitiveDiagnosisModel(nn.Module):
                     * ae_posterior_theta_delta
                 )
                 ae_posterior_theta_logit = tutor_posterior_theta_shift_logit
-            tutor_local_navigation_logit = (
-                tutor_current_mastery_logit
-                + tutor_current_recent_logit
-                + tutor_route_mastery_logit
-                + tutor_route_recent_logit
-                + tutor_gap_penalty_logit
-                + ae_posterior_prior_logit
-                + ae_posterior_theta_logit
-            )
-            # E is a local tutoring hint, not a replacement for the diagnostic
-            # head. Keep the student-specific route bounded so early epochs do
-            # not overfit train-only mastery priors.
-            local_clip = query_weight.new_tensor(0.75)
-            tutor_local_navigation_logit = local_clip * torch.tanh(
-                tutor_local_navigation_logit / local_clip
-            )
+            # E is a local tutoring hint for the query-state path, not an
+            # independent predictor.  Keep the mastery/reliability quantities as
+            # diagnostics, but do not add them directly to the final logit.
+            tutor_current_mastery_logit = zero_vec
+            tutor_current_recent_logit = zero_vec
+            tutor_route_mastery_logit = zero_vec
+            tutor_route_recent_logit = zero_vec
+            tutor_gap_penalty_logit = zero_vec
+            tutor_posterior_mastery_shift_logit = zero_vec
+            tutor_posterior_recent_shift_logit = zero_vec
+            tutor_student_readiness_logit = zero_vec
+            tutor_posterior_theta_shift_logit = zero_vec
+            ae_posterior_prior_logit = zero_vec
+            ae_posterior_theta_logit = zero_vec
+            tutor_local_navigation_logit = zero_vec
 
         raw = roadmap_macro_logit + tutor_local_navigation_logit
         raw_before_clip = raw

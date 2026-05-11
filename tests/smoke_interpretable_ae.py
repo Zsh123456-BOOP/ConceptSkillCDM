@@ -166,7 +166,14 @@ def _check_roadmap_and_tutor_are_not_blackbox_modules() -> None:
     _assert(torch.isfinite(logits).all().item(), "Interpretable AE logits should stay finite.")
     _assert(details["ae_logit_residual_abs_mean"].item() > 0.0, "Interpretable AE residual should be active.")
     _assert(details["roadmap_macro_logit_abs_mean"].item() > 0.0, "A roadmap contribution should be active.")
-    _assert(details["tutor_local_navigation_logit_abs_mean"].item() > 0.0, "E tutoring contribution should be active.")
+    _assert(
+        details["tutor_local_navigation_logit_abs_mean"].item() == 0.0,
+        "E tutoring should not bypass the CD head with a direct logit.",
+    )
+    _assert(
+        details["query_row_personal_message_delta"].item() > 0.0,
+        "E tutoring contribution should be active through bounded query-state correction.",
+    )
     _assert(
         details["tutor_personal_route_delta_abs_mean"].item() > 0.0,
         "E local navigation should use the personalized posterior route, not only the global A route.",
