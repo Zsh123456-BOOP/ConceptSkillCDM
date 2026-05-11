@@ -117,12 +117,20 @@ def run_cdm_forward(
     graph_query_adapter_gain = query_row_global_readout_delta / query_row_global_readout_pre_gate_delta.clamp(min=1e-8)
 
     b, a = model.exercise_encoder(exercise_ids)
+    theta_raw = model.diagnosis_head.theta_proj(prediction_state).squeeze(-1)
+    theta_calibrated, theta_calibration_details = model._build_main_path_theta_calibration(
+        theta_raw=theta_raw,
+        relation_matrices=relation_matrices,
+        personal_relation_spec=personal_relation_spec,
+        concept_mask=q_vector,
+    )
     if return_details:
         irt_logit, diag_details = model.diagnosis_head(
             knowledge_state=prediction_state,
             concept_mask=q_vector,
             b=b,
             a=a,
+            theta_override=theta_calibrated,
             return_details=True,
         )
     else:
@@ -131,6 +139,7 @@ def run_cdm_forward(
             concept_mask=q_vector,
             b=b,
             a=a,
+            theta_override=theta_calibrated,
             return_details=False,
         )
         diag_details = None
@@ -144,6 +153,7 @@ def run_cdm_forward(
     )
     relation_theta_logit = a * float(getattr(model, "relation_theta_scale", 0.0)) * relation_theta_delta
     if diag_details is not None:
+        diag_details.update(theta_calibration_details)
         diag_details["relation_theta_delta"] = relation_theta_delta.detach()
         diag_details["relation_theta_logit"] = relation_theta_logit.detach()
 
@@ -202,6 +212,9 @@ def run_cdm_forward(
         "ae_posterior_theta_scale": torch.tensor(float(model.ae_posterior_theta_scale), device=device),
         "relation_theta_scale": torch.tensor(float(model.relation_theta_scale), device=device),
         "relation_theta_delta_clip": torch.tensor(float(model.relation_theta_delta_clip), device=device),
+        "roadmap_theta_calibration_scale": torch.tensor(float(model.roadmap_theta_calibration_scale), device=device),
+        "tutor_theta_calibration_scale": torch.tensor(float(model.tutor_theta_calibration_scale), device=device),
+        "theta_calibration_clip": torch.tensor(float(model.theta_calibration_clip), device=device),
         "irt_logit_scale_used": torch.tensor(float(irt_logit_scale), device=device),
         "ae_logit_dim": torch.tensor(float(model.ae_logit_dim), device=device),
         "relation_matrices": relation_matrices,
@@ -214,6 +227,14 @@ def run_cdm_forward(
         "irt_b": b.detach(),
         "irt_a": a.detach(),
         "irt_logit": irt_logit.detach(),
+        "theta_c_raw": theta_raw.detach(),
+        "theta_c_calibrated": theta_calibrated.detach(),
+        "roadmap_theta_delta": theta_calibration_details["roadmap_theta_delta"].detach(),
+        "tutor_theta_delta": theta_calibration_details["tutor_theta_delta"].detach(),
+        "theta_calibration_delta": theta_calibration_details["theta_calibration_delta"].detach(),
+        "roadmap_theta_delta_abs_mean": theta_calibration_details["roadmap_theta_delta_abs_mean"].detach(),
+        "tutor_theta_delta_abs_mean": theta_calibration_details["tutor_theta_delta_abs_mean"].detach(),
+        "theta_calibration_delta_abs_mean": theta_calibration_details["theta_calibration_delta_abs_mean"].detach(),
         "relation_theta_logit": relation_theta_logit.detach(),
         "relation_theta_logit_abs_mean": relation_theta_logit.detach().abs().mean(),
         "relation_theta_delta_abs_mean": relation_theta_delta_abs_mean.detach(),

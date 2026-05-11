@@ -337,6 +337,111 @@ def _check_e_does_not_create_direct_logit_bypass() -> None:
     )
 
 
+def _check_diagnosis_head_accepts_theta_override() -> None:
+    from src.prediction_head import CognitiveDiagnosisHead
+
+    head = CognitiveDiagnosisHead(knowledge_dim=4)
+    knowledge_state = torch.zeros((2, 3, 4), dtype=torch.float32)
+    concept_mask = torch.tensor([[1.0, 0.0, 1.0], [0.0, 1.0, 1.0]], dtype=torch.float32)
+    theta_override = torch.tensor([[0.2, 9.0, 0.8], [7.0, -0.4, 0.6]], dtype=torch.float32)
+    b = torch.tensor([0.1, -0.2], dtype=torch.float32)
+    a = torch.tensor([2.0, 1.5], dtype=torch.float32)
+
+    logits, details = head(
+        knowledge_state=knowledge_state,
+        concept_mask=concept_mask,
+        b=b,
+        a=a,
+        theta_override=theta_override,
+        return_details=True,
+    )
+
+    expected_theta_e = torch.tensor([0.5, 0.1], dtype=torch.float32)
+    expected_logits = a * (expected_theta_e - b)
+    _assert(torch.allclose(logits, expected_logits, atol=1e-6), "Diagnosis head should use theta_override.")
+    _assert(torch.allclose(details["theta_c"], theta_override, atol=1e-6), "Details should expose override theta.")
+
+
+def _check_ae_calibration_enters_main_theta_path() -> None:
+    torch.manual_seed(17)
+    full = _build_model(
+        use_concept_graph=True,
+        use_personal_graph=True,
+        ae_logit_residual_scale=0.0,
+        relation_theta_scale=0.0,
+        graph_query_readout_scale=0.0,
+        graph_query_readout_2hop_scale=0.0,
+        roadmap_theta_calibration_scale=0.60,
+        tutor_theta_calibration_scale=0.55,
+        theta_calibration_clip=2.0,
+        personal_mastery_prior_scale=1.0,
+        personal_recent_mastery_prior_scale=0.5,
+        personal_mastery_count_smoothing=1.0,
+        personal_delta_scale=3.0,
+        personal_warmup_epochs=0,
+        personal_reg_warmup_epochs=0,
+    )
+    no_e = _build_model(
+        use_concept_graph=True,
+        use_personal_graph=False,
+        ae_logit_residual_scale=0.0,
+        relation_theta_scale=0.0,
+        graph_query_readout_scale=0.0,
+        graph_query_readout_2hop_scale=0.0,
+        roadmap_theta_calibration_scale=0.60,
+        tutor_theta_calibration_scale=0.55,
+        theta_calibration_clip=2.0,
+    )
+    no_a = _build_model(
+        use_concept_graph=False,
+        use_personal_graph=True,
+        ae_logit_residual_scale=0.0,
+        relation_theta_scale=0.0,
+        graph_query_readout_scale=0.0,
+        graph_query_readout_2hop_scale=0.0,
+        roadmap_theta_calibration_scale=0.60,
+        tutor_theta_calibration_scale=0.55,
+        theta_calibration_clip=2.0,
+    )
+
+    with torch.no_grad():
+        full.ae_student_concept_prior_logit.copy_(
+            torch.tensor(
+                [
+                    [1.5, -1.0, 0.4],
+                    [-0.8, 1.2, -0.2],
+                    [0.6, -0.4, 1.0],
+                    [1.0, 0.2, -1.2],
+                    [-1.0, 0.8, 0.3],
+                ],
+                dtype=full.ae_student_concept_prior_logit.dtype,
+            )
+        )
+        full.ae_student_concept_recent_logit.copy_(0.5 * full.ae_student_concept_prior_logit)
+        full.ae_student_concept_observed_count.fill_(12.0)
+
+    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+
+    with torch.no_grad():
+        _, full_details = full(student_ids, exercise_ids, return_details=True, return_logits=True)
+        _, no_e_details = no_e(student_ids, exercise_ids, return_details=True, return_logits=True)
+        _, no_a_details = no_a(student_ids, exercise_ids, return_details=True, return_logits=True)
+
+    _assert(full_details["ae_logit_residual_abs_mean"].item() == 0.0, "A/E must not use a direct logit bypass.")
+    _assert(full_details["roadmap_theta_delta_abs_mean"].item() > 0.0, "A should calibrate concept theta.")
+    _assert(full_details["tutor_theta_delta_abs_mean"].item() > 0.0, "E should calibrate concept theta.")
+    _assert(full_details["theta_calibration_delta_abs_mean"].item() > 0.0, "Calibrated theta should enter diagnosis.")
+    _assert(
+        (full_details["theta_c"] - full_details["theta_c_raw"]).abs().mean().item() > 0.0,
+        "Diagnosis details should show calibrated theta differs from raw theta.",
+    )
+    _assert(no_e_details["roadmap_theta_delta_abs_mean"].item() > 0.0, "no_E should keep A theta calibration.")
+    _assert(no_e_details["tutor_theta_delta_abs_mean"].item() == 0.0, "no_E should remove E theta calibration.")
+    _assert(no_a_details["roadmap_theta_delta_abs_mean"].item() == 0.0, "no_A should remove A theta calibration.")
+    _assert(no_a_details["tutor_theta_delta_abs_mean"].item() == 0.0, "no_A should remove E theta calibration.")
+
+
 def _check_removed_residual_artifacts() -> None:
     model = _build_model(ablate_module1=False, use_personal_graph=True)
     student_ids = torch.tensor([0, 1], dtype=torch.long)
@@ -442,6 +547,8 @@ def main() -> None:
     _check_per_head_personal_graph()
     _check_no_a_removes_personal_support_space()
     _check_e_does_not_create_direct_logit_bypass()
+    _check_diagnosis_head_accepts_theta_override()
+    _check_ae_calibration_enters_main_theta_path()
     _check_removed_residual_artifacts()
     _check_relation_theta_readout_is_interpretable_and_ablatable()
     _check_get_student_diagnosis()

@@ -361,6 +361,12 @@ def parse_args():
                         help="Signed scale for interpretable A/E support theta contrast inside the IRT logit.")
     parser.add_argument("--relation_theta_delta_clip", type=float, default=2.0,
                         help="Tanh clip for relation support theta contrast before scaling.")
+    parser.add_argument("--roadmap_theta_calibration_scale", type=float, default=0.0,
+                        help="Scale for A/global roadmap concept-theta calibration inside the main IRT path.")
+    parser.add_argument("--tutor_theta_calibration_scale", type=float, default=0.0,
+                        help="Scale for E/student local route concept-theta calibration inside the main IRT path.")
+    parser.add_argument("--theta_calibration_clip", type=float, default=2.0,
+                        help="Tanh clip for A/E concept-theta calibration deltas.")
     parser.add_argument("--graph_query_adapter_enable", action=bool_action, default=None,
                         help="Enable query adapter on top of graph readout before the fixed diagnosis head.")
     parser.add_argument("--personal_state_lr_mult", type=float, default=1.0,
@@ -768,6 +774,15 @@ def main():
                 ),
                 relation_theta_delta_clip=loaded_args.get(
                     "relation_theta_delta_clip", getattr(args, "relation_theta_delta_clip", 2.0)
+                ),
+                roadmap_theta_calibration_scale=loaded_args.get(
+                    "roadmap_theta_calibration_scale", getattr(args, "roadmap_theta_calibration_scale", 0.0)
+                ),
+                tutor_theta_calibration_scale=loaded_args.get(
+                    "tutor_theta_calibration_scale", getattr(args, "tutor_theta_calibration_scale", 0.0)
+                ),
+                theta_calibration_clip=loaded_args.get(
+                    "theta_calibration_clip", getattr(args, "theta_calibration_clip", 2.0)
                 ),
                 share_concept_embeddings=loaded_args.get(
                     "share_concept_embeddings", getattr(args, "share_concept_embeddings", False)

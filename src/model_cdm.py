@@ -117,6 +117,9 @@ class CognitiveDiagnosisModel(nn.Module):
         lambda_theta_prior_align: float = 0.0,
         relation_theta_scale: float = 0.0,
         relation_theta_delta_clip: float = 2.0,
+        roadmap_theta_calibration_scale: float = 0.0,
+        tutor_theta_calibration_scale: float = 0.0,
+        theta_calibration_clip: float = 2.0,
         share_concept_embeddings: bool = False,
     ):
         super().__init__()
@@ -214,6 +217,9 @@ class CognitiveDiagnosisModel(nn.Module):
         self.lambda_theta_prior_align = max(0.0, float(lambda_theta_prior_align))
         self.relation_theta_scale = float(relation_theta_scale)
         self.relation_theta_delta_clip = max(1e-6, float(relation_theta_delta_clip))
+        self.roadmap_theta_calibration_scale = max(0.0, float(roadmap_theta_calibration_scale))
+        self.tutor_theta_calibration_scale = max(0.0, float(tutor_theta_calibration_scale))
+        self.theta_calibration_clip = max(1e-6, float(theta_calibration_clip))
         self.share_concept_embeddings = bool(share_concept_embeddings)
 
         self.register_buffer("q_matrix", q_matrix)
@@ -616,6 +622,89 @@ class CognitiveDiagnosisModel(nn.Module):
         delta = torch.tanh(raw_delta / clip) * clip
         neighbor_mass = (support_weight * (1.0 - query_mask)).sum(dim=1).mean()
         return delta, delta.abs().mean(), neighbor_mass, personal_support_mass
+
+    @staticmethod
+    def _masked_concept_abs_mean(tensor: torch.Tensor, concept_mask: Optional[torch.Tensor]) -> torch.Tensor:
+        if concept_mask is None:
+            return tensor.abs().mean()
+        mask = concept_mask.float().to(dtype=tensor.dtype, device=tensor.device)
+        denom = mask.sum().clamp(min=1.0)
+        return (tensor.abs() * mask).sum() / denom
+
+    def _clip_theta_delta(self, delta: torch.Tensor) -> torch.Tensor:
+        clip = delta.new_tensor(self.theta_calibration_clip)
+        return torch.tanh(delta / clip) * clip
+
+    def _build_main_path_theta_calibration(
+        self,
+        *,
+        theta_raw: torch.Tensor,
+        relation_matrices: torch.Tensor,
+        personal_relation_spec: Optional[Dict[str, torch.Tensor]],
+        concept_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """Calibrate concept mastery theta inside the main CD/IRT path.
+
+        A performs a global roadmap smoothing over the train-evidence concept
+        graph. E then performs a student-conditioned local route smoothing over
+        the same support. Neither component writes a separate final-logit branch.
+        """
+        zero_scalar = theta_raw.new_tensor(0.0)
+        zero_theta = torch.zeros_like(theta_raw)
+        theta_after_a = theta_raw
+        roadmap_delta = zero_theta
+
+        if (
+            self.enable_module1
+            and self.use_concept_graph
+            and self.roadmap_theta_calibration_scale > 0.0
+            and concept_mask is not None
+        ):
+            roadmap_support_theta = self._aggregate_with_relation(theta_raw.unsqueeze(-1), relation_matrices).squeeze(-1)
+            roadmap_delta = self._clip_theta_delta(roadmap_support_theta - theta_raw)
+            theta_after_a = theta_raw + self.roadmap_theta_calibration_scale * roadmap_delta
+
+        theta_after_e = theta_after_a
+        tutor_delta = zero_theta
+        if (
+            self.enable_module1
+            and self.use_concept_graph
+            and self.use_personal_graph
+            and self.tutor_theta_calibration_scale > 0.0
+            and isinstance(personal_relation_spec, dict)
+            and concept_mask is not None
+        ):
+            local_route_theta = self._aggregate_with_relation(theta_after_a.unsqueeze(-1), personal_relation_spec).squeeze(-1)
+            query_mask = concept_mask.float().to(dtype=theta_raw.dtype, device=theta_raw.device)
+            tutor_delta = self._clip_theta_delta(local_route_theta - theta_after_a) * query_mask
+            theta_after_e = theta_after_a + self.tutor_theta_calibration_scale * tutor_delta
+
+        total_delta = theta_after_e - theta_raw
+        diagnostics = {
+            "theta_c_raw": theta_raw.detach(),
+            "theta_c_after_roadmap": theta_after_a.detach(),
+            "theta_c_calibrated": theta_after_e.detach(),
+            "roadmap_theta_delta": (self.roadmap_theta_calibration_scale * roadmap_delta).detach(),
+            "tutor_theta_delta": (self.tutor_theta_calibration_scale * tutor_delta).detach(),
+            "theta_calibration_delta": total_delta.detach(),
+            "roadmap_theta_delta_abs_mean": self._masked_concept_abs_mean(
+                self.roadmap_theta_calibration_scale * roadmap_delta,
+                concept_mask,
+            ).detach(),
+            "tutor_theta_delta_abs_mean": self._masked_concept_abs_mean(
+                self.tutor_theta_calibration_scale * tutor_delta,
+                concept_mask,
+            ).detach(),
+            "theta_calibration_delta_abs_mean": self._masked_concept_abs_mean(total_delta, concept_mask).detach(),
+            "roadmap_theta_calibration_scale": theta_raw.new_tensor(float(self.roadmap_theta_calibration_scale)),
+            "tutor_theta_calibration_scale": theta_raw.new_tensor(float(self.tutor_theta_calibration_scale)),
+            "theta_calibration_clip": theta_raw.new_tensor(float(self.theta_calibration_clip)),
+        }
+        if concept_mask is None:
+            diagnostics["roadmap_theta_delta_abs_mean"] = zero_scalar
+            diagnostics["tutor_theta_delta_abs_mean"] = zero_scalar
+            diagnostics["theta_calibration_delta_abs_mean"] = zero_scalar
+        return theta_after_e, diagnostics
 
     def _build_ae_query_state_residual(
         self,
