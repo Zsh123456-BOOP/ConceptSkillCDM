@@ -645,14 +645,33 @@ class CognitiveDiagnosisModel(nn.Module):
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Calibrate concept mastery theta inside the main CD/IRT path.
 
-        A performs a global roadmap smoothing over the train-evidence concept
-        graph. E then performs a student-conditioned local route smoothing over
-        the same support. Neither component writes a separate final-logit branch.
+        A/E are treated as route maps for the current exercise, not as a
+        full-concept smoothing operator.  A produces a global route adjustment
+        to the exercise ability theta_e; E refines that route with the
+        student-conditioned posterior over the same support.  The scalar
+        theta_e adjustment is written back only to concepts in the current
+        Q-vector, so non-query concepts are never silently modified.
         """
         zero_scalar = theta_raw.new_tensor(0.0)
         zero_theta = torch.zeros_like(theta_raw)
+        batch_size, num_concepts = theta_raw.shape
+        query_mask = (
+            concept_mask.float().to(dtype=theta_raw.dtype, device=theta_raw.device)
+            if concept_mask is not None
+            else torch.zeros_like(theta_raw)
+        )
+        query_weight = query_mask / query_mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+        theta_query = (theta_raw * query_weight).sum(dim=1)
+
         theta_after_a = theta_raw
+        theta_after_e = theta_raw
         roadmap_delta = zero_theta
+        tutor_delta = zero_theta
+        roadmap_adjustment = theta_raw.new_zeros((batch_size,))
+        tutor_adjustment = theta_raw.new_zeros((batch_size,))
+        roadmap_reliability = theta_raw.new_zeros((batch_size,))
+        tutor_reliability = theta_raw.new_zeros((batch_size,))
+        global_support = query_weight
 
         if (
             self.enable_module1
@@ -660,12 +679,25 @@ class CognitiveDiagnosisModel(nn.Module):
             and self.roadmap_theta_calibration_scale > 0.0
             and concept_mask is not None
         ):
-            roadmap_support_theta = self._aggregate_with_relation(theta_raw.unsqueeze(-1), relation_matrices).squeeze(-1)
-            roadmap_delta = self._clip_theta_delta(roadmap_support_theta - theta_raw)
-            theta_after_a = theta_raw + self.roadmap_theta_calibration_scale * roadmap_delta
+            global_relation = relation_matrices["global_matrices"] if isinstance(relation_matrices, dict) else relation_matrices
+            if global_relation.dim() == 4:
+                A = global_relation.mean(dim=1).to(dtype=theta_raw.dtype)
+                A = A / A.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+                global_support = torch.bmm(query_weight.unsqueeze(1), A).squeeze(1)
+            else:
+                A = global_relation.mean(dim=0).to(dtype=theta_raw.dtype, device=theta_raw.device)
+                A = A / A.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+                global_support = query_weight.matmul(A)
+            global_support = global_support / global_support.sum(dim=1, keepdim=True).clamp(min=1e-12)
+            route_theta = (global_support * theta_raw).sum(dim=1)
+            route_delta = self._clip_theta_delta(route_theta - theta_query)
+            off_query_mass = (global_support * (1.0 - query_mask)).sum(dim=1)
+            route_shift = 0.5 * (global_support - query_weight).abs().sum(dim=1)
+            roadmap_reliability = torch.maximum(off_query_mass, route_shift).clamp(min=0.0, max=1.0)
+            roadmap_adjustment = self.roadmap_theta_calibration_scale * roadmap_reliability * route_delta
+            roadmap_delta = query_mask * roadmap_adjustment.unsqueeze(1)
+            theta_after_a = theta_raw + roadmap_delta
 
-        theta_after_e = theta_after_a
-        tutor_delta = zero_theta
         if (
             self.enable_module1
             and self.use_concept_graph
@@ -674,28 +706,44 @@ class CognitiveDiagnosisModel(nn.Module):
             and isinstance(personal_relation_spec, dict)
             and concept_mask is not None
         ):
-            local_route_theta = self._aggregate_with_relation(theta_after_a.unsqueeze(-1), personal_relation_spec).squeeze(-1)
-            query_mask = concept_mask.float().to(dtype=theta_raw.dtype, device=theta_raw.device)
-            tutor_delta = self._clip_theta_delta(local_route_theta - theta_after_a) * query_mask
-            theta_after_e = theta_after_a + self.tutor_theta_calibration_scale * tutor_delta
+            personal_support = self._query_sparse_support_distribution(query_weight, personal_relation_spec)
+            personal_mass = personal_support.sum(dim=1, keepdim=True)
+            has_personal = personal_mass > 1e-12
+            personal_support = torch.where(
+                has_personal,
+                personal_support / personal_mass.clamp(min=1e-12),
+                global_support,
+            )
+            global_route_theta = (global_support * theta_after_a).sum(dim=1)
+            personal_route_theta = (personal_support * theta_after_a).sum(dim=1)
+            posterior_delta = self._clip_theta_delta(personal_route_theta - global_route_theta)
+            tutor_reliability = (0.5 * (personal_support - global_support).abs().sum(dim=1)).clamp(min=0.0, max=1.0)
+            tutor_adjustment = self.tutor_theta_calibration_scale * tutor_reliability * posterior_delta
+            tutor_delta = query_mask * tutor_adjustment.unsqueeze(1)
+            theta_after_e = theta_after_a + tutor_delta
 
         total_delta = theta_after_e - theta_raw
         diagnostics = {
             "theta_c_raw": theta_raw.detach(),
             "theta_c_after_roadmap": theta_after_a.detach(),
             "theta_c_calibrated": theta_after_e.detach(),
-            "roadmap_theta_delta": (self.roadmap_theta_calibration_scale * roadmap_delta).detach(),
-            "tutor_theta_delta": (self.tutor_theta_calibration_scale * tutor_delta).detach(),
+            "roadmap_theta_delta": roadmap_delta.detach(),
+            "tutor_theta_delta": tutor_delta.detach(),
             "theta_calibration_delta": total_delta.detach(),
             "roadmap_theta_delta_abs_mean": self._masked_concept_abs_mean(
-                self.roadmap_theta_calibration_scale * roadmap_delta,
+                roadmap_delta,
                 concept_mask,
             ).detach(),
             "tutor_theta_delta_abs_mean": self._masked_concept_abs_mean(
-                self.tutor_theta_calibration_scale * tutor_delta,
+                tutor_delta,
                 concept_mask,
             ).detach(),
             "theta_calibration_delta_abs_mean": self._masked_concept_abs_mean(total_delta, concept_mask).detach(),
+            "roadmap_theta_e_adjustment": roadmap_adjustment.detach(),
+            "tutor_theta_e_adjustment": tutor_adjustment.detach(),
+            "theta_e_calibration_delta": (roadmap_adjustment + tutor_adjustment).detach(),
+            "roadmap_theta_e_reliability": roadmap_reliability.detach(),
+            "tutor_theta_e_reliability": tutor_reliability.detach(),
             "roadmap_theta_calibration_scale": theta_raw.new_tensor(float(self.roadmap_theta_calibration_scale)),
             "tutor_theta_calibration_scale": theta_raw.new_tensor(float(self.tutor_theta_calibration_scale)),
             "theta_calibration_clip": theta_raw.new_tensor(float(self.theta_calibration_clip)),

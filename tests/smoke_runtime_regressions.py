@@ -442,6 +442,70 @@ def _check_ae_calibration_enters_main_theta_path() -> None:
     _assert(no_a_details["tutor_theta_delta_abs_mean"].item() == 0.0, "no_A should remove E theta calibration.")
 
 
+def _check_ae_calibration_is_query_local_theta_e_adjustment() -> None:
+    torch.manual_seed(23)
+    model = _build_model(
+        use_concept_graph=True,
+        use_personal_graph=True,
+        ae_logit_residual_scale=0.0,
+        relation_theta_scale=0.0,
+        graph_query_readout_scale=0.0,
+        graph_query_readout_2hop_scale=0.0,
+        roadmap_theta_calibration_scale=0.40,
+        tutor_theta_calibration_scale=0.35,
+        theta_calibration_clip=0.75,
+        personal_mastery_prior_scale=1.0,
+        personal_recent_mastery_prior_scale=0.5,
+        personal_mastery_count_smoothing=1.0,
+        personal_delta_scale=3.0,
+        personal_warmup_epochs=0,
+        personal_reg_warmup_epochs=0,
+    )
+    with torch.no_grad():
+        model.ae_student_concept_prior_logit.copy_(
+            torch.tensor(
+                [
+                    [1.5, -1.0, 0.4],
+                    [-0.8, 1.2, -0.2],
+                    [0.6, -0.4, 1.0],
+                    [1.0, 0.2, -1.2],
+                    [-1.0, 0.8, 0.3],
+                ],
+                dtype=model.ae_student_concept_prior_logit.dtype,
+            )
+        )
+        model.ae_student_concept_recent_logit.copy_(0.5 * model.ae_student_concept_prior_logit)
+        model.ae_student_concept_observed_count.fill_(12.0)
+
+    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    with torch.no_grad():
+        _, details = model(student_ids, exercise_ids, return_details=True, return_logits=True)
+
+    q = details["q_vector"].bool()
+    theta_shift = details["theta_c_calibrated"] - details["theta_c_raw"]
+    _assert(theta_shift[q].abs().mean().item() > 0.0, "A/E should adjust queried concept theta.")
+    _assert(
+        theta_shift[~q].abs().max().item() == 0.0,
+        "A/E theta calibration must stay query-local and avoid smoothing non-query concepts.",
+    )
+    expected = details["roadmap_theta_e_adjustment"] + details["tutor_theta_e_adjustment"]
+    _assert(
+        torch.allclose(details["theta_e_calibration_delta"], expected, atol=1e-6),
+        "Theta-e calibration should be the sum of A and E adjustments.",
+    )
+    _assert(
+        0.0 <= details["roadmap_theta_e_reliability"].min().item()
+        and details["roadmap_theta_e_reliability"].max().item() <= 1.0,
+        "A reliability gate should stay in [0, 1].",
+    )
+    _assert(
+        0.0 <= details["tutor_theta_e_reliability"].min().item()
+        and details["tutor_theta_e_reliability"].max().item() <= 1.0,
+        "E reliability gate should stay in [0, 1].",
+    )
+
+
 def _check_removed_residual_artifacts() -> None:
     model = _build_model(ablate_module1=False, use_personal_graph=True)
     student_ids = torch.tensor([0, 1], dtype=torch.long)
@@ -549,6 +613,7 @@ def main() -> None:
     _check_e_does_not_create_direct_logit_bypass()
     _check_diagnosis_head_accepts_theta_override()
     _check_ae_calibration_enters_main_theta_path()
+    _check_ae_calibration_is_query_local_theta_e_adjustment()
     _check_removed_residual_artifacts()
     _check_relation_theta_readout_is_interpretable_and_ablatable()
     _check_get_student_diagnosis()

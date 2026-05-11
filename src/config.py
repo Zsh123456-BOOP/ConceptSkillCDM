@@ -86,7 +86,7 @@ DATASET_DEFAULTS = {
         "relation_theta_delta_clip": 2.0,
         "roadmap_theta_calibration_scale": 0.35,
         "tutor_theta_calibration_scale": 0.30,
-        "theta_calibration_clip": 2.0,
+        "theta_calibration_clip": 0.75,
         "ae_posterior_prior_scale": 2.0,
         "ae_posterior_theta_scale": 0.0,
         "graph_query_adapter_enable": True,
