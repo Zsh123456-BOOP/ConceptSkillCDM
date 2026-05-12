@@ -1062,6 +1062,8 @@ class CognitiveDiagnosisModel(nn.Module):
         tutor_query_reliability = zero_vec
         tutor_route_reliability = zero_vec
         tutor_route_transfer_reliability = zero_vec
+        tutor_local_reliability_gate = zero_vec
+        tutor_route_shift_gate = zero_vec
         tutor_personal_route_mass = zero_vec
         tutor_personal_route_delta = zero_vec
         ae_posterior_prior_logit = zero_vec
@@ -1194,18 +1196,24 @@ class CognitiveDiagnosisModel(nn.Module):
                     * ae_posterior_theta_delta
                 )
                 ae_posterior_theta_logit = tutor_posterior_theta_shift_logit
-            # E contributes only explicit tutoring evidence terms to the
-            # diagnosis equation.  There is no MLP/student-id shortcut here:
-            # each term can be traced to train-only mastery, recent mastery,
-            # local route transfer, or posterior support shift.
-            tutor_local_navigation_logit = (
-                tutor_current_mastery_logit
-                + tutor_current_recent_logit
-                + tutor_route_mastery_logit
+            # E is a local tutor map: it may adjust the diagnosis only when the
+            # personalized posterior has enough train-observed evidence and
+            # actually changes the global route.  This keeps E from becoming an
+            # unconditional student-prior shortcut.
+            tutor_local_reliability_gate = (
+                0.5 * tutor_query_reliability + 0.5 * tutor_route_reliability
+            ).clamp(min=0.0, max=1.0)
+            tutor_route_shift_gate = tutor_personal_route_delta.clamp(min=0.0, max=1.0)
+            tutor_self_anchor_logit = 0.35 * (tutor_current_mastery_logit + tutor_current_recent_logit)
+            tutor_route_navigation_logit = (
+                tutor_route_mastery_logit
                 + tutor_route_recent_logit
                 + tutor_gap_penalty_logit
                 + ae_posterior_prior_logit
                 + ae_posterior_theta_logit
+            )
+            tutor_local_navigation_logit = tutor_local_reliability_gate * (
+                tutor_self_anchor_logit + tutor_route_shift_gate * tutor_route_navigation_logit
             )
 
         raw = roadmap_macro_logit + tutor_local_navigation_logit
@@ -1246,6 +1254,8 @@ class CognitiveDiagnosisModel(nn.Module):
             "tutor_query_reliability": torch.where(active, tutor_query_reliability, zero_vec),
             "tutor_route_reliability": torch.where(active, tutor_route_reliability, zero_vec),
             "tutor_route_transfer_reliability": torch.where(active, tutor_route_transfer_reliability, zero_vec),
+            "tutor_local_reliability_gate": torch.where(active, tutor_local_reliability_gate, zero_vec),
+            "tutor_route_shift_gate": torch.where(active, tutor_route_shift_gate, zero_vec),
             "tutor_personal_route_mass": torch.where(active, tutor_personal_route_mass, zero_vec),
             "tutor_personal_route_delta": torch.where(active, tutor_personal_route_delta, zero_vec),
             "map_raw_logit_before_clip": torch.where(active, raw_before_clip, zero_vec),
