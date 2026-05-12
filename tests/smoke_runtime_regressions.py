@@ -437,6 +437,10 @@ def _check_ae_calibration_enters_main_theta_path() -> None:
         "Diagnosis details should show calibrated theta differs from raw theta.",
     )
     _assert(no_e_details["roadmap_theta_delta_abs_mean"].item() > 0.0, "no_E should keep A theta calibration.")
+    _assert(
+        no_e_details["theta_calibration_delta_abs_mean"].item() > 0.0,
+        "no_E should route A theta calibration into the diagnosis head.",
+    )
     _assert(no_e_details["tutor_theta_delta_abs_mean"].item() == 0.0, "no_E should remove E theta calibration.")
     _assert(no_a_details["roadmap_theta_delta_abs_mean"].item() == 0.0, "no_A should remove A theta calibration.")
     _assert(no_a_details["tutor_theta_delta_abs_mean"].item() == 0.0, "no_A should remove E theta calibration.")

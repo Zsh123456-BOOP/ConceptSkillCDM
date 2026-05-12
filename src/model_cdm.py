@@ -698,6 +698,7 @@ class CognitiveDiagnosisModel(nn.Module):
             roadmap_delta = query_mask * roadmap_adjustment.unsqueeze(1)
             theta_after_a = theta_raw + roadmap_delta
 
+        theta_after_e = theta_after_a
         if (
             self.enable_module1
             and self.use_concept_graph
