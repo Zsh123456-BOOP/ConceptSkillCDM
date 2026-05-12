@@ -10,12 +10,12 @@ out_dir <- args[[2]]
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 rows <- read.csv(result_csv, stringsAsFactors = FALSE, check.names = FALSE)
-rows <- rows[rows$status %in% c("ok", "metrics_ok") & !is.na(rows$test_auc), ]
+rows$test_auc <- as.numeric(rows$test_auc)
+rows <- rows[rows$status %in% c("ok", "metrics_ok") & is.finite(rows$test_auc), ]
 if (nrow(rows) == 0) {
   stop("No successful rows with test_auc found.")
 }
 
-rows$test_auc <- as.numeric(rows$test_auc)
 rows$phase_dataset <- paste(rows$phase, rows$dataset, sep = " / ")
 
 variant_order <- c(
@@ -26,6 +26,7 @@ variant_order <- c(
   "A_uniform_neutralE", "A_self_neutralE",
   "E_prior_only", "E_frozen_alpha", "E_full_fair",
   "E_global_posterior", "E_posterior_only", "E_query_only",
+  "E_shuffle_student",
   "E_theta025_full", "E_theta025_global", "E_theta025_posterior_only",
   "E_theta050_full", "E_theta050_global", "E_theta050_posterior_only",
   "E_mastery05_full", "E_mastery05_global", "E_mastery05_posterior_only",
@@ -53,8 +54,12 @@ for (i in seq_along(dataset_levels)) {
   offsets <- seq(-0.32, 0.32, length.out = length(variant_order))
   for (j in seq_along(variant_order)) {
     r <- sub[as.character(sub$variant) == variant_order[[j]], ]
+    r <- r[is.finite(r$test_auc), ]
     if (nrow(r) > 0) {
-      points(i + offsets[[j]], r$test_auc[[which.max(r$test_auc)]], pch = 16, col = cols[[j]], cex = 0.9)
+      best_idx <- which.max(r$test_auc)
+      if (length(best_idx) == 1) {
+        points(i + offsets[[j]], r$test_auc[[best_idx]], pch = 16, col = cols[[j]], cex = 0.9)
+      }
     }
   }
 }
@@ -98,18 +103,21 @@ if (file.exists(summary_csv)) {
 
   if ("query_row_posterior_kl" %in% names(s) && "drop_no_E" %in% names(s)) {
     s$query_row_posterior_kl <- as.numeric(s$query_row_posterior_kl)
+    e_sub <- s[is.finite(s$query_row_posterior_kl) & is.finite(s$drop_no_E), ]
+  }
+  if (exists("e_sub") && nrow(e_sub) > 0) {
     png(file.path(out_dir, "e_drop_vs_posterior_kl.png"), width = 1400, height = 1000, res = 160)
     op <- par(mar = c(5, 5, 4, 2))
     plot(
-      s$query_row_posterior_kl,
-      s$drop_no_E,
+      e_sub$query_row_posterior_kl,
+      e_sub$drop_no_E,
       pch = 16,
       col = "#B279A2",
       xlab = "E posterior KL",
       ylab = "full - no_E AUC",
       main = "E Effect vs Posterior Movement"
     )
-    text(s$query_row_posterior_kl, s$drop_no_E, labels = s$dataset, pos = 3, cex = 0.7)
+    text(e_sub$query_row_posterior_kl, e_sub$drop_no_E, labels = e_sub$dataset, pos = 3, cex = 0.7)
     abline(h = 0, lty = 2, col = "gray40")
     par(op)
     dev.off()
