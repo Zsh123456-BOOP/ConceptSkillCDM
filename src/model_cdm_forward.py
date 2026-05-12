@@ -118,11 +118,29 @@ def run_cdm_forward(
 
     b, a = model.exercise_encoder(exercise_ids)
     theta_raw = model.diagnosis_head.theta_proj(prediction_state).squeeze(-1)
+    theta_student_concept_prior = (
+        model.ae_student_concept_prior_logit[student_ids]
+        if model.use_personal_graph and getattr(model, "personal_mastery_prior_scale", 0.0) > 0.0
+        else None
+    )
+    theta_student_concept_recent_prior = (
+        model.ae_student_concept_recent_logit[student_ids]
+        if model.use_personal_graph and getattr(model, "personal_recent_mastery_prior_scale", 0.0) > 0.0
+        else None
+    )
+    theta_student_concept_count = (
+        model.ae_student_concept_observed_count[student_ids]
+        if model.use_personal_graph and getattr(model, "personal_mastery_count_smoothing", 0.0) > 0.0
+        else None
+    )
     theta_calibrated, theta_calibration_details = model._build_main_path_theta_calibration(
         theta_raw=theta_raw,
         relation_matrices=relation_matrices,
         personal_relation_spec=personal_relation_spec,
         concept_mask=q_vector,
+        student_concept_prior=theta_student_concept_prior,
+        student_concept_recent_prior=theta_student_concept_recent_prior,
+        student_concept_count=theta_student_concept_count,
     )
     if return_details:
         irt_logit, diag_details = model.diagnosis_head(

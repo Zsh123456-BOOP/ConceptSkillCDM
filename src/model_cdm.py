@@ -642,6 +642,9 @@ class CognitiveDiagnosisModel(nn.Module):
         relation_matrices: torch.Tensor,
         personal_relation_spec: Optional[Dict[str, torch.Tensor]],
         concept_mask: torch.Tensor,
+        student_concept_prior: Optional[torch.Tensor] = None,
+        student_concept_recent_prior: Optional[torch.Tensor] = None,
+        student_concept_count: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Calibrate concept mastery theta inside the main CD/IRT path.
 
@@ -654,7 +657,7 @@ class CognitiveDiagnosisModel(nn.Module):
         """
         zero_scalar = theta_raw.new_tensor(0.0)
         zero_theta = torch.zeros_like(theta_raw)
-        batch_size, num_concepts = theta_raw.shape
+        batch_size, _ = theta_raw.shape
         query_mask = (
             concept_mask.float().to(dtype=theta_raw.dtype, device=theta_raw.device)
             if concept_mask is not None
@@ -671,6 +674,12 @@ class CognitiveDiagnosisModel(nn.Module):
         tutor_adjustment = theta_raw.new_zeros((batch_size,))
         roadmap_reliability = theta_raw.new_zeros((batch_size,))
         tutor_reliability = theta_raw.new_zeros((batch_size,))
+        tutor_support_reliability = theta_raw.new_zeros((batch_size,))
+        tutor_prior_reliability = theta_raw.new_zeros((batch_size,))
+        tutor_mastery_anchor_delta = theta_raw.new_zeros((batch_size,))
+        tutor_recent_anchor_delta = theta_raw.new_zeros((batch_size,))
+        tutor_route_mastery_delta = theta_raw.new_zeros((batch_size,))
+        tutor_posterior_route_delta = theta_raw.new_zeros((batch_size,))
         global_support = query_weight
 
         if (
@@ -718,8 +727,76 @@ class CognitiveDiagnosisModel(nn.Module):
             global_route_theta = (global_support * theta_after_a).sum(dim=1)
             personal_route_theta = (personal_support * theta_after_a).sum(dim=1)
             posterior_delta = self._clip_theta_delta(personal_route_theta - global_route_theta)
-            tutor_reliability = (0.5 * (personal_support - global_support).abs().sum(dim=1)).clamp(min=0.0, max=1.0)
-            tutor_adjustment = self.tutor_theta_calibration_scale * tutor_reliability * posterior_delta
+            tutor_posterior_route_delta = posterior_delta
+            tutor_support_reliability = (
+                0.5 * (personal_support - global_support).abs().sum(dim=1)
+            ).clamp(min=0.0, max=1.0)
+
+            combined_delta = 0.20 * posterior_delta
+            if (
+                student_concept_prior is not None
+                and student_concept_prior.dim() == 2
+                and student_concept_prior.size(0) == batch_size
+                and student_concept_prior.size(1) == theta_raw.size(1)
+            ):
+                prior = student_concept_prior.to(dtype=theta_raw.dtype, device=theta_raw.device).clamp(
+                    min=-self.theta_calibration_clip,
+                    max=self.theta_calibration_clip,
+                )
+                recent_prior = (
+                    student_concept_recent_prior.to(dtype=theta_raw.dtype, device=theta_raw.device).clamp(
+                        min=-self.theta_calibration_clip,
+                        max=self.theta_calibration_clip,
+                    )
+                    if (
+                        student_concept_recent_prior is not None
+                        and student_concept_recent_prior.dim() == 2
+                        and student_concept_recent_prior.size() == student_concept_prior.size()
+                    )
+                    else torch.zeros_like(prior)
+                )
+                query_prior = (query_weight * prior).sum(dim=1)
+                query_recent_prior = (query_weight * recent_prior).sum(dim=1)
+                route_prior = (personal_support * prior).sum(dim=1)
+                tutor_mastery_anchor_delta = self._clip_theta_delta(query_prior - theta_query.detach())
+                tutor_recent_anchor_delta = self._clip_theta_delta(query_recent_prior - theta_query.detach())
+                tutor_route_mastery_delta = self._clip_theta_delta(route_prior - query_prior)
+
+                if (
+                    student_concept_count is not None
+                    and student_concept_count.dim() == 2
+                    and student_concept_count.size() == student_concept_prior.size()
+                ):
+                    count = student_concept_count.to(dtype=theta_raw.dtype, device=theta_raw.device).clamp(min=0.0)
+                    query_count = (query_weight * count).sum(dim=1)
+                    route_count = (personal_support * count).sum(dim=1)
+                    smoothing = max(0.0, float(self.personal_mastery_count_smoothing))
+                    if smoothing > 0.0:
+                        query_rel = query_count / (query_count + smoothing).clamp(min=1e-6)
+                        route_rel = route_count / (route_count + smoothing).clamp(min=1e-6)
+                    else:
+                        query_rel = (query_count > 0).to(dtype=theta_raw.dtype)
+                        route_rel = (route_count > 0).to(dtype=theta_raw.dtype)
+                    tutor_prior_reliability = torch.maximum(
+                        query_rel,
+                        torch.sqrt((query_rel * route_rel).clamp(min=0.0)),
+                    ).clamp(min=0.0, max=1.0)
+                else:
+                    tutor_prior_reliability = torch.ones_like(theta_query)
+
+                combined_delta = (
+                    0.65 * tutor_mastery_anchor_delta
+                    + 0.20 * tutor_recent_anchor_delta
+                    + 0.10 * tutor_route_mastery_delta
+                    + 0.05 * posterior_delta
+                )
+
+            combined_delta = self._clip_theta_delta(combined_delta)
+            tutor_reliability = torch.maximum(tutor_support_reliability, tutor_prior_reliability).clamp(
+                min=0.0,
+                max=1.0,
+            )
+            tutor_adjustment = self.tutor_theta_calibration_scale * tutor_reliability * combined_delta
             tutor_delta = query_mask * tutor_adjustment.unsqueeze(1)
             theta_after_e = theta_after_a + tutor_delta
 
@@ -745,6 +822,15 @@ class CognitiveDiagnosisModel(nn.Module):
             "theta_e_calibration_delta": (roadmap_adjustment + tutor_adjustment).detach(),
             "roadmap_theta_e_reliability": roadmap_reliability.detach(),
             "tutor_theta_e_reliability": tutor_reliability.detach(),
+            "tutor_theta_support_reliability": tutor_support_reliability.detach(),
+            "tutor_theta_prior_reliability": tutor_prior_reliability.detach(),
+            "tutor_theta_mastery_anchor_delta": tutor_mastery_anchor_delta.detach(),
+            "tutor_theta_recent_anchor_delta": tutor_recent_anchor_delta.detach(),
+            "tutor_theta_route_mastery_delta": tutor_route_mastery_delta.detach(),
+            "tutor_theta_posterior_route_delta": tutor_posterior_route_delta.detach(),
+            "tutor_theta_mastery_anchor_abs_mean": tutor_mastery_anchor_delta.abs().mean().detach(),
+            "tutor_theta_recent_anchor_abs_mean": tutor_recent_anchor_delta.abs().mean().detach(),
+            "tutor_theta_route_mastery_abs_mean": tutor_route_mastery_delta.abs().mean().detach(),
             "roadmap_theta_calibration_scale": theta_raw.new_tensor(float(self.roadmap_theta_calibration_scale)),
             "tutor_theta_calibration_scale": theta_raw.new_tensor(float(self.tutor_theta_calibration_scale)),
             "theta_calibration_clip": theta_raw.new_tensor(float(self.theta_calibration_clip)),
