@@ -1209,8 +1209,9 @@ class CognitiveDiagnosisModel(nn.Module):
                 + tutor_route_recent_logit
                 + tutor_gap_penalty_logit
             )
+            tutor_self_anchor_logit = 0.15 * (tutor_current_mastery_logit + 0.5 * tutor_current_recent_logit)
             tutor_local_navigation_logit = tutor_local_reliability_gate * (
-                tutor_route_shift_gate * tutor_route_navigation_logit
+                tutor_self_anchor_logit + tutor_route_shift_gate * tutor_route_navigation_logit
             )
 
         raw = roadmap_macro_logit + tutor_local_navigation_logit
