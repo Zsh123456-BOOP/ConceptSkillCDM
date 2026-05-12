@@ -96,6 +96,7 @@ PHASE1_MAX_AE_LR_MULT = 5.0
 NEUTRAL_E_VARIANTS = {
     "no_E",
     "no_E_fair",
+    "no_A_fair",
     "A_fused_neutralE",
     "A_item_neutralE",
     "A_seq_neutralE",
