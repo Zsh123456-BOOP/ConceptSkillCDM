@@ -1204,16 +1204,13 @@ class CognitiveDiagnosisModel(nn.Module):
                 0.5 * tutor_query_reliability + 0.5 * tutor_route_reliability
             ).clamp(min=0.0, max=1.0)
             tutor_route_shift_gate = tutor_personal_route_delta.clamp(min=0.0, max=1.0)
-            tutor_self_anchor_logit = 0.35 * (tutor_current_mastery_logit + tutor_current_recent_logit)
             tutor_route_navigation_logit = (
                 tutor_route_mastery_logit
                 + tutor_route_recent_logit
                 + tutor_gap_penalty_logit
-                + ae_posterior_prior_logit
-                + ae_posterior_theta_logit
             )
             tutor_local_navigation_logit = tutor_local_reliability_gate * (
-                tutor_self_anchor_logit + tutor_route_shift_gate * tutor_route_navigation_logit
+                tutor_route_shift_gate * tutor_route_navigation_logit
             )
 
         raw = roadmap_macro_logit + tutor_local_navigation_logit
