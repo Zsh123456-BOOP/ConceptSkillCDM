@@ -282,7 +282,7 @@ def _check_no_a_removes_personal_support_space() -> None:
     )
 
 
-def _check_e_does_not_create_direct_logit_bypass() -> None:
+def _check_e_uses_interpretable_diagnosis_evidence() -> None:
     model = _build_model(
         ablate_module1=False,
         use_concept_graph=True,
@@ -332,8 +332,12 @@ def _check_e_does_not_create_direct_logit_bypass() -> None:
         "E should still write a bounded query-state correction.",
     )
     _assert(
-        details["tutor_local_navigation_logit_abs_mean"].item() == 0.0,
-        "E should not create a direct final-logit bypass; prediction should go through the CD head.",
+        details["tutor_local_navigation_logit_abs_mean"].item() > 0.0,
+        "E should contribute explicit local tutoring evidence to the diagnosis equation.",
+    )
+    _assert(
+        details["ae_logit_residual_abs_mean"].item() > 0.0,
+        "The interpretable A/E diagnosis evidence should be active when ae_logit_residual_scale > 0.",
     )
 
 
@@ -622,7 +626,7 @@ def main() -> None:
     _check_graph_query_adapter_is_initially_residual()
     _check_per_head_personal_graph()
     _check_no_a_removes_personal_support_space()
-    _check_e_does_not_create_direct_logit_bypass()
+    _check_e_uses_interpretable_diagnosis_evidence()
     _check_diagnosis_head_accepts_theta_override()
     _check_ae_calibration_enters_main_theta_path()
     _check_ae_calibration_is_query_local_theta_e_adjustment()
