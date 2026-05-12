@@ -1209,10 +1209,9 @@ class CognitiveDiagnosisModel(nn.Module):
                     * ae_posterior_theta_delta
                 )
                 ae_posterior_theta_logit = tutor_posterior_theta_shift_logit
-            # E is a local tutor map: it may adjust the diagnosis only when the
-            # personalized posterior has enough train-observed evidence and
-            # actually changes the global route.  This keeps E from becoming an
-            # unconditional student-prior shortcut.
+            # E is the student's local tutor map.  Current/recent mastery are
+            # direct train-observed local evidence, while posterior route terms
+            # explain how the student's local map differs from the global route.
             tutor_local_reliability_gate = (
                 0.5 * tutor_query_reliability + 0.5 * tutor_route_reliability
             ).clamp(min=0.0, max=1.0)
@@ -1222,13 +1221,15 @@ class CognitiveDiagnosisModel(nn.Module):
                 + tutor_route_recent_logit
                 + tutor_gap_penalty_logit
             )
-            tutor_mastery_anchor_logit = tutor_query_reliability * (
-                0.20 * student_prior
-                + 0.20 * query_sc_prior
-                + 0.10 * query_recent_prior
+            tutor_mastery_anchor_logit = (
+                tutor_current_mastery_logit
+                + tutor_current_recent_logit
+                + 0.10 * tutor_query_reliability * student_prior
             )
-            tutor_local_navigation_logit = tutor_local_reliability_gate * (
-                tutor_mastery_anchor_logit + tutor_route_shift_gate * tutor_route_navigation_logit
+            tutor_local_navigation_logit = tutor_mastery_anchor_logit + tutor_local_reliability_gate * (
+                ae_posterior_prior_logit
+                + ae_posterior_theta_logit
+                + tutor_route_shift_gate * tutor_route_navigation_logit
             )
 
         raw = roadmap_macro_logit + tutor_local_navigation_logit
