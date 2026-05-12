@@ -194,8 +194,12 @@ def run_cdm_forward(
     )
     ae_logit_residual = map_logit_residual
     ae_logit_residual_abs_mean = map_logit_residual_abs_mean
+    # The route-map residual is meaningful only when the global roadmap exists.
+    # If no_A disables the roadmap, keep the IRT backbone at its natural scale
+    # instead of damping it as if an A/E residual would replace it.
     ae_predictor_active = (
         model.enable_module1
+        and model.use_concept_graph
         and model.ae_logit_residual_scale > 0.0
     )
     if ae_predictor_active:
