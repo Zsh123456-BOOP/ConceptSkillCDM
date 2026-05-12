@@ -1153,13 +1153,13 @@ class CognitiveDiagnosisModel(nn.Module):
                 mastery_scale
                 * self._positive_weight(getattr(self, "tutor_route_mastery_weight_raw", None), tutor_route_mastery_delta)
                 * tutor_route_transfer_reliability
-                * route_sc_prior
+                * tutor_route_mastery_delta
             )
             tutor_route_recent_logit = (
                 recent_scale
                 * self._positive_weight(getattr(self, "tutor_route_recent_weight_raw", None), tutor_route_recent_delta)
                 * tutor_route_transfer_reliability
-                * route_recent_prior
+                * tutor_route_recent_delta
             )
             route_gap_penalty = torch.relu(query_sc_prior - route_sc_prior)
             tutor_gap_penalty_logit = (
