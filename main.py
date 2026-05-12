@@ -346,7 +346,7 @@ def parse_args():
     parser.add_argument("--ae_logit_residual_clip", type=float, default=1.0,
                         help="Tanh clip magnitude for the A/E-only query logit residual before scaling.")
     parser.add_argument("--ae_irt_logit_scale", type=float, default=1.0,
-                        help="Scale for the backbone IRT logit when the full A/E logit predictor is active; A-only/E-only ablations suppress IRT.")
+                        help="Scale for the backbone IRT logit when the interpretable A/E route-map calibration is active.")
     parser.add_argument("--ae_interaction_logit_scale", type=float, default=0.0,
                         help="Scale for the full-only A x E student-exercise interaction logit.")
     parser.add_argument("--ae_logit_dim", type=int, default=32,
