@@ -201,6 +201,7 @@ def run_cdm_forward(
         model.enable_module1
         and model.use_concept_graph
         and model.ae_logit_residual_scale > 0.0
+        and (model.roadmap_logit_residual_scale > 0.0 or model.tutor_logit_residual_scale > 0.0)
     )
     if ae_predictor_active:
         irt_logit_scale = float(model.ae_irt_logit_scale)
@@ -227,6 +228,8 @@ def run_cdm_forward(
         "graph_prior_logit_scale": torch.tensor(float(model.graph_prior_logit_scale), device=device),
         "ae_query_residual_scale": torch.tensor(float(model.ae_query_residual_scale), device=device),
         "ae_logit_residual_scale": torch.tensor(float(model.ae_logit_residual_scale), device=device),
+        "roadmap_logit_residual_scale": torch.tensor(float(model.roadmap_logit_residual_scale), device=device),
+        "tutor_logit_residual_scale": torch.tensor(float(model.tutor_logit_residual_scale), device=device),
         "ae_logit_residual_clip": torch.tensor(float(model.ae_logit_residual_clip), device=device),
         "ae_irt_logit_scale": torch.tensor(float(model.ae_irt_logit_scale), device=device),
         "ae_interaction_logit_scale": torch.tensor(float(model.ae_interaction_logit_scale), device=device),

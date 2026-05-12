@@ -339,6 +339,10 @@ def parse_args():
                         help="Scale for the A/E-only nonlinear query-state residual before the fixed diagnosis head.")
     parser.add_argument("--ae_logit_residual_scale", type=float, default=0.0,
                         help="Scale for the A/E query logit predictor; no_A/no_E keep the remaining A or E prior component active.")
+    parser.add_argument("--roadmap_logit_residual_scale", type=float, default=1.0,
+                        help="Scale for the global roadmap (A) component inside the interpretable route-map logit residual.")
+    parser.add_argument("--tutor_logit_residual_scale", type=float, default=1.0,
+                        help="Scale for the local tutor-map (E) component inside the interpretable route-map logit residual.")
     parser.add_argument("--ae_logit_residual_clip", type=float, default=1.0,
                         help="Tanh clip magnitude for the A/E-only query logit residual before scaling.")
     parser.add_argument("--ae_irt_logit_scale", type=float, default=1.0,
@@ -747,6 +751,12 @@ def main():
                 ),
                 ae_logit_residual_scale=loaded_args.get(
                     "ae_logit_residual_scale", getattr(args, "ae_logit_residual_scale", 0.0)
+                ),
+                roadmap_logit_residual_scale=loaded_args.get(
+                    "roadmap_logit_residual_scale", getattr(args, "roadmap_logit_residual_scale", 1.0)
+                ),
+                tutor_logit_residual_scale=loaded_args.get(
+                    "tutor_logit_residual_scale", getattr(args, "tutor_logit_residual_scale", 1.0)
                 ),
                 ae_logit_residual_clip=loaded_args.get(
                     "ae_logit_residual_clip", getattr(args, "ae_logit_residual_clip", 1.0)

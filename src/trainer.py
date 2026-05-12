@@ -81,6 +81,8 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "graph_prior_logit_scale",
     "ae_query_residual_scale",
     "ae_logit_residual_scale",
+    "roadmap_logit_residual_scale",
+    "tutor_logit_residual_scale",
     "ae_logit_residual_clip",
     "ae_irt_logit_scale",
     "ae_interaction_logit_scale",
@@ -2279,6 +2281,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         graph_prior_logit_scale=getattr(args, "graph_prior_logit_scale", 0.0),
         ae_query_residual_scale=getattr(args, "ae_query_residual_scale", 0.0),
         ae_logit_residual_scale=getattr(args, "ae_logit_residual_scale", 0.0),
+        roadmap_logit_residual_scale=getattr(args, "roadmap_logit_residual_scale", 1.0),
+        tutor_logit_residual_scale=getattr(args, "tutor_logit_residual_scale", 1.0),
         ae_logit_residual_clip=getattr(args, "ae_logit_residual_clip", 1.0),
         ae_irt_logit_scale=getattr(args, "ae_irt_logit_scale", 1.0),
         ae_interaction_logit_scale=getattr(args, "ae_interaction_logit_scale", 0.0),
@@ -3140,6 +3144,12 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         ae_logit_residual_scale=loaded_args.get(
             "ae_logit_residual_scale", getattr(args, "ae_logit_residual_scale", 0.0)
+        ),
+        roadmap_logit_residual_scale=loaded_args.get(
+            "roadmap_logit_residual_scale", getattr(args, "roadmap_logit_residual_scale", 1.0)
+        ),
+        tutor_logit_residual_scale=loaded_args.get(
+            "tutor_logit_residual_scale", getattr(args, "tutor_logit_residual_scale", 1.0)
         ),
         ae_logit_residual_clip=loaded_args.get(
             "ae_logit_residual_clip", getattr(args, "ae_logit_residual_clip", 1.0)

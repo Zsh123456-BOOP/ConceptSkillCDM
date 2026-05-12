@@ -108,6 +108,8 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_prior_logit_scale: float = 0.0,
         ae_query_residual_scale: float = 0.0,
         ae_logit_residual_scale: float = 0.0,
+        roadmap_logit_residual_scale: float = 1.0,
+        tutor_logit_residual_scale: float = 1.0,
         ae_logit_residual_clip: float = 1.0,
         ae_irt_logit_scale: float = 1.0,
         ae_interaction_logit_scale: float = 0.0,
@@ -208,6 +210,8 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_prior_logit_scale = max(0.0, float(graph_prior_logit_scale))
         self.ae_query_residual_scale = max(0.0, float(ae_query_residual_scale))
         self.ae_logit_residual_scale = max(0.0, float(ae_logit_residual_scale))
+        self.roadmap_logit_residual_scale = max(0.0, float(roadmap_logit_residual_scale))
+        self.tutor_logit_residual_scale = max(0.0, float(tutor_logit_residual_scale))
         self.ae_logit_residual_clip = max(0.0, float(ae_logit_residual_clip))
         self.ae_irt_logit_scale = max(0.0, float(ae_irt_logit_scale))
         self.ae_interaction_logit_scale = max(0.0, float(ae_interaction_logit_scale))
@@ -318,7 +322,11 @@ class CognitiveDiagnosisModel(nn.Module):
         else:
             self.graph_query_head_gate = None
         self.graph_query_adapter = None
-        map_predictor_enabled = self.enable_module1 and self.ae_logit_residual_scale > 0.0
+        map_predictor_enabled = (
+            self.enable_module1
+            and self.ae_logit_residual_scale > 0.0
+            and (self.roadmap_logit_residual_scale > 0.0 or self.tutor_logit_residual_scale > 0.0)
+        )
         if self.enable_module1:
             self.tutor_current_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.30))
             self.tutor_current_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.12))
@@ -1247,7 +1255,13 @@ class CognitiveDiagnosisModel(nn.Module):
                 + tutor_route_shift_gate * tutor_route_navigation_logit
             )
 
-        raw = roadmap_macro_logit + tutor_local_navigation_logit
+        # A is the global roadmap; E is the local tutor map.  Scale them before
+        # clipping so no_E keeps only the roadmap term instead of sharing one
+        # opaque residual scale with the full model.
+        raw = (
+            self.roadmap_logit_residual_scale * roadmap_macro_logit
+            + self.tutor_logit_residual_scale * tutor_local_navigation_logit
+        )
         raw_before_clip = raw
         if self.ae_logit_residual_clip > 0.0:
             clip = self.ae_logit_residual_clip

@@ -208,6 +208,8 @@ def _build_config_hash(args) -> str:
         "graph_prior_logit_scale",
         "ae_query_residual_scale",
         "ae_logit_residual_scale",
+        "roadmap_logit_residual_scale",
+        "tutor_logit_residual_scale",
         "ae_logit_residual_clip",
         "ae_irt_logit_scale",
         "ae_interaction_logit_scale",
