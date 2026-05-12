@@ -320,10 +320,10 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_query_adapter = None
         map_predictor_enabled = self.enable_module1 and self.ae_logit_residual_scale > 0.0
         if self.enable_module1:
-            self.tutor_current_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.65))
-            self.tutor_current_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.20))
-            self.tutor_route_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.10))
-            self.tutor_route_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.08))
+            self.tutor_current_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.30))
+            self.tutor_current_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.12))
+            self.tutor_route_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.25))
+            self.tutor_route_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.10))
         if map_predictor_enabled:
             self.roadmap_difficulty_weight_raw = nn.Parameter(self._inverse_softplus_value(0.18))
             self.roadmap_reliability_weight_raw = nn.Parameter(self._inverse_softplus_value(0.04))
@@ -652,7 +652,9 @@ class CognitiveDiagnosisModel(nn.Module):
         A/E are treated as route maps for the current exercise, not as a
         full-concept smoothing operator.  A produces a global route adjustment
         to the exercise ability theta_e; E refines that route with the
-        student-conditioned posterior over the same support.  The scalar
+        student-conditioned posterior over the same support.  E's mastery
+        terms are residuals to the current theta estimate, so it calibrates
+        the diagnosis instead of adding raw historical mastery twice.  The scalar
         theta_e adjustment is written back only to concepts in the current
         Q-vector, so non-query concepts are never silently modified.
         """
@@ -761,10 +763,11 @@ class CognitiveDiagnosisModel(nn.Module):
                 query_recent_prior = (query_weight * recent_prior).sum(dim=1)
                 route_prior = (personal_support * prior).sum(dim=1)
                 route_recent_prior = (personal_support * recent_prior).sum(dim=1)
-                tutor_current_mastery_delta = self._clip_theta_delta(query_prior)
-                tutor_current_recent_delta = self._clip_theta_delta(query_recent_prior)
-                tutor_route_mastery_delta = self._clip_theta_delta(route_prior - query_prior)
-                tutor_route_recent_delta = self._clip_theta_delta(route_recent_prior - query_recent_prior)
+                theta_query_after_a = (query_weight * theta_after_a).sum(dim=1)
+                tutor_current_mastery_delta = self._clip_theta_delta(query_prior - theta_query_after_a)
+                tutor_current_recent_delta = self._clip_theta_delta(query_recent_prior - theta_query_after_a)
+                tutor_route_mastery_delta = self._clip_theta_delta(route_prior - personal_route_theta)
+                tutor_route_recent_delta = self._clip_theta_delta(route_recent_prior - personal_route_theta)
 
                 if (
                     student_concept_count is not None
@@ -805,18 +808,19 @@ class CognitiveDiagnosisModel(nn.Module):
                     tutor_route_recent_delta,
                 )
 
+                route_shift = tutor_support_reliability.clamp(min=0.0, max=1.0)
                 combined_delta = (
                     float(self.personal_mastery_prior_scale)
                     * (
                         current_mastery_weight * tutor_current_mastery_delta
-                        + route_mastery_weight * tutor_route_mastery_delta
+                        + (0.50 + route_shift) * route_mastery_weight * tutor_route_mastery_delta
                     )
                     + float(self.personal_recent_mastery_prior_scale)
                     * (
                         current_recent_weight * tutor_current_recent_delta
-                        + route_recent_weight * tutor_route_recent_delta
+                        + (0.50 + route_shift) * route_recent_weight * tutor_route_recent_delta
                     )
-                    + 0.05 * posterior_delta
+                    + 0.15 * posterior_delta
                 )
 
             combined_delta = self._clip_theta_delta(combined_delta)
