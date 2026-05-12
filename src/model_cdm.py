@@ -865,6 +865,17 @@ class CognitiveDiagnosisModel(nn.Module):
             "tutor_theta_calibration_scale": theta_raw.new_tensor(float(self.tutor_theta_calibration_scale)),
             "theta_calibration_clip": theta_raw.new_tensor(float(self.theta_calibration_clip)),
         }
+        both_adjusted = (roadmap_adjustment.abs() > 1e-8) & (tutor_adjustment.abs() > 1e-8)
+        both_count = both_adjusted.to(dtype=theta_raw.dtype).sum().clamp(min=1.0)
+        signed_product = roadmap_adjustment * tutor_adjustment
+        diagnostics["roadmap_theta_e_adjustment_mean"] = roadmap_adjustment.mean().detach()
+        diagnostics["tutor_theta_e_adjustment_mean"] = tutor_adjustment.mean().detach()
+        diagnostics["roadmap_tutor_same_sign_ratio"] = (
+            ((signed_product > 0) & both_adjusted).to(dtype=theta_raw.dtype).sum() / both_count
+        ).detach()
+        diagnostics["roadmap_tutor_opposite_sign_ratio"] = (
+            ((signed_product < 0) & both_adjusted).to(dtype=theta_raw.dtype).sum() / both_count
+        ).detach()
         if concept_mask is None:
             diagnostics["roadmap_theta_delta_abs_mean"] = zero_scalar
             diagnostics["tutor_theta_delta_abs_mean"] = zero_scalar

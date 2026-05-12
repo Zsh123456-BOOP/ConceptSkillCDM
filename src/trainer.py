@@ -1165,6 +1165,10 @@ def _collect_debug_forward_stats(
     roadmap_theta_delta_abs_vals: List[float] = []
     tutor_theta_delta_abs_vals: List[float] = []
     theta_calibration_delta_abs_vals: List[float] = []
+    roadmap_theta_e_adjustment_mean_vals: List[float] = []
+    tutor_theta_e_adjustment_mean_vals: List[float] = []
+    roadmap_tutor_same_sign_ratio_vals: List[float] = []
+    roadmap_tutor_opposite_sign_ratio_vals: List[float] = []
     ae_posterior_prior_logit_abs_vals: List[float] = []
     ae_posterior_prior_delta_abs_vals: List[float] = []
     ae_posterior_theta_logit_abs_vals: List[float] = []
@@ -1330,6 +1334,10 @@ def _collect_debug_forward_stats(
                 ("roadmap_theta_delta_abs_mean", roadmap_theta_delta_abs_vals),
                 ("tutor_theta_delta_abs_mean", tutor_theta_delta_abs_vals),
                 ("theta_calibration_delta_abs_mean", theta_calibration_delta_abs_vals),
+                ("roadmap_theta_e_adjustment_mean", roadmap_theta_e_adjustment_mean_vals),
+                ("tutor_theta_e_adjustment_mean", tutor_theta_e_adjustment_mean_vals),
+                ("roadmap_tutor_same_sign_ratio", roadmap_tutor_same_sign_ratio_vals),
+                ("roadmap_tutor_opposite_sign_ratio", roadmap_tutor_opposite_sign_ratio_vals),
                 ("ae_posterior_prior_logit_abs_mean", ae_posterior_prior_logit_abs_vals),
                 ("ae_posterior_prior_delta_abs_mean", ae_posterior_prior_delta_abs_vals),
                 ("ae_posterior_theta_logit_abs_mean", ae_posterior_theta_logit_abs_vals),
@@ -1532,6 +1540,10 @@ def _collect_debug_forward_stats(
     roadmap_theta_delta_abs_mean, _ = _safe_mean_std(roadmap_theta_delta_abs_vals)
     tutor_theta_delta_abs_mean, _ = _safe_mean_std(tutor_theta_delta_abs_vals)
     theta_calibration_delta_abs_mean, _ = _safe_mean_std(theta_calibration_delta_abs_vals)
+    roadmap_theta_e_adjustment_mean, _ = _safe_mean_std(roadmap_theta_e_adjustment_mean_vals)
+    tutor_theta_e_adjustment_mean, _ = _safe_mean_std(tutor_theta_e_adjustment_mean_vals)
+    roadmap_tutor_same_sign_ratio, _ = _safe_mean_std(roadmap_tutor_same_sign_ratio_vals)
+    roadmap_tutor_opposite_sign_ratio, _ = _safe_mean_std(roadmap_tutor_opposite_sign_ratio_vals)
     ae_posterior_prior_logit_abs_mean, _ = _safe_mean_std(ae_posterior_prior_logit_abs_vals)
     ae_posterior_prior_delta_abs_mean, _ = _safe_mean_std(ae_posterior_prior_delta_abs_vals)
     ae_posterior_theta_logit_abs_mean, _ = _safe_mean_std(ae_posterior_theta_logit_abs_vals)
@@ -1673,6 +1685,10 @@ def _collect_debug_forward_stats(
         "roadmap_theta_delta_abs_mean": roadmap_theta_delta_abs_mean,
         "tutor_theta_delta_abs_mean": tutor_theta_delta_abs_mean,
         "theta_calibration_delta_abs_mean": theta_calibration_delta_abs_mean,
+        "roadmap_theta_e_adjustment_mean": roadmap_theta_e_adjustment_mean,
+        "tutor_theta_e_adjustment_mean": tutor_theta_e_adjustment_mean,
+        "roadmap_tutor_same_sign_ratio": roadmap_tutor_same_sign_ratio,
+        "roadmap_tutor_opposite_sign_ratio": roadmap_tutor_opposite_sign_ratio,
         "roadmap_theta_calibration_scale": float(getattr(base_model, "roadmap_theta_calibration_scale", 0.0)),
         "tutor_theta_calibration_scale": float(getattr(base_model, "tutor_theta_calibration_scale", 0.0)),
         "ae_posterior_prior_logit_abs_mean": ae_posterior_prior_logit_abs_mean,
@@ -2441,6 +2457,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "ae_posterior_prior_delta=%.4f, ae_posterior_theta_scale=%.4f, "
                 "ae_posterior_theta_logit=%.4f, ae_posterior_theta_delta=%.4f, "
                 "roadmap_theta_delta=%.4f, tutor_theta_delta=%.4f, theta_calibration_delta=%.4f, "
+                "roadmap_theta_signed=%.4f, tutor_theta_signed=%.4f, "
+                "roadmap_tutor_same=%.4f, roadmap_tutor_opposite=%.4f, "
                 "graph_row_entropy=%.4f, graph_entropy_ratio=%.4f, "
                 "alpha_mean=%.4f, alpha_std=%.4f, alpha_base_mean=%.4f, alpha_delta_absmean=%.4f, "
                 "alpha_saturation_ratio=%.4f, alpha_bias_std=%s, "
@@ -2482,6 +2500,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diag["roadmap_theta_delta_abs_mean"],
                 diag["tutor_theta_delta_abs_mean"],
                 diag["theta_calibration_delta_abs_mean"],
+                diag["roadmap_theta_e_adjustment_mean"],
+                diag["tutor_theta_e_adjustment_mean"],
+                diag["roadmap_tutor_same_sign_ratio"],
+                diag["roadmap_tutor_opposite_sign_ratio"],
                 diag["graph_row_entropy_mean"],
                 diag["graph_entropy_ratio"],
                 diag["alpha_mean"],
