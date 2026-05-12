@@ -319,15 +319,16 @@ class CognitiveDiagnosisModel(nn.Module):
             self.graph_query_head_gate = None
         self.graph_query_adapter = None
         map_predictor_enabled = self.enable_module1 and self.ae_logit_residual_scale > 0.0
+        if self.enable_module1:
+            self.tutor_current_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.65))
+            self.tutor_current_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.20))
+            self.tutor_route_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.10))
+            self.tutor_route_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.08))
         if map_predictor_enabled:
             self.roadmap_difficulty_weight_raw = nn.Parameter(self._inverse_softplus_value(0.18))
             self.roadmap_reliability_weight_raw = nn.Parameter(self._inverse_softplus_value(0.04))
             self.roadmap_item_weight_raw = nn.Parameter(self._inverse_softplus_value(0.10))
             self.roadmap_sequence_weight_raw = nn.Parameter(self._inverse_softplus_value(0.12))
-            self.tutor_current_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.24))
-            self.tutor_current_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.12))
-            self.tutor_route_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.30))
-            self.tutor_route_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.15))
             self.tutor_student_readiness_weight_raw = nn.Parameter(self._inverse_softplus_value(0.20))
             self.tutor_gap_penalty_weight_raw = nn.Parameter(self._inverse_softplus_value(0.08))
 
@@ -676,9 +677,10 @@ class CognitiveDiagnosisModel(nn.Module):
         tutor_reliability = theta_raw.new_zeros((batch_size,))
         tutor_support_reliability = theta_raw.new_zeros((batch_size,))
         tutor_prior_reliability = theta_raw.new_zeros((batch_size,))
-        tutor_mastery_anchor_delta = theta_raw.new_zeros((batch_size,))
-        tutor_recent_anchor_delta = theta_raw.new_zeros((batch_size,))
+        tutor_current_mastery_delta = theta_raw.new_zeros((batch_size,))
+        tutor_current_recent_delta = theta_raw.new_zeros((batch_size,))
         tutor_route_mastery_delta = theta_raw.new_zeros((batch_size,))
+        tutor_route_recent_delta = theta_raw.new_zeros((batch_size,))
         tutor_posterior_route_delta = theta_raw.new_zeros((batch_size,))
         global_support = query_weight
 
@@ -732,7 +734,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 0.5 * (personal_support - global_support).abs().sum(dim=1)
             ).clamp(min=0.0, max=1.0)
 
-            combined_delta = 0.20 * posterior_delta
+            combined_delta = 0.05 * posterior_delta
             if (
                 student_concept_prior is not None
                 and student_concept_prior.dim() == 2
@@ -758,9 +760,11 @@ class CognitiveDiagnosisModel(nn.Module):
                 query_prior = (query_weight * prior).sum(dim=1)
                 query_recent_prior = (query_weight * recent_prior).sum(dim=1)
                 route_prior = (personal_support * prior).sum(dim=1)
-                tutor_mastery_anchor_delta = self._clip_theta_delta(query_prior - theta_query.detach())
-                tutor_recent_anchor_delta = self._clip_theta_delta(query_recent_prior - theta_query.detach())
+                route_recent_prior = (personal_support * recent_prior).sum(dim=1)
+                tutor_current_mastery_delta = self._clip_theta_delta(query_prior)
+                tutor_current_recent_delta = self._clip_theta_delta(query_recent_prior)
                 tutor_route_mastery_delta = self._clip_theta_delta(route_prior - query_prior)
+                tutor_route_recent_delta = self._clip_theta_delta(route_recent_prior - query_recent_prior)
 
                 if (
                     student_concept_count is not None
@@ -784,10 +788,34 @@ class CognitiveDiagnosisModel(nn.Module):
                 else:
                     tutor_prior_reliability = torch.ones_like(theta_query)
 
+                current_mastery_weight = self._positive_weight(
+                    getattr(self, "tutor_current_mastery_weight_raw", None),
+                    tutor_current_mastery_delta,
+                )
+                current_recent_weight = self._positive_weight(
+                    getattr(self, "tutor_current_recent_weight_raw", None),
+                    tutor_current_recent_delta,
+                )
+                route_mastery_weight = self._positive_weight(
+                    getattr(self, "tutor_route_mastery_weight_raw", None),
+                    tutor_route_mastery_delta,
+                )
+                route_recent_weight = self._positive_weight(
+                    getattr(self, "tutor_route_recent_weight_raw", None),
+                    tutor_route_recent_delta,
+                )
+
                 combined_delta = (
-                    0.65 * tutor_mastery_anchor_delta
-                    + 0.20 * tutor_recent_anchor_delta
-                    + 0.10 * tutor_route_mastery_delta
+                    float(self.personal_mastery_prior_scale)
+                    * (
+                        current_mastery_weight * tutor_current_mastery_delta
+                        + route_mastery_weight * tutor_route_mastery_delta
+                    )
+                    + float(self.personal_recent_mastery_prior_scale)
+                    * (
+                        current_recent_weight * tutor_current_recent_delta
+                        + route_recent_weight * tutor_route_recent_delta
+                    )
                     + 0.05 * posterior_delta
                 )
 
@@ -824,13 +852,15 @@ class CognitiveDiagnosisModel(nn.Module):
             "tutor_theta_e_reliability": tutor_reliability.detach(),
             "tutor_theta_support_reliability": tutor_support_reliability.detach(),
             "tutor_theta_prior_reliability": tutor_prior_reliability.detach(),
-            "tutor_theta_mastery_anchor_delta": tutor_mastery_anchor_delta.detach(),
-            "tutor_theta_recent_anchor_delta": tutor_recent_anchor_delta.detach(),
+            "tutor_theta_current_mastery_delta": tutor_current_mastery_delta.detach(),
+            "tutor_theta_current_recent_delta": tutor_current_recent_delta.detach(),
             "tutor_theta_route_mastery_delta": tutor_route_mastery_delta.detach(),
+            "tutor_theta_route_recent_delta": tutor_route_recent_delta.detach(),
             "tutor_theta_posterior_route_delta": tutor_posterior_route_delta.detach(),
-            "tutor_theta_mastery_anchor_abs_mean": tutor_mastery_anchor_delta.abs().mean().detach(),
-            "tutor_theta_recent_anchor_abs_mean": tutor_recent_anchor_delta.abs().mean().detach(),
+            "tutor_theta_current_mastery_abs_mean": tutor_current_mastery_delta.abs().mean().detach(),
+            "tutor_theta_current_recent_abs_mean": tutor_current_recent_delta.abs().mean().detach(),
             "tutor_theta_route_mastery_abs_mean": tutor_route_mastery_delta.abs().mean().detach(),
+            "tutor_theta_route_recent_abs_mean": tutor_route_recent_delta.abs().mean().detach(),
             "roadmap_theta_calibration_scale": theta_raw.new_tensor(float(self.roadmap_theta_calibration_scale)),
             "tutor_theta_calibration_scale": theta_raw.new_tensor(float(self.tutor_theta_calibration_scale)),
             "theta_calibration_clip": theta_raw.new_tensor(float(self.theta_calibration_clip)),
