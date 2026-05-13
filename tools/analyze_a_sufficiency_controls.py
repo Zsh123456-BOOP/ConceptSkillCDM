@@ -119,7 +119,9 @@ def _annotate_a_relevance(base: pd.DataFrame, info: Mapping[str, Any], dataset_n
     train_df = train_df[train_df["stu_id"].isin(info["stu_id_map"].keys())].reset_index(drop=True)
     stu_counts, stu_history, concept_freq = _student_history(train_df, info["cpt_id_map"])
     q_matrix = info["q_matrix"].detach().cpu()
-    support_prior = _row_normalize(info["item_prior_matrix"] + info["sequence_prior_matrix"]).numpy()
+    item_prior = info["item_prior_matrix"].detach().cpu()
+    sequence_prior = info["sequence_prior_matrix"].detach().cpu()
+    support_prior = _row_normalize(item_prior + sequence_prior).numpy()
 
     masses: List[float] = []
     min_freqs: List[float] = []
@@ -305,7 +307,9 @@ def edge_deletion_experiment(
         "sequence_support_mask": relation.sequence_support_mask.detach().clone(),
     }
     support = _current_support_mask(model)
-    evidence = _row_normalize(info["item_prior_matrix"] + info["sequence_prior_matrix"]).cpu()
+    item_prior = info["item_prior_matrix"].detach().cpu()
+    sequence_prior = info["sequence_prior_matrix"].detach().cpu()
+    evidence = _row_normalize(item_prior + sequence_prior).cpu()
     groups = {
         "all": np.ones(len(annotated), dtype=bool),
         "graph_hits_history": annotated["group_graph_hits_history"].to_numpy(dtype=bool),
@@ -430,8 +434,8 @@ def transition_retrieval_with_ci(args: argparse.Namespace, info: Mapping[str, An
             )
 
     random_rows: List[Dict[str, Any]] = []
-    item = info["item_prior_matrix"].detach().float()
-    seq = info["sequence_prior_matrix"].detach().float()
+    item = info["item_prior_matrix"].detach().cpu().float()
+    seq = info["sequence_prior_matrix"].detach().cpu().float()
     for i in range(int(args.random_repeats)):
         prior, meta = make_degree_random_prior(item, seq, seed=int(args.seed) + 7919 * (i + 1))
         values = _rank_values(prior, pairs, args.ks)
