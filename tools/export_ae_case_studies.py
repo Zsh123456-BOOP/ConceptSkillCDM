@@ -183,6 +183,58 @@ def _predict_probs(
     return np.concatenate(labels_all), np.concatenate(probs_all), np.concatenate(logits_all)
 
 
+def _apply_personal_counterfactual(
+    model: CognitiveDiagnosisModel,
+    mode: str,
+    *,
+    seed: int,
+) -> None:
+    """Mutate train-derived E buffers for inference-only counterfactuals."""
+    attrs = (
+        "ae_student_concept_prior_logit",
+        "ae_student_concept_recent_logit",
+        "ae_student_concept_count_feature",
+        "ae_student_concept_observed_count",
+        "ae_student_prior_logit",
+        "ae_student_count_feature",
+    )
+    if mode == "actual":
+        return
+    if mode not in {"shuffle", "mean"}:
+        raise ValueError(f"Unsupported E counterfactual mode: {mode}")
+    with torch.no_grad():
+        if mode == "shuffle":
+            first = getattr(model, "ae_student_concept_prior_logit", None)
+            if first is None:
+                return
+            gen = torch.Generator(device=first.device)
+            gen.manual_seed(int(seed))
+            perm = torch.randperm(first.size(0), generator=gen, device=first.device)
+            for attr in attrs:
+                value = getattr(model, attr, None)
+                if torch.is_tensor(value) and value.size(0) == perm.numel():
+                    value.copy_(value.index_select(0, perm))
+        elif mode == "mean":
+            for attr in attrs:
+                value = getattr(model, attr, None)
+                if torch.is_tensor(value) and value.ndim >= 1 and value.size(0) > 0:
+                    mean = value.mean(dim=0, keepdim=True)
+                    value.copy_(mean.expand_as(value))
+
+
+def _predict_e_counterfactual(
+    checkpoint: Mapping[str, Any],
+    loader: DataLoader,
+    device: torch.device,
+    mode: str,
+    *,
+    seed: int,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    model = _build_model(checkpoint, device)
+    _apply_personal_counterfactual(model, mode, seed=seed)
+    return _predict_probs(model, loader, device)
+
+
 def _concept_label(mapped_id: int, reverse_map: Mapping[int, Any]) -> str:
     raw = reverse_map.get(int(mapped_id), int(mapped_id))
     return f"C{raw}"
@@ -267,20 +319,74 @@ def _rank_e_case_pool(candidates: pd.DataFrame, top_k: int) -> pd.DataFrame:
     if candidates.empty:
         return candidates
     out = candidates.copy()
+    for col in (
+        "e_gain",
+        "query_row_posterior_kl",
+        "query_row_posterior_delta_abs",
+        "query_row_personal_message_delta",
+        "e_observed_shift_abs",
+        "e_observed_state_abs",
+        "e_counterfactual_gain_min",
+    ):
+        if col not in out:
+            out[col] = 0.0
+    strict = out.copy()
+    if "e_rescue" in strict:
+        strict = strict[strict["e_rescue"].astype(bool)]
+    if "e_top_observed_support_count" in strict:
+        strict = strict[strict["e_top_observed_support_count"].astype(float) > 0.0]
+    if "e_counterfactual_gain_min" in strict:
+        strict = strict[strict["e_counterfactual_gain_min"].astype(float) > 0.0]
+    if not strict.empty:
+        out = strict
     out["selection_score"] = out["e_gain"].astype(float)
-    out["selection_score"] += out["query_row_posterior_kl"].astype(float) * 0.60
-    out["selection_score"] += out["query_row_posterior_delta_abs"].astype(float) * 0.30
-    out["selection_score"] += out["query_row_personal_message_delta"].astype(float) * 0.20
+    out["selection_score"] += out["query_row_posterior_kl"].astype(float) * 0.80
+    out["selection_score"] += out["query_row_posterior_delta_abs"].astype(float) * 0.50
+    out["selection_score"] += out["e_observed_shift_abs"].astype(float) * 1.50
+    out["selection_score"] += out["e_observed_state_abs"].astype(float) * 0.08
+    out["selection_score"] += out["e_counterfactual_gain_min"].astype(float) * 0.80
     e_rescue = out["e_rescue"] if "e_rescue" in out else pd.Series(False, index=out.index)
     out["quality_reason"] = np.where(
         e_rescue,
         "full_correct_no_E_wrong",
         "largest_no_E_error_reduction_with_posterior_shift",
     )
-    return out.sort_values(
-        ["selection_score", "e_gain", "query_row_posterior_kl", "query_row_posterior_delta_abs"],
-        ascending=[False, False, False, False],
-    ).head(top_k)
+    ranked = out.sort_values(
+        [
+            "selection_score",
+            "e_counterfactual_gain_min",
+            "e_observed_shift_abs",
+            "e_gain",
+            "query_row_posterior_kl",
+        ],
+        ascending=[False, False, False, False, False],
+    )
+    selected_rows: List[pd.DataFrame] = []
+    used_concepts: set[str] = set()
+    if "e_query_concept" in ranked:
+        for _, row in ranked.iterrows():
+            concept = str(row.get("e_query_concept", ""))
+            if concept in used_concepts:
+                continue
+            selected_rows.append(row.to_frame().T)
+            used_concepts.add(concept)
+            if len(selected_rows) >= top_k:
+                break
+    if len(selected_rows) < top_k:
+        selected_ids = set()
+        if selected_rows:
+            selected_ids = {int(x) for part in selected_rows for x in part["eval_row_id"].tolist()}
+        for _, row in ranked.iterrows():
+            eval_row_id = int(row["eval_row_id"])
+            if eval_row_id in selected_ids:
+                continue
+            selected_rows.append(row.to_frame().T)
+            selected_ids.add(eval_row_id)
+            if len(selected_rows) >= top_k:
+                break
+    if not selected_rows:
+        return ranked.head(top_k).reset_index(drop=True)
+    return pd.concat(selected_rows, ignore_index=True).head(top_k).reset_index(drop=True)
 
 
 def _safe_float(value: Any) -> float:
@@ -540,6 +646,81 @@ def _support_distribution_for_case(
     return query_c, pd.DataFrame(out).sort_values("e_posterior", ascending=False)
 
 
+def _add_e_mechanism_diagnostics(
+    selected: pd.DataFrame,
+    details_by_eval: Mapping[int, Dict[str, Any]],
+    info: Mapping[str, Any],
+    model: CognitiveDiagnosisModel,
+) -> pd.DataFrame:
+    if selected.empty:
+        return selected
+    reverse_cpt = info.get("cpt_id_reverse_map") or {v: k for k, v in dict(info["cpt_id_map"]).items()}
+    prior = model.ae_student_concept_prior_logit.detach().float().cpu().numpy()
+    recent = model.ae_student_concept_recent_logit.detach().float().cpu().numpy()
+    count = model.ae_student_concept_observed_count.detach().float().cpu().numpy()
+    out = selected.copy().reset_index(drop=True)
+    diagnostic_cols = {
+        "e_query_concept": "",
+        "e_top_shift_support": "",
+        "e_top_shift_abs": 0.0,
+        "e_top_shift_delta": 0.0,
+        "e_top_observed_support": "",
+        "e_top_observed_abs_delta": 0.0,
+        "e_top_observed_delta": 0.0,
+        "e_top_observed_support_count": 0.0,
+        "e_top_observed_mastery_logit": 0.0,
+        "e_top_observed_recent_logit": 0.0,
+        "e_observed_shift_abs": 0.0,
+        "e_observed_state_abs": 0.0,
+        "e_observed_support_count_sum": 0.0,
+    }
+    for col, default in diagnostic_cols.items():
+        out[col] = default
+    for i, row in out.iterrows():
+        eval_row_id = int(row["eval_row_id"])
+        details = details_by_eval.get(eval_row_id)
+        if not details:
+            continue
+        sample_pos = int(row.get("detail_pos", i))
+        q_vector = details["q_vector"][sample_pos].float().numpy()
+        query_concepts = [int(idx) for idx in np.where(q_vector > 0)[0]]
+        dist = _support_distribution_for_case(details, sample_pos, query_concepts)
+        if dist is None:
+            continue
+        query_c, edges = dist
+        if edges.empty:
+            continue
+        mapped_student = int(row["mapped_student_id"])
+        edges = edges.copy()
+        edges["abs_delta"] = edges["delta"].abs()
+        edges["support_count"] = [float(count[mapped_student, int(s)]) for s in edges["support_mapped"]]
+        edges["support_mastery"] = [float(prior[mapped_student, int(s)]) for s in edges["support_mapped"]]
+        edges["support_recent"] = [float(recent[mapped_student, int(s)]) for s in edges["support_mapped"]]
+        edges["state_abs"] = edges["support_mastery"].abs() + edges["support_recent"].abs()
+        observed = edges[(edges["support_count"] > 0.0) & (edges["support_mapped"].astype(int) != int(query_c))].copy()
+        top_shift = edges.sort_values("abs_delta", ascending=False).head(1)
+        out.loc[i, "e_query_concept"] = _concept_label(query_c, reverse_cpt)
+        if not top_shift.empty:
+            support = int(top_shift["support_mapped"].iloc[0])
+            out.loc[i, "e_top_shift_support"] = _concept_label(support, reverse_cpt)
+            out.loc[i, "e_top_shift_abs"] = float(top_shift["abs_delta"].iloc[0])
+            out.loc[i, "e_top_shift_delta"] = float(top_shift["delta"].iloc[0])
+        if not observed.empty:
+            observed = observed.sort_values(["abs_delta", "state_abs"], ascending=[False, False])
+            top_obs = observed.head(1)
+            support = int(top_obs["support_mapped"].iloc[0])
+            out.loc[i, "e_top_observed_support"] = _concept_label(support, reverse_cpt)
+            out.loc[i, "e_top_observed_abs_delta"] = float(top_obs["abs_delta"].iloc[0])
+            out.loc[i, "e_top_observed_delta"] = float(top_obs["delta"].iloc[0])
+            out.loc[i, "e_top_observed_support_count"] = float(top_obs["support_count"].iloc[0])
+            out.loc[i, "e_top_observed_mastery_logit"] = float(top_obs["support_mastery"].iloc[0])
+            out.loc[i, "e_top_observed_recent_logit"] = float(top_obs["support_recent"].iloc[0])
+            out.loc[i, "e_observed_shift_abs"] = float((observed["abs_delta"] * (observed["support_count"] > 0.0)).sum())
+            out.loc[i, "e_observed_state_abs"] = float((observed["abs_delta"] * observed["state_abs"]).sum())
+            out.loc[i, "e_observed_support_count_sum"] = float(observed["support_count"].sum())
+    return out
+
+
 def _history_rows(
     train_df: pd.DataFrame,
     stu_id: Any,
@@ -640,11 +821,21 @@ def _write_e_tables(
                 "cpt_seq": row.cpt_seq,
                 "full_prob": row.full_prob,
                 "no_E_prob": row.no_E_prob,
+                "E_shuffle_prob": getattr(row, "E_shuffle_prob", np.nan),
+                "E_mean_prob": getattr(row, "E_mean_prob", np.nan),
                 "e_gain": row.e_gain,
+                "E_shuffle_gain": getattr(row, "E_shuffle_gain", np.nan),
+                "E_mean_gain": getattr(row, "E_mean_gain", np.nan),
+                "e_counterfactual_gain_min": getattr(row, "e_counterfactual_gain_min", np.nan),
                 "query_concept": _concept_label(query_c, reverse_cpt),
                 "query_row_posterior_kl": row.query_row_posterior_kl,
                 "query_row_posterior_delta_abs": row.query_row_posterior_delta_abs,
                 "query_row_personal_message_delta": row.query_row_personal_message_delta,
+                "e_top_observed_support": getattr(row, "e_top_observed_support", ""),
+                "e_top_observed_abs_delta": getattr(row, "e_top_observed_abs_delta", np.nan),
+                "e_top_observed_support_count": getattr(row, "e_top_observed_support_count", np.nan),
+                "e_observed_shift_abs": getattr(row, "e_observed_shift_abs", np.nan),
+                "e_observed_state_abs": getattr(row, "e_observed_state_abs", np.nan),
             }
         )
         for h in _history_rows(train_df, row.stu_id, related_raw, history_window=history_window):
@@ -719,10 +910,30 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         result["e_gain"] = result["no_E_abs_error"] - result["full_abs_error"]
         result["e_rescue"] = (result["full_pred"] == result["label"]) & (result["no_E_pred"] != result["label"])
 
+    if args.e_counterfactuals:
+        for mode, prefix in (("shuffle", "E_shuffle"), ("mean", "E_mean")):
+            _, cf_prob, _ = _predict_e_counterfactual(
+                ckpt_full,
+                loader,
+                device,
+                mode,
+                seed=args.counterfactual_seed,
+            )
+            result[f"{prefix}_prob"] = cf_prob
+            result[f"{prefix}_pred"] = (result[f"{prefix}_prob"] > 0.5).astype(int)
+            result[f"{prefix}_abs_error"] = (result["label"] - result[f"{prefix}_prob"]).abs()
+            result[f"{prefix}_gain"] = result[f"{prefix}_abs_error"] - result["full_abs_error"]
+        if "E_shuffle_gain" in result and "E_mean_gain" in result:
+            result["e_counterfactual_gain_min"] = result[["E_shuffle_gain", "E_mean_gain"]].min(axis=1)
+            result["e_counterfactual_rescue"] = (
+                (result["full_pred"] == result["label"])
+                & ((result["E_shuffle_pred"] != result["label"]) | (result["E_mean_pred"] != result["label"]))
+            )
+
     result.to_csv(out_dir / "case_predictions.csv", index=False)
 
     metric_rows: List[Dict[str, Any]] = []
-    for prefix in ("full", "no_A", "no_E"):
+    for prefix in ("full", "no_A", "no_E", "E_shuffle", "E_mean"):
         prob_col = f"{prefix}_prob"
         if prob_col not in result:
             continue
@@ -773,7 +984,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             min_gain=args.min_gain,
             prefer_multi_concept=False,
         )
-        e_pool_details, _ = _run_selected_details(
+        e_pool_details, e_pool_detail_map = _run_selected_details(
             full_model,
             e_pool,
             info,
@@ -781,6 +992,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             context_frame=result,
             context_batch_size=args.batch_size,
         )
+        e_pool_details = _add_e_mechanism_diagnostics(e_pool_details, e_pool_detail_map, info, full_model)
         e_pool_details.to_csv(out_dir / "e_candidate_pool.csv", index=False)
         e_details_sel = _rank_e_case_pool(e_pool_details, args.top_cases).reset_index(drop=True)
         e_details_sel, e_details = _run_selected_details(
@@ -791,6 +1003,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             context_frame=result,
             context_batch_size=args.batch_size,
         )
+        e_details_sel = _add_e_mechanism_diagnostics(e_details_sel, e_details, info, full_model)
         _attach_model_buffers_to_details(e_details, full_model)
         train_df = pd.read_csv(os.path.join(data_dir, "train.csv"))
         _write_e_tables(
@@ -847,6 +1060,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch_size", type=int, default=1024)
     parser.add_argument("--num_workers", type=int, default=2)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--e_counterfactuals", action="store_true", help="Evaluate shuffled/mean student-state E counterfactuals.")
+    parser.add_argument("--counterfactual_seed", type=int, default=20260513)
     return parser.parse_args()
 
 

@@ -133,6 +133,32 @@ if (nrow(a_edges) > 0) {
 e_edges <- read_table("e_case_edges.csv")
 e_cases <- read_table("e_cases.csv")
 if (nrow(e_edges) > 0) {
+  if (nrow(e_cases) > 0 && all(c("E_shuffle_prob", "E_mean_prob") %in% names(e_cases))) {
+    png(file.path(out_dir, "E_counterfactual_probability_comparison.png"), width = 1900, height = 1100, res = 170)
+    op <- par(mar = c(10, 5, 4, 2))
+    labels <- paste(e_cases$case_id, "y=", e_cases$label)
+    values <- rbind(
+      safe_num(e_cases$full_prob),
+      safe_num(e_cases$no_E_prob),
+      safe_num(e_cases$E_shuffle_prob),
+      safe_num(e_cases$E_mean_prob)
+    )
+    barplot(
+      values,
+      beside = TRUE,
+      names.arg = labels,
+      las = 2,
+      col = c("#4C78A8", "#54A24B", "#E45756", "#B279A2"),
+      ylim = c(0, 1),
+      ylab = "Predicted probability",
+      main = "E Counterfactual: real student state vs no_E / shuffled / mean"
+    )
+    abline(h = 0.5, lty = 2, col = "gray40")
+    legend("topright", legend = c("full actual E", "no_E", "E shuffled", "E mean"), fill = c("#4C78A8", "#54A24B", "#E45756", "#B279A2"), bty = "n")
+    par(op)
+    dev.off()
+  }
+
   for (case_id in unique(e_edges$case_id)) {
     sub <- e_edges[e_edges$case_id == case_id, ]
     sub <- sub[order(-abs(safe_num(sub$delta))), ][seq_len(min(10, nrow(sub))), ]
