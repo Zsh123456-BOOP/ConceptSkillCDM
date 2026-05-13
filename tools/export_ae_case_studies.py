@@ -601,6 +601,84 @@ def _run_selected_details(
     return selected, detail_by_eval
 
 
+def _relation_edges_for_sample(
+    details: Mapping[str, Any],
+    sample_pos: int,
+    query_concepts: Sequence[int],
+    *,
+    top_neighbors: int,
+) -> pd.DataFrame:
+    relation_tensor = details.get("relation_matrices")
+    if relation_tensor is None or not query_concepts:
+        return pd.DataFrame()
+    relation = relation_tensor.float().numpy().mean(axis=0)
+    rows: List[Dict[str, Any]] = []
+    for c in query_concepts:
+        for k in _top_indices(relation[c], top_neighbors, exclude=[]):
+            rows.append({"query_mapped": int(c), "support_mapped": int(k), "a_weight": float(relation[c, k])})
+    return pd.DataFrame(rows)
+
+
+def _add_a_mechanism_diagnostics(
+    selected: pd.DataFrame,
+    details_by_eval: Mapping[int, Dict[str, Any]],
+    info: Mapping[str, Any],
+    *,
+    top_neighbors: int,
+) -> pd.DataFrame:
+    if selected.empty:
+        return selected
+    item_prior = info["item_prior_matrix"].detach().float().cpu().numpy()
+    seq_prior = info["sequence_prior_matrix"].detach().float().cpu().numpy()
+    out = selected.copy().reset_index(drop=True)
+    diagnostic_cols = {
+        "a_top_edge_weight_sum": 0.0,
+        "a_top_edge_weight_max": 0.0,
+        "a_top_edge_entropy": 0.0,
+        "a_edge_item_mass": 0.0,
+        "a_edge_seq_mass": 0.0,
+        "a_edge_self_mass": 0.0,
+        "a_edge_evidence_mass": 0.0,
+        "a_edge_item_count": 0.0,
+        "a_edge_seq_count": 0.0,
+        "a_edge_evidence_count": 0.0,
+    }
+    for col, default in diagnostic_cols.items():
+        out[col] = default
+    for i, row in out.iterrows():
+        eval_row_id = int(row["eval_row_id"])
+        details = details_by_eval.get(eval_row_id)
+        if not details:
+            continue
+        sample_pos = int(row.get("detail_pos", i))
+        q_vector = details["q_vector"][sample_pos].float().numpy()
+        query_concepts = [int(idx) for idx in np.where(q_vector > 0)[0]]
+        edges = _relation_edges_for_sample(details, sample_pos, query_concepts, top_neighbors=top_neighbors)
+        if edges.empty:
+            continue
+        weights = edges["a_weight"].astype(float).clip(lower=0.0).to_numpy()
+        weight_sum = float(weights.sum())
+        p = weights / max(weight_sum, 1e-12)
+        entropy = float(-(p * np.log(np.clip(p, 1e-12, 1.0))).sum())
+        item_vals = np.array([float(item_prior[int(r.query_mapped), int(r.support_mapped)]) for r in edges.itertuples(index=False)])
+        seq_vals = np.array([float(seq_prior[int(r.query_mapped), int(r.support_mapped)]) for r in edges.itertuples(index=False)])
+        self_mask = np.array([int(r.query_mapped) == int(r.support_mapped) for r in edges.itertuples(index=False)], dtype=bool)
+        item_mask = item_vals > 0.0
+        seq_mask = seq_vals > 0.0
+        evidence_mask = item_mask | seq_mask | self_mask
+        out.loc[i, "a_top_edge_weight_sum"] = weight_sum
+        out.loc[i, "a_top_edge_weight_max"] = float(weights.max()) if weights.size else 0.0
+        out.loc[i, "a_top_edge_entropy"] = entropy
+        out.loc[i, "a_edge_item_mass"] = float(weights[item_mask].sum())
+        out.loc[i, "a_edge_seq_mass"] = float(weights[seq_mask].sum())
+        out.loc[i, "a_edge_self_mass"] = float(weights[self_mask].sum())
+        out.loc[i, "a_edge_evidence_mass"] = float(weights[evidence_mask].sum())
+        out.loc[i, "a_edge_item_count"] = float(item_mask.sum())
+        out.loc[i, "a_edge_seq_count"] = float(seq_mask.sum())
+        out.loc[i, "a_edge_evidence_count"] = float(evidence_mask.sum())
+    return out
+
+
 def _write_a_tables(
     selected: pd.DataFrame,
     details_by_eval: Mapping[int, Dict[str, Any]],
@@ -1140,6 +1218,12 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             context_frame=result,
             context_batch_size=args.batch_size,
         )
+        a_pool_details = _add_a_mechanism_diagnostics(
+            a_pool_details,
+            _a_pool_detail_map,
+            info,
+            top_neighbors=args.top_neighbors,
+        )
         a_pool_details.to_csv(out_dir / "a_candidate_pool.csv", index=False)
         a_details_sel = _rank_a_case_pool(a_pool_details, args.top_cases).reset_index(drop=True)
         a_details_sel, a_details = _run_selected_details(
@@ -1149,6 +1233,12 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             device,
             context_frame=result,
             context_batch_size=args.batch_size,
+        )
+        a_details_sel = _add_a_mechanism_diagnostics(
+            a_details_sel,
+            a_details,
+            info,
+            top_neighbors=args.top_neighbors,
         )
         _write_a_tables(a_details_sel, a_details, info, out_dir, top_neighbors=args.top_neighbors)
         a_details_sel.to_csv(out_dir / "a_selected_cases.csv", index=False)

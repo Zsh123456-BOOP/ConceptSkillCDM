@@ -580,8 +580,27 @@ def create_dataloaders(
             "uniform_prior_edge_count": observed,
         }
 
+    def _random_prior(num_concepts: int, seed: int = 20260513) -> Tuple[torch.Tensor, Dict[str, float]]:
+        if num_concepts == 1:
+            prior = torch.ones(1, 1, dtype=torch.float32)
+        else:
+            gen = torch.Generator().manual_seed(int(seed) + int(num_concepts) * 1009)
+            scores = torch.rand(num_concepts, num_concepts, generator=gen, dtype=torch.float32)
+            eye = torch.eye(num_concepts, dtype=torch.float32)
+            scores = scores * (1.0 - eye)
+            prior = scores / scores.sum(dim=-1, keepdim=True).clamp(min=1e-12)
+        possible = float(num_concepts * max(0, num_concepts - 1))
+        observed = possible
+        return prior, {
+            "item_observed_edge_count": 0.0,
+            "item_prior_density": 1.0 if possible > 0 else 0.0,
+            "item_prior_entropy": _prior_entropy(prior),
+            "random_prior_edge_count": observed,
+            "random_prior_seed": float(seed),
+        }
+
     prior_mode = str(graph_prior_mode or "evidence").strip().lower()
-    valid_prior_modes = {"evidence", "item_only", "seq_only", "self_only", "uniform"}
+    valid_prior_modes = {"evidence", "item_only", "seq_only", "self_only", "uniform", "random"}
     if prior_mode not in valid_prior_modes:
         raise ValueError(f"graph_prior_mode must be one of {sorted(valid_prior_modes)}, got {graph_prior_mode!r}")
     if prior_mode == "evidence":
@@ -597,6 +616,10 @@ def create_dataloaders(
         item_prior_matrix, item_prior_stats = _uniform_prior(num_concepts)
         sequence_prior_matrix, sequence_prior_stats = _zero_sequence_prior(num_concepts)
         log("[A Prior] mode=uniform: using train-independent uniform off-diagonal control prior.")
+    elif prior_mode == "random":
+        item_prior_matrix, item_prior_stats = _random_prior(num_concepts)
+        sequence_prior_matrix, sequence_prior_stats = _zero_sequence_prior(num_concepts)
+        log("[A Prior] mode=random: using deterministic train-independent random off-diagonal control prior.")
     elif prior_mode == "self_only":
         item_prior_matrix, item_prior_stats = _zero_item_prior(num_concepts)
         sequence_prior_matrix, sequence_prior_stats = _zero_sequence_prior(num_concepts)
@@ -766,8 +789,8 @@ def create_dataloaders(
         'item_prior_matrix': item_prior_matrix,
         'sequence_prior_matrix': sequence_prior_matrix,
         'graph_prior_stats': graph_prior_stats,
-        'sequence_prior_disabled': bool(disable_sequence_prior or prior_mode in {"item_only", "self_only", "uniform"}),
-        'item_prior_disabled': bool(disable_item_prior or prior_mode in {"seq_only", "self_only"}),
+        'sequence_prior_disabled': bool(disable_sequence_prior or prior_mode in {"item_only", "self_only", "uniform", "random"}),
+        'item_prior_disabled': bool(disable_item_prior or prior_mode in {"seq_only", "self_only", "random"}),
         'graph_prior_mode': prior_mode,
         # 新增：每道题的“概念数量”，与 exer_id 内部索引对齐
         'concepts_per_exercise': concepts_per_exercise,

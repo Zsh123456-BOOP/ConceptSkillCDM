@@ -43,6 +43,7 @@ DEFAULT_VARIANTS = (
     "A_item_only",
     "A_seq_only",
     "A_uniform",
+    "A_random",
     "A_self_only",
     "E_prior_only",
     "E_frozen_alpha",
@@ -101,6 +102,7 @@ NEUTRAL_E_VARIANTS = {
     "A_item_neutralE",
     "A_seq_neutralE",
     "A_uniform_neutralE",
+    "A_random_neutralE",
     "A_self_neutralE",
     "E_global_posterior",
     "E_prior_only",
@@ -381,6 +383,8 @@ def _variant_spec(name: str) -> AblationSpec:
         return AblationSpec(name=name, flags={}, overrides={"graph_prior_mode": "seq_only"})
     if name == "A_uniform":
         return AblationSpec(name=name, flags={}, overrides={"graph_prior_mode": "uniform"})
+    if name == "A_random":
+        return AblationSpec(name=name, flags={}, overrides={"graph_prior_mode": "random"})
     if name == "A_self_only":
         return AblationSpec(name=name, flags={}, overrides={"graph_prior_mode": "self_only"})
     if name == "A_fused_neutralE":
@@ -396,6 +400,10 @@ def _variant_spec(name: str) -> AblationSpec:
     if name == "A_uniform_neutralE":
         overrides = dict(FAIR_NEUTRAL_E_OVERRIDES)
         overrides["graph_prior_mode"] = "uniform"
+        return AblationSpec(name=name, flags={}, overrides=overrides)
+    if name == "A_random_neutralE":
+        overrides = dict(FAIR_NEUTRAL_E_OVERRIDES)
+        overrides["graph_prior_mode"] = "random"
         return AblationSpec(name=name, flags={}, overrides=overrides)
     if name == "A_self_neutralE":
         overrides = dict(FAIR_NEUTRAL_E_OVERRIDES)

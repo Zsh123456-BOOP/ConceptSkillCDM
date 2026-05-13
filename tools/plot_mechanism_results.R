@@ -20,10 +20,10 @@ rows$phase_dataset <- paste(rows$phase, rows$dataset, sep = " / ")
 
 variant_order <- c(
   "full", "no_A", "no_E", "A_item_only", "A_seq_only",
-  "A_uniform", "A_self_only",
+  "A_uniform", "A_random", "A_self_only",
   "full_fair", "no_A_fair", "no_E_fair",
   "A_fused_neutralE", "A_item_neutralE", "A_seq_neutralE",
-  "A_uniform_neutralE", "A_self_neutralE",
+  "A_uniform_neutralE", "A_random_neutralE", "A_self_neutralE",
   "E_prior_only", "E_frozen_alpha", "E_full_fair",
   "E_global_posterior", "E_posterior_only", "E_query_only",
   "E_shuffle_student",
@@ -70,7 +70,7 @@ dev.off()
 summary_csv <- file.path(dirname(result_csv), "mechanism_effectiveness_summary.csv")
 if (file.exists(summary_csv)) {
   s <- read.csv(summary_csv, stringsAsFactors = FALSE, check.names = FALSE)
-  metric_cols <- c("drop_no_A", "drop_no_E", "evidence_gain_vs_uniform", "seq_minus_item")
+  metric_cols <- c("drop_no_A", "drop_no_E", "evidence_gain_vs_uniform", "evidence_gain_random_neutralE", "seq_minus_item")
   for (m in metric_cols) {
     if (m %in% names(s)) {
       s[[m]] <- as.numeric(s[[m]])
@@ -80,12 +80,16 @@ if (file.exists(summary_csv)) {
 
   png(file.path(out_dir, "mechanism_drops.png"), width = 1800, height = 1100, res = 160)
   op <- par(mar = c(12, 5, 4, 2), las = 2)
-  mat <- t(as.matrix(s[, c("drop_no_A", "drop_no_E", "evidence_gain_vs_uniform")]))
+  cols_present <- c("drop_no_A", "drop_no_E", "evidence_gain_vs_uniform")
+  if ("evidence_gain_random_neutralE" %in% names(s)) {
+    cols_present <- c(cols_present, "evidence_gain_random_neutralE")
+  }
+  mat <- t(as.matrix(s[, cols_present, drop = FALSE]))
   colnames(mat) <- s$phase_dataset
   barplot(
     mat,
     beside = TRUE,
-    col = c("#4C78A8", "#F58518", "#54A24B"),
+    col = c("#4C78A8", "#F58518", "#54A24B", "#B279A2")[seq_len(nrow(mat))],
     ylab = "AUC Difference",
     main = "Mechanism Effect Sizes",
     cex.names = 0.65
@@ -93,8 +97,8 @@ if (file.exists(summary_csv)) {
   abline(h = 0, lty = 2, col = "gray40")
   legend(
     "topright",
-    legend = c("full - no_A", "full - no_E", "full - A_uniform"),
-    fill = c("#4C78A8", "#F58518", "#54A24B"),
+    legend = c("full - no_A", "full - no_E", "full - A_uniform", "A_fused - A_random")[seq_len(nrow(mat))],
+    fill = c("#4C78A8", "#F58518", "#54A24B", "#B279A2")[seq_len(nrow(mat))],
     cex = 0.75,
     bty = "n"
   )
