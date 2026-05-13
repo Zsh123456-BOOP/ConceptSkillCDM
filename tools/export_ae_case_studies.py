@@ -288,6 +288,71 @@ def _select_cases(
     return preferred.sort_values(["selection_score", gain_col, "full_abs_error"], ascending=[False, False, True]).head(top_k)
 
 
+def _select_mechanism_pool(
+    frame: pd.DataFrame,
+    gain_col: str,
+    rescue_col: str,
+    top_k: int,
+    *,
+    seed: int,
+) -> pd.DataFrame:
+    """Select a stratified diagnostic pool, not just visually strong rescue cases.
+
+    Case figures should prefer clean rescue examples. Mechanism-correlation plots
+    need the opposite: they must include wins, neutral rows, failures, and rescue
+    rows, otherwise rescue-rate and gain correlations are selection artifacts.
+    """
+    if top_k <= 0 or gain_col not in frame:
+        return pd.DataFrame()
+    work = frame.copy()
+    work[gain_col] = pd.to_numeric(work[gain_col], errors="coerce")
+    work = work.replace([np.inf, -np.inf], np.nan).dropna(subset=[gain_col])
+    if work.empty:
+        return work
+    if len(work) <= top_k:
+        work["mechanism_pool_reason"] = "all_rows"
+        return work.reset_index(drop=True)
+
+    unique_gains = int(work[gain_col].nunique())
+    q = max(2, min(10, unique_gains, int(top_k)))
+    pieces: List[pd.DataFrame] = []
+    try:
+        work["_gain_bin"] = pd.qcut(work[gain_col], q=q, labels=False, duplicates="drop")
+    except ValueError:
+        work["_gain_bin"] = 0
+    bins = [b for b in sorted(work["_gain_bin"].dropna().unique())]
+    per_bin = max(1, int(np.ceil(top_k * 0.75 / max(1, len(bins)))))
+    for b in bins:
+        grp = work[work["_gain_bin"] == b]
+        take = min(per_bin, len(grp))
+        sampled = grp.sample(n=take, random_state=seed + int(b))
+        sampled = sampled.copy()
+        sampled["mechanism_pool_reason"] = f"gain_bin_{int(b)}"
+        pieces.append(sampled)
+
+    if rescue_col in work:
+        rescue = work[work[rescue_col].astype(bool)].sort_values(gain_col, ascending=False).head(max(1, top_k // 8))
+        if not rescue.empty:
+            rescue = rescue.copy()
+            rescue["mechanism_pool_reason"] = "rescue_topup"
+            pieces.append(rescue)
+
+    selected = pd.concat(pieces, ignore_index=True) if pieces else pd.DataFrame()
+    if not selected.empty:
+        selected = selected.drop_duplicates(subset=["eval_row_id"], keep="first")
+    if len(selected) < top_k:
+        used = set(selected["eval_row_id"].astype(int).tolist()) if not selected.empty else set()
+        remaining = work[~work["eval_row_id"].astype(int).isin(used)]
+        fill_n = min(top_k - len(selected), len(remaining))
+        if fill_n > 0:
+            fill = remaining.sample(n=fill_n, random_state=seed + 7919).copy()
+            fill["mechanism_pool_reason"] = "random_fill"
+            selected = pd.concat([selected, fill], ignore_index=True)
+    if len(selected) > top_k:
+        selected = selected.sample(n=top_k, random_state=seed + 1543)
+    return selected.drop(columns=["_gain_bin"], errors="ignore").reset_index(drop=True)
+
+
 def _rank_a_case_pool(candidates: pd.DataFrame, top_k: int) -> pd.DataFrame:
     if candidates.empty:
         return candidates
@@ -1225,6 +1290,29 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             top_neighbors=args.top_neighbors,
         )
         a_pool_details.to_csv(out_dir / "a_candidate_pool.csv", index=False)
+        if args.mechanism_pool > 0:
+            a_mech_pool = _select_mechanism_pool(
+                result,
+                "a_gain",
+                "a_rescue",
+                args.mechanism_pool,
+                seed=args.counterfactual_seed + 101,
+            )
+            a_mech_details, a_mech_detail_map = _run_selected_details(
+                full_model,
+                a_mech_pool,
+                info,
+                device,
+                context_frame=result,
+                context_batch_size=args.batch_size,
+            )
+            a_mech_details = _add_a_mechanism_diagnostics(
+                a_mech_details,
+                a_mech_detail_map,
+                info,
+                top_neighbors=args.top_neighbors,
+            )
+            a_mech_details.to_csv(out_dir / "a_mechanism_pool.csv", index=False)
         a_details_sel = _rank_a_case_pool(a_pool_details, args.top_cases).reset_index(drop=True)
         a_details_sel, a_details = _run_selected_details(
             full_model,
@@ -1263,6 +1351,24 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         )
         e_pool_details = _add_e_mechanism_diagnostics(e_pool_details, e_pool_detail_map, info, full_model)
         e_pool_details.to_csv(out_dir / "e_candidate_pool.csv", index=False)
+        if args.mechanism_pool > 0:
+            e_mech_pool = _select_mechanism_pool(
+                result,
+                "e_gain",
+                "e_rescue",
+                args.mechanism_pool,
+                seed=args.counterfactual_seed + 211,
+            )
+            e_mech_details, e_mech_detail_map = _run_selected_details(
+                full_model,
+                e_mech_pool,
+                info,
+                device,
+                context_frame=result,
+                context_batch_size=args.batch_size,
+            )
+            e_mech_details = _add_e_mechanism_diagnostics(e_mech_details, e_mech_detail_map, info, full_model)
+            e_mech_details.to_csv(out_dir / "e_mechanism_pool.csv", index=False)
         e_details_sel = _rank_e_case_pool(e_pool_details, args.top_cases).reset_index(drop=True)
         e_details_sel, e_details = _run_selected_details(
             full_model,
@@ -1344,6 +1450,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_dir", required=True)
     parser.add_argument("--top_cases", type=int, default=3)
     parser.add_argument("--candidate_pool", type=int, default=40)
+    parser.add_argument(
+        "--mechanism_pool",
+        type=int,
+        default=0,
+        help="Stratified full-distribution pool size for mechanism correlation; 0 disables it.",
+    )
     parser.add_argument("--min_gain", type=float, default=0.10)
     parser.add_argument("--top_neighbors", type=int, default=8)
     parser.add_argument("--history_window", type=int, default=12)

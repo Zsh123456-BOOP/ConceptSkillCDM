@@ -162,8 +162,36 @@ def _bin_table(frame: pd.DataFrame, module: str, metrics: Iterable[str], gain_co
     return pd.DataFrame(rows)
 
 
-def _write_markdown(corr: pd.DataFrame, bins: pd.DataFrame, out_dir: Path) -> None:
+def _pool_summary(frame: pd.DataFrame, rescue_col: str) -> str:
+    if frame.empty:
+        return "n=0"
+    parts = [f"n={len(frame)}"]
+    if rescue_col in frame:
+        rescue_rate = frame[rescue_col].astype(bool).mean()
+        parts.append(f"{rescue_col}={rescue_rate:.3f}")
+    return ", ".join(parts)
+
+
+def _write_markdown(
+    corr: pd.DataFrame,
+    bins: pd.DataFrame,
+    out_dir: Path,
+    *,
+    a_pool: pd.DataFrame,
+    e_pool: pd.DataFrame,
+    a_source: str,
+    e_source: str,
+) -> None:
     lines = ["# A/E Mechanism Correlation Analysis", ""]
+    lines.extend(
+        [
+            "## Diagnostic Pools",
+            "",
+            f"- A source: `{a_source}` ({_pool_summary(a_pool, 'a_rescue')})",
+            f"- E source: `{e_source}` ({_pool_summary(e_pool, 'e_rescue')})",
+            "",
+        ]
+    )
     if corr.empty:
         lines.append("No correlation rows were generated.")
     else:
@@ -191,8 +219,10 @@ def main() -> None:
     out_dir = args.out_dir or (case_dir / "mechanism_correlation")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    a_pool = _prepare_common(_read_csv(case_dir / "a_candidate_pool.csv"))
-    e_pool = _prepare_common(_read_csv(case_dir / "e_candidate_pool.csv"))
+    a_source = "a_mechanism_pool.csv" if (case_dir / "a_mechanism_pool.csv").exists() else "a_candidate_pool.csv"
+    e_source = "e_mechanism_pool.csv" if (case_dir / "e_mechanism_pool.csv").exists() else "e_candidate_pool.csv"
+    a_pool = _prepare_common(_read_csv(case_dir / a_source))
+    e_pool = _prepare_common(_read_csv(case_dir / e_source))
     a_pool = _to_num(a_pool, A_METRICS)
     e_pool = _to_num(e_pool, E_METRICS)
 
@@ -205,7 +235,7 @@ def main() -> None:
         ignore_index=True,
     )
     bins.to_csv(out_dir / "mechanism_metric_bins.csv", index=False)
-    _write_markdown(corr, bins, out_dir)
+    _write_markdown(corr, bins, out_dir, a_pool=a_pool, e_pool=e_pool, a_source=a_source, e_source=e_source)
     print(f"Wrote {out_dir}")
 
 
