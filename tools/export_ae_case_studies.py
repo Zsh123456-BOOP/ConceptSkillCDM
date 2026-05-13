@@ -299,27 +299,22 @@ def _extract_scalar(details: Mapping[str, torch.Tensor], key: str, idx: int) -> 
     return _safe_float(row.mean().item())
 
 
+def _details_to_cpu(details: Mapping[str, Any]) -> Dict[str, Any]:
+    return {k: v.detach().cpu() if torch.is_tensor(v) else v for k, v in details.items()}
+
+
 def _run_selected_details(
     model: CognitiveDiagnosisModel,
     selected: pd.DataFrame,
     info: Mapping[str, Any],
     device: torch.device,
+    *,
+    context_frame: Optional[pd.DataFrame] = None,
+    context_batch_size: int = 1024,
 ) -> Tuple[pd.DataFrame, Dict[int, Dict[str, Any]]]:
     if selected.empty:
         return selected, {}
-    loader = _make_loader(selected.reset_index(drop=True), info, batch_size=len(selected), num_workers=0)
-    batch = next(iter(loader))
-    student_ids, exercise_ids, labels = batch
-    with torch.no_grad():
-        logits, details = model(
-            student_ids.to(device),
-            exercise_ids.to(device),
-            return_details=True,
-            return_logits=True,
-        )
     selected = selected.copy().reset_index(drop=True)
-    selected["detail_pos"] = np.arange(len(selected), dtype=np.int64)
-    selected["full_logit_detail"] = logits.detach().cpu().numpy().reshape(-1)
     scalar_keys = (
         "query_row_posterior_kl",
         "query_row_posterior_delta_abs",
@@ -334,12 +329,66 @@ def _run_selected_details(
         "tutor_student_readiness_logit",
         "tutor_gap_penalty_logit",
     )
-    for key in scalar_keys:
-        selected[key] = [_extract_scalar(details, key, i) for i in range(len(selected))]
-    detail_by_eval = {
-        int(selected.loc[i, "eval_row_id"]): {k: v.detach().cpu() if torch.is_tensor(v) else v for k, v in details.items()}
-        for i in range(len(selected))
-    }
+    for key in ("detail_pos", "full_logit_detail", *scalar_keys):
+        selected[key] = 0.0
+    detail_by_eval: Dict[int, Dict[str, Any]] = {}
+
+    if context_frame is None:
+        loader = _make_loader(selected, info, batch_size=len(selected), num_workers=0)
+        batch = next(iter(loader))
+        student_ids, exercise_ids, _labels = batch
+        with torch.no_grad():
+            logits, details = model(
+                student_ids.to(device),
+                exercise_ids.to(device),
+                return_details=True,
+                return_logits=True,
+            )
+        logits_np = logits.detach().cpu().numpy().reshape(-1)
+        details_cpu = _details_to_cpu(details)
+        for i in range(len(selected)):
+            eval_row_id = int(selected.loc[i, "eval_row_id"])
+            selected.loc[i, "detail_pos"] = i
+            selected.loc[i, "full_logit_detail"] = float(logits_np[i])
+            for key in scalar_keys:
+                selected.loc[i, key] = _extract_scalar(details_cpu, key, i)
+            detail_by_eval[eval_row_id] = details_cpu
+        return selected, detail_by_eval
+
+    if "eval_row_id" not in context_frame.columns:
+        raise ValueError("context_frame must contain eval_row_id for faithful case detail extraction.")
+    context_batch_size = max(1, int(context_batch_size))
+    selected_eval_ids = [int(x) for x in selected["eval_row_id"].tolist()]
+    batches: Dict[int, List[int]] = {}
+    for sel_idx, eval_row_id in enumerate(selected_eval_ids):
+        if eval_row_id < 0 or eval_row_id >= len(context_frame):
+            raise ValueError(f"eval_row_id out of context range: {eval_row_id}")
+        start = (eval_row_id // context_batch_size) * context_batch_size
+        batches.setdefault(start, []).append(sel_idx)
+
+    for start, sel_indices in sorted(batches.items()):
+        end = min(start + context_batch_size, len(context_frame))
+        context = context_frame.iloc[start:end].copy()
+        loader = _make_loader(context, info, batch_size=len(context), num_workers=0)
+        batch = next(iter(loader))
+        student_ids, exercise_ids, _labels = batch
+        with torch.no_grad():
+            logits, details = model(
+                student_ids.to(device),
+                exercise_ids.to(device),
+                return_details=True,
+                return_logits=True,
+            )
+        logits_np = logits.detach().cpu().numpy().reshape(-1)
+        details_cpu = _details_to_cpu(details)
+        for sel_idx in sel_indices:
+            eval_row_id = selected_eval_ids[sel_idx]
+            local_pos = eval_row_id - start
+            selected.loc[sel_idx, "detail_pos"] = int(local_pos)
+            selected.loc[sel_idx, "full_logit_detail"] = float(logits_np[local_pos])
+            for key in scalar_keys:
+                selected.loc[sel_idx, key] = _extract_scalar(details_cpu, key, local_pos)
+            detail_by_eval[eval_row_id] = details_cpu
     return selected, detail_by_eval
 
 
@@ -686,11 +735,24 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             min_gain=args.min_gain,
             prefer_multi_concept=True,
         )
-        a_pool_details, a_pool_detail_map = _run_selected_details(full_model, a_pool, info, device)
+        a_pool_details, _a_pool_detail_map = _run_selected_details(
+            full_model,
+            a_pool,
+            info,
+            device,
+            context_frame=result,
+            context_batch_size=args.batch_size,
+        )
         a_pool_details.to_csv(out_dir / "a_candidate_pool.csv", index=False)
         a_details_sel = _rank_a_case_pool(a_pool_details, args.top_cases).reset_index(drop=True)
-        a_details_sel["detail_pos"] = np.arange(len(a_details_sel), dtype=np.int64)
-        a_details_sel, a_details = _run_selected_details(full_model, a_details_sel, info, device)
+        a_details_sel, a_details = _run_selected_details(
+            full_model,
+            a_details_sel,
+            info,
+            device,
+            context_frame=result,
+            context_batch_size=args.batch_size,
+        )
         _write_a_tables(a_details_sel, a_details, info, out_dir, top_neighbors=args.top_neighbors)
         a_details_sel.to_csv(out_dir / "a_selected_cases.csv", index=False)
         selected_frames.append(a_details_sel.assign(case_type="A"))
@@ -704,11 +766,24 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             min_gain=args.min_gain,
             prefer_multi_concept=False,
         )
-        e_pool_details, _ = _run_selected_details(full_model, e_pool, info, device)
+        e_pool_details, _ = _run_selected_details(
+            full_model,
+            e_pool,
+            info,
+            device,
+            context_frame=result,
+            context_batch_size=args.batch_size,
+        )
         e_pool_details.to_csv(out_dir / "e_candidate_pool.csv", index=False)
         e_details_sel = _rank_e_case_pool(e_pool_details, args.top_cases).reset_index(drop=True)
-        e_details_sel["detail_pos"] = np.arange(len(e_details_sel), dtype=np.int64)
-        e_details_sel, e_details = _run_selected_details(full_model, e_details_sel, info, device)
+        e_details_sel, e_details = _run_selected_details(
+            full_model,
+            e_details_sel,
+            info,
+            device,
+            context_frame=result,
+            context_batch_size=args.batch_size,
+        )
         _attach_model_buffers_to_details(e_details, full_model)
         train_df = pd.read_csv(os.path.join(data_dir, "train.csv"))
         _write_e_tables(

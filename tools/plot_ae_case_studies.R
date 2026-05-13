@@ -33,7 +33,7 @@ clip_scale <- function(x, lo = NULL, hi = NULL) {
   pmin(1, pmax(0, (x - lo) / (hi - lo)))
 }
 
-draw_matrix_heatmap <- function(mat, row_labels, col_labels, main, file, palette, zlim = NULL) {
+draw_matrix_heatmap <- function(mat, row_labels, col_labels, main, file, palette, zlim = NULL, label_mat = NULL, label_digits = 2) {
   if (length(mat) == 0 || nrow(mat) == 0 || ncol(mat) == 0) return(FALSE)
   png(file, width = 1800, height = 1400, res = 170)
   op <- par(mar = c(9, 10, 5, 8), xpd = NA)
@@ -58,9 +58,10 @@ draw_matrix_heatmap <- function(mat, row_labels, col_labels, main, file, palette
   axis(2, at = seq_len(nrow(mat)), labels = rev(row_labels), las = 2, cex.axis = 0.75)
   box()
   if (nrow(mat) <= 12 && ncol(mat) <= 12) {
+    if (is.null(label_mat)) label_mat <- mat
     for (i in seq_len(nrow(mat))) {
       for (j in seq_len(ncol(mat))) {
-        text(j, nrow(mat) - i + 1, sprintf("%.2f", mat[i, j]), cex = 0.55, col = "black")
+        text(j, nrow(mat) - i + 1, sprintf(paste0("%.", label_digits, "f"), label_mat[i, j]), cex = 0.55, col = "black")
       }
     }
   }
@@ -154,14 +155,15 @@ if (nrow(e_edges) > 0) {
     visual[, 4] <- clip_scale(mat[, 4], -2, 2)
     visual[, 5] <- clip_scale(mat[, 5], -2, 2)
     meta <- e_cases[e_cases$case_id == case_id, ]
+    max_delta <- max(abs(safe_num(sub$delta)), na.rm = TRUE)
     title <- if (nrow(meta) > 0) {
       sprintf(
-        "E Personalized Tutor Map: %s | y=%s full=%.3f no_E=%.3f KL=%.3f",
+        "E Personalized Tutor Map: %s | y=%s full=%.3f no_E=%.3f max|E-A|=%.3f",
         case_id,
         meta$label[[1]],
         safe_num(meta$full_prob[[1]]),
         safe_num(meta$no_E_prob[[1]]),
-        safe_num(meta$query_row_posterior_kl[[1]])
+        max_delta
       )
     } else {
       paste("E Personalized Tutor Map:", case_id)
@@ -173,7 +175,33 @@ if (nrow(e_edges) > 0) {
       title,
       file.path(out_dir, paste0("E_tutor_heatmap_", case_id, ".png")),
       colorRampPalette(c("#2166ac", "#f7f7f7", "#b2182b"))(100),
-      zlim = c(0, 1)
+      zlim = c(0, 1),
+      label_mat = mat,
+      label_digits = 2
+    )
+  }
+
+  case_ids <- unique(e_edges$case_id)
+  edge_keys <- unique(paste(e_edges$query_concept, "->", e_edges$support_concept))
+  if (length(case_ids) > 1 && length(edge_keys) > 0) {
+    delta_mat <- matrix(0, nrow = length(edge_keys), ncol = length(case_ids), dimnames = list(edge_keys, case_ids))
+    for (i in seq_len(nrow(e_edges))) {
+      key <- paste(e_edges$query_concept[[i]], "->", e_edges$support_concept[[i]])
+      delta_mat[key, e_edges$case_id[[i]]] <- safe_num(e_edges$delta[[i]])
+    }
+    keep <- order(rowSums(abs(delta_mat)), decreasing = TRUE)[seq_len(min(10, nrow(delta_mat)))]
+    delta_mat <- delta_mat[keep, , drop = FALSE]
+    z <- max(abs(delta_mat), na.rm = TRUE)
+    draw_matrix_heatmap(
+      delta_mat,
+      rownames(delta_mat),
+      colnames(delta_mat),
+      "E Personalized Delta Across Students: posterior minus A prior",
+      file.path(out_dir, "E_posterior_delta_by_student.png"),
+      colorRampPalette(c("#2166ac", "#f7f7f7", "#b2182b"))(100),
+      zlim = c(-max(z, 1e-6), max(z, 1e-6)),
+      label_mat = delta_mat,
+      label_digits = 3
     )
   }
 
@@ -221,6 +249,32 @@ if (nrow(hist) > 0) {
   legend("topright", legend = c("correct", "wrong", "related concept", "other"), col = c("#2ca25f", "#de2d26", "black", "black"), pch = c(16, 16, 16, 1), bty = "n")
   par(op)
   dev.off()
+}
+
+if (nrow(a_edges) > 0) {
+  mix <- aggregate(safe_num(a_edges$a_weight), by = list(case_id = a_edges$case_id, source = a_edges$source), FUN = sum)
+  names(mix)[3] <- "weight"
+  case_ids <- unique(mix$case_id)
+  sources <- unique(mix$source)
+  mat <- matrix(0, nrow = length(sources), ncol = length(case_ids), dimnames = list(sources, case_ids))
+  for (i in seq_len(nrow(mix))) {
+    mat[mix$source[[i]], mix$case_id[[i]]] <- safe_num(mix$weight[[i]])
+  }
+  if (ncol(mat) > 0) {
+    png(file.path(out_dir, "A_evidence_source_mix.png"), width = 1700, height = 1000, res = 170)
+    op <- par(mar = c(7, 5, 4, 2))
+    barplot(
+      mat,
+      beside = FALSE,
+      las = 2,
+      col = c("#4C78A8", "#F58518", "#54A24B", "#B279A2", "#9D755D", "#BAB0AC")[seq_len(nrow(mat))],
+      ylab = "Sum of selected A edge weights",
+      main = "A Global Roadmap: Evidence Source Mix"
+    )
+    legend("topright", legend = rownames(mat), fill = c("#4C78A8", "#F58518", "#54A24B", "#B279A2", "#9D755D", "#BAB0AC")[seq_len(nrow(mat))], bty = "n", cex = 0.75)
+    par(op)
+    dev.off()
+  }
 }
 
 selected <- read_table("selected_cases.csv")
