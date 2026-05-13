@@ -31,6 +31,8 @@ logs/*
 !logs/suffnec09_ba2d5c8_a_support_evidence.log
 !logs/suffnec09_ba2d5c8_a_sufficiency_controls.log
 !logs/suffnec09_ba2d5c8_a_sufficiency_plot.log
+!logs/suffnec09_ba2d5c8_a_support_corruption.log
+!logs/suffnec09_ba2d5c8_a_support_corruption_plot.log
 server_logs/
 results/*
 !results/.gitkeep
