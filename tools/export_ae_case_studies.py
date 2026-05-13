@@ -467,7 +467,13 @@ def _rank_e_contrast_pool(candidates: pd.DataFrame, cases_per_group: int) -> pd.
         chosen = pd.concat(chosen_parts, ignore_index=True).head(cases_per_group)
         support_diversity = float(chosen["e_top_observed_support"].nunique()) if "e_top_observed_support" in chosen else 1.0
         cf_rescues = float(chosen["e_counterfactual_rescue"].astype(bool).sum())
-        score = float(chosen["contrast_row_score"].mean()) + support_diversity * 0.12 + cf_rescues * 0.20
+        # For this figure, support diversity matters more than raw gain: the
+        # goal is to fix one A row and show different students receiving
+        # visibly different local maps.
+        score = float(chosen["contrast_row_score"].mean()) * 0.30
+        score += support_diversity * 0.70
+        score += cf_rescues * 0.60
+        score += float(np.log1p(len(group))) * 0.10
         if str(concept) == "C13":
             score -= 0.15
         if score > best_score:
