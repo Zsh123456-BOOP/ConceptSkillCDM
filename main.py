@@ -225,11 +225,20 @@ def parse_args():
         "--graph_prior_mode",
         type=str,
         default="evidence",
-        choices=["evidence", "item_only", "seq_only", "self_only", "uniform", "random"],
+        choices=[
+            "evidence",
+            "item_only",
+            "seq_only",
+            "self_only",
+            "uniform",
+            "random",
+            "support_uniform",
+            "degree_random",
+        ],
         help=(
             "Global A prior evidence mode. evidence uses item+sequence; item_only/seq_only isolate "
             "one evidence source; self_only keeps only self-loop support; uniform/random are train-independent "
-            "off-diagonal controls."
+            "off-diagonal controls; support_uniform and degree_random test evidence support separately from weights."
         ),
     )
 
