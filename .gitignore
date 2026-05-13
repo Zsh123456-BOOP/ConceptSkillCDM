@@ -23,9 +23,16 @@ venv/
 checkpoints/
 
 # 实验运行日志和远端启动脚本输出
-logs/
+# 默认忽略大日志/临时结果；只允许精选的小型证据包入库。
+logs/*
+!logs/.gitkeep
+!logs/ae_case09_a95c3c4_standard/
+!logs/ae_case09_a95c3c4_standard/**
 server_logs/
-results/
+results/*
+!results/.gitkeep
+!results/ae_case09_a95c3c4_standard/
+!results/ae_case09_a95c3c4_standard/**
 .claude/
 
 # EduData 下载缓存只作为可复现来源，不提交原始副本

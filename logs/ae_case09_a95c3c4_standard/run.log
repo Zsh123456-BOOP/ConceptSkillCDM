@@ -1,0 +1,36 @@
+AE case-study evidence run
+==========================
+
+Commit: 820a52a
+Dataset: assist_09
+Split: test
+Output: results/ae_case09_a95c3c4_standard
+
+Checkpoints:
+- full: checkpoints/abce_diag/ae_global_tutor_10ed8b6_20260512_1510/assist_09/seed42/best_full/best_model.pth
+- no_A: checkpoints/abce_diag/ae_global_tutor_10ed8b6_20260512_1510/assist_09/seed42/best_no_A/best_model.pth
+- no_E: checkpoints/abce_diag/ae_global_tutor_10ed8b6_20260512_1510/assist_09/seed42/best_no_E/best_model.pth
+
+Export command:
+CUDA_VISIBLE_DEVICES=3 /home/zsh/anaconda3/envs/xph_env/bin/python tools/export_ae_case_studies.py --dataset_name assist_09 --split test --full_dir checkpoints/abce_diag/ae_global_tutor_10ed8b6_20260512_1510/assist_09/seed42/best_full --no_a_dir checkpoints/abce_diag/ae_global_tutor_10ed8b6_20260512_1510/assist_09/seed42/best_no_A --no_e_dir checkpoints/abce_diag/ae_global_tutor_10ed8b6_20260512_1510/assist_09/seed42/best_no_E --output_dir results/ae_case09_a95c3c4_standard --top_cases 3 --candidate_pool 80 --min_gain 0.08 --top_neighbors 8 --history_window 12 --batch_size 1024 --num_workers 2 --device cuda
+
+Plot command:
+Rscript tools/plot_ae_case_studies.R results/ae_case09_a95c3c4_standard results/ae_case09_a95c3c4_standard/figures
+
+Metrics:
+- full: AUC=0.7783116166, ACC=0.7406733216, RMSE=0.4177640253
+- no_A: AUC=0.7671327299, ACC=0.7320414954, RMSE=0.4222092188
+- no_E: AUC=0.7633669337, ACC=0.7308866706, RMSE=0.4246636167
+
+Case counts:
+- a_rescue=2788
+- e_rescue=2986
+- a_positive_gain=28368
+- e_positive_gain=25641
+
+Selection rules:
+- A cases are selected deterministically from rescue / positive-gain candidates by error reduction and A readout shift.
+- A selection keeps at least one multi-concept rescue case when available.
+- E cases are selected deterministically from rescue / positive-gain candidates by error reduction and posterior-shift diagnostics.
+- Case details are extracted in the original eval-batch context to avoid batch-normalization drift.
+
