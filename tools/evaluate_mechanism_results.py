@@ -72,6 +72,8 @@ def _classify(
     drop_no_a_neutral: Optional[float] = None,
     evidence_gain_neutral: Optional[float] = None,
     evidence_gain_random_neutral: Optional[float] = None,
+    support_gain_degree_random: Optional[float] = None,
+    support_gain_self: Optional[float] = None,
     drop_e_shuffle: Optional[float] = None,
     args: argparse.Namespace,
 ) -> Tuple[str, str, str]:
@@ -79,6 +81,12 @@ def _classify(
     a_gain = evidence_gain_neutral if evidence_gain_neutral is not None else evidence_gain
     if evidence_gain_random_neutral is not None:
         a_gain = min(a_gain, evidence_gain_random_neutral) if a_gain is not None else evidence_gain_random_neutral
+    support_gain = None
+    for value in (support_gain_degree_random, support_gain_self):
+        if value is not None:
+            support_gain = value if support_gain is None else min(support_gain, value)
+    if support_gain is not None:
+        a_gain = support_gain if a_gain is None else max(a_gain, support_gain)
     e_drop = max(
         value
         for value in (
@@ -124,8 +132,11 @@ def write_summary(rows: List[Dict[str, Any]], out_dir: Path, args: argparse.Name
         random_auc = _to_float(best.get("A_random", {}).get("test_auc"))
         self_auc = _to_float(best.get("A_self_only", {}).get("test_auc"))
         a_fused_neutral_auc = _to_float(best.get("A_fused_neutralE", {}).get("test_auc"))
+        a_support_uniform_neutral_auc = _to_float(best.get("A_support_uniform_neutralE", {}).get("test_auc"))
+        a_degree_random_neutral_auc = _to_float(best.get("A_degree_random_neutralE", {}).get("test_auc"))
         a_uniform_neutral_auc = _to_float(best.get("A_uniform_neutralE", {}).get("test_auc"))
         a_random_neutral_auc = _to_float(best.get("A_random_neutralE", {}).get("test_auc"))
+        a_self_neutral_auc = _to_float(best.get("A_self_neutralE", {}).get("test_auc"))
         no_a_fair_auc = _to_float(best.get("no_A_fair", {}).get("test_auc"))
         prior_auc = _to_float(best.get("E_prior_only", {}).get("test_auc"))
         frozen_auc = _to_float(best.get("E_frozen_alpha", {}).get("test_auc"))
@@ -137,6 +148,10 @@ def write_summary(rows: List[Dict[str, Any]], out_dir: Path, args: argparse.Name
         drop_no_a_neutral = _delta(a_fused_neutral_auc, no_a_fair_auc)
         evidence_gain_neutral = _delta(a_fused_neutral_auc, a_uniform_neutral_auc)
         evidence_gain_random_neutral = _delta(a_fused_neutral_auc, a_random_neutral_auc)
+        support_gain_degree_random = _delta(a_support_uniform_neutral_auc, a_degree_random_neutral_auc)
+        support_gain_self = _delta(a_support_uniform_neutral_auc, a_self_neutral_auc)
+        support_gain_no_a = _delta(a_support_uniform_neutral_auc, no_a_fair_auc)
+        support_weight_gain = _delta(a_fused_neutral_auc, a_support_uniform_neutral_auc)
         drop_e_shuffle = _delta(full_auc, e_shuffle_auc)
         seq_minus_item = None if seq_auc is None or item_auc is None else seq_auc - item_auc
         e_posterior_gain = _delta(full_auc, prior_auc)
@@ -148,6 +163,8 @@ def write_summary(rows: List[Dict[str, Any]], out_dir: Path, args: argparse.Name
             drop_no_a_neutral=drop_no_a_neutral,
             evidence_gain_neutral=evidence_gain_neutral,
             evidence_gain_random_neutral=evidence_gain_random_neutral,
+            support_gain_degree_random=support_gain_degree_random,
+            support_gain_self=support_gain_self,
             drop_e_shuffle=drop_e_shuffle,
             args=args,
         )
@@ -166,8 +183,11 @@ def write_summary(rows: List[Dict[str, Any]], out_dir: Path, args: argparse.Name
                 "A_random_auc": _fmt(random_auc),
                 "A_self_only_auc": _fmt(self_auc),
                 "A_fused_neutralE_auc": _fmt(a_fused_neutral_auc),
+                "A_support_uniform_neutralE_auc": _fmt(a_support_uniform_neutral_auc),
+                "A_degree_random_neutralE_auc": _fmt(a_degree_random_neutral_auc),
                 "A_uniform_neutralE_auc": _fmt(a_uniform_neutral_auc),
                 "A_random_neutralE_auc": _fmt(a_random_neutral_auc),
+                "A_self_neutralE_auc": _fmt(a_self_neutral_auc),
                 "no_A_fair_auc": _fmt(no_a_fair_auc),
                 "E_prior_only_auc": _fmt(prior_auc),
                 "E_frozen_alpha_auc": _fmt(frozen_auc),
@@ -177,6 +197,10 @@ def write_summary(rows: List[Dict[str, Any]], out_dir: Path, args: argparse.Name
                 "drop_no_A_neutralE": _fmt(drop_no_a_neutral),
                 "evidence_gain_neutralE": _fmt(evidence_gain_neutral),
                 "evidence_gain_random_neutralE": _fmt(evidence_gain_random_neutral),
+                "support_gain_no_A_neutralE": _fmt(support_gain_no_a),
+                "support_gain_degree_random_neutralE": _fmt(support_gain_degree_random),
+                "support_gain_self_neutralE": _fmt(support_gain_self),
+                "support_weight_gain_neutralE": _fmt(support_weight_gain),
                 "drop_E_shuffle_student": _fmt(drop_e_shuffle),
                 "evidence_gain_vs_uniform": _fmt(evidence_gain),
                 "seq_minus_item": _fmt(seq_minus_item),
@@ -212,14 +236,14 @@ def write_summary(rows: List[Dict[str, Any]], out_dir: Path, args: argparse.Name
         "- If neutral-E A controls exist, A is judged by A_fused_neutralE - no_A_fair and by fused evidence against uniform/random neutral controls.",
         "- If E_shuffle_student exists, E is also judged by full - E_shuffle_student.",
         "",
-        "| phase | dataset | full | drop_no_A | drop_no_E | drop_E_shuffle | A_neutral_drop | A_vs_uniform | A_vs_random | verdict |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| phase | dataset | full | A_neutral_drop | support_vs_random | support_vs_self | weight_gain | A_vs_uniform | verdict |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for row in summary_rows:
         lines.append(
-            "| {phase} | {dataset} | {full_auc} | {drop_no_A} | {drop_no_E} | "
-            "{drop_E_shuffle_student} | {drop_no_A_neutralE} | {evidence_gain_neutralE} | "
-            "{evidence_gain_random_neutralE} | {verdict} |".format(**row)
+            "| {phase} | {dataset} | {full_auc} | {drop_no_A_neutralE} | "
+            "{support_gain_degree_random_neutralE} | {support_gain_self_neutralE} | "
+            "{support_weight_gain_neutralE} | {evidence_gain_neutralE} | {verdict} |".format(**row)
         )
     summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return summary_csv, summary_md

@@ -245,6 +245,70 @@ def _keep_observed_support_only(prior: torch.Tensor, observed_mask: torch.Tensor
     return torch.where(row_sum > 0, prior / row_sum.clamp(min=1e-12), torch.zeros_like(prior))
 
 
+def _observed_offdiag_support(*priors: torch.Tensor) -> torch.Tensor:
+    if not priors:
+        raise ValueError("at least one prior matrix is required")
+    first = priors[0].detach().float()
+    if first.dim() != 2 or first.size(0) != first.size(1):
+        raise ValueError(f"prior matrices must be square, got {tuple(first.shape)}")
+    C = int(first.size(0))
+    support = torch.zeros(C, C, dtype=torch.bool)
+    for prior in priors:
+        p = prior.detach().float()
+        if tuple(p.shape) != (C, C):
+            raise ValueError(f"all prior matrices must share shape {(C, C)}, got {tuple(p.shape)}")
+        support |= p > 0.0
+    if C > 0:
+        support &= ~torch.eye(C, dtype=torch.bool)
+    return support
+
+
+def make_support_uniform_prior(*priors: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """Uniform row prior on the union of observed train-evidence support edges."""
+    support = _observed_offdiag_support(*priors)
+    prior = support.float()
+    row_sum = prior.sum(dim=-1, keepdim=True)
+    prior = torch.where(row_sum > 0, prior / row_sum.clamp(min=1e-12), torch.zeros_like(prior))
+    C = int(prior.size(0))
+    possible = float(C * max(0, C - 1))
+    edge_count = float(support.float().sum().item())
+    return prior.to(dtype=torch.float32), {
+        "support_uniform_edge_count": edge_count,
+        "support_uniform_density": edge_count / possible if possible > 0 else 0.0,
+        "support_uniform_entropy": _prior_entropy(prior),
+    }
+
+
+def make_degree_random_prior(
+        *priors: torch.Tensor,
+        seed: int = 20260513,
+) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """Random off-diagonal support with the same row-wise degree as observed evidence."""
+    support = _observed_offdiag_support(*priors)
+    C = int(support.size(0))
+    sampled = torch.zeros(C, C, dtype=torch.float32)
+    if C > 1:
+        gen = torch.Generator().manual_seed(int(seed) + C * 1009)
+        for row_idx in range(C):
+            degree = int(support[row_idx].sum().item())
+            if degree <= 0:
+                continue
+            candidates = torch.tensor([idx for idx in range(C) if idx != row_idx], dtype=torch.long)
+            perm = torch.randperm(candidates.numel(), generator=gen)[:degree]
+            cols = candidates[perm]
+            sampled[row_idx, cols] = 1.0
+    row_sum = sampled.sum(dim=-1, keepdim=True)
+    prior = torch.where(row_sum > 0, sampled / row_sum.clamp(min=1e-12), torch.zeros_like(sampled))
+    possible = float(C * max(0, C - 1))
+    edge_count = float(sampled.sum().item())
+    return prior.to(dtype=torch.float32), {
+        "degree_random_edge_count": edge_count,
+        "degree_random_density": edge_count / possible if possible > 0 else 0.0,
+        "degree_random_entropy": _prior_entropy(prior),
+        "degree_random_seed": float(seed),
+    }
+
+
 def _prior_entropy(prior: torch.Tensor) -> float:
     if prior.numel() <= 1:
         return 0.0
@@ -600,7 +664,16 @@ def create_dataloaders(
         }
 
     prior_mode = str(graph_prior_mode or "evidence").strip().lower()
-    valid_prior_modes = {"evidence", "item_only", "seq_only", "self_only", "uniform", "random"}
+    valid_prior_modes = {
+        "evidence",
+        "item_only",
+        "seq_only",
+        "self_only",
+        "uniform",
+        "random",
+        "support_uniform",
+        "degree_random",
+    }
     if prior_mode not in valid_prior_modes:
         raise ValueError(f"graph_prior_mode must be one of {sorted(valid_prior_modes)}, got {graph_prior_mode!r}")
     if prior_mode == "evidence":
@@ -612,6 +685,17 @@ def create_dataloaders(
             prior_mode = "item_only"
     num_concepts = len(cpt_id_map)
 
+    def _build_evidence_priors() -> Tuple[torch.Tensor, Dict[str, float], torch.Tensor, Dict[str, float]]:
+        item_prior, item_stats = build_item_cooccurrence_prior(q_matrix)
+        seq_prior, seq_stats = build_sequence_transition_prior(
+            train_sources=train_sources,
+            cpt_id_map=cpt_id_map,
+            max_hops=3,
+            decay=0.70,
+            shrink=2.0,
+        )
+        return item_prior, item_stats, seq_prior, seq_stats
+
     if prior_mode == "uniform":
         item_prior_matrix, item_prior_stats = _uniform_prior(num_concepts)
         sequence_prior_matrix, sequence_prior_stats = _zero_sequence_prior(num_concepts)
@@ -620,6 +704,18 @@ def create_dataloaders(
         item_prior_matrix, item_prior_stats = _random_prior(num_concepts)
         sequence_prior_matrix, sequence_prior_stats = _zero_sequence_prior(num_concepts)
         log("[A Prior] mode=random: using deterministic train-independent random off-diagonal control prior.")
+    elif prior_mode == "support_uniform":
+        evidence_item, item_prior_stats, evidence_seq, sequence_prior_stats = _build_evidence_priors()
+        item_prior_matrix, support_stats = make_support_uniform_prior(evidence_item, evidence_seq)
+        item_prior_stats = {**item_prior_stats, **support_stats}
+        sequence_prior_matrix, _ = _zero_sequence_prior(num_concepts)
+        log("[A Prior] mode=support_uniform: using evidence-union support with uniform row weights.")
+    elif prior_mode == "degree_random":
+        evidence_item, item_prior_stats, evidence_seq, sequence_prior_stats = _build_evidence_priors()
+        item_prior_matrix, random_stats = make_degree_random_prior(evidence_item, evidence_seq)
+        item_prior_stats = {**item_prior_stats, **random_stats}
+        sequence_prior_matrix, _ = _zero_sequence_prior(num_concepts)
+        log("[A Prior] mode=degree_random: using row-degree-matched random support control prior.")
     elif prior_mode == "self_only":
         item_prior_matrix, item_prior_stats = _zero_item_prior(num_concepts)
         sequence_prior_matrix, sequence_prior_stats = _zero_sequence_prior(num_concepts)

@@ -23,6 +23,7 @@ variant_order <- c(
   "A_uniform", "A_random", "A_self_only",
   "full_fair", "no_A_fair", "no_E_fair",
   "A_fused_neutralE", "A_item_neutralE", "A_seq_neutralE",
+  "A_support_uniform_neutralE", "A_degree_random_neutralE",
   "A_uniform_neutralE", "A_random_neutralE", "A_self_neutralE",
   "E_prior_only", "E_frozen_alpha", "E_full_fair",
   "E_global_posterior", "E_posterior_only", "E_query_only",

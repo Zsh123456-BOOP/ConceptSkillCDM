@@ -215,11 +215,53 @@ def _check_relation_heads_start_with_source_roles() -> None:
     _assert(seq_beta.std(unbiased=False).item() > 0.0, "sequence beta should expose head source diversity.")
 
 
+def _check_support_control_priors_keep_expected_support() -> None:
+    from src.dataset import make_degree_random_prior, make_support_uniform_prior
+
+    item_prior = torch.tensor(
+        [
+            [0.0, 0.8, 0.2, 0.0],
+            [0.3, 0.0, 0.0, 0.7],
+            [0.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    sequence_prior = torch.tensor(
+        [
+            [0.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.4, 0.6, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ],
+        dtype=torch.float32,
+    )
+    evidence_support = ((item_prior + sequence_prior) > 0.0) & (~torch.eye(4, dtype=torch.bool))
+
+    support_uniform, support_stats = make_support_uniform_prior(item_prior, sequence_prior)
+    _assert(
+        torch.equal(support_uniform > 0.0, evidence_support),
+        "support_uniform must keep exactly the train-evidence union support.",
+    )
+    row0 = support_uniform[0]
+    _assert(torch.allclose(row0[row0 > 0], torch.full((3,), 1.0 / 3.0)), "support_uniform row should be uniform.")
+    _assert(support_stats["support_uniform_edge_count"] == float(evidence_support.sum().item()), "support stats should count evidence edges.")
+
+    degree_random, random_stats = make_degree_random_prior(item_prior, sequence_prior, seed=7)
+    _assert(
+        torch.equal((degree_random > 0.0).sum(dim=-1), evidence_support.sum(dim=-1)),
+        "degree_random must preserve row-wise evidence support degree.",
+    )
+    _assert(torch.all(torch.diag(degree_random) == 0.0).item(), "degree_random must not create off-protocol self evidence.")
+    _assert(random_stats["degree_random_edge_count"] == float(evidence_support.sum().item()), "random stats should count sampled edges.")
+
+
 def main() -> None:
     _check_train_only_sequence_prior_handles_single_concept_items()
     _check_sequence_prior_drives_relation_learning_support()
     _check_item_support_is_not_pruned_by_dense_sequence_prior()
     _check_relation_heads_start_with_source_roles()
+    _check_support_control_priors_keep_expected_support()
     print("smoke_sequence_prior passed")
 
 

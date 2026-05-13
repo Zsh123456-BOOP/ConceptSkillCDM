@@ -101,6 +101,8 @@ NEUTRAL_E_VARIANTS = {
     "A_fused_neutralE",
     "A_item_neutralE",
     "A_seq_neutralE",
+    "A_support_uniform_neutralE",
+    "A_degree_random_neutralE",
     "A_uniform_neutralE",
     "A_random_neutralE",
     "A_self_neutralE",
@@ -385,6 +387,10 @@ def _variant_spec(name: str) -> AblationSpec:
         return AblationSpec(name=name, flags={}, overrides={"graph_prior_mode": "uniform"})
     if name == "A_random":
         return AblationSpec(name=name, flags={}, overrides={"graph_prior_mode": "random"})
+    if name == "A_support_uniform":
+        return AblationSpec(name=name, flags={}, overrides={"graph_prior_mode": "support_uniform"})
+    if name == "A_degree_random":
+        return AblationSpec(name=name, flags={}, overrides={"graph_prior_mode": "degree_random"})
     if name == "A_self_only":
         return AblationSpec(name=name, flags={}, overrides={"graph_prior_mode": "self_only"})
     if name == "A_fused_neutralE":
@@ -396,6 +402,14 @@ def _variant_spec(name: str) -> AblationSpec:
     if name == "A_seq_neutralE":
         overrides = dict(FAIR_NEUTRAL_E_OVERRIDES)
         overrides["graph_prior_mode"] = "seq_only"
+        return AblationSpec(name=name, flags={}, overrides=overrides)
+    if name == "A_support_uniform_neutralE":
+        overrides = dict(FAIR_NEUTRAL_E_OVERRIDES)
+        overrides["graph_prior_mode"] = "support_uniform"
+        return AblationSpec(name=name, flags={}, overrides=overrides)
+    if name == "A_degree_random_neutralE":
+        overrides = dict(FAIR_NEUTRAL_E_OVERRIDES)
+        overrides["graph_prior_mode"] = "degree_random"
         return AblationSpec(name=name, flags={}, overrides=overrides)
     if name == "A_uniform_neutralE":
         overrides = dict(FAIR_NEUTRAL_E_OVERRIDES)
