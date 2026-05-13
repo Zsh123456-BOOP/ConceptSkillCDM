@@ -227,10 +227,11 @@ hist <- read_table("e_case_history.csv")
 if (nrow(hist) > 0) {
   case_ids <- unique(hist$case_id)
   png(file.path(out_dir, "E_recent_history_strip.png"), width = 1800, height = 900, res = 170)
-  op <- par(mar = c(5, 8, 4, 2))
+  op <- par(mar = c(5, 8, 4, 8), xpd = NA)
+  x_rng <- range(hist$history_pos, na.rm = TRUE)
   plot(
     NA,
-    xlim = range(hist$history_pos, na.rm = TRUE) + c(-0.5, 0.5),
+    xlim = x_rng + c(-0.5, 2.0),
     ylim = c(0.5, length(case_ids) + 0.5),
     xaxt = "n",
     yaxt = "n",
@@ -246,7 +247,7 @@ if (nrow(hist) > 0) {
     pch <- ifelse(safe_num(hist$hit_related[[i]]) > 0.5, 16, 1)
     points(safe_num(hist$history_pos[[i]]), y, pch = pch, col = col, cex = 1.5)
   }
-  legend("topright", legend = c("correct", "wrong", "related concept", "other"), col = c("#2ca25f", "#de2d26", "black", "black"), pch = c(16, 16, 16, 1), bty = "n")
+  legend(max(x_rng) + 0.25, length(case_ids) + 0.45, legend = c("correct", "wrong", "related concept", "other"), col = c("#2ca25f", "#de2d26", "black", "black"), pch = c(16, 16, 16, 1), bty = "n")
   par(op)
   dev.off()
 }
