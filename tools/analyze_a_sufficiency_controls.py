@@ -406,7 +406,10 @@ def transition_retrieval_with_ci(args: argparse.Namespace, info: Mapping[str, An
     weights = pairs["weight"].to_numpy(dtype=np.float64)
     n = len(pairs)
     rng = np.random.default_rng(int(args.seed))
-    variants = _build_prior_variants(info)
+    info_cpu = dict(info)
+    info_cpu["item_prior_matrix"] = info["item_prior_matrix"].detach().cpu()
+    info_cpu["sequence_prior_matrix"] = info["sequence_prior_matrix"].detach().cpu()
+    variants = _build_prior_variants(info_cpu)
 
     rows: List[Dict[str, Any]] = []
     ci_rows: List[Dict[str, Any]] = []
