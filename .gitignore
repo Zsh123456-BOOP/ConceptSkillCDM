@@ -28,11 +28,14 @@ logs/*
 !logs/.gitkeep
 !logs/ae_case09_a95c3c4_standard/
 !logs/ae_case09_a95c3c4_standard/**
+!logs/suffnec09_ba2d5c8_a_support_evidence.log
 server_logs/
 results/*
 !results/.gitkeep
 !results/ae_case09_a95c3c4_standard/
 !results/ae_case09_a95c3c4_standard/**
+!results/suffnec09_ba2d5c8/
+!results/suffnec09_ba2d5c8/**
 .claude/
 
 # EduData 下载缓存只作为可复现来源，不提交原始副本
