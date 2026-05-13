@@ -337,6 +337,8 @@ def _rank_e_case_pool(candidates: pd.DataFrame, top_k: int) -> pd.DataFrame:
         strict = strict[strict["e_top_observed_support_count"].astype(float) > 0.0]
     if "e_counterfactual_gain_min" in strict:
         strict = strict[strict["e_counterfactual_gain_min"].astype(float) > 0.0]
+    if "e_counterfactual_rescue" in strict:
+        strict = strict[strict["e_counterfactual_rescue"].astype(bool)]
     if not strict.empty:
         out = strict
     out["selection_score"] = out["e_gain"].astype(float)
@@ -927,7 +929,8 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             result["e_counterfactual_gain_min"] = result[["E_shuffle_gain", "E_mean_gain"]].min(axis=1)
             result["e_counterfactual_rescue"] = (
                 (result["full_pred"] == result["label"])
-                & ((result["E_shuffle_pred"] != result["label"]) | (result["E_mean_pred"] != result["label"]))
+                & (result["E_shuffle_pred"] != result["label"])
+                & (result["E_mean_pred"] != result["label"])
             )
 
     result.to_csv(out_dir / "case_predictions.csv", index=False)
