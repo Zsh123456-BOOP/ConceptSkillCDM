@@ -391,6 +391,94 @@ def _rank_e_case_pool(candidates: pd.DataFrame, top_k: int) -> pd.DataFrame:
     return pd.concat(selected_rows, ignore_index=True).head(top_k).reset_index(drop=True)
 
 
+def _rank_e_contrast_pool(candidates: pd.DataFrame, cases_per_group: int) -> pd.DataFrame:
+    """Pick one query concept with several students to show personalized maps.
+
+    The contrast table is intentionally different from the headline E cases:
+    it fixes the global A row by fixing the query concept, then chooses several
+    students where E has observable student-state support.  This supports the
+    "same roadmap, different local tutor map" mechanism claim.
+    """
+    if candidates.empty or cases_per_group <= 1:
+        return pd.DataFrame()
+    out = candidates.copy()
+    for col in (
+        "e_gain",
+        "query_row_posterior_kl",
+        "query_row_posterior_delta_abs",
+        "e_observed_shift_abs",
+        "e_observed_state_abs",
+        "e_counterfactual_gain_min",
+        "e_top_observed_support_count",
+    ):
+        if col not in out:
+            out[col] = 0.0
+    if "e_query_concept" not in out:
+        return pd.DataFrame()
+    strict = out[out["e_query_concept"].astype(str).str.len() > 0].copy()
+    if "e_rescue" in strict:
+        strict = strict[strict["e_rescue"].astype(bool)]
+    strict = strict[strict["e_top_observed_support_count"].astype(float) > 0.0]
+    if strict.empty:
+        return pd.DataFrame()
+    if "e_counterfactual_rescue" not in strict:
+        strict["e_counterfactual_rescue"] = False
+    strict["contrast_row_score"] = strict["e_gain"].astype(float)
+    strict["contrast_row_score"] += strict["query_row_posterior_kl"].astype(float) * 0.50
+    strict["contrast_row_score"] += strict["query_row_posterior_delta_abs"].astype(float) * 0.30
+    strict["contrast_row_score"] += strict["e_observed_shift_abs"].astype(float) * 0.60
+    strict["contrast_row_score"] += strict["e_observed_state_abs"].astype(float) * 0.08
+    strict["contrast_row_score"] += strict["e_counterfactual_gain_min"].astype(float) * 0.40
+    strict["contrast_row_score"] += strict["e_counterfactual_rescue"].astype(bool).astype(float) * 0.75
+
+    best_score = -np.inf
+    best_rows: Optional[pd.DataFrame] = None
+    for concept, group in strict.groupby("e_query_concept", sort=False):
+        group = group.sort_values(
+            ["contrast_row_score", "e_counterfactual_rescue", "e_gain"],
+            ascending=[False, False, False],
+        )
+        group = group.drop_duplicates(subset=["mapped_student_id"], keep="first")
+        if len(group) < cases_per_group:
+            continue
+        chosen_parts: List[pd.DataFrame] = []
+        used_supports: set[str] = set()
+        if "e_top_observed_support" in group:
+            for _, row in group.iterrows():
+                support = str(row.get("e_top_observed_support", ""))
+                if support in used_supports:
+                    continue
+                chosen_parts.append(row.to_frame().T)
+                used_supports.add(support)
+                if len(chosen_parts) >= cases_per_group:
+                    break
+        if len(chosen_parts) < cases_per_group:
+            selected_ids = {int(part["eval_row_id"].iloc[0]) for part in chosen_parts}
+            for _, row in group.iterrows():
+                eval_id = int(row["eval_row_id"])
+                if eval_id in selected_ids:
+                    continue
+                chosen_parts.append(row.to_frame().T)
+                selected_ids.add(eval_id)
+                if len(chosen_parts) >= cases_per_group:
+                    break
+        if len(chosen_parts) < cases_per_group:
+            continue
+        chosen = pd.concat(chosen_parts, ignore_index=True).head(cases_per_group)
+        support_diversity = float(chosen["e_top_observed_support"].nunique()) if "e_top_observed_support" in chosen else 1.0
+        cf_rescues = float(chosen["e_counterfactual_rescue"].astype(bool).sum())
+        score = float(chosen["contrast_row_score"].mean()) + support_diversity * 0.12 + cf_rescues * 0.20
+        if str(concept) == "C13":
+            score -= 0.15
+        if score > best_score:
+            best_score = score
+            best_rows = chosen.copy()
+    if best_rows is None:
+        return pd.DataFrame()
+    best_rows["contrast_group_score"] = best_score
+    return best_rows.reset_index(drop=True)
+
+
 def _safe_float(value: Any) -> float:
     try:
         value = float(value)
@@ -849,6 +937,88 @@ def _write_e_tables(
     pd.DataFrame(hist_rows).to_csv(out_dir / "e_case_history.csv", index=False)
 
 
+def _write_e_contrast_tables(
+    selected: pd.DataFrame,
+    details_by_eval: Mapping[int, Dict[str, Any]],
+    info: Mapping[str, Any],
+    out_dir: Path,
+    *,
+    top_neighbors: int,
+) -> None:
+    reverse_cpt = info.get("cpt_id_reverse_map") or {v: k for k, v in dict(info["cpt_id_map"]).items()}
+    item_prior = info["item_prior_matrix"].detach().float().cpu().numpy()
+    seq_prior = info["sequence_prior_matrix"].detach().float().cpu().numpy()
+    edge_rows: List[Dict[str, Any]] = []
+    case_rows: List[Dict[str, Any]] = []
+
+    for rank, row in enumerate(selected.itertuples(index=False), start=1):
+        eval_row_id = int(row.eval_row_id)
+        case_id = _case_id("EC", rank, eval_row_id)
+        details = details_by_eval[eval_row_id]
+        sample_pos = int(getattr(row, "detail_pos", rank - 1))
+        q_vector = details["q_vector"][sample_pos].float().numpy()
+        query_concepts = [int(i) for i in np.where(q_vector > 0)[0]]
+        dist = _support_distribution_for_case(details, sample_pos, query_concepts)
+        if dist is None:
+            continue
+        query_c, edges = dist
+        edges = edges.head(top_neighbors).copy()
+        mapped_student = int(row.mapped_student_id)
+        student_prior = details.get("_student_prior")
+        student_recent = details.get("_student_recent")
+        student_count = details.get("_student_count")
+        for e in edges.itertuples(index=False):
+            support = int(e.support_mapped)
+            item_val = float(item_prior[query_c, support])
+            seq_val = float(seq_prior[query_c, support])
+            edge_rows.append(
+                {
+                    "case_id": case_id,
+                    "rank": rank,
+                    "stu_id": row.stu_id,
+                    "eval_row_id": eval_row_id,
+                    "query_concept": _concept_label(query_c, reverse_cpt),
+                    "support_concept": _concept_label(support, reverse_cpt),
+                    "query_mapped": query_c,
+                    "support_mapped": support,
+                    "a_prior": float(e.a_prior),
+                    "e_posterior": float(e.e_posterior),
+                    "delta": float(e.delta),
+                    "student_support_mastery_logit": _safe_float(student_prior[mapped_student, support]) if student_prior is not None else 0.0,
+                    "student_support_recent_logit": _safe_float(student_recent[mapped_student, support]) if student_recent is not None else 0.0,
+                    "student_support_count": _safe_float(student_count[mapped_student, support]) if student_count is not None else 0.0,
+                    "item_prior": item_val,
+                    "seq_prior": seq_val,
+                    "source": _source_label(item_val, seq_val, query_c == support),
+                    "is_self": int(query_c == support),
+                }
+            )
+        case_rows.append(
+            {
+                "case_id": case_id,
+                "rank": rank,
+                "eval_row_id": eval_row_id,
+                "stu_id": row.stu_id,
+                "exer_id": row.exer_id,
+                "label": row.label,
+                "cpt_seq": row.cpt_seq,
+                "full_prob": row.full_prob,
+                "no_E_prob": row.no_E_prob,
+                "E_shuffle_prob": getattr(row, "E_shuffle_prob", np.nan),
+                "E_mean_prob": getattr(row, "E_mean_prob", np.nan),
+                "e_gain": row.e_gain,
+                "query_concept": _concept_label(query_c, reverse_cpt),
+                "e_top_observed_support": getattr(row, "e_top_observed_support", ""),
+                "e_top_observed_support_count": getattr(row, "e_top_observed_support_count", np.nan),
+                "e_observed_shift_abs": getattr(row, "e_observed_shift_abs", np.nan),
+                "contrast_group_score": getattr(row, "contrast_group_score", np.nan),
+            }
+        )
+
+    pd.DataFrame(case_rows).to_csv(out_dir / "e_student_contrast_cases.csv", index=False)
+    pd.DataFrame(edge_rows).to_csv(out_dir / "e_student_contrast_edges.csv", index=False)
+
+
 def _attach_model_buffers_to_details(
     details_by_eval: Dict[int, Dict[str, Any]],
     model: CognitiveDiagnosisModel,
@@ -1021,6 +1191,27 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         e_details_sel.to_csv(out_dir / "e_selected_cases.csv", index=False)
         selected_frames.append(e_details_sel.assign(case_type="E"))
 
+        contrast_sel = _rank_e_contrast_pool(e_pool_details, args.contrast_cases)
+        if not contrast_sel.empty:
+            contrast_sel, contrast_details = _run_selected_details(
+                full_model,
+                contrast_sel,
+                info,
+                device,
+                context_frame=result,
+                context_batch_size=args.batch_size,
+            )
+            contrast_sel = _add_e_mechanism_diagnostics(contrast_sel, contrast_details, info, full_model)
+            _attach_model_buffers_to_details(contrast_details, full_model)
+            _write_e_contrast_tables(
+                contrast_sel,
+                contrast_details,
+                info,
+                out_dir,
+                top_neighbors=args.top_neighbors,
+            )
+            contrast_sel.to_csv(out_dir / "e_student_contrast_selected_cases.csv", index=False)
+
     if selected_frames:
         pd.concat(selected_frames, ignore_index=True).to_csv(out_dir / "selected_cases.csv", index=False)
 
@@ -1060,6 +1251,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min_gain", type=float, default=0.10)
     parser.add_argument("--top_neighbors", type=int, default=8)
     parser.add_argument("--history_window", type=int, default=12)
+    parser.add_argument("--contrast_cases", type=int, default=3)
     parser.add_argument("--batch_size", type=int, default=1024)
     parser.add_argument("--num_workers", type=int, default=2)
     parser.add_argument("--device", default=None)

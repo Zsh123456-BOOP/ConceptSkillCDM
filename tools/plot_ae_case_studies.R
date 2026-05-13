@@ -132,6 +132,8 @@ if (nrow(a_edges) > 0) {
 
 e_edges <- read_table("e_case_edges.csv")
 e_cases <- read_table("e_cases.csv")
+e_contrast_edges <- read_table("e_student_contrast_edges.csv")
+e_contrast_cases <- read_table("e_student_contrast_cases.csv")
 if (nrow(e_edges) > 0) {
   if (nrow(e_cases) > 0 && all(c("E_shuffle_prob", "E_mean_prob") %in% names(e_cases))) {
     png(file.path(out_dir, "E_counterfactual_probability_comparison.png"), width = 1900, height = 1100, res = 170)
@@ -149,12 +151,12 @@ if (nrow(e_edges) > 0) {
       names.arg = labels,
       las = 2,
       col = c("#4C78A8", "#54A24B", "#E45756", "#B279A2"),
-      ylim = c(0, 1),
+      ylim = c(0, 1.10),
       ylab = "Predicted probability",
       main = "E Counterfactual: real student state vs no_E / shuffled / mean"
     )
     abline(h = 0.5, lty = 2, col = "gray40")
-    legend("topright", legend = c("full actual E", "no_E", "E shuffled", "E mean"), fill = c("#4C78A8", "#54A24B", "#E45756", "#B279A2"), bty = "n")
+    legend("topleft", legend = c("full actual E", "no_E", "E shuffled", "E mean"), fill = c("#4C78A8", "#54A24B", "#E45756", "#B279A2"), bty = "n", cex = 0.82)
     par(op)
     dev.off()
   }
@@ -291,6 +293,51 @@ if (nrow(e_edges) > 0) {
   }
   par(op)
   dev.off()
+}
+
+if (nrow(e_contrast_edges) > 0) {
+  case_ids <- unique(e_contrast_edges$case_id)
+  edge_keys <- unique(paste(e_contrast_edges$query_concept, "->", e_contrast_edges$support_concept))
+  prior_vec <- rep(0, length(edge_keys))
+  names(prior_vec) <- edge_keys
+  post_mat <- matrix(0, nrow = length(edge_keys), ncol = length(case_ids), dimnames = list(edge_keys, case_ids))
+  delta_mat <- matrix(0, nrow = length(edge_keys), ncol = length(case_ids), dimnames = list(edge_keys, case_ids))
+  for (i in seq_len(nrow(e_contrast_edges))) {
+    key <- paste(e_contrast_edges$query_concept[[i]], "->", e_contrast_edges$support_concept[[i]])
+    prior_vec[key] <- safe_num(e_contrast_edges$a_prior[[i]])
+    post_mat[key, e_contrast_edges$case_id[[i]]] <- safe_num(e_contrast_edges$e_posterior[[i]])
+    delta_mat[key, e_contrast_edges$case_id[[i]]] <- safe_num(e_contrast_edges$delta[[i]])
+  }
+  row_score <- rowSums(abs(delta_mat), na.rm = TRUE) + prior_vec
+  keep <- order(row_score, decreasing = TRUE)[seq_len(min(10, length(row_score)))]
+  prior_vec <- prior_vec[keep]
+  post_mat <- post_mat[keep, , drop = FALSE]
+  delta_mat <- delta_mat[keep, , drop = FALSE]
+  posterior_view <- cbind("A prior (same)" = prior_vec, post_mat)
+  query_label <- if ("query_concept" %in% names(e_contrast_edges)) unique(e_contrast_edges$query_concept)[[1]] else "query"
+  draw_matrix_heatmap(
+    posterior_view,
+    rownames(posterior_view),
+    colnames(posterior_view),
+    paste("E Same Global Map, Different Student Maps:", query_label),
+    file.path(out_dir, "E_same_global_map_posterior_by_student.png"),
+    colorRampPalette(c("#f7fbff", "#9ecae1", "#08519c"))(100),
+    zlim = c(0, max(posterior_view, 1e-6)),
+    label_mat = posterior_view,
+    label_digits = 2
+  )
+  z <- max(abs(delta_mat), na.rm = TRUE)
+  draw_matrix_heatmap(
+    delta_mat,
+    rownames(delta_mat),
+    colnames(delta_mat),
+    paste("E Same Global Map Delta by Student:", query_label),
+    file.path(out_dir, "E_same_global_map_delta_by_student.png"),
+    colorRampPalette(c("#2166ac", "#f7f7f7", "#b2182b"))(100),
+    zlim = c(-max(z, 1e-6), max(z, 1e-6)),
+    label_mat = delta_mat,
+    label_digits = 3
+  )
 }
 
 hist <- read_table("e_case_history.csv")
