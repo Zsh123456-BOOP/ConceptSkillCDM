@@ -250,10 +250,17 @@ def _rank_a_case_pool(candidates: pd.DataFrame, top_k: int) -> pd.DataFrame:
         "full_correct_no_A_wrong",
         "largest_no_A_error_reduction",
     )
-    return out.sort_values(
+    ranked = out.sort_values(
         ["selection_score", "a_gain", "query_row_global_readout_delta"],
         ascending=[False, False, False],
-    ).head(top_k)
+    )
+    selected = ranked.head(top_k).copy()
+    if top_k >= 3 and "q_count" in ranked and not (selected["q_count"].astype(float) >= 2.0).any():
+        multi = ranked[ranked["q_count"].astype(float) >= 2.0].head(1)
+        if not multi.empty:
+            selected = pd.concat([selected.head(top_k - 1), multi], ignore_index=True)
+            selected = selected.drop_duplicates(subset=["eval_row_id"], keep="first").head(top_k)
+    return selected.reset_index(drop=True)
 
 
 def _rank_e_case_pool(candidates: pd.DataFrame, top_k: int) -> pd.DataFrame:
