@@ -14,13 +14,17 @@ safe_num <- function(x) suppressWarnings(as.numeric(x))
 subgroup_csv <- file.path(input_dir, "a_relevant_subgroup_monotonicity.csv")
 if (file.exists(subgroup_csv)) {
   rows <- read.csv(subgroup_csv, stringsAsFactors = FALSE, check.names = FALSE)
-  bins <- rows[rows$group_type == "support_mass_bin", ]
-  if (nrow(bins) > 0) {
+  for (bin_type in unique(rows$group_type[grepl("_bin$", rows$group_type)])) {
+    bins <- rows[rows$group_type == bin_type, ]
+    if (nrow(bins) <= 0) {
+      next
+    }
     bins$support_mass_mean <- safe_num(bins$support_mass_mean)
     bins$no_A_minus_A_fused_bce <- safe_num(bins$no_A_minus_A_fused_bce)
     bins$A_fused_minus_no_A_auc <- safe_num(bins$A_fused_minus_no_A_auc)
     bins <- bins[order(bins$support_mass_mean), ]
-    png(file.path(fig_dir, "a_relevant_monotonicity.png"), width = 1500, height = 900, res = 160)
+    out_name <- paste0("a_relevant_monotonicity_", gsub("[^A-Za-z0-9_]+", "_", bin_type), ".png")
+    png(file.path(fig_dir, out_name), width = 1500, height = 900, res = 160)
     op <- par(mar = c(8, 5, 4, 5), las = 2)
     x <- seq_len(nrow(bins))
     bp <- barplot(
@@ -28,7 +32,7 @@ if (file.exists(subgroup_csv)) {
       names.arg = bins$group,
       col = "#4C78A8",
       ylab = "BCE gain of A_fused over no_A",
-      main = "A-Relevant Subgroup Monotonicity"
+      main = paste("A-Relevant Subgroup Monotonicity:", bin_type)
     )
     par(new = TRUE)
     plot(
@@ -46,6 +50,9 @@ if (file.exists(subgroup_csv)) {
     legend("topleft", legend = c("BCE gain", "AUC gain"), fill = c("#4C78A8", NA), border = c("#4C78A8", NA), lty = c(NA, 1), pch = c(NA, 16), col = c("#4C78A8", "#E45756"), bty = "n")
     par(op)
     dev.off()
+    if (bin_type == "support_mass_bin") {
+      file.copy(file.path(fig_dir, out_name), file.path(fig_dir, "a_relevant_monotonicity.png"), overwrite = TRUE)
+    }
   }
 }
 

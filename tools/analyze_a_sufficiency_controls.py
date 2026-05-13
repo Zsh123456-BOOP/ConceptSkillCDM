@@ -121,12 +121,19 @@ def _annotate_a_relevance(base: pd.DataFrame, info: Mapping[str, Any], dataset_n
     q_matrix = info["q_matrix"].detach().cpu()
     item_prior = info["item_prior_matrix"].detach().cpu()
     sequence_prior = info["sequence_prior_matrix"].detach().cpu()
-    support_prior = _row_normalize(item_prior + sequence_prior).numpy()
+    support_prior_t = _row_normalize(item_prior + sequence_prior)
+    support_prior = support_prior_t.numpy()
+    support_mask = ((item_prior + sequence_prior) > 0).float().numpy()
+    sequence_prior_np = _row_normalize(sequence_prior).numpy()
 
     masses: List[float] = []
     min_freqs: List[float] = []
     concept_counts: List[int] = []
     history_counts: List[int] = []
+    query_degrees: List[float] = []
+    query_top1: List[float] = []
+    query_top5: List[float] = []
+    query_seq_top5: List[float] = []
     for row in base.itertuples(index=False):
         mapped_ex = int(getattr(row, "mapped_exercise_id"))
         mapped_concepts = torch.nonzero(q_matrix[mapped_ex] > 0, as_tuple=False).view(-1).cpu().numpy().astype(int).tolist()
@@ -136,12 +143,33 @@ def _annotate_a_relevance(base: pd.DataFrame, info: Mapping[str, Any], dataset_n
         min_freqs.append(float(min([concept_freq[c] for c in mapped_concepts], default=0.0)))
         concept_counts.append(len(mapped_concepts))
         history_counts.append(int(stu_counts.get(getattr(row, "stu_id"), 0)))
+        if mapped_concepts:
+            row_degree = [float(support_mask[c].sum()) for c in mapped_concepts]
+            row_top1 = [float(np.max(support_prior[c])) for c in mapped_concepts]
+            row_top5 = [float(np.sort(support_prior[c])[-min(5, support_prior.shape[1]):].sum()) for c in mapped_concepts]
+            row_seq_top5 = [
+                float(np.sort(sequence_prior_np[c])[-min(5, sequence_prior_np.shape[1]):].sum())
+                for c in mapped_concepts
+            ]
+        else:
+            row_degree = [0.0]
+            row_top1 = [0.0]
+            row_top5 = [0.0]
+            row_seq_top5 = [0.0]
+        query_degrees.append(float(np.mean(row_degree)))
+        query_top1.append(float(np.mean(row_top1)))
+        query_top5.append(float(np.mean(row_top5)))
+        query_seq_top5.append(float(np.mean(row_seq_top5)))
 
     out = base.copy()
     out["a_support_mass_to_history"] = masses
     out["a_min_concept_train_freq"] = min_freqs
     out["concept_count"] = concept_counts
     out["student_train_count"] = history_counts
+    out["a_query_support_degree_mean"] = query_degrees
+    out["a_query_top1_evidence_mean"] = query_top1
+    out["a_query_top5_evidence_mass_mean"] = query_top5
+    out["a_query_seq_top5_mass_mean"] = query_seq_top5
     positive = out["a_support_mass_to_history"].to_numpy() > 0
     high_cut = float(np.quantile(out.loc[positive, "a_support_mass_to_history"], 0.75)) if positive.any() else float("inf")
     out["group_all"] = True
@@ -151,15 +179,15 @@ def _annotate_a_relevance(base: pd.DataFrame, info: Mapping[str, Any], dataset_n
     return out
 
 
-def _support_mass_bins(frame: pd.DataFrame) -> pd.Series:
-    masses = frame["a_support_mass_to_history"].astype(float)
-    labels = pd.Series("zero", index=frame.index, dtype="object")
-    positive = masses > 0.0
+def _quantile_bins(values: pd.Series, zero_label: str = "zero") -> pd.Series:
+    numeric = values.astype(float)
+    labels = pd.Series(zero_label, index=values.index, dtype="object")
+    positive = numeric > 0.0
     if positive.sum() < 4:
         labels.loc[positive] = "positive"
         return labels
     try:
-        qbins = pd.qcut(masses.loc[positive], q=4, labels=["q1_low", "q2_midlow", "q3_midhigh", "q4_high"], duplicates="drop")
+        qbins = pd.qcut(numeric.loc[positive], q=4, labels=["q1_low", "q2_midlow", "q3_midhigh", "q4_high"], duplicates="drop")
         labels.loc[positive] = qbins.astype(str)
     except ValueError:
         labels.loc[positive] = "positive"
@@ -182,7 +210,11 @@ def subgroup_monotonicity(
     base = full_pred.rename(columns={"prob": "prob_A_fused"})
     base["prob_no_A"] = no_a_pred["prob"].to_numpy()
     base = _annotate_a_relevance(base, info, args.dataset_name, args.data_dir)
-    base["support_mass_bin"] = _support_mass_bins(base)
+    base["support_mass_bin"] = _quantile_bins(base["a_support_mass_to_history"])
+    base["query_degree_bin"] = _quantile_bins(base["a_query_support_degree_mean"])
+    base["query_top1_bin"] = _quantile_bins(base["a_query_top1_evidence_mean"])
+    base["query_top5_bin"] = _quantile_bins(base["a_query_top5_evidence_mass_mean"])
+    base["query_seq_top5_bin"] = _quantile_bins(base["a_query_seq_top5_mass_mean"])
     base["bce_gain_A_over_no_A"] = (
         -(
             base["label_eval"] * np.log(base["prob_no_A"].clip(1e-8, 1.0 - 1e-8))
@@ -196,7 +228,13 @@ def subgroup_monotonicity(
     base.to_csv(out_dir / "a_relevant_samples.csv", index=False)
 
     rows: List[Dict[str, Any]] = []
-    group_specs = [("support_mass_bin", None)]
+    group_specs = [
+        ("support_mass_bin", None),
+        ("query_degree_bin", None),
+        ("query_top1_bin", None),
+        ("query_top5_bin", None),
+        ("query_seq_top5_bin", None),
+    ]
     for col in ("group_all", "group_graph_hits_history", "group_high_support_mass", "group_multi_concept"):
         group_specs.append((col, True))
     for col, value in group_specs:
