@@ -134,10 +134,78 @@ def _query_gpu_stats() -> Dict[int, Dict[str, int]]:
     return stats
 
 
+def _query_gpu_processes() -> Dict[int, List[Dict[str, Any]]]:
+    """Return compute processes grouped by GPU index.
+
+    Watched GPUs are only meant to be used when they are actually empty.  GPU
+    utilization is sampled and can briefly read as low while another user's job
+    is still resident, so process occupancy is the safer guard.
+    """
+    try:
+        gpu_text = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,uuid",
+                "--format=csv,noheader,nounits",
+            ],
+            encoding="utf-8",
+            stderr=subprocess.DEVNULL,
+        )
+        app_text = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
+                "--format=csv,noheader,nounits",
+            ],
+            encoding="utf-8",
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as exc:
+        print(f"[GPU] failed to query compute processes: {exc}")
+        return {}
+
+    uuid_to_gid: Dict[str, int] = {}
+    for line in gpu_text.strip().splitlines():
+        if not line.strip():
+            continue
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 2:
+            continue
+        uuid_to_gid[parts[1]] = int(parts[0])
+
+    processes: Dict[int, List[Dict[str, Any]]] = {gid: [] for gid in uuid_to_gid.values()}
+    for line in app_text.strip().splitlines():
+        if not line.strip():
+            continue
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 4:
+            continue
+        gid = uuid_to_gid.get(parts[0])
+        if gid is None:
+            continue
+        try:
+            pid = int(parts[1])
+        except ValueError:
+            pid = -1
+        try:
+            used_memory = int(parts[3])
+        except ValueError:
+            used_memory = 0
+        processes.setdefault(gid, []).append(
+            {
+                "pid": pid,
+                "process_name": parts[2],
+                "used_memory": used_memory,
+            }
+        )
+    return processes
+
+
 def _gpu_can_accept(
     *,
     gid: int,
     stats: Dict[int, Dict[str, int]],
+    processes: Dict[int, List[Dict[str, Any]]],
     initial_gpus: Sequence[int],
     gpu_load: Dict[int, int],
     max_per_gpu: int,
@@ -153,6 +221,8 @@ def _gpu_can_accept(
         return False
     if gid in initial_gpus:
         return True
+    if processes.get(gid):
+        return False
     return stat["util"] <= int(idle_util)
 
 
@@ -166,6 +236,7 @@ def _available_gpus(
     min_free_mem_mb: int,
 ) -> List[int]:
     stats = _query_gpu_stats()
+    processes = _query_gpu_processes()
     candidates: List[int] = []
     for gid in [*initial_gpus, *watch_gpus]:
         if gid in candidates:
@@ -173,6 +244,7 @@ def _available_gpus(
         if _gpu_can_accept(
             gid=gid,
             stats=stats,
+            processes=processes,
             initial_gpus=initial_gpus,
             gpu_load=gpu_load,
             max_per_gpu=max_per_gpu,
@@ -182,7 +254,10 @@ def _available_gpus(
             candidates.append(gid)
     if stats:
         status = " | ".join(
-            f"{gid}: util={stats[gid]['util']}%, free={stats[gid]['free']}MiB, own={gpu_load.get(gid, 0)}"
+            (
+                f"{gid}: util={stats[gid]['util']}%, free={stats[gid]['free']}MiB, "
+                f"procs={len(processes.get(gid, []))}, own={gpu_load.get(gid, 0)}"
+            )
             for gid in sorted(set([*initial_gpus, *watch_gpus]))
             if gid in stats
         )
