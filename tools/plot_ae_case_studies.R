@@ -205,6 +205,50 @@ if (nrow(e_edges) > 0) {
     )
   }
 
+  support_keys <- unique(paste(e_edges$query_concept, "->", e_edges$support_concept))
+  if (length(case_ids) > 1 && length(support_keys) > 0) {
+    mastery_mat <- matrix(0, nrow = length(support_keys), ncol = length(case_ids), dimnames = list(support_keys, case_ids))
+    recent_mat <- matrix(0, nrow = length(support_keys), ncol = length(case_ids), dimnames = list(support_keys, case_ids))
+    for (i in seq_len(nrow(e_edges))) {
+      key <- paste(e_edges$query_concept[[i]], "->", e_edges$support_concept[[i]])
+      mastery_mat[key, e_edges$case_id[[i]]] <- safe_num(e_edges$student_support_mastery_logit[[i]])
+      recent_mat[key, e_edges$case_id[[i]]] <- safe_num(e_edges$student_support_recent_logit[[i]])
+    }
+    row_score <- rowSums(abs(mastery_mat), na.rm = TRUE) + rowSums(abs(recent_mat), na.rm = TRUE)
+    keep <- order(row_score, decreasing = TRUE)[seq_len(min(10, nrow(mastery_mat)))]
+    mastery_mat <- mastery_mat[keep, , drop = FALSE]
+    recent_mat <- recent_mat[keep, , drop = FALSE]
+    z <- max(abs(c(mastery_mat, recent_mat)), na.rm = TRUE)
+    z <- max(z, 1e-6)
+    png(file.path(out_dir, "E_student_state_by_support.png"), width = 2200, height = 1200, res = 170)
+    op <- par(mar = c(8, 9, 4, 3), mfrow = c(1, 2))
+    draw_one <- function(mat, main) {
+      image(
+        x = seq_len(ncol(mat)),
+        y = seq_len(nrow(mat)),
+        z = t(mat[nrow(mat):1, , drop = FALSE]),
+        col = colorRampPalette(c("#2166ac", "#f7f7f7", "#b2182b"))(100),
+        axes = FALSE,
+        xlab = "",
+        ylab = "",
+        main = main,
+        zlim = c(-z, z)
+      )
+      axis(1, at = seq_len(ncol(mat)), labels = colnames(mat), las = 2, cex.axis = 0.7)
+      axis(2, at = seq_len(nrow(mat)), labels = rev(rownames(mat)), las = 2, cex.axis = 0.7)
+      box()
+      for (i in seq_len(nrow(mat))) {
+        for (j in seq_len(ncol(mat))) {
+          text(j, nrow(mat) - i + 1, sprintf("%.2f", mat[i, j]), cex = 0.52, col = "black")
+        }
+      }
+    }
+    draw_one(mastery_mat, "Student support mastery")
+    draw_one(recent_mat, "Student recent state")
+    par(op)
+    dev.off()
+  }
+
   png(file.path(out_dir, "E_prior_to_posterior_shift.png"), width = 1800, height = 1200, res = 170)
   op <- par(mar = c(7, 5, 4, 2), mfrow = c(max(1, ceiling(length(unique(e_edges$case_id)) / 2)), 2))
   for (case_id in unique(e_edges$case_id)) {
