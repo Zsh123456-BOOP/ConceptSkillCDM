@@ -29,6 +29,8 @@ logs/*
 !logs/ae_case09_a95c3c4_standard/
 !logs/ae_case09_a95c3c4_standard/**
 !logs/suffnec09_ba2d5c8_a_support_evidence.log
+!logs/suffnec09_ba2d5c8_a_sufficiency_controls.log
+!logs/suffnec09_ba2d5c8_a_sufficiency_plot.log
 server_logs/
 results/*
 !results/.gitkeep
