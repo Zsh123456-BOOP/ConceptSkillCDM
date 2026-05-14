@@ -30,6 +30,8 @@ def _args(*, variants: str, phase: str = "phase1", phase1_epochs: int = 6) -> Si
         limit_jobs=0,
         rerun_existing=True,
         generate_diagnosis=False,
+        student_global_scale=None,
+        student_global_mode=None,
     )
 
 
@@ -63,6 +65,23 @@ def _check_phase1_full_activates_e_writing() -> None:
     _assert(
         float(params["ae_lr_mult"]) <= 5.0,
         "phase1 should cap fast AE scalar learning so E mechanism tests do not become train-prior overfit tests.",
+    )
+
+
+def _check_neighbor_e_is_an_explicit_hypothesis_variant() -> None:
+    params = _params_by_variant("full_neighborE")["full_neighborE"]
+    _assert(bool(params["use_personal_graph"]), "full_neighborE should keep E enabled.")
+    _assert(
+        bool(params["personal_include_neighbor_rows"]),
+        "full_neighborE should let E personalize A-neighbor rows.",
+    )
+    _assert(
+        bool(params["personal_support_include_neighbors"]),
+        "full_neighborE should expose A-neighbor support columns to E.",
+    )
+    _assert(
+        float(params["personal_neighbor_row_budget"]) > 0.0,
+        "full_neighborE should give neighbor rows a non-zero budget.",
     )
 
 
@@ -100,6 +119,7 @@ def _check_phase2_full_cannot_mute_posterior_route() -> None:
 
 def main() -> None:
     _check_phase1_full_activates_e_writing()
+    _check_neighbor_e_is_an_explicit_hypothesis_variant()
     _check_controls_keep_their_semantics()
     _check_phase2_full_cannot_mute_posterior_route()
     print("OK: mechanism params keep E active only where intended.")

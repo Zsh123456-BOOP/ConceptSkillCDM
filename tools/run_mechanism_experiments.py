@@ -38,6 +38,7 @@ DEFAULT_DATASETS = (
 
 DEFAULT_VARIANTS = (
     "full",
+    "full_neighborE",
     "no_A",
     "no_E",
     "A_item_only",
@@ -369,6 +370,17 @@ def parse_args() -> argparse.Namespace:
 def _variant_spec(name: str) -> AblationSpec:
     if name == "full":
         return AblationSpec(name=name, flags={}, overrides={})
+    if name == "full_neighborE":
+        return AblationSpec(
+            name=name,
+            flags={},
+            overrides={
+                "personal_include_neighbor_rows": True,
+                "personal_support_include_neighbors": True,
+                "personal_neighbor_row_budget": 0.30,
+                "personal_query_support_hops": 1,
+            },
+        )
     if name == "no_A":
         return AblationSpec(name=name, flags={"ablate_concept_graph": True}, overrides={})
     if name == "no_E":
