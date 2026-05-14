@@ -101,12 +101,11 @@ def build_response_transition_priors(
     ordered = _ordered_train_df(train_df)
     for _, stu_df in ordered.groupby("stu_id", sort=False):
         history: List[tuple[List[int], float]] = []
-        for _, row in stu_df.iterrows():
-            concepts = sorted({cpt_id_map[cid] for cid in _parse_concept_seq(row["cpt_seq"]) if cid in cpt_id_map})
+        for seq, label_value in zip(stu_df["cpt_seq"].values, stu_df["label"].values):
+            concepts = sorted({cpt_id_map[cid] for cid in _parse_concept_seq(seq) if cid in cpt_id_map})
             if not concepts:
                 continue
-            label = float(row["label"])
-            history.append((concepts, label))
+            history.append((concepts, float(label_value)))
         if len(history) < 2:
             continue
 
