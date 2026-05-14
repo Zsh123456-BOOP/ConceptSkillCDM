@@ -282,8 +282,35 @@ def _predict(x: np.ndarray, weight: np.ndarray, bias: float, mean: np.ndarray, s
     return 1.0 / (1.0 + np.exp(-np.clip(logits, -30.0, 30.0)))
 
 
+def _predict_logits(x: np.ndarray, weight: np.ndarray, bias: float, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
+    xs = (x.astype(np.float32) - mean) / np.maximum(std, 1e-6)
+    return xs.dot(weight.astype(np.float32)) + float(bias)
+
+
 def _metrics(y: np.ndarray, prob: np.ndarray) -> Dict[str, float]:
     return compute_metrics(y, (prob >= 0.5).astype(np.float32), prob)
+
+
+def _apply_residual(logits: np.ndarray, residual: np.ndarray, scale: float) -> np.ndarray:
+    adjusted = logits.astype(np.float32) + float(scale) * residual.astype(np.float32)
+    return 1.0 / (1.0 + np.exp(-np.clip(adjusted, -30.0, 30.0)))
+
+
+def _select_residual_scale(
+    *,
+    valid_y: np.ndarray,
+    valid_logits: np.ndarray,
+    valid_residual: np.ndarray,
+    grid: Iterable[float],
+) -> Tuple[float, float]:
+    best_scale = 0.0
+    best_auc = _metrics(valid_y, _apply_residual(valid_logits, valid_residual, 0.0))["auc"]
+    for scale in grid:
+        auc = _metrics(valid_y, _apply_residual(valid_logits, valid_residual, float(scale)))["auc"]
+        if auc > best_auc + 1e-12:
+            best_auc = auc
+            best_scale = float(scale)
+    return best_scale, float(best_auc)
 
 
 def _run_dataset(args: argparse.Namespace, dataset_name: str) -> Dict[str, object]:
@@ -414,6 +441,7 @@ def _run_dataset(args: argparse.Namespace, dataset_name: str) -> Dict[str, objec
             for name in (*A_FEATURES, *E_FEATURES, "query_count", "route_count")
         },
         "models": {},
+        "residual_controls": {},
     }
 
     for model_name, columns_iter in feature_sets.items():
@@ -455,6 +483,75 @@ def _run_dataset(args: argparse.Namespace, dataset_name: str) -> Dict[str, objec
         for name, model in result["models"].items()
         if name != "base"
     }
+
+    base_cols = list(BASE_FEATURES)
+    base_model = result["models"]["base"]
+    base_weight = np.asarray([base_model["weights"][col] for col in base_cols], dtype=np.float32)
+    base_bias = float(base_model["bias"])
+    x_valid_base = valid_frame[base_cols].to_numpy(dtype=np.float32)
+    x_test_base = test_frame[base_cols].to_numpy(dtype=np.float32)
+    base_mean = np.asarray(
+        [
+            # Recomputeing mean/std would be wrong here; model output did not persist them.
+            # Use a refit with the same base setup below to obtain calibrated logits.
+            0.0
+            for _ in base_cols
+        ],
+        dtype=np.float32,
+    )
+    del base_weight, base_bias, x_valid_base, x_test_base, base_mean
+
+    # Refit base once here and keep logits fixed.  Residual controls answer:
+    # can A/E add a small interpretable correction without stealing capacity
+    # from the base diagnostic path?
+    x_train_base = train_frame[base_cols].to_numpy(dtype=np.float32)
+    x_valid_base = valid_frame[base_cols].to_numpy(dtype=np.float32)
+    x_test_base = test_frame[base_cols].to_numpy(dtype=np.float32)
+    x_fit, y_fit = _sample_rows(x_train_base, train_y, args.max_train_rows, args.seed)
+    base_weight, base_bias, base_mean, base_std = _fit_logistic(
+        x_fit,
+        y_fit,
+        seed=args.seed,
+        steps=args.steps,
+        lr=args.lr,
+        nonnegative=args.nonnegative,
+        l2=args.l2,
+    )
+    valid_logits = _predict_logits(x_valid_base, base_weight, base_bias, base_mean, base_std)
+    test_logits = _predict_logits(x_test_base, base_weight, base_bias, base_mean, base_std)
+
+    residual_specs = {
+        "A_route_residual": ("a_route_delta", [0.0, 0.02, 0.05, 0.10, 0.20, 0.35]),
+        "E_exact_residual": ("e_exact", [0.0, 0.02, 0.05, 0.10, 0.20, 0.35]),
+        "E_group_residual": ("e_group", [0.0, 0.02, 0.05, 0.10, 0.20, 0.35]),
+        "E_safe_residual": ("__safe_e__", [0.0, 0.02, 0.05, 0.10, 0.20, 0.35]),
+    }
+    for name, (feature, grid) in residual_specs.items():
+        if feature == "__safe_e__":
+            valid_residual = (
+                valid_frame["e_exact"].to_numpy(dtype=np.float32)
+                + 0.25 * valid_frame["e_group"].to_numpy(dtype=np.float32)
+            )
+            test_residual = (
+                test_frame["e_exact"].to_numpy(dtype=np.float32)
+                + 0.25 * test_frame["e_group"].to_numpy(dtype=np.float32)
+            )
+        else:
+            valid_residual = valid_frame[feature].to_numpy(dtype=np.float32)
+            test_residual = test_frame[feature].to_numpy(dtype=np.float32)
+        scale, valid_auc = _select_residual_scale(
+            valid_y=valid_y,
+            valid_logits=valid_logits,
+            valid_residual=valid_residual,
+            grid=grid,
+        )
+        test_prob = _apply_residual(test_logits, test_residual, scale)
+        result["residual_controls"][name] = {
+            "selected_scale": float(scale),
+            "valid_auc": float(valid_auc),
+            "test": _metrics(test_y, test_prob),
+            "test_auc_gain_vs_base": float(_metrics(test_y, test_prob)["auc"]) - base_auc,
+        }
     return result
 
 
