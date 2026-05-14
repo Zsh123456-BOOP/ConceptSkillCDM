@@ -204,7 +204,11 @@ def run_cdm_forward(
         and (model.roadmap_logit_residual_scale > 0.0 or model.tutor_logit_residual_scale > 0.0)
     )
     if ae_predictor_active:
-        irt_logit_scale = float(model.ae_irt_logit_scale)
+        # A/E are interpretable calibrators on top of the same CD backbone, not
+        # replacements for the IRT path.  Keeping the backbone scale identical
+        # across full/no_A/no_E avoids making full artificially worse whenever
+        # the roadmap/tutor residual is intentionally kept small and explainable.
+        irt_logit_scale = 1.0
     else:
         irt_logit_scale = 1.0
     irt_logit_for_total = irt_logit * irt_logit_scale
