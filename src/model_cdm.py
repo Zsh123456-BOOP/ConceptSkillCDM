@@ -1183,24 +1183,26 @@ class CognitiveDiagnosisModel(nn.Module):
                 * tutor_student_readiness_confidence
                 * tutor_student_readiness_delta
             )
+            query_mastery_signal = query_sc_prior - student_prior
+            route_mastery_signal = route_sc_prior - student_prior
+            query_recent_signal = query_recent_prior
+            route_recent_signal = route_recent_prior - query_recent_prior
             tutor_current_mastery_logit = (
                 mastery_scale
-                * self._positive_weight(getattr(self, "tutor_current_mastery_weight_raw", None), query_sc_prior)
+                * self._positive_weight(getattr(self, "tutor_current_mastery_weight_raw", None), query_mastery_signal)
                 * tutor_query_reliability
-                * query_sc_prior
+                * query_mastery_signal
             )
             tutor_current_recent_logit = (
                 recent_scale
-                * self._positive_weight(getattr(self, "tutor_current_recent_weight_raw", None), query_recent_prior)
+                * self._positive_weight(getattr(self, "tutor_current_recent_weight_raw", None), query_recent_signal)
                 * tutor_query_reliability
-                * query_recent_prior
+                * query_recent_signal
             )
-            # The local tutor map should read the student's mastery on the A
-            # route itself, not only the posterior-vs-prior shift. Otherwise
-            # single-concept exercises can reduce E to a current-concept
-            # calibration and the route terms collapse during training.
-            route_mastery_signal = route_sc_prior
-            route_recent_signal = route_recent_prior
+            # E is a local tutor map, so its route evidence is signed relative
+            # to the student's own baseline rather than a raw "more is better"
+            # shortcut.  This keeps personalization interpretable without
+            # shifting every prediction in the same direction.
             tutor_route_mastery_logit = (
                 mastery_scale
                 * self._positive_weight(
