@@ -89,24 +89,33 @@ def _build_split_features(
 
     qw = _query_weights(q_matrix, eid)
     rw = qw @ route
+    rw2 = rw @ route
     route_delta = rw - qw
+    route2_delta = rw2 - qw
     off_mass = (rw * (1.0 - (qw > 0).astype(np.float32))).sum(axis=1)
     support_shift = 0.5 * np.abs(route_delta).sum(axis=1)
+    off_mass2 = (rw2 * (1.0 - (qw > 0).astype(np.float32))).sum(axis=1)
+    support_shift2 = 0.5 * np.abs(route2_delta).sum(axis=1)
 
     sc = student_concept_logits[sid]
     recent = recent_student_concept_logits[sid]
     counts = student_concept_counts[sid]
     query_counts = (qw * counts).sum(axis=1)
     route_counts = (rw * counts).sum(axis=1)
+    route2_counts = (rw2 * counts).sum(axis=1)
     query_rel = _reliability(query_counts, smoothing)
     route_rel = _reliability(route_counts, smoothing)
+    route2_rel = _reliability(route2_counts, smoothing)
 
     query_concept = qw @ concept_logits
     route_concept = rw @ concept_logits
+    route2_concept = rw2 @ concept_logits
     query_sc = (qw * sc).sum(axis=1)
     route_sc = (rw * sc).sum(axis=1)
+    route2_sc = (rw2 * sc).sum(axis=1)
     query_recent = (qw * recent).sum(axis=1)
     route_recent = (rw * recent).sum(axis=1)
+    route2_recent = (rw2 * recent).sum(axis=1)
 
     frame = pd.DataFrame(
         {
@@ -115,14 +124,26 @@ def _build_split_features(
             "exercise_prior": exercise_logits[eid],
             "query_concept_prior": query_concept,
             "A_route_concept_delta": route_concept - query_concept,
+            "A_route2_concept_delta": route2_concept - query_concept,
             "A_off_query_mass": off_mass,
             "A_support_shift": support_shift,
+            "A2_off_query_mass": off_mass2,
+            "A2_support_shift": support_shift2,
             "E_query_student_concept": query_sc,
             "E_query_recent": query_recent,
             "E_query_reliability": query_rel,
+            "E_route_student_concept": route_sc,
+            "E_route_recent": route_recent,
+            "E_route_reliability": route_rel,
             "E_route_student_concept_delta": route_sc - query_sc,
             "E_route_recent_delta": route_recent - query_recent,
             "E_route_reliability_delta": route_rel - query_rel,
+            "E_route2_student_concept": route2_sc,
+            "E_route2_recent": route2_recent,
+            "E_route2_reliability": route2_rel,
+            "E_route2_student_concept_delta": route2_sc - query_sc,
+            "E_route2_recent_delta": route2_recent - query_recent,
+            "E_route2_reliability_delta": route2_rel - query_rel,
             "label": y,
         }
     )
@@ -160,6 +181,17 @@ FEATURE_SETS: Dict[str, List[str]] = {
         "A_off_query_mass",
         "A_support_shift",
     ],
+    "base_plus_A2": [
+        "student_prior",
+        "exercise_prior",
+        "query_concept_prior",
+        "A_route_concept_delta",
+        "A_route2_concept_delta",
+        "A_off_query_mass",
+        "A_support_shift",
+        "A2_off_query_mass",
+        "A2_support_shift",
+    ],
     "base_plus_E_current": [
         "student_prior",
         "exercise_prior",
@@ -167,6 +199,17 @@ FEATURE_SETS: Dict[str, List[str]] = {
         "E_query_student_concept",
         "E_query_recent",
         "E_query_reliability",
+    ],
+    "base_plus_E_route_abs": [
+        "student_prior",
+        "exercise_prior",
+        "query_concept_prior",
+        "E_query_student_concept",
+        "E_query_recent",
+        "E_query_reliability",
+        "E_route_student_concept",
+        "E_route_recent",
+        "E_route_reliability",
     ],
     "base_plus_AE_route": [
         "student_prior",
@@ -181,6 +224,32 @@ FEATURE_SETS: Dict[str, List[str]] = {
         "E_route_student_concept_delta",
         "E_route_recent_delta",
         "E_route_reliability_delta",
+    ],
+    "base_plus_AE_route2": [
+        "student_prior",
+        "exercise_prior",
+        "query_concept_prior",
+        "A_route_concept_delta",
+        "A_route2_concept_delta",
+        "A_off_query_mass",
+        "A_support_shift",
+        "A2_off_query_mass",
+        "A2_support_shift",
+        "E_query_student_concept",
+        "E_query_recent",
+        "E_query_reliability",
+        "E_route_student_concept",
+        "E_route_recent",
+        "E_route_reliability",
+        "E_route_student_concept_delta",
+        "E_route_recent_delta",
+        "E_route_reliability_delta",
+        "E_route2_student_concept",
+        "E_route2_recent",
+        "E_route2_reliability",
+        "E_route2_student_concept_delta",
+        "E_route2_recent_delta",
+        "E_route2_reliability_delta",
     ],
 }
 
