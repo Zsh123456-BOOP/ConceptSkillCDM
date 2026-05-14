@@ -779,11 +779,17 @@ class CognitiveDiagnosisModel(nn.Module):
                 query_recent_prior = (query_weight * recent_prior).sum(dim=1)
                 route_prior = (personal_support * prior).sum(dim=1)
                 route_recent_prior = (personal_support * recent_prior).sum(dim=1)
-                theta_query_after_a = (query_weight * theta_after_a).sum(dim=1)
-                tutor_current_mastery_delta = self._clip_theta_delta(query_prior - theta_query_after_a)
-                tutor_current_recent_delta = self._clip_theta_delta(query_recent_prior - theta_query_after_a)
-                tutor_route_mastery_delta = self._clip_theta_delta(route_prior - personal_route_theta)
-                tutor_route_recent_delta = self._clip_theta_delta(route_recent_prior - personal_route_theta)
+                # Student-concept priors are train-only relative evidence
+                # (student/concept correctness relative to the concept base
+                # rate), not an absolute theta target.  Treating 0.0 as an
+                # absolute mastery target would incorrectly pull many sparse
+                # rows downward.  E therefore writes relative local-map deltas
+                # into theta: current concept evidence plus the route-neighbor
+                # deviation from the current concept.
+                tutor_current_mastery_delta = self._clip_theta_delta(query_prior)
+                tutor_current_recent_delta = self._clip_theta_delta(query_recent_prior)
+                tutor_route_mastery_delta = self._clip_theta_delta(route_prior - query_prior)
+                tutor_route_recent_delta = self._clip_theta_delta(route_recent_prior - query_recent_prior)
 
                 if (
                     student_concept_count is not None
@@ -1183,8 +1189,8 @@ class CognitiveDiagnosisModel(nn.Module):
                 * tutor_student_readiness_confidence
                 * tutor_student_readiness_delta
             )
-            query_mastery_signal = query_sc_prior - student_prior
-            route_mastery_signal = route_sc_prior - student_prior
+            query_mastery_signal = query_sc_prior
+            route_mastery_signal = route_sc_prior - query_sc_prior
             query_recent_signal = query_recent_prior
             route_recent_signal = route_recent_prior - query_recent_prior
             tutor_current_mastery_logit = (
@@ -1199,10 +1205,10 @@ class CognitiveDiagnosisModel(nn.Module):
                 * tutor_query_reliability
                 * query_recent_signal
             )
-            # E is a local tutor map, so its route evidence is signed relative
-            # to the student's own baseline rather than a raw "more is better"
-            # shortcut.  This keeps personalization interpretable without
-            # shifting every prediction in the same direction.
+            # E is a local tutor map, so route evidence is the signed deviation
+            # from the current concept on the same student's map.  This keeps
+            # personalization interpretable without turning route evidence into
+            # a raw "more is always better" shortcut.
             tutor_route_mastery_logit = (
                 mastery_scale
                 * self._positive_weight(
