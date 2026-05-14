@@ -76,6 +76,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "graph_propagation_alpha",
     "graph_query_readout_scale",
     "graph_query_readout_2hop_scale",
+    "student_global_scale",
     "graph_headwise_query_gate",
     "graph_edge_bias_rank",
     "graph_prior_logit_scale",
@@ -2102,7 +2103,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         "personal_mastery_prior_scale=%.3f, personal_recent_mastery_prior_scale=%.3f, "
         "personal_query_message_gain=%.3f, "
         "personal_query_correction_scale=%.3f, personal_state_lr_mult=%.3f, personal_id_lr_mult=%.3f, "
-        "graph_propagation_alpha=%.3f, graph_query_readout_scale=%.3f, graph_query_readout_2hop_scale=%.3f",
+        "graph_propagation_alpha=%.3f, graph_query_readout_scale=%.3f, graph_query_readout_2hop_scale=%.3f, "
+        "student_global_scale=%.3f",
         run_tag,
         float(getattr(args, "personal_max_alpha", 0.35)),
         float(getattr(args, "personal_delta_scale", 1.0)),
@@ -2127,6 +2129,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         float(getattr(args, "graph_propagation_alpha", 0.20)),
         float(getattr(args, "graph_query_readout_scale", 0.35)),
         float(getattr(args, "graph_query_readout_2hop_scale", 0.15)),
+        float(getattr(args, "student_global_scale", 1.0)),
     )
 
     data_dir = args.data_dir
@@ -2224,6 +2227,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         graph_propagation_alpha=getattr(args, "graph_propagation_alpha", 0.20),
         graph_query_readout_scale=getattr(args, "graph_query_readout_scale", 0.35),
         graph_query_readout_2hop_scale=getattr(args, "graph_query_readout_2hop_scale", 0.15),
+        student_global_scale=getattr(args, "student_global_scale", 1.0),
         personal_rank=getattr(args, "personal_rank", 4),
         lambda_sparse_personal=args.lambda_sparse_personal,
         lambda_alpha=args.lambda_alpha,
@@ -3014,6 +3018,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         graph_query_readout_2hop_scale=loaded_args.get(
             "graph_query_readout_2hop_scale", getattr(args, "graph_query_readout_2hop_scale", 0.15)
+        ),
+        student_global_scale=loaded_args.get(
+            "student_global_scale", getattr(args, "student_global_scale", 1.0)
         ),
         prediction_l2_lambda=loaded_args.get(
             "prediction_l2_lambda",

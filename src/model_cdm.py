@@ -62,6 +62,7 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_propagation_alpha: float = 0.20,
         graph_query_readout_scale: float = 0.35,
         graph_query_readout_2hop_scale: float = 0.15,
+        student_global_scale: float = 1.0,
         prediction_l2_lambda: float = 5e-5,
         gnn_residual_weight: float = 0.5,
         personal_max_alpha: float = 0.35,
@@ -158,6 +159,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_propagation_alpha = max(0.0, min(1.0, float(graph_propagation_alpha)))
         self.graph_query_readout_scale = max(0.0, float(graph_query_readout_scale))
         self.graph_query_readout_2hop_scale = max(0.0, float(graph_query_readout_2hop_scale))
+        self.student_global_scale = max(0.0, float(student_global_scale))
         self._current_epoch = 1
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
@@ -279,6 +281,7 @@ class CognitiveDiagnosisModel(nn.Module):
             allow_self_loop=allow_self_loop,
             graph_identity_residual=self.graph_identity_residual,
             graph_propagation_alpha=self.graph_propagation_alpha,
+            student_global_scale=self.student_global_scale,
             use_personal_graph=self.use_personal_graph,
             personal_rank=personal_rank,
             personal_max_alpha=self.personal_max_alpha,

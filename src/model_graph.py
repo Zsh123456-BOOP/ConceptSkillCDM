@@ -436,6 +436,7 @@ class StudentKnowledgeEncoder(nn.Module):
         dropout: float = 0.1,
         gnn_residual_weight: float = 0.5,
         propagation_alpha: float = 0.20,
+        student_global_scale: float = 1.0,
     ):
         super().__init__()
         self.num_students = int(num_students)
@@ -443,6 +444,7 @@ class StudentKnowledgeEncoder(nn.Module):
         self.knowledge_dim = int(knowledge_dim)
         self.gnn_residual_weight = float(gnn_residual_weight)
         self.propagation_alpha = max(0.0, min(1.0, float(propagation_alpha)))
+        self.student_global_scale = max(0.0, float(student_global_scale))
 
         self.student_global = nn.Embedding(num_students, knowledge_dim)
         self.concept_emb = nn.Embedding(num_concepts, knowledge_dim)
@@ -462,7 +464,7 @@ class StudentKnowledgeEncoder(nn.Module):
 
     def compose_initial_state(self, student_ids: torch.Tensor) -> torch.Tensor:
         B = student_ids.size(0)
-        s = self.student_global(student_ids)
+        s = self.student_global(student_ids) * self.student_global_scale
         c = self.concept_emb.weight.unsqueeze(0).expand(B, -1, -1)
         return self.dropout(c + s.unsqueeze(1))
 

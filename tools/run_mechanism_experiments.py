@@ -248,6 +248,7 @@ RESULT_FIELD_HINTS = (
     "seed",
     "variant",
     "profile",
+    "student_global_scale",
     "status",
     "exit_code",
     "test_auc",
@@ -344,6 +345,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--phase1_max_test_batches", type=int, default=60)
     parser.add_argument("--phase2_epochs", type=int, default=45)
     parser.add_argument("--phase2_patience", type=int, default=8)
+    parser.add_argument(
+        "--student_global_scale",
+        type=float,
+        default=None,
+        help="Optional override for the backbone student-global embedding scale.",
+    )
     parser.add_argument("--limit_jobs", type=int, default=0, help="Optional total cap for smoke testing.")
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--rerun_existing", action="store_true")
@@ -738,6 +745,8 @@ def _base_params(dataset: str, args: argparse.Namespace) -> Dict[str, Any]:
     params.pop("seed", None)
     params.pop("model_variant", None)
     params["num_workers"] = int(args.num_workers)
+    if args.student_global_scale is not None:
+        params["student_global_scale"] = max(0.0, float(args.student_global_scale))
     return params
 
 

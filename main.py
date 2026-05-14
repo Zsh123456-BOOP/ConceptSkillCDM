@@ -146,6 +146,12 @@ def parse_args():
         default=0.15,
         help="Canonical 2-hop query-local global graph readout scale before the fixed diagnosis head.",
     )
+    parser.add_argument(
+        "--student_global_scale",
+        type=float,
+        default=1.0,
+        help="Scale the backbone student-global embedding so E can be tested as the owner of local personalization.",
+    )
     parser.add_argument("--lambda_sparse_personal", type=float, default=0.0)
     parser.add_argument("--lambda_alpha", type=float, default=0.0)
     parser.add_argument("--lambda_personal_kl", type=float, default=0.0,
@@ -423,6 +429,7 @@ def main():
 
     args.graph_query_readout_scale = float(getattr(args, "graph_query_readout_scale", 0.35))
     args.graph_query_readout_2hop_scale = float(getattr(args, "graph_query_readout_2hop_scale", 0.15))
+    args.student_global_scale = max(0.0, float(getattr(args, "student_global_scale", 1.0)))
 
     # =========================================================
     # -1) main  launcher 
@@ -622,6 +629,9 @@ def main():
                 ),
                 graph_query_readout_2hop_scale=loaded_args.get(
                     "graph_query_readout_2hop_scale", getattr(args, "graph_query_readout_2hop_scale", 0.15)
+                ),
+                student_global_scale=loaded_args.get(
+                    "student_global_scale", getattr(args, "student_global_scale", 1.0)
                 ),
                 lambda_graph_entropy=loaded_args.get("lambda_sparse", getattr(args, "lambda_sparse", 0.01)),
                 graph_entropy_min=loaded_args.get("graph_entropy_min", getattr(args, "graph_entropy_min", 0.15)),
