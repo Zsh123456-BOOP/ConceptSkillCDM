@@ -1195,7 +1195,6 @@ class CognitiveDiagnosisModel(nn.Module):
                 * self._positive_weight(
                     getattr(self, "tutor_student_readiness_weight_raw", None),
                     tutor_student_readiness_delta,
-                    max_value=0.85,
                 )
                 * readiness_gate
                 * tutor_student_readiness_confidence
@@ -1207,21 +1206,13 @@ class CognitiveDiagnosisModel(nn.Module):
             route_recent_signal = route_recent_prior
             tutor_current_mastery_logit = (
                 mastery_scale
-                * self._positive_weight(
-                    getattr(self, "tutor_current_mastery_weight_raw", None),
-                    query_mastery_signal,
-                    max_value=0.85,
-                )
+                * self._positive_weight(getattr(self, "tutor_current_mastery_weight_raw", None), query_mastery_signal)
                 * tutor_query_reliability
                 * query_mastery_signal
             )
             tutor_current_recent_logit = (
                 recent_scale
-                * self._positive_weight(
-                    getattr(self, "tutor_current_recent_weight_raw", None),
-                    query_recent_signal,
-                    max_value=0.85,
-                )
+                * self._positive_weight(getattr(self, "tutor_current_recent_weight_raw", None), query_recent_signal)
                 * tutor_query_reliability
                 * query_recent_signal
             )
@@ -1234,7 +1225,6 @@ class CognitiveDiagnosisModel(nn.Module):
                 * self._positive_weight(
                     getattr(self, "tutor_route_mastery_weight_raw", None),
                     route_mastery_signal,
-                    max_value=0.85,
                     min_value=0.04,
                 )
                 * tutor_route_transfer_reliability
@@ -1245,7 +1235,6 @@ class CognitiveDiagnosisModel(nn.Module):
                 * self._positive_weight(
                     getattr(self, "tutor_route_recent_weight_raw", None),
                     route_recent_signal,
-                    max_value=0.85,
                     min_value=0.02,
                 )
                 * tutor_route_transfer_reliability
@@ -1254,11 +1243,7 @@ class CognitiveDiagnosisModel(nn.Module):
             route_gap_penalty = torch.relu(query_sc_prior - route_sc_prior)
             tutor_gap_penalty_logit = (
                 -mastery_scale
-                * self._positive_weight(
-                    getattr(self, "tutor_gap_penalty_weight_raw", None),
-                    route_gap_penalty,
-                    max_value=0.85,
-                )
+                * self._positive_weight(getattr(self, "tutor_gap_penalty_weight_raw", None), route_gap_penalty)
                 * paired_reliability
                 * route_gap_penalty
             )
