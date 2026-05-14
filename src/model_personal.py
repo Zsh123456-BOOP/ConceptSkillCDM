@@ -206,7 +206,21 @@ class PersonalRelationGenerator(nn.Module):
             support_reliability = support_count / (support_count + smooth).clamp(min=1e-6)
             reliability = torch.sqrt((row_reliability * support_reliability).clamp(min=0.0))
             valid = support_row_cache["support_valid_mask"].to(dtype=scores.dtype)
-            scores = scores * reliability.to(dtype=scores.dtype) * valid
+            row_col = active_row_index.clamp(min=0).view(B, 1, R, 1)
+            neighbor_mask = (support_cols != row_col).to(dtype=scores.dtype)
+            # A neighbor that has appeared in this student's history is useful
+            # local tutoring evidence even when the current exercise contains a
+            # single concept.  This keeps E as a reweighting of A support while
+            # letting it express a student-specific "small map" over previously
+            # visited neighboring concepts.
+            history_transfer = support_reliability * (1.0 - row_reliability).clamp(min=0.0, max=1.0)
+            history_transfer = history_transfer + 0.25 * support_reliability
+            history_scores = _normalize_sparse_scores(
+                history_transfer * neighbor_mask * valid,
+                support_row_cache["support_valid_mask"],
+                row_budget=row_budget_values,
+            )
+            scores = scores * reliability.to(dtype=scores.dtype) * valid + 0.35 * history_scores
             denom = valid.sum(dim=-1, keepdim=True).clamp(min=1.0)
             scores = (scores - (scores * valid).sum(dim=-1, keepdim=True) / denom) * valid
             reliability_mean = (reliability.to(dtype=scores.dtype) * valid).sum() / valid.sum().clamp(min=1.0)
