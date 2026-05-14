@@ -57,6 +57,23 @@ E_FEATURES = (
     "e_reliability",
     "e_route_reliability",
 )
+E_EXACT_FEATURES = (
+    "e_exact",
+    "e_reliability",
+)
+E_CURRENT_FEATURES = (
+    "e_exact",
+    "e_recent",
+    "e_reliability",
+)
+E_GROUP_FEATURES = (
+    "e_group",
+)
+E_ROUTE_FEATURES = (
+    "e_route_exact_delta",
+    "e_route_group_delta",
+    "e_route_reliability",
+)
 
 
 def _as_numpy(x: torch.Tensor) -> np.ndarray:
@@ -375,6 +392,10 @@ def _run_dataset(args: argparse.Namespace, dataset_name: str) -> Dict[str, objec
     feature_sets: Dict[str, Iterable[str]] = {
         "base": BASE_FEATURES,
         "base_plus_A": (*BASE_FEATURES, *A_FEATURES),
+        "base_plus_E_exact": (*BASE_FEATURES, *E_EXACT_FEATURES),
+        "base_plus_E_current": (*BASE_FEATURES, *E_CURRENT_FEATURES),
+        "base_plus_E_group": (*BASE_FEATURES, *E_GROUP_FEATURES),
+        "base_plus_E_route": (*BASE_FEATURES, *E_EXACT_FEATURES, *E_ROUTE_FEATURES),
         "base_plus_E": (*BASE_FEATURES, *E_FEATURES),
         "base_plus_AE": (*BASE_FEATURES, *A_FEATURES, *E_FEATURES),
     }
@@ -419,7 +440,7 @@ def _run_dataset(args: argparse.Namespace, dataset_name: str) -> Dict[str, objec
             "valid": _metrics(valid_y, valid_prob),
             "test": _metrics(test_y, test_prob),
         }
-        if model_name in {"base_plus_E", "base_plus_AE"}:
+        if model_name.startswith("base_plus_E") or model_name == "base_plus_AE":
             x_shuffle = test_shuffle_frame[columns].to_numpy(dtype=np.float32)
             shuffle_prob = _predict(x_shuffle, weight, bias, mean, std)
             model_result["test_shuffle_E"] = _metrics(test_y, shuffle_prob)
@@ -475,10 +496,11 @@ def main() -> None:
             models = row["models"]
             parts = [f"{row['dataset']} base={models['base']['test']['auc']:.6f}"]
             for name in ("base_plus_A", "base_plus_E", "base_plus_AE"):
-                parts.append(
-                    f"{name}={models[name]['test']['auc']:.6f} "
-                    f"(gain={row['auc_gains'][name]:+.6f})"
-                )
+                if name in models:
+                    parts.append(
+                        f"{name}={models[name]['test']['auc']:.6f} "
+                        f"(gain={row['auc_gains'][name]:+.6f})"
+                    )
             if "test_drop_shuffle_E" in models["base_plus_AE"]:
                 parts.append(f"AE_shuffle_drop={models['base_plus_AE']['test_drop_shuffle_E']:+.6f}")
             print(" | ".join(parts))
