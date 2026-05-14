@@ -357,11 +357,14 @@ class CognitiveDiagnosisModel(nn.Module):
         raw: Optional[torch.Tensor],
         reference: torch.Tensor,
         max_value: float = 0.35,
+        min_value: float = 0.0,
     ) -> torch.Tensor:
         if raw is None:
             return reference.new_tensor(0.0)
         weight = F.softplus(raw.to(device=reference.device, dtype=reference.dtype))
-        return weight.clamp(max=max(1e-4, float(max_value)))
+        min_v = max(0.0, float(min_value))
+        max_v = max(min_v + 1e-4, float(max_value))
+        return weight.clamp(min=min_v, max=max_v)
 
     @staticmethod
     def _build_uniform_relation_matrix(num_concepts: int) -> torch.Tensor:
@@ -1192,17 +1195,31 @@ class CognitiveDiagnosisModel(nn.Module):
                 * tutor_query_reliability
                 * query_recent_prior
             )
+            # The local tutor map should read the student's mastery on the A
+            # route itself, not only the posterior-vs-prior shift. Otherwise
+            # single-concept exercises can reduce E to a current-concept
+            # calibration and the route terms collapse during training.
+            route_mastery_signal = route_sc_prior
+            route_recent_signal = route_recent_prior
             tutor_route_mastery_logit = (
                 mastery_scale
-                * self._positive_weight(getattr(self, "tutor_route_mastery_weight_raw", None), tutor_route_mastery_delta)
+                * self._positive_weight(
+                    getattr(self, "tutor_route_mastery_weight_raw", None),
+                    route_mastery_signal,
+                    min_value=0.04,
+                )
                 * tutor_route_transfer_reliability
-                * tutor_route_mastery_delta
+                * route_mastery_signal
             )
             tutor_route_recent_logit = (
                 recent_scale
-                * self._positive_weight(getattr(self, "tutor_route_recent_weight_raw", None), tutor_route_recent_delta)
+                * self._positive_weight(
+                    getattr(self, "tutor_route_recent_weight_raw", None),
+                    route_recent_signal,
+                    min_value=0.02,
+                )
                 * tutor_route_transfer_reliability
-                * tutor_route_recent_delta
+                * route_recent_signal
             )
             route_gap_penalty = torch.relu(query_sc_prior - route_sc_prior)
             tutor_gap_penalty_logit = (
@@ -1245,7 +1262,10 @@ class CognitiveDiagnosisModel(nn.Module):
             tutor_local_reliability_gate = (
                 0.5 * tutor_query_reliability + 0.5 * tutor_route_reliability
             ).clamp(min=0.0, max=1.0)
-            tutor_route_shift_gate = tutor_personal_route_delta.clamp(min=0.0, max=1.0)
+            tutor_route_shift_gate = torch.maximum(
+                tutor_personal_route_delta,
+                tutor_route_transfer_reliability,
+            ).clamp(min=0.0, max=1.0)
             tutor_route_navigation_logit = (
                 tutor_route_mastery_logit
                 + tutor_route_recent_logit
