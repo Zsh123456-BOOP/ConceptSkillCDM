@@ -1183,24 +1183,27 @@ class CognitiveDiagnosisModel(nn.Module):
                 dtype=query_weight.dtype,
                 device=device,
             )
-            concept_prior_shift = (posterior_route_shift * concept_prior_vec.view(1, -1)).sum(dim=1)
-            missing_local_evidence = (1.0 - tutor_query_reliability).clamp(min=0.0, max=1.0)
             tutor_student_readiness_confidence = torch.sigmoid(student_count_feature)
-            tutor_student_readiness_delta = student_prior * concept_prior_shift
+            readiness_gate = torch.maximum(tutor_query_reliability, tutor_route_transfer_reliability)
+            readiness_gate = torch.maximum(
+                readiness_gate,
+                0.25 * tutor_student_readiness_confidence,
+            ).clamp(min=0.0, max=1.0)
+            tutor_student_readiness_delta = student_prior
             tutor_student_readiness_logit = (
                 self.ae_posterior_prior_scale
                 * self._positive_weight(
                     getattr(self, "tutor_student_readiness_weight_raw", None),
                     tutor_student_readiness_delta,
                 )
-                * missing_local_evidence
+                * readiness_gate
                 * tutor_student_readiness_confidence
                 * tutor_student_readiness_delta
             )
             query_mastery_signal = query_sc_prior
-            route_mastery_signal = route_sc_prior - query_sc_prior
+            route_mastery_signal = route_sc_prior
             query_recent_signal = query_recent_prior
-            route_recent_signal = route_recent_prior - query_recent_prior
+            route_recent_signal = route_recent_prior
             tutor_current_mastery_logit = (
                 mastery_scale
                 * self._positive_weight(getattr(self, "tutor_current_mastery_weight_raw", None), query_mastery_signal)
