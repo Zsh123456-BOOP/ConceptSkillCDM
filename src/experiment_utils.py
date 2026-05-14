@@ -173,6 +173,7 @@ def _build_config_hash(args) -> str:
         "graph_query_readout_scale",
         "graph_query_readout_2hop_scale",
         "student_global_scale",
+        "student_global_mode",
         "use_concept_graph",
         "use_personal_graph",
         "share_concept_embeddings",

@@ -50,6 +50,7 @@ class ConceptStructureModeling(nn.Module):
         graph_identity_residual: float,
         graph_propagation_alpha: float,
         student_global_scale: float,
+        student_global_mode: str,
         # personal graph
         use_personal_graph: bool,
         personal_rank: int,
@@ -122,6 +123,7 @@ class ConceptStructureModeling(nn.Module):
         self.personal_mastery_count_smoothing = max(0.0, float(personal_mastery_count_smoothing))
         self.enable_personal_support_value_proj = bool(enable_personal_support_value_proj)
         self.student_global_scale = max(0.0, float(student_global_scale))
+        self.student_global_mode = str(student_global_mode or "vector").strip().lower()
         self._current_epoch = 1
 
         # -------- 完全消融：不创建任何可训练参数 --------
@@ -171,6 +173,7 @@ class ConceptStructureModeling(nn.Module):
             gnn_residual_weight=gnn_residual_weight,
             propagation_alpha=graph_propagation_alpha,
             student_global_scale=self.student_global_scale,
+            student_global_mode=self.student_global_mode,
         )
 
         # E) 个性化图（可选）

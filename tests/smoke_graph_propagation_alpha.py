@@ -10,7 +10,11 @@ if str(ROOT) not in sys.path:
 from src.model_graph import StudentKnowledgeEncoder
 
 
-def _encoder(alpha: float, student_global_scale: float = 1.0) -> StudentKnowledgeEncoder:
+def _encoder(
+    alpha: float,
+    student_global_scale: float = 1.0,
+    student_global_mode: str = "vector",
+) -> StudentKnowledgeEncoder:
     torch.manual_seed(7)
     enc = StudentKnowledgeEncoder(
         num_students=3,
@@ -22,6 +26,7 @@ def _encoder(alpha: float, student_global_scale: float = 1.0) -> StudentKnowledg
         gnn_residual_weight=0.5,
         propagation_alpha=alpha,
         student_global_scale=student_global_scale,
+        student_global_mode=student_global_mode,
     )
     enc.eval()
     return enc
@@ -82,3 +87,16 @@ def test_student_global_scale_zero_removes_student_id_state_shortcut() -> None:
     assert torch.allclose(
         disabled_state[0], disabled_state[1], atol=1e-6
     ), "scale=0 should remove the student-id shortcut from the initial concept state"
+
+
+def test_student_global_scalar_mode_keeps_only_global_ability_shift() -> None:
+    student_ids = torch.tensor([0, 1], dtype=torch.long)
+    enc = _encoder(alpha=0.0, student_global_mode="scalar")
+    assert not enc.student_global.weight.requires_grad
+    assert enc.student_global_scalar.weight.requires_grad
+    with torch.no_grad():
+        state = enc.compose_initial_state(student_ids)
+        delta = state[0] - state[1]
+    assert torch.allclose(
+        delta[0], delta[1], atol=1e-6
+    ), "scalar mode should add the same ability shift to every concept row"

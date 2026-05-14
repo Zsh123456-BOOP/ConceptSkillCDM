@@ -437,6 +437,7 @@ class StudentKnowledgeEncoder(nn.Module):
         gnn_residual_weight: float = 0.5,
         propagation_alpha: float = 0.20,
         student_global_scale: float = 1.0,
+        student_global_mode: str = "vector",
     ):
         super().__init__()
         self.num_students = int(num_students)
@@ -445,8 +446,14 @@ class StudentKnowledgeEncoder(nn.Module):
         self.gnn_residual_weight = float(gnn_residual_weight)
         self.propagation_alpha = max(0.0, min(1.0, float(propagation_alpha)))
         self.student_global_scale = max(0.0, float(student_global_scale))
+        self.student_global_mode = str(student_global_mode or "vector").strip().lower()
+        if self.student_global_mode not in {"vector", "scalar", "none"}:
+            raise ValueError(f"Unsupported student_global_mode: {student_global_mode!r}")
 
         self.student_global = nn.Embedding(num_students, knowledge_dim)
+        self.student_global_scalar = nn.Embedding(num_students, 1)
+        direction = torch.ones(knowledge_dim, dtype=torch.float32) / float(max(1, knowledge_dim)) ** 0.5
+        self.register_buffer("student_global_direction", direction, persistent=False)
         self.concept_emb = nn.Embedding(num_concepts, knowledge_dim)
 
         self.gnn_layers = nn.ModuleList([
@@ -457,14 +464,26 @@ class StudentKnowledgeEncoder(nn.Module):
         self.hop_mix_logits = nn.Parameter(torch.zeros(num_gnn_layers + 1))
         self.dropout = nn.Dropout(dropout)
         self._initialize_weights()
+        if self.student_global_mode != "vector":
+            self.student_global.weight.requires_grad_(False)
+        if self.student_global_mode != "scalar":
+            self.student_global_scalar.weight.requires_grad_(False)
 
     def _initialize_weights(self) -> None:
         nn.init.xavier_normal_(self.student_global.weight)
+        nn.init.normal_(self.student_global_scalar.weight, mean=0.0, std=0.02)
         nn.init.xavier_normal_(self.concept_emb.weight)
 
     def compose_initial_state(self, student_ids: torch.Tensor) -> torch.Tensor:
         B = student_ids.size(0)
-        s = self.student_global(student_ids) * self.student_global_scale
+        if self.student_global_scale <= 0.0 or self.student_global_mode == "none":
+            s = self.concept_emb.weight.new_zeros((B, self.knowledge_dim))
+        elif self.student_global_mode == "scalar":
+            scalar = self.student_global_scalar(student_ids).to(dtype=self.concept_emb.weight.dtype)
+            direction = self.student_global_direction.to(dtype=self.concept_emb.weight.dtype, device=scalar.device)
+            s = scalar * direction.view(1, -1) * self.student_global_scale
+        else:
+            s = self.student_global(student_ids) * self.student_global_scale
         c = self.concept_emb.weight.unsqueeze(0).expand(B, -1, -1)
         return self.dropout(c + s.unsqueeze(1))
 

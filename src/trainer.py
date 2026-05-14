@@ -77,6 +77,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "graph_query_readout_scale",
     "graph_query_readout_2hop_scale",
     "student_global_scale",
+    "student_global_mode",
     "graph_headwise_query_gate",
     "graph_edge_bias_rank",
     "graph_prior_logit_scale",
@@ -2104,7 +2105,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         "personal_query_message_gain=%.3f, "
         "personal_query_correction_scale=%.3f, personal_state_lr_mult=%.3f, personal_id_lr_mult=%.3f, "
         "graph_propagation_alpha=%.3f, graph_query_readout_scale=%.3f, graph_query_readout_2hop_scale=%.3f, "
-        "student_global_scale=%.3f",
+        "student_global_scale=%.3f, student_global_mode=%s",
         run_tag,
         float(getattr(args, "personal_max_alpha", 0.35)),
         float(getattr(args, "personal_delta_scale", 1.0)),
@@ -2130,6 +2131,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         float(getattr(args, "graph_query_readout_scale", 0.35)),
         float(getattr(args, "graph_query_readout_2hop_scale", 0.15)),
         float(getattr(args, "student_global_scale", 1.0)),
+        str(getattr(args, "student_global_mode", "vector")),
     )
 
     data_dir = args.data_dir
@@ -2228,6 +2230,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         graph_query_readout_scale=getattr(args, "graph_query_readout_scale", 0.35),
         graph_query_readout_2hop_scale=getattr(args, "graph_query_readout_2hop_scale", 0.15),
         student_global_scale=getattr(args, "student_global_scale", 1.0),
+        student_global_mode=getattr(args, "student_global_mode", "vector"),
         personal_rank=getattr(args, "personal_rank", 4),
         lambda_sparse_personal=args.lambda_sparse_personal,
         lambda_alpha=args.lambda_alpha,
@@ -3021,6 +3024,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         student_global_scale=loaded_args.get(
             "student_global_scale", getattr(args, "student_global_scale", 1.0)
+        ),
+        student_global_mode=loaded_args.get(
+            "student_global_mode", getattr(args, "student_global_mode", "vector")
         ),
         prediction_l2_lambda=loaded_args.get(
             "prediction_l2_lambda",

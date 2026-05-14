@@ -170,6 +170,7 @@ def _build_model(checkpoint: Mapping[str, Any], device: torch.device) -> Cogniti
         graph_query_readout_scale=_get(loaded_args, "graph_query_readout_scale", 0.35),
         graph_query_readout_2hop_scale=_get(loaded_args, "graph_query_readout_2hop_scale", 0.15),
         student_global_scale=_get(loaded_args, "student_global_scale", 1.0),
+        student_global_mode=_get(loaded_args, "student_global_mode", "vector"),
         prediction_l2_lambda=_get(loaded_args, "prediction_l2_lambda", 5e-5),
         gnn_residual_weight=_get(loaded_args, "gnn_residual_weight", 0.5),
         personal_max_alpha=_get(loaded_args, "personal_max_alpha", 0.35),
