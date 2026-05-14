@@ -353,10 +353,15 @@ class CognitiveDiagnosisModel(nn.Module):
         return torch.log(torch.expm1(value_t).clamp(min=1e-12))
 
     @staticmethod
-    def _positive_weight(raw: Optional[torch.Tensor], reference: torch.Tensor) -> torch.Tensor:
+    def _positive_weight(
+        raw: Optional[torch.Tensor],
+        reference: torch.Tensor,
+        max_value: float = 0.35,
+    ) -> torch.Tensor:
         if raw is None:
             return reference.new_tensor(0.0)
-        return F.softplus(raw.to(device=reference.device, dtype=reference.dtype))
+        weight = F.softplus(raw.to(device=reference.device, dtype=reference.dtype))
+        return weight.clamp(max=max(1e-4, float(max_value)))
 
     @staticmethod
     def _build_uniform_relation_matrix(num_concepts: int) -> torch.Tensor:
