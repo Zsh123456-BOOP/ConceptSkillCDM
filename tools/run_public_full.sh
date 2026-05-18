@@ -19,6 +19,7 @@ EPOCHS="${EPOCHS:-30}"
 PATIENCE="${PATIENCE:-5}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
+DEBUG_GRAPH_DIAG="${DEBUG_GRAPH_DIAG:-False}"
 
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   if [[ -x "/home/zsh/anaconda3/envs/xph_env/bin/python" ]]; then
@@ -38,10 +39,18 @@ echo "run_id=${RUN_ID}"
 echo "gpus=${GPUS_CSV}"
 echo "datasets=${DATASETS[*]}"
 echo "epochs=${EPOCHS} patience=${PATIENCE} num_workers=${NUM_WORKERS}"
+echo "debug_graph_diag=${DEBUG_GRAPH_DIAG}"
 echo "python=${PYTHON_BIN}"
 
 declare -A GPU_PID=()
 declare -A GPU_DATASET=()
+
+DEBUG_ARGS=(--no-debug_graph_diag)
+case "${DEBUG_GRAPH_DIAG,,}" in
+  1|true|yes|y|on)
+    DEBUG_ARGS=(--debug_graph_diag)
+    ;;
+esac
 
 wait_for_gpu() {
   local gpu="$1"
@@ -77,6 +86,7 @@ launch_job() {
     --num_workers "$NUM_WORKERS" \
     --save_dir "$ckpt_dir" \
     --log_dir "$log_dir" \
+    "${DEBUG_ARGS[@]}" \
     --generate_diagnosis False \
     > "$stdout_log" 2>&1 &
   GPU_PID[$gpu]="$!"

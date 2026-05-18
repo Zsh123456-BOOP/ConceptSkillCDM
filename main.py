@@ -408,7 +408,8 @@ def parse_args():
     # 
     parser.add_argument(
         "--debug_graph_diag",
-        action="store_true",
+        action=bool_action,
+        default=None,
         help="Enable per-epoch A/E diagnostics and graph-related gradient norms.",
     )
     parser.add_argument(
