@@ -59,4 +59,8 @@ data/ednet_kt1/*.csv
 data/assist_12_clean15_item50/*.csv
 data/ednet_kt1_clean15_sample5000/*.csv
 data/nips34_l3/*.csv
+data/assist_09_cr/
+data/junyi_cr/
+data/assist_12_clean15_item50_cr/
+data/ednet_kt1_clean15_sample5000_cr/
 data/public_benchmarks_processed_*.tar.gz

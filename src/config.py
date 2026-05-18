@@ -411,6 +411,36 @@ DATASET_DEFAULTS["ednet_kt1_clean15_sample5000"] = {
     "data_dir": "./data/ednet_kt1_clean15_sample5000",
 }
 
+CANONICAL_REACHABILITY_DEFAULTS = {
+    "min_stu_interactions": 0,
+    "min_exer_interactions": 0,
+    "min_poison_count": 0,
+}
+
+DATASET_DEFAULTS["assist_09_cr"] = {
+    **DATASET_DEFAULTS["assist_09"],
+    **CANONICAL_REACHABILITY_DEFAULTS,
+    "data_dir": "./data/assist_09_cr",
+}
+
+DATASET_DEFAULTS["junyi_cr"] = {
+    **DATASET_DEFAULTS["junyi"],
+    **CANONICAL_REACHABILITY_DEFAULTS,
+    "data_dir": "./data/junyi_cr",
+}
+
+DATASET_DEFAULTS["assist_12_clean15_item50_cr"] = {
+    **DATASET_DEFAULTS["assist_12_clean15_item50"],
+    **CANONICAL_REACHABILITY_DEFAULTS,
+    "data_dir": "./data/assist_12_clean15_item50_cr",
+}
+
+DATASET_DEFAULTS["ednet_kt1_clean15_sample5000_cr"] = {
+    **DATASET_DEFAULTS["ednet_kt1_clean15_sample5000"],
+    **CANONICAL_REACHABILITY_DEFAULTS,
+    "data_dir": "./data/ednet_kt1_clean15_sample5000_cr",
+}
+
 GRID_SEARCH_SPACE = {
     "assist_09": {
         "base": {},
