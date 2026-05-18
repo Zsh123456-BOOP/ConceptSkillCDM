@@ -10,11 +10,7 @@ if str(ROOT) not in sys.path:
 from src.model_graph import StudentKnowledgeEncoder
 
 
-def _encoder(
-    alpha: float,
-    student_global_scale: float = 1.0,
-    student_global_mode: str = "vector",
-) -> StudentKnowledgeEncoder:
+def _encoder(alpha: float) -> StudentKnowledgeEncoder:
     torch.manual_seed(7)
     enc = StudentKnowledgeEncoder(
         num_students=3,
@@ -25,8 +21,6 @@ def _encoder(
         dropout=0.0,
         gnn_residual_weight=0.5,
         propagation_alpha=alpha,
-        student_global_scale=student_global_scale,
-        student_global_mode=student_global_mode,
     )
     enc.eval()
     return enc
@@ -71,32 +65,3 @@ def test_graph_propagation_alpha_controls_update_strength() -> None:
         low_delta = (low(student_ids, _relations()) - initial).pow(2).mean().sqrt()
         high_delta = (high(student_ids, _relations()) - initial).pow(2).mean().sqrt()
     assert high_delta > low_delta * 2.0, "larger alpha should produce a stronger graph update"
-
-
-def test_student_global_scale_zero_removes_student_id_state_shortcut() -> None:
-    student_ids = torch.tensor([0, 1], dtype=torch.long)
-    scaled = _encoder(alpha=0.0, student_global_scale=1.0)
-    disabled = _encoder(alpha=0.0, student_global_scale=0.0)
-    disabled.load_state_dict(scaled.state_dict())
-    with torch.no_grad():
-        scaled_state = scaled.compose_initial_state(student_ids)
-        disabled_state = disabled.compose_initial_state(student_ids)
-    assert not torch.allclose(
-        scaled_state[0], scaled_state[1], atol=1e-6
-    ), "default student-global embedding should make different students distinct"
-    assert torch.allclose(
-        disabled_state[0], disabled_state[1], atol=1e-6
-    ), "scale=0 should remove the student-id shortcut from the initial concept state"
-
-
-def test_student_global_scalar_mode_keeps_only_global_ability_shift() -> None:
-    student_ids = torch.tensor([0, 1], dtype=torch.long)
-    enc = _encoder(alpha=0.0, student_global_mode="scalar")
-    assert not enc.student_global.weight.requires_grad
-    assert enc.student_global_scalar.weight.requires_grad
-    with torch.no_grad():
-        state = enc.compose_initial_state(student_ids)
-        delta = state[0] - state[1]
-    assert torch.allclose(
-        delta[0], delta[1], atol=1e-6
-    ), "scalar mode should add the same ability shift to every concept row"

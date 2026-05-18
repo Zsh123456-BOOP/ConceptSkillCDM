@@ -30,8 +30,6 @@ def _args(*, variants: str, phase: str = "phase1", phase1_epochs: int = 6) -> Si
         limit_jobs=0,
         rerun_existing=True,
         generate_diagnosis=False,
-        student_global_scale=None,
-        student_global_mode=None,
     )
 
 

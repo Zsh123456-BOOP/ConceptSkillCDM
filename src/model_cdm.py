@@ -62,8 +62,6 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_propagation_alpha: float = 0.20,
         graph_query_readout_scale: float = 0.35,
         graph_query_readout_2hop_scale: float = 0.15,
-        student_global_scale: float = 1.0,
-        student_global_mode: str = "vector",
         prediction_l2_lambda: float = 5e-5,
         gnn_residual_weight: float = 0.5,
         personal_max_alpha: float = 0.35,
@@ -160,10 +158,6 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_propagation_alpha = max(0.0, min(1.0, float(graph_propagation_alpha)))
         self.graph_query_readout_scale = max(0.0, float(graph_query_readout_scale))
         self.graph_query_readout_2hop_scale = max(0.0, float(graph_query_readout_2hop_scale))
-        self.student_global_scale = max(0.0, float(student_global_scale))
-        self.student_global_mode = str(student_global_mode or "vector").strip().lower()
-        if self.student_global_mode not in {"vector", "scalar", "none"}:
-            raise ValueError(f"Unsupported student_global_mode: {student_global_mode!r}")
         self._current_epoch = 1
         self.lambda_sparse_personal = float(lambda_sparse_personal)
         self.lambda_alpha = float(lambda_alpha)
@@ -285,8 +279,6 @@ class CognitiveDiagnosisModel(nn.Module):
             allow_self_loop=allow_self_loop,
             graph_identity_residual=self.graph_identity_residual,
             graph_propagation_alpha=self.graph_propagation_alpha,
-            student_global_scale=self.student_global_scale,
-            student_global_mode=self.student_global_mode,
             use_personal_graph=self.use_personal_graph,
             personal_rank=personal_rank,
             personal_max_alpha=self.personal_max_alpha,
@@ -341,6 +333,10 @@ class CognitiveDiagnosisModel(nn.Module):
             self.tutor_route_mastery_weight_raw = nn.Parameter(self._inverse_softplus_value(0.25))
             self.tutor_route_recent_weight_raw = nn.Parameter(self._inverse_softplus_value(0.10))
         if map_predictor_enabled:
+            self.ae_logit_feature_weight = nn.Parameter(
+                torch.tensor([0.05, 0.05, 0.05, 0.02], dtype=torch.float32)
+            )
+            self.ae_reliability_feature_weight = nn.Parameter(torch.zeros(7, dtype=torch.float32))
             self.roadmap_difficulty_weight_raw = nn.Parameter(self._inverse_softplus_value(0.18))
             self.roadmap_reliability_weight_raw = nn.Parameter(self._inverse_softplus_value(0.04))
             self.roadmap_item_weight_raw = nn.Parameter(self._inverse_softplus_value(0.10))
@@ -361,18 +357,10 @@ class CognitiveDiagnosisModel(nn.Module):
         return torch.log(torch.expm1(value_t).clamp(min=1e-12))
 
     @staticmethod
-    def _positive_weight(
-        raw: Optional[torch.Tensor],
-        reference: torch.Tensor,
-        max_value: float = 0.35,
-        min_value: float = 0.0,
-    ) -> torch.Tensor:
+    def _positive_weight(raw: Optional[torch.Tensor], reference: torch.Tensor) -> torch.Tensor:
         if raw is None:
             return reference.new_tensor(0.0)
-        weight = F.softplus(raw.to(device=reference.device, dtype=reference.dtype))
-        min_v = max(0.0, float(min_value))
-        max_v = max(min_v + 1e-4, float(max_value))
-        return weight.clamp(min=min_v, max=max_v)
+        return F.softplus(raw.to(device=reference.device, dtype=reference.dtype))
 
     @staticmethod
     def _build_uniform_relation_matrix(num_concepts: int) -> torch.Tensor:
@@ -787,17 +775,11 @@ class CognitiveDiagnosisModel(nn.Module):
                 query_recent_prior = (query_weight * recent_prior).sum(dim=1)
                 route_prior = (personal_support * prior).sum(dim=1)
                 route_recent_prior = (personal_support * recent_prior).sum(dim=1)
-                # Student-concept priors are train-only relative evidence
-                # (student/concept correctness relative to the concept base
-                # rate), not an absolute theta target.  Treating 0.0 as an
-                # absolute mastery target would incorrectly pull many sparse
-                # rows downward.  E therefore writes relative local-map deltas
-                # into theta: current concept evidence plus the route-neighbor
-                # deviation from the current concept.
-                tutor_current_mastery_delta = self._clip_theta_delta(query_prior)
-                tutor_current_recent_delta = self._clip_theta_delta(query_recent_prior)
-                tutor_route_mastery_delta = self._clip_theta_delta(route_prior - query_prior)
-                tutor_route_recent_delta = self._clip_theta_delta(route_recent_prior - query_recent_prior)
+                theta_query_after_a = (query_weight * theta_after_a).sum(dim=1)
+                tutor_current_mastery_delta = self._clip_theta_delta(query_prior - theta_query_after_a)
+                tutor_current_recent_delta = self._clip_theta_delta(query_recent_prior - theta_query_after_a)
+                tutor_route_mastery_delta = self._clip_theta_delta(route_prior - personal_route_theta)
+                tutor_route_recent_delta = self._clip_theta_delta(route_recent_prior - personal_route_theta)
 
                 if (
                     student_concept_count is not None
@@ -1059,19 +1041,14 @@ class CognitiveDiagnosisModel(nn.Module):
             A = A / A.sum(dim=-1, keepdim=True).clamp(min=1e-12)
             graph_query_weight = query_weight.matmul(A)
             route_weight_delta = graph_query_weight - query_weight
-            graph_neighbor_mass = (graph_query_weight * (1.0 - query_mask)).sum(dim=1)
-            graph_route_shift = (0.5 * route_weight_delta.abs().sum(dim=1)).clamp(min=0.0, max=1.0)
-            roadmap_evidence_gate = torch.maximum(graph_neighbor_mass, graph_route_shift).clamp(min=0.0, max=1.0)
             roadmap_route_difficulty_delta = route_weight_delta.matmul(concept_prior_vec)
             roadmap_route_reliability_delta = (graph_query_weight - uniform_query_weight).matmul(concept_count_vec)
             roadmap_difficulty_logit = (
                 self._positive_weight(getattr(self, "roadmap_difficulty_weight_raw", None), roadmap_route_difficulty_delta)
-                * roadmap_evidence_gate
                 * roadmap_route_difficulty_delta
             )
             roadmap_reliability_logit = (
                 self._positive_weight(getattr(self, "roadmap_reliability_weight_raw", None), roadmap_route_reliability_delta)
-                * roadmap_evidence_gate
                 * roadmap_route_reliability_delta
             )
             item_query_weight = _source_route_weight(self.item_prior_matrix)
@@ -1080,17 +1057,20 @@ class CognitiveDiagnosisModel(nn.Module):
             roadmap_sequence_difficulty_delta = (sequence_query_weight - uniform_query_weight).matmul(concept_prior_vec)
             roadmap_item_logit = (
                 self._positive_weight(getattr(self, "roadmap_item_weight_raw", None), roadmap_item_difficulty_delta)
-                * roadmap_evidence_gate
                 * roadmap_item_difficulty_delta
             )
             roadmap_sequence_logit = (
                 self._positive_weight(getattr(self, "roadmap_sequence_weight_raw", None), roadmap_sequence_difficulty_delta)
-                * roadmap_evidence_gate
                 * roadmap_sequence_difficulty_delta
             )
+            exercise_prior = self.ae_exercise_prior_logit[exercise_ids].to(dtype=query_weight.dtype, device=device)
             query_concept_prior = query_weight.matmul(concept_prior_vec)
             route_concept_prior = graph_query_weight.matmul(concept_prior_vec)
-            roadmap_static_logit = 0.25 * roadmap_evidence_gate * (route_concept_prior - query_concept_prior)
+            roadmap_static_logit = (
+                0.35 * exercise_prior
+                + 0.25 * query_concept_prior
+                + 0.15 * route_concept_prior
+            )
             roadmap_macro_logit = (
                 roadmap_difficulty_logit
                 + roadmap_reliability_logit
@@ -1183,62 +1163,43 @@ class CognitiveDiagnosisModel(nn.Module):
                 dtype=query_weight.dtype,
                 device=device,
             )
+            concept_prior_shift = (posterior_route_shift * concept_prior_vec.view(1, -1)).sum(dim=1)
+            missing_local_evidence = (1.0 - tutor_query_reliability).clamp(min=0.0, max=1.0)
             tutor_student_readiness_confidence = torch.sigmoid(student_count_feature)
-            readiness_gate = torch.maximum(tutor_query_reliability, tutor_route_transfer_reliability)
-            readiness_gate = torch.maximum(
-                readiness_gate,
-                0.25 * tutor_student_readiness_confidence,
-            ).clamp(min=0.0, max=1.0)
-            tutor_student_readiness_delta = student_prior
+            tutor_student_readiness_delta = student_prior * concept_prior_shift
             tutor_student_readiness_logit = (
                 self.ae_posterior_prior_scale
                 * self._positive_weight(
                     getattr(self, "tutor_student_readiness_weight_raw", None),
                     tutor_student_readiness_delta,
                 )
-                * readiness_gate
+                * missing_local_evidence
                 * tutor_student_readiness_confidence
                 * tutor_student_readiness_delta
             )
-            query_mastery_signal = query_sc_prior
-            route_mastery_signal = route_sc_prior
-            query_recent_signal = query_recent_prior
-            route_recent_signal = route_recent_prior
             tutor_current_mastery_logit = (
                 mastery_scale
-                * self._positive_weight(getattr(self, "tutor_current_mastery_weight_raw", None), query_mastery_signal)
+                * self._positive_weight(getattr(self, "tutor_current_mastery_weight_raw", None), query_sc_prior)
                 * tutor_query_reliability
-                * query_mastery_signal
+                * query_sc_prior
             )
             tutor_current_recent_logit = (
                 recent_scale
-                * self._positive_weight(getattr(self, "tutor_current_recent_weight_raw", None), query_recent_signal)
+                * self._positive_weight(getattr(self, "tutor_current_recent_weight_raw", None), query_recent_prior)
                 * tutor_query_reliability
-                * query_recent_signal
+                * query_recent_prior
             )
-            # E is a local tutor map, so route evidence is the signed deviation
-            # from the current concept on the same student's map.  This keeps
-            # personalization interpretable without turning route evidence into
-            # a raw "more is always better" shortcut.
             tutor_route_mastery_logit = (
                 mastery_scale
-                * self._positive_weight(
-                    getattr(self, "tutor_route_mastery_weight_raw", None),
-                    route_mastery_signal,
-                    min_value=0.04,
-                )
+                * self._positive_weight(getattr(self, "tutor_route_mastery_weight_raw", None), tutor_route_mastery_delta)
                 * tutor_route_transfer_reliability
-                * route_mastery_signal
+                * tutor_route_mastery_delta
             )
             tutor_route_recent_logit = (
                 recent_scale
-                * self._positive_weight(
-                    getattr(self, "tutor_route_recent_weight_raw", None),
-                    route_recent_signal,
-                    min_value=0.02,
-                )
+                * self._positive_weight(getattr(self, "tutor_route_recent_weight_raw", None), tutor_route_recent_delta)
                 * tutor_route_transfer_reliability
-                * route_recent_signal
+                * tutor_route_recent_delta
             )
             route_gap_penalty = torch.relu(query_sc_prior - route_sc_prior)
             tutor_gap_penalty_logit = (
@@ -1281,10 +1242,7 @@ class CognitiveDiagnosisModel(nn.Module):
             tutor_local_reliability_gate = (
                 0.5 * tutor_query_reliability + 0.5 * tutor_route_reliability
             ).clamp(min=0.0, max=1.0)
-            tutor_route_shift_gate = torch.maximum(
-                tutor_personal_route_delta,
-                tutor_route_transfer_reliability,
-            ).clamp(min=0.0, max=1.0)
+            tutor_route_shift_gate = tutor_personal_route_delta.clamp(min=0.0, max=1.0)
             tutor_route_navigation_logit = (
                 tutor_route_mastery_logit
                 + tutor_route_recent_logit
@@ -1300,6 +1258,125 @@ class CognitiveDiagnosisModel(nn.Module):
                 + ae_posterior_theta_logit
                 + tutor_route_shift_gate * tutor_route_navigation_logit
             )
+
+        if self.use_concept_graph:
+            feature_weight = getattr(self, "ae_logit_feature_weight", None)
+            reliability_feature_weight = getattr(self, "ae_reliability_feature_weight", None)
+
+            exercise_prior = self.ae_exercise_prior_logit[exercise_ids].to(dtype=dtype, device=device)
+            query_concept_prior = query_weight.matmul(concept_prior_vec)
+            route_concept_prior = graph_query_weight.matmul(concept_prior_vec)
+            graph_rms = self._masked_query_rms_per_sample(global_query_context, concept_mask)
+            personal_rms = self._masked_query_rms_per_sample(personal_query_correction, concept_mask)
+            query_count = concept_mask.float().sum(dim=1, keepdim=True)
+            query_density = (query_count / float(max(1, self.num_concepts))).squeeze(-1)
+            graph_neighbor_mass = (graph_query_weight * (1.0 - query_mask)).sum(dim=1)
+            roadmap_static = (
+                0.30 * query_concept_prior
+                + 0.30 * route_concept_prior
+            )
+            reliability_features = None
+            if isinstance(reliability_feature_weight, nn.Parameter):
+                student_count_feature = self.ae_student_count_feature[student_ids].to(dtype=dtype, device=device)
+                exercise_count_feature = self.ae_exercise_count_feature[exercise_ids].to(dtype=dtype, device=device)
+                concept_count = self.ae_concept_count_feature.to(dtype=query_weight.dtype, device=device)
+                query_concept_count = query_weight.matmul(concept_count)
+                graph_concept_count = graph_query_weight.matmul(concept_count)
+                sc_count = self.ae_student_concept_count_feature[student_ids].to(dtype=query_weight.dtype, device=device)
+                query_sc_count = (query_weight * sc_count).sum(dim=1)
+                graph_sc_count = (graph_query_weight * sc_count).sum(dim=1)
+                active_sc_count = torch.where(query_mask > 0, sc_count, torch.full_like(sc_count, 1.0e4))
+                query_sc_min = active_sc_count.min(dim=1).values
+                query_sc_min = torch.where(query_mask.sum(dim=1) > 0, query_sc_min, torch.zeros_like(query_sc_min))
+                reliability_features = torch.stack(
+                    [
+                        student_count_feature,
+                        exercise_count_feature,
+                        query_concept_count,
+                        graph_concept_count,
+                        query_sc_count,
+                        graph_sc_count,
+                        query_sc_min,
+                    ],
+                    dim=1,
+                ).to(dtype=dtype)
+
+            scalar_feats = None
+            if isinstance(feature_weight, nn.Parameter):
+                scalar_feats = torch.stack(
+                    [
+                        graph_rms,
+                        personal_rms,
+                        graph_rms * personal_rms,
+                        query_density + graph_neighbor_mass,
+                    ],
+                    dim=1,
+                ).to(dtype=dtype)
+
+            roadmap_macro_logit = (
+                roadmap_difficulty_logit
+                + roadmap_reliability_logit
+                + roadmap_item_logit
+                + roadmap_sequence_logit
+                + roadmap_static
+            )
+            roadmap_static_logit = roadmap_static
+
+            if self.use_personal_graph and student_concept_prior is not None:
+                student_prior = self.ae_student_prior_logit[student_ids].to(dtype=dtype, device=device)
+                sc_prior = student_concept_prior[student_ids].to(dtype=query_weight.dtype, device=device)
+                query_sc_prior = (query_weight * sc_prior).sum(dim=1)
+                graph_sc_prior = (graph_query_weight * sc_prior).sum(dim=1)
+                local_task_context_logit = (
+                    0.70 * exercise_prior
+                    + 0.20 * query_concept_prior
+                    + 0.10 * route_concept_prior
+                )
+                tutor_mastery_anchor_logit = (
+                    local_task_context_logit
+                    + student_prior
+                    + 0.60 * query_sc_prior
+                    + 0.40 * graph_sc_prior
+                )
+                tutor_local_navigation_logit = tutor_mastery_anchor_logit + 0.25 * personal_rms
+                if self.ae_interaction_logit_scale > 0.0:
+                    tutor_local_navigation_logit = tutor_local_navigation_logit + (
+                        self.ae_interaction_logit_scale * graph_rms * personal_rms
+                    )
+                if self.ae_posterior_prior_scale > 0.0 and isinstance(personal_relation_spec, dict):
+                    personal_support = self._query_sparse_support_distribution(
+                        query_weight,
+                        personal_relation_spec,
+                        probability_key="posterior_prob",
+                    )
+                    personal_mass = personal_support.sum(dim=1, keepdim=True)
+                    has_personal = personal_mass.squeeze(-1) > 1e-12
+                    normalized_personal_support = torch.where(
+                        personal_mass > 1e-12,
+                        personal_support / personal_mass.clamp(min=1e-12),
+                        torch.zeros_like(personal_support),
+                    )
+                    personal_sc_prior = (normalized_personal_support * sc_prior).sum(dim=1)
+                    ae_posterior_prior_delta = torch.where(
+                        has_personal,
+                        personal_sc_prior - graph_sc_prior,
+                        torch.zeros_like(personal_sc_prior),
+                    )
+                    ae_posterior_prior_logit = 0.40 * self.ae_posterior_prior_scale * ae_posterior_prior_delta
+                    tutor_posterior_mastery_shift_logit = ae_posterior_prior_logit
+                    tutor_posterior_mastery_shift_delta = ae_posterior_prior_delta
+                    tutor_local_navigation_logit = tutor_local_navigation_logit + ae_posterior_prior_logit
+                if reliability_features is not None and isinstance(reliability_feature_weight, nn.Parameter):
+                    reliability_feature_logit = (
+                        reliability_features
+                        * reliability_feature_weight.to(dtype=dtype, device=device).view(1, -1)
+                    ).sum(dim=1)
+                    tutor_local_navigation_logit = tutor_local_navigation_logit + reliability_feature_logit
+                if scalar_feats is not None and isinstance(feature_weight, nn.Parameter):
+                    explicit_feature_logit = (
+                        scalar_feats * feature_weight.to(dtype=dtype, device=device).view(1, -1)
+                    ).sum(dim=1)
+                    tutor_local_navigation_logit = tutor_local_navigation_logit + explicit_feature_logit
 
         # A is the global roadmap; E is the local tutor map.  Scale them before
         # clipping so no_E keeps only the roadmap term instead of sharing one

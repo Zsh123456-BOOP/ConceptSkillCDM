@@ -1,0 +1,49 @@
+{
+  "dataset": "assist_09",
+  "split": "test",
+  "output_dir": "results/ae_case09_a95c3c4_standard",
+  "num_eval_rows": 51090,
+  "checkpoints": {
+    "full": "checkpoints/abce_diag/ae_global_tutor_10ed8b6_20260512_1510/assist_09/seed42/best_full/best_model.pth",
+    "no_A": "checkpoints/abce_diag/ae_global_tutor_10ed8b6_20260512_1510/assist_09/seed42/best_no_A/best_model.pth",
+    "no_E": "checkpoints/abce_diag/ae_global_tutor_10ed8b6_20260512_1510/assist_09/seed42/best_no_E/best_model.pth"
+  },
+  "metrics": [
+    {
+      "variant": "full",
+      "auc": 0.7783116166343362,
+      "acc": 0.7406733215893522,
+      "rmse": 0.41776402531062284
+    },
+    {
+      "variant": "no_A",
+      "auc": 0.767132729913772,
+      "acc": 0.7320414954002741,
+      "rmse": 0.42220921876330686
+    },
+    {
+      "variant": "no_E",
+      "auc": 0.7633669337459796,
+      "acc": 0.7308866705813271,
+      "rmse": 0.4246636167411234
+    },
+    {
+      "variant": "E_shuffle",
+      "auc": 0.5750942006494523,
+      "acc": 0.6333920532393815,
+      "rmse": 0.5070431970913913
+    },
+    {
+      "variant": "E_mean",
+      "auc": 0.6064734561768834,
+      "acc": 0.6636328048541789,
+      "rmse": 0.4826892621429139
+    }
+  ],
+  "case_counts": {
+    "a_rescue": 2788,
+    "e_rescue": 2986,
+    "a_positive_gain": 28368,
+    "e_positive_gain": 25641
+  }
+}

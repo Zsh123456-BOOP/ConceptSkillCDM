@@ -146,18 +146,6 @@ def parse_args():
         default=0.15,
         help="Canonical 2-hop query-local global graph readout scale before the fixed diagnosis head.",
     )
-    parser.add_argument(
-        "--student_global_scale",
-        type=float,
-        default=1.0,
-        help="Scale the backbone student-global embedding so E can be tested as the owner of local personalization.",
-    )
-    parser.add_argument(
-        "--student_global_mode",
-        choices=["vector", "scalar", "none"],
-        default="vector",
-        help="Backbone student representation: high-dimensional vector, interpretable scalar ability, or disabled.",
-    )
     parser.add_argument("--lambda_sparse_personal", type=float, default=0.0)
     parser.add_argument("--lambda_alpha", type=float, default=0.0)
     parser.add_argument("--lambda_personal_kl", type=float, default=0.0,
@@ -408,8 +396,7 @@ def parse_args():
     # 
     parser.add_argument(
         "--debug_graph_diag",
-        action=bool_action,
-        default=None,
+        action="store_true",
         help="Enable per-epoch A/E diagnostics and graph-related gradient norms.",
     )
     parser.add_argument(
@@ -436,10 +423,6 @@ def main():
 
     args.graph_query_readout_scale = float(getattr(args, "graph_query_readout_scale", 0.35))
     args.graph_query_readout_2hop_scale = float(getattr(args, "graph_query_readout_2hop_scale", 0.15))
-    args.student_global_scale = max(0.0, float(getattr(args, "student_global_scale", 1.0)))
-    args.student_global_mode = str(getattr(args, "student_global_mode", "vector") or "vector").strip().lower()
-    if args.student_global_mode not in {"vector", "scalar", "none"}:
-        raise ValueError(f"Unsupported student_global_mode: {args.student_global_mode!r}")
 
     # =========================================================
     # -1) main  launcher 
@@ -639,12 +622,6 @@ def main():
                 ),
                 graph_query_readout_2hop_scale=loaded_args.get(
                     "graph_query_readout_2hop_scale", getattr(args, "graph_query_readout_2hop_scale", 0.15)
-                ),
-                student_global_scale=loaded_args.get(
-                    "student_global_scale", getattr(args, "student_global_scale", 1.0)
-                ),
-                student_global_mode=loaded_args.get(
-                    "student_global_mode", getattr(args, "student_global_mode", "vector")
                 ),
                 lambda_graph_entropy=loaded_args.get("lambda_sparse", getattr(args, "lambda_sparse", 0.01)),
                 graph_entropy_min=loaded_args.get("graph_entropy_min", getattr(args, "graph_entropy_min", 0.15)),
