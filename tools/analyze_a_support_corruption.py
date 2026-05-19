@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""Inference-only A-support corruption counterfactual.
+"""Inference-only CRG-support corruption counterfactual.
 
-The experiment keeps the trained A_fused checkpoint fixed and progressively
+The experiment keeps the trained CRG/A_fused checkpoint fixed and progressively
 replaces evidence support edges with row-degree-matched random non-evidence
 edges.  It tests whether the selected support of the global concept map is
 specific and necessary, rather than merely adding arbitrary graph neighbors.

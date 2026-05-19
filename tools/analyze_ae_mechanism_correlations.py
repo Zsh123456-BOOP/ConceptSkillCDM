@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""Analyze whether A/E mechanism diagnostics track prediction gains.
+"""Analyze whether CRG/LCRF mechanism diagnostics track prediction gains.
 
 This is a post-hoc statistics helper for the paper-style mechanism evidence.
 It does not train models.  It consumes a case-study export directory produced
@@ -182,7 +182,7 @@ def _write_markdown(
     a_source: str,
     e_source: str,
 ) -> None:
-    lines = ["# A/E Mechanism Correlation Analysis", ""]
+    lines = ["# CRG/LCRF Mechanism Correlation Analysis", ""]
     lines.extend(
         [
             "## Diagnostic Pools",

@@ -41,7 +41,7 @@ if (nrow(corr) > 0) {
       col = rev(cols),
       xlim = c(-1, 1),
       xlab = "Spearman correlation",
-      main = "A/E mechanism metrics vs gain/rescue"
+      main = "CRG/LCRF mechanism metrics vs gain/rescue"
     )
     abline(v = 0, lty = 2, col = "gray40")
     par(op)
@@ -91,9 +91,9 @@ plot_metric_bins <- function(module_name, metric_name, file_name, title) {
   TRUE
 }
 
-plot_metric_bins("A", "a_edge_evidence_mass", "A_gain_by_edge_evidence_mass.png", "A evidence edge mass vs no_A rescue gain")
-plot_metric_bins("A", "a_top_edge_entropy", "A_gain_by_edge_entropy.png", "A edge entropy vs no_A rescue gain")
-plot_metric_bins("E", "query_row_posterior_kl", "E_gain_by_posterior_kl.png", "E posterior movement vs no_E rescue gain")
-plot_metric_bins("E", "e_observed_shift_abs", "E_gain_by_observed_shift.png", "E observed student-state shift vs no_E rescue gain")
+plot_metric_bins("CRG", "a_edge_evidence_mass", "CRG_gain_by_edge_evidence_mass.png", "CRG evidence edge mass vs no_CRG rescue gain")
+plot_metric_bins("CRG", "a_top_edge_entropy", "CRG_gain_by_edge_entropy.png", "CRG edge entropy vs no_CRG rescue gain")
+plot_metric_bins("LCRF", "query_row_posterior_kl", "LCRF_gain_by_posterior_kl.png", "LCRF posterior movement vs no_LCRF rescue gain")
+plot_metric_bins("LCRF", "e_observed_shift_abs", "LCRF_gain_by_observed_shift.png", "LCRF observed student-state shift vs no_LCRF rescue gain")
 
 cat("Mechanism correlation plots written to", out_dir, "\n")

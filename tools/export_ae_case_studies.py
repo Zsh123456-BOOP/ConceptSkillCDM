@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""Export interpretable A/E case-study tables from trained checkpoints.
+"""Export interpretable CRG/LCRF case-study tables from trained checkpoints.
 
 The script is for paper-style mechanism evidence, not training.  It compares a
 full checkpoint with no_A/no_E checkpoints, selects rescue cases by a fixed

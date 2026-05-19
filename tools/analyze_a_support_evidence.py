@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""Analyze whether A's evidence support behaves like a useful learning map."""
+"""Analyze whether CRG evidence support behaves like a useful reachability map."""
 
 from __future__ import annotations
 

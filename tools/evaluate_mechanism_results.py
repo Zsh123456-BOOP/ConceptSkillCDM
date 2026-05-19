@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""Summarize whether the staged ERS/SLPR mechanism experiments are effective."""
+"""Summarize whether the staged CRG/LCRF mechanism experiments are effective."""
 
 from __future__ import annotations
 
@@ -229,12 +229,12 @@ def write_summary(rows: List[Dict[str, Any]], out_dir: Path, args: argparse.Name
 
     summary_md = out_dir / "mechanism_effectiveness_summary.md"
     lines = [
-        "# Mechanism Effectiveness Summary",
+        "# CRG/LCRF Mechanism Effectiveness Summary",
         "",
-        f"- A effective threshold: no_A drop >= {args.min_a_drop:.4f} and full - A_uniform >= {args.min_evidence_gain:.4f}",
-        f"- E effective threshold: no_E drop >= {args.min_e_drop:.4f}",
-        "- If neutral-E A controls exist, A is judged by A_fused_neutralE - no_A_fair and by fused evidence against uniform/random neutral controls.",
-        "- If E_shuffle_student exists, E is also judged by full - E_shuffle_student.",
+        f"- CRG effective threshold: no_A/no_CRG drop >= {args.min_a_drop:.4f} and full - A_uniform/CRG_uniform >= {args.min_evidence_gain:.4f}",
+        f"- LCRF effective threshold: no_E/no_LCRF drop >= {args.min_e_drop:.4f}",
+        "- If neutral-LCRF CRG controls exist, CRG is judged by A_fused_neutralE - no_A_fair and by fused evidence against uniform/random neutral controls.",
+        "- If E_shuffle_student/LCRF_shuffle_student exists, LCRF is also judged by full - E_shuffle_student.",
         "",
         "| phase | dataset | full | A_neutral_drop | support_vs_random | support_vs_self | weight_gain | A_vs_uniform | verdict |",
         "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",

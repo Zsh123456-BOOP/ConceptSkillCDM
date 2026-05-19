@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""Run staged ERS/SLPR mechanism experiments and plot them with R."""
+"""Run staged CRG/LCRF mechanism experiments and plot them with R."""
 
 from __future__ import annotations
 

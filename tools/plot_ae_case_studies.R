@@ -86,7 +86,7 @@ if (nrow(a_matrix) > 0) {
     meta <- a_cases[a_cases$case_id == case_id, ]
     title <- if (nrow(meta) > 0) {
       sprintf(
-        "A Global Roadmap: %s | y=%s full=%.3f no_A=%.3f gain=%.3f",
+        "CRG Concept Reachability Graph: %s | y=%s full=%.3f no_CRG=%.3f gain=%.3f",
         case_id,
         meta$label[[1]],
         safe_num(meta$full_prob[[1]]),
@@ -94,7 +94,7 @@ if (nrow(a_matrix) > 0) {
         safe_num(meta$a_gain[[1]])
       )
     } else {
-      paste("A Global Roadmap:", case_id)
+      paste("CRG Concept Reachability Graph:", case_id)
     }
     draw_matrix_heatmap(
       mat,
@@ -121,7 +121,7 @@ if (nrow(a_edges) > 0) {
       names.arg = labels,
       las = 2,
       col = "#4C78A8",
-      ylab = "A edge weight",
+      ylab = "CRG edge weight",
       main = case_id,
       cex.names = 0.65
     )
@@ -153,10 +153,10 @@ if (nrow(e_edges) > 0) {
       col = c("#4C78A8", "#54A24B", "#E45756", "#B279A2"),
       ylim = c(0, 1.10),
       ylab = "Predicted probability",
-      main = "E Counterfactual: real student state vs no_E / shuffled / mean"
+      main = "LCRF Counterfactual: actual learner state vs no_LCRF / shuffled / mean"
     )
     abline(h = 0.5, lty = 2, col = "gray40")
-    legend("topleft", legend = c("full actual E", "no_E", "E shuffled", "E mean"), fill = c("#4C78A8", "#54A24B", "#E45756", "#B279A2"), bty = "n", cex = 0.82)
+    legend("topleft", legend = c("full actual LCRF", "no_LCRF", "LCRF shuffled", "LCRF mean"), fill = c("#4C78A8", "#54A24B", "#E45756", "#B279A2"), bty = "n", cex = 0.82)
     par(op)
     dev.off()
   }
@@ -164,7 +164,7 @@ if (nrow(e_edges) > 0) {
   for (case_id in unique(e_edges$case_id)) {
     sub <- e_edges[e_edges$case_id == case_id, ]
     sub <- sub[order(-abs(safe_num(sub$delta))), ][seq_len(min(10, nrow(sub))), ]
-    metric_names <- c("A prior", "E posterior", "E - A", "mastery", "recent")
+    metric_names <- c("CRG prior", "LCRF posterior", "LCRF - CRG", "mastery", "recent")
     mat <- cbind(
       safe_num(sub$a_prior),
       safe_num(sub$e_posterior),
@@ -186,7 +186,7 @@ if (nrow(e_edges) > 0) {
     max_delta <- max(abs(safe_num(sub$delta)), na.rm = TRUE)
     title <- if (nrow(meta) > 0) {
       sprintf(
-        "E Personalized Tutor Map: %s | y=%s full=%.3f no_E=%.3f max|E-A|=%.3f",
+        "LCRF Learner-Conditioned Filter: %s | y=%s full=%.3f no_LCRF=%.3f max|LCRF-CRG|=%.3f",
         case_id,
         meta$label[[1]],
         safe_num(meta$full_prob[[1]]),
@@ -194,7 +194,7 @@ if (nrow(e_edges) > 0) {
         max_delta
       )
     } else {
-      paste("E Personalized Tutor Map:", case_id)
+      paste("LCRF Learner-Conditioned Filter:", case_id)
     }
     draw_matrix_heatmap(
       visual,
@@ -284,7 +284,7 @@ if (nrow(e_edges) > 0) {
     sub <- sub[order(-abs(safe_num(sub$delta))), ][seq_len(min(8, nrow(sub))), ]
     ymax <- max(c(sub$a_prior, sub$e_posterior), na.rm = TRUE)
     plot(c(1, 2), c(0, max(ymax, 1e-4)), type = "n", xaxt = "n", xlab = "", ylab = "Weight", main = case_id)
-    axis(1, at = c(1, 2), labels = c("A prior", "E posterior"))
+    axis(1, at = c(1, 2), labels = c("CRG prior", "LCRF posterior"))
     for (i in seq_len(nrow(sub))) {
       col <- ifelse(safe_num(sub$delta[[i]]) >= 0, "#b2182b", "#2166ac")
       lines(c(1, 2), c(safe_num(sub$a_prior[[i]]), safe_num(sub$e_posterior[[i]])), col = col, lwd = 2)
@@ -386,8 +386,8 @@ if (nrow(a_edges) > 0) {
       beside = FALSE,
       las = 2,
       col = c("#4C78A8", "#F58518", "#54A24B", "#B279A2", "#9D755D", "#BAB0AC")[seq_len(nrow(mat))],
-      ylab = "Sum of selected A edge weights",
-      main = "A Global Roadmap: Evidence Source Mix"
+      ylab = "Sum of selected CRG edge weights",
+      main = "CRG Evidence Source Mix"
     )
     legend("topright", legend = rownames(mat), fill = c("#4C78A8", "#F58518", "#54A24B", "#B279A2", "#9D755D", "#BAB0AC")[seq_len(nrow(mat))], bty = "n", cex = 0.75)
     par(op)
@@ -416,7 +416,7 @@ if (nrow(selected) > 0) {
     main = "Selected Case Prediction Probabilities"
   )
   abline(h = 0.5, lty = 2, col = "gray40")
-  legend("topright", legend = c("full", "no_A", "no_E"), fill = c("#4C78A8", "#F58518", "#54A24B"), bty = "n")
+  legend("topright", legend = c("full", "no_CRG", "no_LCRF"), fill = c("#4C78A8", "#F58518", "#54A24B"), bty = "n")
   par(op)
   dev.off()
 }

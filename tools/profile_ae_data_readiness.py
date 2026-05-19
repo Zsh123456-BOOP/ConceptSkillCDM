@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-"""Profile whether datasets can actually support interpretable A/E mechanisms.
+"""Profile whether datasets can actually support interpretable CRG/LCRF mechanisms.
 
 This is a fail-fast diagnostic.  It does not train the model.  It reuses the
 same train-only data loader and prior construction path as training, then
-summarizes whether the global relation substrate (A) and the student evidence
-calibration/personalization path (E) have usable signal on each dataset.
+summarizes whether the Concept Reachability Graph (CRG) and the
+Learner-Conditioned Reachability Filter (LCRF) have usable signal on each
+dataset.
 """
 
 from __future__ import annotations

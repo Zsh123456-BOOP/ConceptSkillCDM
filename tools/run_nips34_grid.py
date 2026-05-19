@@ -3,7 +3,7 @@
 
 """Run a bounded NIPS34 full-model tuning grid.
 
-The grid intentionally keeps the interpretable A/E architecture intact. It only
+The grid intentionally keeps the interpretable CRG/LCRF architecture intact. It only
 varies training regularization and relation-support strength parameters that
 are already exposed by the project.
 """
