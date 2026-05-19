@@ -6,7 +6,7 @@ Run: `crg_lcrf_small_core_20260519`
 
 - Paper names: `CRG` = Concept Reachability Graph, `LCRF` = Learner-Conditioned Reachability Filter.
 - Full raw transition-pair/candidate-pool files were intentionally removed from this compact package; the retained files are paper-facing summaries, selected cases, CSV diagnostics, PNG/PDF figures, and reproducible plotting outputs.
-- Paper figures were redrawn with R using `tools/plot_crg_lcrf_paper_figures.R`.
+- Paper figures were redrawn with R using `tools/plot_crg_lcrf_mechanism_figures.R`.
 
 ## Dataset Phenomenon
 
@@ -33,6 +33,17 @@ Run: `crg_lcrf_small_core_20260519`
 | junyi | 0.0029 | 0.0022 | 0.0018 | weak |
 | assist_17 | 0.0028 | 0.0034 | 0.0009 | weak/moderate in AUC; BCE sensitivity is clearer |
 
+## CRG Support Corruption Controls
+
+Inference-only controls were added under `crg_support_corruption_control/`.
+They use the existing full checkpoints and test splits; no retraining is involved.
+
+| dataset | evidence AUC drop @100% | degree-random AUC drop @100% | seq-shuffle AUC drop @100% | evidence BCE inc. @100% | verdict |
+| --- | ---: | ---: | ---: | ---: | --- |
+| assist_09 | 0.0148 | 0.0160 | 0.0035 | 0.0086 | necessary support is visible, but degree-random is close/stronger in AUC; write as support-dependence, not evidence-edge exclusivity |
+| assist_17 | 0.0111 | 0.0026 | 0.0002 | 0.0223 | strong: evidence support is clearly more damaging than degree-random and BCE inc. exceeds 0.010 |
+| junyi | 0.0019 | 0.0028 | 0.0033 | 0.0095 | weak; report as weak rather than forcing a positive claim |
+
 ## LCRF Counterfactual
 
 | dataset | full AUC | no_LCRF AUC | shuffle AUC | mean AUC | verdict |
@@ -41,6 +52,19 @@ Run: `crg_lcrf_small_core_20260519`
 | junyi | 0.8291 | 0.8286 | 0.8188 | 0.8259 | weak/global, usable cautiously |
 | assist_17 | 0.7847 | 0.7829 | 0.5966 | 0.6441 | strong counterfactual despite weak no_LCRF |
 | nips34 | 0.7903 | 0.7733 | 0.5083 | 0.5050 | strong |
+
+## LCRF Same-Query Posterior
+
+Inference-only same-query posterior exports were added under `lcrf_same_query_posterior/`.
+
+| dataset | selected case type | support size | learners | mean pairwise L1 | mean pairwise JS | pass |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| assist_09 | same query concept | 12 | 296 | 0.173 | 0.007 | yes |
+| assist_17 | same query concept | 25 | 1124 | 0.710 | 0.100 | yes |
+| nips34 | same query concept slot | 96 | 3736 | 0.052 | 0.001 | no |
+
+Conclusion: use `assist_09` and `assist_17` for the same-query posterior heatmap/case figure.
+`nips34` remains strong for actual/shuffle/mean LCRF counterfactuals, but it should not be claimed as a successful same-query posterior-variability case.
 
 ## Interpretation
 
@@ -54,10 +78,10 @@ Run: `crg_lcrf_small_core_20260519`
 - CRG corruption: `crg_support_corruption/<dataset>/figures/crg_support_corruption_counterfactual.png`
 - LCRF counterfactual/cases: `lcrf_case_studies/<dataset>/figures/`
 - Paper-ready R figures: `paper_figures/`
-  - `fig1_dataset_reachability_compact.png`
-  - `fig2_crg_retrieval_ablation.png`
-  - `fig3_crg_support_corruption.png`
-  - `fig4_lcrf_counterfactual_dots.png`
-  - `fig5_module_evidence_matrix.png`
+  - `fig1_mechanism_crg_lcrf.png`
+  - `fig2_data_and_crg_retrieval.png`
+  - `fig3_crg_support_necessity_controls.png`
+  - `fig4_lcrf_counterfactual_delta_auc.png`
+  - `fig5_lcrf_same_query_posterior.png`
   - `paper_figure_summary.csv`
   - `module_evidence_matrix.csv`

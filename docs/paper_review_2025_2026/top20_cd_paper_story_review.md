@@ -95,21 +95,22 @@
 
 这张表直接修正了“单概念题多”的说法：ASSIST09、Junyi、ASSIST17 可以支持该现象，NIPS34 不能。NIPS34 的作用应明确写成对照，而不是硬塞进同一个稀疏故事。
 
-本轮使用 R 重新绘制了论文图，脚本为 `tools/plot_crg_lcrf_paper_figures.R`，输出目录为 `results/crg_lcrf_small_core_20260519_compact/paper_figures/`。重画前额外看了本地 PDF 中的 figure page：AAAI/KDD 的机制图通常不是大标题海报式图，而是短标签、小面板、少 legend、长解释放 caption；因此新图采用 compact small-multiple、line/dot counterfactual 和 numeric heatmap，而不是把所有解释塞进图内。
+本轮使用 R 重新绘制了论文图，脚本为 `tools/plot_crg_lcrf_mechanism_figures.R`，输出目录为 `results/crg_lcrf_small_core_20260519_compact/paper_figures/`。重画前额外看了本地 PDF 中的 figure page：AAAI/KDD 的机制图通常不是大标题海报式图，而是短标签、小面板、少 legend、长解释放 caption；因此新图采用 compact small-multiple、line/dot counterfactual 和 posterior heatmap，而不是把所有解释塞进图内。
 
 | 图 | 文件 | 证明点 | 当前判断 |
 |---|---|---|---|
-| Figure 1 | `fig1_dataset_reachability_compact.png` | 数据现象：哪些数据集是稀疏可达，哪些是密集对照。 | 可用；尤其能解释为什么 NIPS34 不主讲 CRG。 |
-| Figure 2 | `fig2_crg_retrieval_ablation.png` | CRG 充分性：train-only route retrieval 明显强于 random/self。 | 可用；CRG 的主证据应放在 09/Junyi/17。 |
-| Figure 3 | `fig3_crg_support_corruption.png` | CRG 必要性：破坏 support 后预测变差。 | 可用但要谨慎；ASSIST09 最强，Junyi/ASSIST17 只作辅助。 |
-| Figure 4 | `fig4_lcrf_counterfactual_dots.png` | LCRF 不是固定补丁：shuffle/mean learner state 明显伤害 AUC。 | 可用；09/17/NIPS34 强，Junyi 只能谨慎补充。 |
-| Figure 5 | `fig5_module_evidence_matrix.png` | 汇总每个数据集证明哪个 claim。 | 可用；帮助防止把弱证据写满。 |
+| Figure 1 | `fig1_mechanism_crg_lcrf.png` | 方法机制：train-only evidence -> CRG roadmap -> fixed support -> LCRF posterior -> prediction。 | 可用；作为方法总览图，不承担结果证明。 |
+| Figure 2 | `fig2_data_and_crg_retrieval.png` | 数据现象 + CRG 充分性：稀疏可达现象与 held-out route retrieval。 | 可用；CRG 的主证据应放在 09/Junyi/17。 |
+| Figure 3 | `fig3_crg_support_necessity_controls.png` | CRG 必要性：四类 support corruption control。 | 可用但要精确表述：ASSIST17 最干净，ASSIST09 证明 support-dependence，Junyi 弱。 |
+| Figure 4 | `fig4_lcrf_counterfactual_delta_auc.png` | LCRF 必要性：shuffle/mean learner state 明显伤害 AUC。 | 可用；09/17/NIPS34 强，Junyi 只能谨慎补充。 |
+| Figure 5 | `fig5_lcrf_same_query_posterior.png` | LCRF 充分性：同一 CRG support 被不同学生过滤成不同 posterior。 | 可用；主例用 ASSIST09/ASSIST17，不使用 NIPS34 same-query。 |
 
 按图和 CSV 的结论，后续论文不能写成“CRG/LCRF 在四个数据集上都同等强”。更稳的写法是：
 
 - CRG 的充分性：ASSIST09、Junyi、ASSIST17 的 held-out transition retrieval 均明显强于 degree-random/self-only。
-- CRG 的必要性：ASSIST09 最强，100% support corruption 约掉 1.38 AUC 点；Junyi/ASSIST17 的 corruption drop 较弱，只能作为辅助。
+- CRG 的必要性：新增 control 后，ASSIST17 最干净，100% evidence support corruption AUC drop 约 0.011、BCE increase 约 0.022，且明显强于 degree-random；ASSIST09 也有约 0.015 AUC drop，但 degree-random 接近或略强，因此只能写成模型依赖 support substrate，而不能写成 evidence edge 独占有效；Junyi 弱。
 - LCRF 的必要性：ASSIST09、ASSIST17、NIPS34 的 shuffle/mean counterfactual 明显崩，说明个性化状态不是固定补丁。
+- LCRF 的充分性：same-query posterior case 在 ASSIST09 与 ASSIST17 过阈值，mean pairwise L1 分别约 0.173 与 0.710；NIPS34 的 same-query posterior 最高 L1 约 0.053，没有过阈值，不能作为该图主例。
 - LCRF 在 Junyi 上不能夸大：Junyi 主要证明 CRG，因为它是 100% bridge-only；LCRF 在 Junyi 只作为谨慎补充。
 
 ### 交给 GPT Pro 的仓库审图提示词
@@ -121,7 +122,7 @@
 
 仓库中重点阅读：
 1. src/ 中和 CRG/LCRF 对应的模型实现，确认 CRG 是否只用 train-only item cooccurrence、sequence transition、self retention，LCRF 是否只在 CRG support 上做 learner-conditioned filtering。
-2. tools/plot_crg_lcrf_paper_figures.R，确认当前 R 图是否符合 AAAI/KDD 论文常见风格：小面板、少标题、短标签、caption 承担解释。
+2. tools/plot_crg_lcrf_mechanism_figures.R，确认当前 R 图是否符合 AAAI/KDD 论文常见风格：小面板、少标题、短标签、caption 承担解释。
 3. results/crg_lcrf_small_core_20260519_compact/README.md。
 4. results/crg_lcrf_small_core_20260519_compact/data_phenomenon/crg_lcrf_data_readiness.csv。
 5. results/crg_lcrf_small_core_20260519_compact/crg_retrieval/*/crg_transition_retrieval.csv。
