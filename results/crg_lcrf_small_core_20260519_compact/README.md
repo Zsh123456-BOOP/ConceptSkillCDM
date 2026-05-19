@@ -5,7 +5,8 @@ Run: `crg_lcrf_small_core_20260519`
 ## Summary
 
 - Paper names: `CRG` = Concept Reachability Graph, `LCRF` = Learner-Conditioned Reachability Filter.
-- Full raw results remain on the server at `results/crg_lcrf_small_core_20260519` because transition-pair and candidate-pool CSVs are large.
+- Full raw transition-pair/candidate-pool files were intentionally removed from this compact package; the retained files are paper-facing summaries, selected cases, CSV diagnostics, PNG/PDF figures, and reproducible plotting outputs.
+- Paper figures were redrawn with R using `tools/plot_crg_lcrf_paper_figures.R`.
 
 ## Dataset Phenomenon
 
@@ -52,3 +53,11 @@ Run: `crg_lcrf_small_core_20260519`
 - CRG retrieval: `crg_retrieval/<dataset>/figures/crg_transition_retrieval.png`
 - CRG corruption: `crg_support_corruption/<dataset>/figures/crg_support_corruption_counterfactual.png`
 - LCRF counterfactual/cases: `lcrf_case_studies/<dataset>/figures/`
+- Paper-ready R figures: `paper_figures/`
+  - `fig1_dataset_reachability_compact.png`
+  - `fig2_crg_retrieval_ablation.png`
+  - `fig3_crg_support_corruption.png`
+  - `fig4_lcrf_counterfactual_dots.png`
+  - `fig5_module_evidence_matrix.png`
+  - `paper_figure_summary.csv`
+  - `module_evidence_matrix.csv`
