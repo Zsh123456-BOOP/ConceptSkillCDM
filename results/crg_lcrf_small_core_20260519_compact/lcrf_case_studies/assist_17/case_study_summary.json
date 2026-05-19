@@ -1,0 +1,49 @@
+{
+  "dataset": "assist_17",
+  "split": "test",
+  "output_dir": "results/crg_lcrf_small_core_20260519/lcrf_case_studies/assist_17",
+  "num_eval_rows": 77261,
+  "checkpoints": {
+    "full": "/home/zsh/ConceptSkillCDM/checkpoints/abce_diag/recover_ed553d3_junyi17_gpu3_20260519_004530/assist_17/seed42/best_full/best_model.pth",
+    "no_A": "/home/zsh/ConceptSkillCDM/checkpoints/abce_diag/recover_ed553d3_junyi17_gpu3_20260519_004530/assist_17/seed42/best_no_A/best_model.pth",
+    "no_E": "/home/zsh/ConceptSkillCDM/checkpoints/abce_diag/recover_ed553d3_junyi17_gpu3_20260519_004530/assist_17/seed42/best_no_E/best_model.pth"
+  },
+  "metrics": [
+    {
+      "variant": "full",
+      "auc": 0.784681630597249,
+      "acc": 0.7150955850946791,
+      "rmse": 0.4320806099147673
+    },
+    {
+      "variant": "no_A",
+      "auc": 0.764669457711034,
+      "acc": 0.697311709659466,
+      "rmse": 0.4413341530853958
+    },
+    {
+      "variant": "no_E",
+      "auc": 0.7829265821630697,
+      "acc": 0.7132447159627755,
+      "rmse": 0.4359337837306946
+    },
+    {
+      "variant": "E_shuffle",
+      "auc": 0.5965752722110267,
+      "acc": 0.572746922768279,
+      "rmse": 0.5196445312903754
+    },
+    {
+      "variant": "E_mean",
+      "auc": 0.6441237966300283,
+      "acc": 0.6033445075782089,
+      "rmse": 0.4865145192042922
+    }
+  ],
+  "case_counts": {
+    "a_rescue": 5384,
+    "e_rescue": 3615,
+    "a_positive_gain": 41237,
+    "e_positive_gain": 31799
+  }
+}

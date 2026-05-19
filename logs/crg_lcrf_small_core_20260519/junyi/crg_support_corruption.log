@@ -1,0 +1,8 @@
+{
+  "output_dir": "results/crg_lcrf_small_core_20260519/crg_support_corruption/junyi",
+  "rows": {
+    "summary": 84,
+    "aggregate": 20,
+    "meta": 21
+  }
+}
