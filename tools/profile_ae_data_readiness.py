@@ -123,6 +123,29 @@ def _build_student_concept_counts(train_dataset, q_matrix: torch.Tensor, num_stu
     return counts
 
 
+def _student_history_stats(train_dataset, num_students: int) -> Dict[str, float]:
+    if len(train_dataset) == 0 or num_students <= 0:
+        return {
+            "student_train_count_mean": 0.0,
+            "student_train_count_p25": 0.0,
+            "student_train_count_median": 0.0,
+            "student_train_count_p75": 0.0,
+            "student_train_count_max": 0.0,
+        }
+    student_ids = train_dataset.student_ids.detach().long().cpu().numpy()
+    counts = np.bincount(student_ids, minlength=int(num_students)).astype(np.float64)
+    observed = counts[counts > 0]
+    if observed.size == 0:
+        observed = counts
+    return {
+        "student_train_count_mean": float(observed.mean()),
+        "student_train_count_p25": float(np.quantile(observed, 0.25)),
+        "student_train_count_median": float(np.quantile(observed, 0.50)),
+        "student_train_count_p75": float(np.quantile(observed, 0.75)),
+        "student_train_count_max": float(observed.max()),
+    }
+
+
 def _coverage_for_split(dataset, q_matrix: torch.Tensor, counts: torch.Tensor, neighbor_prior: torch.Tensor) -> Dict[str, float]:
     if len(dataset) == 0:
         return {
@@ -141,10 +164,15 @@ def _coverage_for_split(dataset, q_matrix: torch.Tensor, counts: torch.Tensor, n
 
     graph_weight = query_weight.matmul(neighbor_prior.detach().float().cpu())
     neighbor_count = (graph_weight * row_counts).sum(dim=1)
+    direct_seen = query_count > 0
+    neighbor_seen = neighbor_count > 0
+    bridge_only = (~direct_seen) & neighbor_seen
     return {
         "rows": int(len(dataset)),
-        "e_exact_query_coverage": float((query_count > 0).float().mean().item()),
-        "e_neighbor_query_coverage": float((neighbor_count > 0).float().mean().item()),
+        "e_exact_query_coverage": float(direct_seen.float().mean().item()),
+        "e_neighbor_query_coverage": float(neighbor_seen.float().mean().item()),
+        "e_direct_unseen_rate": float((~direct_seen).float().mean().item()),
+        "e_bridge_only_rate": float(bridge_only.float().mean().item()),
         "query_count_mean": float(query_count.float().mean().item()),
         "neighbor_count_mean": float(neighbor_count.float().mean().item()),
     }
@@ -181,6 +209,7 @@ def _load_dataset_profile(dataset: str, data_root: Path) -> Dict[str, Any]:
     seq_prior = info["sequence_prior_matrix"].detach().float().cpu()
     fused_prior = _row_normalize_offdiag(item_prior + seq_prior)
     counts = _build_student_concept_counts(train_loader.dataset, q_matrix, int(info["num_students"]))
+    history_stats = _student_history_stats(train_loader.dataset, int(info["num_students"]))
     q_stats = _q_count_stats(q_matrix)
     prior_stats = dict(info.get("graph_prior_stats", {}))
     valid_cov = _coverage_for_split(valid_loader.dataset, q_matrix, counts, fused_prior)
@@ -205,14 +234,19 @@ def _load_dataset_profile(dataset: str, data_root: Path) -> Dict[str, Any]:
             "seq_density": float(prior_stats.get("sequence_prior_density", 0.0)),
             "seq_entropy": float(prior_stats.get("sequence_prior_entropy", 0.0)),
             "seq_weighted_mass": float(prior_stats.get("seq_student_weighted_mass", 0.0)),
+            **history_stats,
             "a_fused_l1_to_uniform": _prior_l1_to_uniform(fused_prior),
             "a_fused_top1_margin": _prior_top1_margin(fused_prior),
             "valid_e_exact_coverage": valid_cov["e_exact_query_coverage"],
             "valid_e_neighbor_coverage": valid_cov["e_neighbor_query_coverage"],
+            "valid_e_direct_unseen_rate": valid_cov["e_direct_unseen_rate"],
+            "valid_e_bridge_only_rate": valid_cov["e_bridge_only_rate"],
             "valid_query_count_mean": valid_cov["query_count_mean"],
             "valid_neighbor_count_mean": valid_cov["neighbor_count_mean"],
             "test_e_exact_coverage": test_cov["e_exact_query_coverage"],
             "test_e_neighbor_coverage": test_cov["e_neighbor_query_coverage"],
+            "test_e_direct_unseen_rate": test_cov["e_direct_unseen_rate"],
+            "test_e_bridge_only_rate": test_cov["e_bridge_only_rate"],
             "test_query_count_mean": test_cov["query_count_mean"],
             "test_neighbor_count_mean": test_cov["neighbor_count_mean"],
         }
@@ -243,9 +277,11 @@ def _print_compact(rows: List[Dict[str, Any]]) -> None:
         "multi_concept_item_rate",
         "item_density",
         "seq_density",
+        "student_train_count_median",
         "a_fused_l1_to_uniform",
         "test_e_exact_coverage",
         "test_e_neighbor_coverage",
+        "test_e_bridge_only_rate",
     ]
     print(",".join(headers))
     for row in rows:
