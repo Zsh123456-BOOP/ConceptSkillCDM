@@ -1,11 +1,9 @@
-# ConceptSkillCDM
+﻿# ConceptSkillCDM
 
 本仓库当前用于验证一个可解释认知诊断模型。论文叙事采用 **Concept Reachability under Sparse Response Evidence**：学生在测试题上的目标概念不一定直接出现在个人历史中，但可以通过训练集中的概念关系从历史概念“到达”。模型因此被解释为递进式的“全局路线图 + 个性化过滤器”：
 
 - **CRG：Concept Reachability Graph，概念可达图。**
 - **LCRF：Learner-Conditioned Reachability Filter，学习者条件化可达性过滤器。**
-
-为了兼容历史实验脚本和 checkpoint，代码中的 `A/no_A` 对应论文中的 `CRG/no_CRG`，`E/no_E` 对应论文中的 `LCRF/no_LCRF`。后续新图表和论文写作优先使用 CRG/LCRF 命名。
 
 旧实验日志、结果表和 checkpoint 已按要求清理，不再作为当前代码说明的一部分保留。
 
@@ -61,21 +59,21 @@ LCRF 不生成新边，不读 valid/test，不使用 student-id embedding 作为
 ## 3. 消融语义
 
 - `full`：CRG 概念可达图 + LCRF 个性化过滤。
-- `no_A` / `no_CRG`：移除概念可达图，LCRF 失去路线 support。
-- `no_E` / `no_LCRF`：保留 CRG 的全局可达图，移除学生级局部过滤。
-- `A_uniform` / `CRG_uniform`：保留图形态和参数量控制，但路线不使用 train-only evidence。
-- `E_shuffle_student` / `LCRF_shuffle_student`：打乱学生个性化证据，检查 LCRF 是否真的依赖学生历史。
+- `no_CRG`：移除概念可达图，LCRF 失去路线 support。
+- `no_LCRF`：保留 CRG 的全局可达图，移除学生级局部过滤。
+- `CRG_uniform`：保留图形态和参数量控制，但路线不使用 train-only evidence。
+- `LCRF_shuffle_student`：打乱学生个性化证据，检查 LCRF 是否真的依赖学生历史。
 
 后续实验必须优先检查：
 
 ```text
-full > no_A
-full > A_uniform
-full > no_E
-full > E_shuffle_student
+full > no_CRG
+full > CRG_uniform
+full > no_LCRF
+full > LCRF_shuffle_student
 ```
 
-如果 `E_shuffle_student` 接近或超过 `full`，说明 LCRF 仍然不是有效的个性化过滤器，不能只靠 full AUC 宣称 LCRF 成立。
+如果 `LCRF_shuffle_student` 接近或超过 `full`，说明 LCRF 仍然不是有效的个性化过滤器，不能只靠 full AUC 宣称 LCRF 成立。
 
 ## 4. 小实验链路
 

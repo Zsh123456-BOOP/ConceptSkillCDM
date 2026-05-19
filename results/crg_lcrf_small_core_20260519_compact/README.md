@@ -5,7 +5,6 @@ Run: `crg_lcrf_small_core_20260519`
 ## Summary
 
 - Paper names: `CRG` = Concept Reachability Graph, `LCRF` = Learner-Conditioned Reachability Filter.
-- Compatibility names in old scripts/results: `A/no_A` = `CRG/no_CRG`; `E/no_E` = `LCRF/no_LCRF`.
 - Full raw results remain on the server at `results/crg_lcrf_small_core_20260519` because transition-pair and candidate-pool CSVs are large.
 
 ## Dataset Phenomenon
@@ -21,9 +20,9 @@ Run: `crg_lcrf_small_core_20260519`
 
 | dataset | best variant | Hit@10 | NDCG@10 | MRR | random Hit@10 | self Hit@10 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| assist_09 | A_seq_only | 0.367 | 0.196 | 0.170 | 0.136 | 0.112 |
-| junyi | A_fused_prior / A_seq_only | 0.165 | 0.078 | 0.072 | 0.017 | 0.002 |
-| assist_17 | A_seq_only | 0.411 | 0.229 | 0.199 | 0.162 | 0.132 |
+| assist_09 | CRG_seq_only | 0.367 | 0.196 | 0.170 | 0.136 | 0.112 |
+| junyi | CRG_fused_prior / CRG_seq_only | 0.165 | 0.078 | 0.072 | 0.017 | 0.002 |
+| assist_17 | CRG_seq_only | 0.411 | 0.229 | 0.199 | 0.162 | 0.132 |
 
 ## CRG Support Corruption
 
@@ -39,7 +38,7 @@ Run: `crg_lcrf_small_core_20260519`
 | --- | ---: | ---: | ---: | ---: | --- |
 | assist_09 | 0.7783 | 0.7634 | 0.5751 | 0.6065 | strong |
 | junyi | 0.8291 | 0.8286 | 0.8188 | 0.8259 | weak/global, usable cautiously |
-| assist_17 | 0.7847 | 0.7829 | 0.5966 | 0.6441 | strong counterfactual despite weak no_E |
+| assist_17 | 0.7847 | 0.7829 | 0.5966 | 0.6441 | strong counterfactual despite weak no_LCRF |
 | nips34 | 0.7903 | 0.7733 | 0.5083 | 0.5050 | strong |
 
 ## Interpretation
@@ -50,6 +49,6 @@ Run: `crg_lcrf_small_core_20260519`
 
 ## Key Figures
 
-- CRG retrieval: `crg_retrieval/<dataset>/figures/a_transition_retrieval.png`
-- CRG corruption: `crg_support_corruption/<dataset>/figures/a_support_corruption_counterfactual.png`
+- CRG retrieval: `crg_retrieval/<dataset>/figures/crg_transition_retrieval.png`
+- CRG corruption: `crg_support_corruption/<dataset>/figures/crg_support_corruption_counterfactual.png`
 - LCRF counterfactual/cases: `lcrf_case_studies/<dataset>/figures/`
