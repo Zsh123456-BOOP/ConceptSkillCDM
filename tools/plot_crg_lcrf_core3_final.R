@@ -222,7 +222,7 @@ if (nrow(cf) > 0) {
     scale_fill_manual(values = palette) +
     labs(x = NULL, y = expression(Delta * "AUC from full")) +
     theme_core() +
-    theme(axis.text.x = element_text(angle = 28, hjust = 1))
+    theme(axis.text.x = element_text(angle = 28, hjust = 1), legend.position = "none")
   ggsave(file.path(fig_dir, "fig4_core3_lcrf_counterfactual_final.pdf"), p4_auc, width = 7.3, height = 3.1, device = cairo_pdf, bg = "white")
   ggsave(file.path(fig_dir, "fig4_core3_lcrf_counterfactual_final.png"), p4_auc, width = 7.3, height = 3.1, dpi = 300, bg = "white")
 }
@@ -289,6 +289,7 @@ if (nrow(same) > 0) {
     p5d <- ggplot(two, aes(support_concept_name, posterior_prob, fill = learner_id_anonymized)) +
       geom_col(position = position_dodge(width = 0.72), width = 0.62) +
       geom_text(aes(label = sprintf("%.2f", posterior_prob)), position = position_dodge(width = 0.72), vjust = -0.25, size = 2.1) +
+      scale_y_continuous(expand = expansion(mult = c(0, 0.14))) +
       labs(x = "top posterior route", y = "posterior") +
       theme_core()
     s1 <- unique(two[, c("learner_id_anonymized", "query_mastery", "query_recent_mastery")])
