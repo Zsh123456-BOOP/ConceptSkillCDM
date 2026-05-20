@@ -77,9 +77,9 @@
 
 原来的现实问题“CDM 需要诊断学生对概念的掌握，但现实平台里概念覆盖稀疏、单概念题多、学生路径不同”不够精确，尤其“单概念题多”不能套到所有数据集。修正后的问题应写成：
 
-> 现实学习平台中的概念证据并不总是以同一题内多概念共现的形式出现。在 ASSIST09、Junyi 和 ASSIST17 中，题目大多是单概念或 item co-occurrence 很稀疏，当前题目的概念证据常需要从学生历史概念通过训练集可观测的学习路径到达；而 NIPS34 是多概念密集对照，它更适合验证个性化过滤，而不是作为稀疏可达性的主例。
+> 现实学习平台中的概念证据并不总是以同一题内多概念共现的形式出现。在 ASSIST09、Junyi 和 ASSIST17 中，题目大多是单概念或 item co-occurrence 很稀疏，当前题目的概念证据常需要从学生历史概念通过训练集可观测的学习路径到达。NIPS34 是多概念密集对照，当前 same-query posterior 证据未过阈值，因此不进入核心主线，只保留为附录/历史对照。
 
-因此论文故事不是“所有数据集都单概念”，而是“概念关系证据的形态因平台而异：核心数据集需要全局路线图，密集对照数据集需要个性化过滤器”。CRG 和 LCRF 的递进关系如下：
+因此论文故事不是“所有数据集都单概念”，而是“在核心数据集里，概念关系证据常需要通过全局路线图从历史概念桥接到当前概念”。CRG 和 LCRF 的递进关系如下：
 
 - CRG, Concept Reachability Graph：用 train-only item co-occurrence、sequence transition 和 self retention 构造全局概念可达图，解决“当前概念能否从学生历史概念通过全局学习路线到达”的主问题。
 - LCRF, Learner-Conditioned Reachability Filter：在 CRG 给出的同一 support 上，用学生自身历史、近期表现和邻居概念状态过滤路线，解决“可达路线是否适合当前学生”的副问题。
@@ -91,9 +91,9 @@
 | ASSIST09 | 82.8% | 17.2% | 0.9% | 64.3% | 3.1% | 3.1% | 平衡主例：item 共现稀疏，但 sequence 路线强，CRG/LCRF 都有证据。 |
 | Junyi | 100.0% | 0.0% | 0.0% | 25.2% | 100.0% | 100.0% | 最强 CRG 现象：没有 item 共现，当前概念必须靠 sequence 路线桥接。 |
 | ASSIST17 | 78.3% | 21.7% | 6.2% | 76.3% | 2.8% | 2.8% | CRG 适合，LCRF 全局消融较弱但 counterfactual 强。 |
-| NIPS34 | 0.0% | 100.0% | 6.3% | 98.2% | 0.0% | 0.0% | 多概念密集对照：不主讲 sparse reachability，主要验证 LCRF 过滤。 |
+| NIPS34 | 0.0% | 100.0% | 6.3% | 98.2% | 0.0% | 0.0% | 附录对照：多概念密集，不进入 09/Junyi/17 核心主线。 |
 
-这张表直接修正了“单概念题多”的说法：ASSIST09、Junyi、ASSIST17 可以支持该现象，NIPS34 不能。NIPS34 的作用应明确写成对照，而不是硬塞进同一个稀疏故事。
+这张表直接修正了“单概念题多”的说法：ASSIST09、Junyi、ASSIST17 可以支持该现象，NIPS34 不能。当前论文核心数据集应只保留 ASSIST09、Junyi、ASSIST17；NIPS34 不承担核心 claim。
 
 本轮使用 R 重新绘制了论文图，脚本为 `tools/plot_crg_lcrf_mechanism_figures.R`，输出目录为 `results/crg_lcrf_small_core_20260519_compact/paper_figures/`。重画前额外看了本地 PDF 中的 figure page：AAAI/KDD 的机制图通常不是大标题海报式图，而是短标签、小面板、少 legend、长解释放 caption；因此新图采用 compact small-multiple、line/dot counterfactual 和 posterior heatmap，而不是把所有解释塞进图内。
 
@@ -102,14 +102,14 @@
 | Figure 1 | `fig1_mechanism_crg_lcrf.png` | 方法机制：train-only evidence -> CRG roadmap -> fixed support -> LCRF posterior -> prediction。 | 可用；作为方法总览图，不承担结果证明。 |
 | Figure 2 | `fig2_data_and_crg_retrieval.png` | 数据现象 + CRG 充分性：稀疏可达现象与 held-out route retrieval。 | 可用；CRG 的主证据应放在 09/Junyi/17。 |
 | Figure 3 | `fig3_crg_support_necessity_controls.png` | CRG 必要性：四类 support corruption control。 | 可用但要精确表述：ASSIST17 最干净，ASSIST09 证明 support-dependence，Junyi 弱。 |
-| Figure 4 | `fig4_lcrf_counterfactual_delta_auc.png` | LCRF 必要性：shuffle/mean learner state 明显伤害 AUC。 | 可用；09/17/NIPS34 强，Junyi 只能谨慎补充。 |
+| Figure 4 | `fig4_lcrf_counterfactual_delta_auc.png` | LCRF 必要性：shuffle/mean learner state 明显伤害 AUC。 | 可用；核心写 09/17，Junyi 谨慎补充，NIPS34 仅附录。 |
 | Figure 5 | `fig5_lcrf_same_query_posterior.png` | LCRF 充分性：同一 CRG support 被不同学生过滤成不同 posterior。 | 可用；主例用 ASSIST09/ASSIST17，不使用 NIPS34 same-query。 |
 
 按图和 CSV 的结论，后续论文不能写成“CRG/LCRF 在四个数据集上都同等强”。更稳的写法是：
 
 - CRG 的充分性：ASSIST09、Junyi、ASSIST17 的 held-out transition retrieval 均明显强于 degree-random/self-only。
 - CRG 的必要性：新增 control 后，ASSIST17 最干净，100% evidence support corruption AUC drop 约 0.011、BCE increase 约 0.022，且明显强于 degree-random；ASSIST09 也有约 0.015 AUC drop，但 degree-random 接近或略强，因此只能写成模型依赖 support substrate，而不能写成 evidence edge 独占有效；Junyi 弱。
-- LCRF 的必要性：ASSIST09、ASSIST17、NIPS34 的 shuffle/mean counterfactual 明显崩，说明个性化状态不是固定补丁。
+- LCRF 的必要性：ASSIST09、ASSIST17 的 shuffle/mean counterfactual 明显崩，说明个性化状态不是固定补丁；NIPS34 可作为附录对照，不进入核心三数据集叙事。
 - LCRF 的充分性：same-query posterior case 在 ASSIST09 与 ASSIST17 过阈值，mean pairwise L1 分别约 0.173 与 0.710；NIPS34 的 same-query posterior 最高 L1 约 0.053，没有过阈值，不能作为该图主例。
 - LCRF 在 Junyi 上不能夸大：Junyi 主要证明 CRG，因为它是 100% bridge-only；LCRF 在 Junyi 只作为谨慎补充。
 
@@ -179,7 +179,7 @@ L = L_BCE + alpha * L_SSL + beta * L_SAR
 
 实验设计：Assist17、NeurIPS2020、Junyi，7:1:2 split；指标 ACC/AUC/F1/DOA；比较 IRT/MIRT/NCD/MFKC/KaNCD 以及 LightGCN、ORCDF、ISGCD；再做噪声注入、消融、奇异值/子空间图。它的关键不是 clean AUC，而是“噪声越强，稳定图越有价值”。
 
-可模仿点：CRG 的 A 实验应加入 support corruption 或 edge noise，证明全局路线图不是任意图，而是在边被破坏时性能/检索能力会下降。
+可模仿点：CRG 的机制实验应加入 support corruption 或 edge noise，证明全局路线图不是任意图，而是在边被破坏时性能/检索能力会下降。
 
 #### DBCD, AAAI 2026
 
@@ -200,7 +200,7 @@ L_info = alpha * L_fc + gamma * L_p
 
 结果写法：作者承认复杂模型提升较小，但强调简单模型和偏置测试集提升明显。它把“模块主次贡献不均衡”写成符合偏置机制的结果。
 
-可模仿点：LCRF 的必要性不应该只用全 test no_E，而应做 actual/shuffle/mean 反事实，证明收益来自真实学生状态，而不是固定补丁。
+可模仿点：LCRF 的必要性不应该只用全 test no_LCRF，而应做 actual/shuffle/mean 反事实，证明收益来自真实学生状态，而不是固定补丁。
 
 #### KCD, AAAI 2025
 
@@ -232,7 +232,7 @@ L = L_CDM + alpha * L_global + beta * L_local + lambda * L_recon
 
 结果写法：作者明确指出 multi-perspective consolidation 比 semantic extractor 更关键，没有强行说每个模块贡献一样大。
 
-可模仿点：我们应该把 CRG 定为主问题模块，LCRF 定为副问题模块。Junyi/assist17 如果 E drop 小，不需要硬说 E 是主贡献。
+可模仿点：我们应该把 CRG 定为主问题模块，LCRF 定为副问题模块。Junyi/assist17 如果 LCRF drop 小，不需要硬说 LCRF 是主贡献。
 
 #### AD4CD, AAAI 2025
 
@@ -254,7 +254,7 @@ L = L_CD + L_ELBO
 
 结果写法：AD4CD 在所有 backbone 上方向一致提升，即使个别指标提升不大，也通过多 backbone 一致性和异常图支撑故事。
 
-可模仿点：LCRF 如果要证明个体过滤，不必要求所有数据集大幅 no_E drop；更应该证明在多个 case/子群中 actual state 比 shuffle/mean 更可靠。
+可模仿点：LCRF 如果要证明个体过滤，不必要求所有数据集大幅 no_LCRF drop；更应该证明在多个 case/子群中 actual state 比 shuffle/mean 更可靠。
 
 #### DFCD, KDD 2025
 
@@ -288,7 +288,7 @@ L_all = L_BCE + beta * L_HSIC
 
 关键数据：ASSIST AUC 0.7604，Junyi AUC 0.8058；作者也明确写 Junyi 是一题一概念，消融和敏感性要按数据特点解释。
 
-可模仿点：CRG 必须被写成 reliable route graph，而不是简单 concept graph。A 的小实验应包括 held-out route retrieval 和 support corruption。
+可模仿点：CRG 必须被写成 reliable route graph，而不是简单 concept graph。CRG 的小实验应包括 held-out route retrieval 和 support corruption。
 
 #### LRCD, KDD 2025
 
@@ -347,61 +347,73 @@ L = sum_m w_m * L_Rm
 4. 消融必须对应公式项。删模块不是随便关开关，而是删除公式里的某个变量、loss 项、输入源或图边。
 5. 论文的好故事通常是递进式：数据现象 -> 科学问题 -> 公式定义 -> 模块 -> 主表 -> 消融 -> 机制图。
 
+### 多数据集证据边界
+
+本地深读论文支持一个明确结论：顶会 CD 论文通常不会要求每个模块在每个数据集、每个指标、每个机制实验上都同等强。更常见的写法是：主数据集负责证明核心问题，辅助数据集验证泛化或补充场景，机制实验只在模块应发挥作用的子场景中展开。
+
+可直接模仿的写法包括：
+
+- DBCD：在不同 test construction 和多个 backbone 上证明 debiasing 框架有效，但不要求每个子模块在每个 backbone 上贡献同等大；复杂 backbone 的提升较小也被解释为机制差异。
+- DMC-CDM：明确 multi-perspective consolidation 是主贡献，semantic extractor 是辅助贡献；组件贡献有主次，不强行等权。
+- FACD：协同诊断在早期更重要，个性化诊断在后期更重要；模块按学习阶段递进，而不是在所有阶段都要求同样强。
+- AD4CD：用 ASSIST09、ASSIST17、Junyi 证明异常/因果场景，重点是多个 backbone 和异常机制一致，不是每个数据集每个模块都掉 1-2 点。
+
+因此 ConceptSkillCDM 的核心主线应固定为 ASSIST09、Junyi、ASSIST17 三个数据集。NIPS34 可以保留在附录说明“多概念密集对照下 same-query posterior 不显著”，但不放进主结论。
+
 ### 对 CRG/LCRF 的最终决策
 
-当前 ConceptSkillCDM 不应该再为了让每个数据集 no_A/no_E 掉 1-2 点而继续累加残差。最稳的路线是保留已恢复的稳定代码内核，把论文故事改写为：
+当前 ConceptSkillCDM 不应该再为了让每个数据集 no_CRG/no_LCRF 掉 1-2 点而继续累加残差。最稳的路线是保留已恢复的稳定代码内核，把论文故事改写为：
 
 ```text
 现实问题：Concept Reachability under Sparse Response Evidence
-A/CRG：Concept Reachability Graph，全局路线图，回答“当前概念能否由学生历史概念通过训练集学习路径到达”。
-E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，回答“这条可达路径对当前学生是否可信”。
+CRG：Concept Reachability Graph，全局路线图，回答“当前概念能否由学生历史概念通过训练集学习路径到达”。
+LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，回答“这条可达路径对当前学生是否可信”。
 ```
 
 推荐主数据集：
 
 | 用途 | 数据集 | 理由 |
 |---|---|---|
-| 主数据集 1 | assist_09 | full 达标，A/E 消融都明显，且有 reachability 现象。 |
-| 主数据集 2 | assist_17 | A 消融强，可证明 sequence reachability；E 作为辅助，不夸大。 |
-| 主数据集 3 | junyi | full 达标，最适合证明单概念下 sequence route；但 E 消融弱，只做 A 强证据。 |
-| 机制补充 | nips34 | 多概念密集，可作为 E case 和 same query different learners 的备选。 |
+| 主数据集 1 | assist_09 | full 达标，CRG/LCRF 消融都明显，且有 reachability 现象。 |
+| 主数据集 2 | assist_17 | CRG 消融强，可证明 sequence reachability；LCRF 作为辅助，不夸大。 |
+| 主数据集 3 | junyi | full 达标，最适合证明单概念下 sequence route；但 LCRF 消融弱，只做 CRG 强证据。 |
 
 推荐实验包：
 
 1. 数据现象统计：direct seen rate、topK bridgeable rate、item cooccurrence edges、sequence density、history length。
 2. CRG 充分性：held-out concept reachability retrieval，指标 Hit@K、NDCG@K、MRR，对比 self-only、item-only、seq-only、random。
 3. CRG 必要性：support corruption，不重训，按 25/50/75/100% 替换 evidence support，观察 reachable subgroup 掉分。
-4. LCRF 必要性：actual/shuffle/mean/no_E counterfactual，固定 checkpoint 和 CRG，只打乱或平均学生状态。
+4. LCRF 必要性：actual/shuffle/mean/no_LCRF counterfactual，固定 checkpoint 和 CRG，只打乱或平均学生状态。
 5. LCRF 充分性：same query different learners，展示相同 CRG support 被不同学生状态过滤成不同 posterior。
 
 写作落点：
 
-- 不能写“AE 在所有数据集都充分必要”。应写成“CRG 是主路线图，LCRF 是在学生状态有辨识度时的个性化过滤”。
+- 不能写“CRG/LCRF 在所有数据集都充分必要”。应写成“CRG 是主路线图，LCRF 是在学生状态有辨识度时的个性化过滤”。
 - 对 Junyi：强调 CRG，不强夸 LCRF。
-- 对 assist17：强调 sequence reachability 和 A 消融。
-- 对 assist09/NIPS34：重点画 LCRF 的个体化 case。
+- 对 assist17：强调 sequence reachability 和 CRG 消融。
+- 对 assist09/assist17：重点画 LCRF 的个体化 case；NIPS34 不作为核心 case。
 - 若要达到顶会论文写法，必须把每个小实验对应到公式变量或 support 操作，而不是只画漂亮图。
 
 ## 结论先行
 
 1. 近两年 CD 论文很少只靠“全数据集 full 比 ablation 大幅高 1-2 个点”讲故事。更常见的是：先定义一个真实教育场景，再证明模块在这个场景中有效。
 2. 很多论文的消融并不是每个模块都大幅下降。有些模块只下降 0.2-0.8 个点，但配合噪声、稀疏、冷启动、跨域、可解释案例、热力图、鲁棒性曲线，仍然能形成完整证据链。
-3. 对我们当前 AE 来说，最危险的是反复为了让 no_A/no_E 掉分而累加残差。这样会让模块边界越来越脏，论文也不好写。
-4. 更稳的方向是回到“效果好、边界清楚”的版本，保留主表 full/no_A/no_E，再补论文式小实验：
-   - A 讲“全局可靠学习地图”：held-out transition retrieval、support corruption、A-relevant subgroup、噪声/边扰动鲁棒性。
-   - E 讲“学生个体小地图”：actual/shuffle/mean E 反事实、同一全局图下不同学生 posterior、历史邻居相关 case、早期/低历史/高 support 场景。
-5. 如果要改代码，优先小范围修补模块边界，不要继续把 A/E 变成大而杂的黑盒主干。
+3. 对我们当前 CRG/LCRF 来说，最危险的是反复为了让 no_CRG/no_LCRF 掉分而累加残差。这样会让模块边界越来越脏，论文也不好写。
+4. 更稳的方向是回到“效果好、边界清楚”的版本，保留主表 full/no_CRG/no_LCRF，再补论文式小实验：
+   - CRG 讲“全局可靠学习地图”：held-out transition retrieval、support corruption、CRG-relevant subgroup、噪声/边扰动鲁棒性。
+   - LCRF 讲“学生个体小地图”：actual/shuffle/mean LCRF 反事实、同一全局图下不同学生 posterior、历史邻居相关 case、早期/低历史/高 support 场景。
+5. 如果要改代码，优先小范围修补模块边界，不要继续把 CRG/LCRF 变成大而杂的黑盒主干。
 
 ## 论文筛选表
 
 | ID | 论文 | 场景/问题 | 参考价值 | 本地 PDF |
 |---|---|---|---|---|
-| NCDLA | AAAI 2026, Noise-Aware Graph-based CD Through Low-Rank Alignment | 图 CD 噪声鲁棒 | A 的可靠图/边噪声实验 | `docs/paper_review_2025_2026/pdfs/aaai26_ncdla.pdf` |
+| NCDLA | AAAI 2026, Noise-Aware Graph-based CD Through Low-Rank Alignment | 图 CD 噪声鲁棒 | CRG 的可靠图/边噪声实验 | `docs/paper_review_2025_2026/pdfs/aaai26_ncdla.pdf` |
 | DBCD | AAAI 2026, Debiased Cognitive Diagnosis | 选择性作答/MNAR/反事实 | 模块主次贡献写法 | `docs/paper_review_2025_2026/pdfs/aaai26_dbcd.pdf` |
 | KCD | AAAI 2025, Knowledge is Power | LLM 先验、冷启动 | case、t-SNE、dropout 冷启动 | `docs/paper_review_2025_2026/pdfs/aaai25_kcd.pdf` |
 | DMC-CDM | AAAI 2025, Multi-Perspective Consolidation | CD 逆问题/信息缺失 | 多视角证据链 | `docs/paper_review_2025_2026/pdfs/aaai25_dmccdm.pdf` |
 | AD4CD | AAAI 2025, Causal-Guided Anomaly Detection | 猜测/失误/异常行为 | 因果故事 + 异常样本 | `docs/paper_review_2025_2026/pdfs/aaai25_ad4cd.pdf` |
-| FACD | IJCAI 2025, Fast-Adaptive CD | CAT 早期诊断 | A/E 递进关系最像 | `docs/paper_review_2025_2026/pdfs/ijcai25_facd.pdf` |
+| FACD | IJCAI 2025, Fast-Adaptive CD | CAT 早期诊断 | CRG/LCRF 递进关系最像 | `docs/paper_review_2025_2026/pdfs/ijcai25_facd.pdf` |
 | KAN2CD | IJCAI 2025, KAN for Neural CD | 可解释神经 CD | 小收益也能靠解释性成立 | `docs/paper_review_2025_2026/pdfs/ijcai25_kan2cd.pdf` |
 | OSCD | KDD 2026, One-Shot NAS for Robust CD | 噪声架构搜索 | 结构鲁棒性/扰动实验 | `docs/paper_review_2025_2026/pdfs/kdd26_oscd.pdf` |
 | DFCD | KDD 2025, Dual-Fusion CD | 开放学习环境/未见实体 | 场景拆分而非全局均值 | `docs/paper_review_2025_2026/pdfs/kdd25_dfcd.pdf` |
@@ -431,7 +443,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：不是只报告 clean AUC，而是强调噪声越强，优势越能体现。消融里低秩对齐更重要，anchor 是细化约束。作者承认模块贡献有主次。
 
-可模仿点：A 模块如果叫“全局学习地图”，不能只做 no_A。应该加 A support corruption/noisy edge 实验：逐步污染或删除 evidence edge，看 A 是否在高噪声和高 support 样本上更稳。
+可模仿点：CRG 模块如果叫“全局学习地图”，不能只做 no_CRG。应该加 CRG support corruption/noisy edge 实验：逐步污染或删除 evidence edge，看 CRG 是否在高噪声和高 support 样本上更稳。
 
 ## 2. DBCD, AAAI 2026
 
@@ -447,7 +459,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：简单 backbone 获益更大，复杂 backbone 获益较小；β-VAE 往往比 counterfactual 部分更关键。作者没有硬说每个组件同等重要，而是把主次解释成符合机制。
 
-可模仿点：我们的 E 不一定要在所有数据集都掉 1-2 点。可以写成 A 是主路径，E 是在“个体化偏差明显”的样本上修正。E 的实验需要 actual/shuffle/mean personal state 反事实，而不是只看全局 no_E。
+可模仿点：我们的 LCRF 不一定要在所有数据集都掉 1-2 点。可以写成 CRG 是主路径，LCRF 是在“个体化偏差明显”的样本上修正。LCRF 的实验需要 actual/shuffle/mean personal state 反事实，而不是只看全局 no_LCRF。
 
 ## 3. KCD, AAAI 2025
 
@@ -461,9 +473,9 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 实验关系：主表比较传统 CDM 和增强版本；冷启动实验通过删除部分学生/题目历史模拟低频；t-SNE 展示表示对齐；case 展示诊断报告的合理性。
 
-结果写法：它强调 alignment 后的 representation 更接近真实行为结构。不是所有证据都来自 AUC，图和 case 是叙事重要部分。
+结果写法：它强调 alignment 后的 representation 更接近真实行为结构。不是所有证据都来自 AUC，图和 casLCRF 是叙事重要部分。
 
-可模仿点：我们对 A 的“地图”也可以先用 held-out concept transition 证明它捕捉学习路径，再进入预测任务。否则直接上 AUC 容易被 uniform/random support 反驳。
+可模仿点：我们对 CRG 的“地图”也可以先用 held-out concept transition 证明它捕捉学习路径，再进入预测任务。否则直接上 AUC 容易被 uniform/random support 反驳。
 
 ## 4. DMC-CDM, AAAI 2025
 
@@ -479,7 +491,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：作者明确写 multi-perspective consolidation 比 semantic extractor 更重要。这个主次关系使论文更可信。
 
-可模仿点：A/E 也应该有主次：A 是全局地图基底，E 是局部个性化校准。不要为了让两个模块都大幅掉分而把 E 写成另一个主干。
+可模仿点：CRG/LCRF 也应该有主次：CRG 是全局地图基底，LCRF 是局部个性化校准。不要为了让两个模块都大幅掉分而把 LCRF 写成另一个主干。
 
 ## 5. AD4CD, AAAI 2025
 
@@ -495,7 +507,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：它把提升写成 framework 对多 backbone 都有效，而不是单模型偶然。ASSIST09 上 KSCD+、KANCD+ 的 AUC 提升并不巨大，但因为多个 backbone 一致提升，证据仍然充分。
 
-可模仿点：如果我们的 A/E 只在某一个 backbone/变体上强，故事弱；如果在 09、Junyi、17 或 NIPS34 上方向一致，即使部分数据集 drop 小，也可以通过场景实验补强。
+可模仿点：如果我们的 CRG/LCRF 只在某一个 backbone/变体上强，故事弱；如果在 09、Junyi、17 上方向一致，即使部分数据集 drop 小，也可以通过场景实验补强。
 
 ## 6. FACD, IJCAI 2025
 
@@ -511,7 +523,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：协同模块在早期更重要，个性化模块在后期稳定诊断中更重要。两个模块不是并列堆叠，而是按学习过程递进。
 
-可模仿点：这是我们 A/E 最应该参考的写法。A 是“大地图”，解决历史不足时的方向引导；E 是“小地图”，当学生有局部历史后做个体化路线修正。实验应按学生历史长度或作答阶段分组。
+可模仿点：这是我们 CRG/LCRF 最应该参考的写法。CRG 是“大地图”，解决历史不足时的方向引导；LCRF 是“小地图”，当学生有局部历史后做个体化路线修正。实验应按学生历史长度或作答阶段分组。
 
 ## 7. KAN2CD, IJCAI 2025
 
@@ -527,7 +539,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：性能提升有时很小，但解释图承担了核心贡献。论文用“可解释神经诊断”而不是“新 SOTA 性能”来定位。
 
-可模仿点：我们的 E 如果全局 no_E 下降小，可以转成解释性贡献：同一 A support 下，不同学生的 posterior 如何因 history/recent mastery 改变。case 必须选机制强样本，不随机选。
+可模仿点：我们的 LCRF 如果全局 no_LCRF 下降小，可以转成解释性贡献：同一 CRG support 下，不同学生的 posterior 如何因 history/recent mastery 改变。case 必须选机制强样本，不随机选。
 
 ## 8. OSCD, KDD 2026
 
@@ -543,7 +555,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：不是只问 clean test 是否更高，而是问不同噪声下谁更稳。KDD 论文很重视 scenario-specific robustness。
 
-可模仿点：A support corruption 可以直接借鉴这种思路：固定模型，不重训，把 A support 逐步 corruption，比较 original 和 degree-matched random。若 A-relevant 样本掉分更大，说明 A 的边是必要的。
+可模仿点：CRG support corruption 可以直接借鉴这种思路：固定模型，不重训，把 CRG support 逐步 corruption，比较 original 和 degree-matched random。若 CRG-relevant 样本掉分更大，说明 CRG 的边是必要的。
 
 ## 9. DFCD, KDD 2025
 
@@ -559,7 +571,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：某些场景下某个消融差距很小，但在 unseen exercise/concept 中 response removal 很关键。作者按模块适用场景解释，不要求全场景同幅度下降。
 
-可模仿点：我们应该把 A/E 的小实验定义为“它该发挥作用的样本”。例如 A 看 history concept 与 query concept 是否被图连接，E 看学生历史邻居是否出现过且 mastery/recent 有差异。
+可模仿点：我们应该把 CRG/LCRF 的小实验定义为“它该发挥作用的样本”。例如 CRG 看 history concept 与 query concept 是否被图连接，LCRF 看学生历史邻居是否出现过且 mastery/recent 有差异。
 
 ## 10. ISG-CD, KDD 2025
 
@@ -575,7 +587,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：AUC 提升不是所有数据都非常大，但 DOA、uncertain edge detection 和 ablation 共同支撑“可靠图”的故事。
 
-可模仿点：A 模块要从“图传播提升 AUC”升级成“可靠地图”。除了 no_A，还要给 edge retrieval、edge corruption、support survival、边证据热力图。
+可模仿点：CRG 模块要从“图传播提升 AUC”升级成“可靠地图”。除了 no_CRG，还要给 edge retrieval、edge corruption、support survival、边证据热力图。
 
 ## 11. LRCD, KDD 2025
 
@@ -591,7 +603,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：跨域/零样本的提升很大，普通场景不是唯一重点。作者把数据拆分方式变成核心实验设计。
 
-可模仿点：如果我们的模型在新数据集 full/no_A/no_E 不稳定，不必强行全写成主结果。可以先选 09、Junyi、NIPS34/17 做核心数据集，再把其他数据集作为 generalization appendix。
+可模仿点：如果我们的模型在新数据集 full/no_CRG/no_LCRF 不稳定，不必强行全写成主结果。核心数据集固定为 09、Junyi、17，其他数据集只作为 generalization appendix。
 
 ## 12. LLM4CD, CIKM 2025 候选
 
@@ -609,7 +621,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：用 ID 替换 LLM 文本会显著变差，说明语义不是装饰。GAT/MoE 的贡献相对小，但通过 case 和冷启动补强。
 
-可模仿点：E 的“个体小地图”也可以用反事实替换：actual student state、shuffle state、mean state、no_E。如果 actual 明显更好，E 的个性化就比普通 no_E 更好解释。
+可模仿点：LCRF 的“个体小地图”也可以用反事实替换：actual student state、shuffle state、mean state、no_LCRF。如果 actual 明显更好，LCRF 的个性化就比普通 no_LCRF 更好解释。
 
 ## 13. ESR-CD, Frontiers of Computer Science 2025
 
@@ -625,7 +637,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：随机划分平均提升约 0.5%，弱覆盖场景提升更明显。作者没有掩盖随机场景提升有限，而是把目标场景对准 sparsity barrier。
 
-可模仿点：E 模块应该考虑学生历史覆盖的邻居概念，而不是只在题目多概念上重排。Junyi 单概念并不意味着 E 无法发挥，关键是“当前概念和学生历史概念是否通过 A support 相关”。
+可模仿点：LCRF 模块应该考虑学生历史覆盖的邻居概念，而不是只在题目多概念上重排。Junyi 单概念并不意味着 LCRF 无法发挥，关键是“当前概念和学生历史概念是否通过 CRG support 相关”。
 
 ## 14. FineCD, Frontiers of Computer Science 2025
 
@@ -641,7 +653,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：传统方法接近随机，LLM-Naive 也不如 FineCD，说明直接把 LLM 丢进去不够，需要诊断流程。
 
-可模仿点：如果要让 E 更像“二次教学/小地图”，可以把实验设计成少历史或早期阶段，而不是全量 test 混合。
+可模仿点：如果要让 LCRF 更像“二次教学/小地图”，可以把实验设计成少历史或早期阶段，而不是全量 test 混合。
 
 ## 15. LCST, Frontiers of Digital Education 2025
 
@@ -657,7 +669,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：LCST 接近 oracle 或明显优于零样本 baseline，图上展示 LLM 推理出来的概念关系，让读者相信迁移来源。
 
-可模仿点：A 的地图必须能画出来。建议保留 concept transition graph、局部 support map、held-out transition retrieval 排名图，而不是只给 AUC。
+可模仿点：CRG 的地图必须能画出来。建议保留 concept transition graph、局部 support map、held-out transition retrieval 排名图，而不是只给 AUC。
 
 ## 16. PromptCD, IEEE TCSS 2025
 
@@ -673,7 +685,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：个性化 prompt 往往是主贡献，shared prompt 有时只小幅提升。论文接受模块贡献不均衡，因为叙事上主副模块明确。
 
-可模仿点：A 可以是主问题，E 可以是副问题。但要把 E 写成“在 A 已给方向后做个性化微调”，不要硬写成和 A 同等规模的第二主干。
+可模仿点：CRG 可以是主问题，LCRF 可以是副问题。但要把 LCRF 写成“在 CRG 已给方向后做个性化微调”，不要硬写成和 CRG 同等规模的第二主干。
 
 ## 17. Generative CD, IEEE TLT 2026
 
@@ -689,7 +701,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：它把“为什么诊断结果可信”放在与预测一样重要的位置。这类论文说明 CD 顶刊接受理论/可靠性/解释性作为核心贡献。
 
-可模仿点：我们的 AE 不要只追求 AUC。若 A/E 可解释，必须补“地图边是否合理”和“个性化 posterior 是否由学生状态驱动”的证据。
+可模仿点：我们的 CRG/LCRF 不要只追求 AUC。若 CRG/LCRF 可解释，必须补“地图边是否合理”和“个性化 posterior 是否由学生状态驱动”的证据。
 
 ## 18. Transfer-Q, Acta Psychologica Sinica 2026
 
@@ -705,7 +717,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：心理学期刊更关心模型约束是否合理、诊断参数是否可解释、迁移是否稳定。
 
-可模仿点：A 的 train-only evidence 可以写成 Q-matrix 与学习序列共同形成的约束，不要写成随意学习一张图。E 也不能读 student-id shortcut。
+可模仿点：CRG 的 train-only evidence 可以写成 Q-matrix 与学习序列共同形成的约束，不要写成随意学习一张图。LCRF 也不能读 student-id shortcut。
 
 ## 19. DiaCDM, ICASSP 2026
 
@@ -721,7 +733,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：新场景论文通常不要求直接和所有传统数据集 SOTA 对齐，而是强调数据和证据来源不同。
 
-可模仿点：我们的 E 可以写成“学习过程中的局部路线证据”，特别是 recent mastery/history neighbor count，而不是题目静态属性。
+可模仿点：我们的 LCRF 可以写成“学习过程中的局部路线证据”，特别是 recent mastery/history neighbor count，而不是题目静态属性。
 
 ## 20. Exploratory DeepCDM, Psychometrika 2026
 
@@ -737,7 +749,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 结果写法：热力图、属性矩阵恢复、可识别性证明是核心，不是预测 AUC 唯一指标。
 
-可模仿点：A 的 concept map 和 E 的 local posterior 都应该有热力图/局部案例。只要可解释性是主卖点，实验图必须能让人看懂“模块到底学了什么”。
+可模仿点：CRG 的 concept map 和 LCRF 的 local posterior 都应该有热力图/局部案例。只要可解释性是主卖点，实验图必须能让人看懂“模块到底学了什么”。
 
 ## 近期论文的共同叙事模板
 
@@ -751,7 +763,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 3. 设计模块只解决这个现象。
 4. 主实验 + 场景实验 + 消融 + 可视化闭环。
 
-适合我们：先用数据诊断证明 A 该解决“概念关系缺失/学习路径缺失”，E 该解决“同一全局地图下学生路径不同”，再上模块。
+适合我们：先用数据诊断证明 CRG 该解决“概念关系缺失/学习路径缺失”，LCRF 该解决“同一全局地图下学生路径不同”，再上模块。
 
 ### 模板 B：主模块和副模块明确分工
 
@@ -763,7 +775,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 3. 消融允许主模块掉得多、副模块掉得少。
 4. 用场景解释为什么副模块不是每个样本都强。
 
-适合我们：A 是主问题“全局学习地图”，E 是副问题“个体小地图”。E 不必在所有数据集都掉 2 个点，但必须在个性化场景中被 actual/shuffle/mean 证明。
+适合我们：CRG 是主问题“全局学习地图”，LCRF 是副问题“个体小地图”。LCRF 不必在所有数据集都掉 2 个点，但必须在个性化场景中被 actual/shuffle/mean 证明。
 
 ### 模板 C：性能提升有限，但解释性强
 
@@ -774,7 +786,7 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 2. 方法保持性能同时提供可解释结构。
 3. 用曲线、热力图、case、显著性检验支撑。
 
-适合我们：如果 AE 的全局 AUC 提升有限，就把小实验图做硬：A map retrieval/corruption，E actual vs shuffled posterior。
+适合我们：如果 CRG/LCRF 的全局 AUC 提升有限，就把小实验图做硬：CRG map retrieval/corruption，LCRF actual vs shuffled posterior。
 
 ### 模板 D：不要全 test 混合，按场景拆
 
@@ -785,19 +797,19 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 2. 模块只在目标场景中必须强。
 3. 总体平均只是补充。
 
-适合我们：A-relevant subgroup 和 E-personalization subgroup 比全局 no_A/no_E 更重要。全局表保留，但故事重点应该是“地图发挥作用的样本”。
+适合我们：CRG-relevant subgroup 和 LCRF-personalization subgroup 比全局 no_CRG/no_LCRF 更重要。全局表保留，但故事重点应该是“地图发挥作用的样本”。
 
 ## 对 ConceptSkillCDM 的直接决策
 
 ### 是否继续当前不断累加残差的重构
 
-不建议继续。原因是当前方向容易变成：为了让 no_A/no_E 掉分，把 A/E 都接到主诊断路径不同位置，导致模块语义越来越不清楚。近期论文确实会改主诊断路径，但前提是科学问题清楚，例如噪声、缺失、跨域、早期诊断。我们现在如果继续乱加，论文会更难写。
+不建议继续。原因是当前方向容易变成：为了让 no_CRG/no_LCRF 掉分，把 CRG/LCRF 都接到主诊断路径不同位置，导致模块语义越来越不清楚。近期论文确实会改主诊断路径，但前提是科学问题清楚，例如噪声、缺失、跨域、早期诊断。我们现在如果继续乱加，论文会更难写。
 
 ### 是否回溯到之前效果好的版本
 
 建议回溯或至少冻结之前强消融版本作为主线。之前已经有一个很有价值的表：
 
-| dataset | full | no_A | no_E |
+| dataset | full | no_CRG | no_LCRF |
 |---|---:|---:|---:|
 | assist_09 | 0.7796 | 0.6817 | 0.6927 |
 | junyi | 0.8291 | 0.6356 | 0.7986 |
@@ -807,54 +819,58 @@ E/LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，�
 
 注意：这张表需要用服务器最终 logs/results 重新核验路径、run id、seed、checkpoint，不能只凭聊天记忆写论文。
 
-### A 模块建议命名和科学问题
+### CRG 模块建议命名和科学问题
 
 推荐名字：Reliable Global Learning Map。
 
-科学问题：在真实学习平台中，单个学生的作答历史覆盖有限，题目可能只有单概念标注，直接诊断会缺少概念之间的学习路径关系。A 用 train-only item cooccurrence、sequence transition 和 self retention 构建全局学习地图，解决“学生当前题目应该参考哪些相邻概念”的方向问题。
+科学问题：在真实学习平台中，单个学生的作答历史覆盖有限，题目可能只有单概念标注，直接诊断会缺少概念之间的学习路径关系。CRG 用 train-only item cooccurrence、sequence transition 和 self retention 构建全局学习地图，解决“学生当前题目应该参考哪些相邻概念”的方向问题。
 
 建议实验：
 1. Held-out concept transition retrieval：只用 train 构图，预测 valid/test 中学生后续概念 transition。指标用 Hit@K、Recall@K、NDCG、MRR。对比 A_fused、seq-only、item-only、self-only、degree-matched random。
-2. A support corruption：不重训，在 inference 时把 A support 按 25/50/75/100% 替换成 degree-matched random support。看 A-relevant 样本 AUC/BCE 是否随 corruption 下降。
-3. A-relevant subgroup：用 train-only 特征分组，例如 query concept 是否与学生历史 concept 被 A support 连接、support mass 高低、sequence evidence 强弱。只写“收益集中在高 support/强 sequence evidence 场景”，不要硬写严格单调。
-4. 局部地图 case：画某个题目或 concept 的 A support，标注 item/seq/self evidence 来源，并展示 no_A 错、full 对的样本。
+2. CRG support corruption：不重训，在 inference 时把 CRG support 按 25/50/75/100% 替换成 degree-matched random support。看 CRG-relevant 样本 AUC/BCE 是否随 corruption 下降。
+3. CRG-relevant subgroup：用 train-only 特征分组，例如 query concept 是否与学生历史 concept 被 CRG support 连接、support mass 高低、sequence evidence 强弱。只写“收益集中在高 support/强 sequence evidence 场景”，不要硬写严格单调。
+4. 局部地图 case：画某个题目或 concept 的 CRG support，标注 item/seq/self evidence 来源，并展示 no_CRG 错、full 对的样本。
 
-### E 模块建议命名和科学问题
+### LCRF 模块建议命名和科学问题
 
 推荐名字：Personalized Local Route Map。
 
-科学问题：同一张全局学习地图不能直接等价于每个学生的学习路线。学生近期做过哪些邻居概念、掌握得如何、是否刚刚出错，会影响当前题目应该参考哪些邻居。E 在 A 给出的 support 上做学生条件化的局部重加权，解决“同一全局地图下，不同学生下一步该看哪条局部路线”的问题。
+科学问题：同一张全局学习地图不能直接等价于每个学生的学习路线。学生近期做过哪些邻居概念、掌握得如何、是否刚刚出错，会影响当前题目应该参考哪些邻居。LCRF 在 CRG 给出的 support 上做学生条件化的局部重加权，解决“同一全局地图下，不同学生下一步该看哪条局部路线”的问题。
 
 建议实验：
-1. Actual/shuffle/mean/no_E 反事实：不重训或少量固定 checkpoint inference，actual E 使用真实学生状态，shuffle E 打乱学生状态，mean E 使用群体平均状态。若 actual 明显优于 shuffle/mean/no_E，说明 E 不是固定补丁。
-2. 同一 A support，不同学生小地图：固定同一 query concept 或 exercise，展示不同学生 history/recent mastery，画 E posterior 差异和 full/no_E 概率差异。
-3. E-strong case 选择规则：不能随机选。必须满足 full 正确、no_E 错误、E gain 高、posterior KL/delta 高、top shifted support 在学生历史中出现过、query concept 多样。
-4. 早期/局部历史分组：参考 FACD，把 E 的作用写成“学生有一定局部历史后做个性化修正”，不是所有样本都同等强。
+1. Actual/shuffle/mean/no_LCRF 反事实：不重训或少量固定 checkpoint inference，actual LCRF 使用真实学生状态，shuffle LCRF 打乱学生状态，mean LCRF 使用群体平均状态。若 actual 明显优于 shuffle/mean/no_LCRF，说明 LCRF 不是固定补丁。
+2. 同一 CRG support，不同学生小地图：固定同一 query concept 或 exercise，展示不同学生 history/recent mastery，画 LCRF posterior 差异和 full/no_LCRF 概率差异。
+3. LCRF-strong case 选择规则：不能随机选。必须满足 full 正确、no_LCRF 错误、LCRF gain 高、posterior KL/delta 高、top shifted support 在学生历史中出现过、query concept 多样。
+4. 早期/局部历史分组：参考 FACD，把 LCRF 的作用写成“学生有一定局部历史后做个性化修正”，不是所有样本都同等强。
 
 ### 论文故事的推荐结构
 
 1. 现实问题：CDM 需要诊断学生对概念的掌握，但现实平台里概念覆盖稀疏、单概念题多、学生路径不同。
-2. 第一层问题 A：没有全局学习地图时，模型只看当前题目/学生局部历史，无法知道概念之间的经验学习路径。
-3. A 模块：Reliable Global Learning Map，从 train-only 的 item evidence 和 sequence evidence 构建可解释概念地图。
-4. 第二层问题 E：全局地图对所有学生相同，但不同学生的局部学习路径不同。
-5. E 模块：Personalized Local Route Map，在 A support 上根据学生历史 mastery/recent state 做 posterior reweighting，不生成新边。
-6. 主实验：full/no_A/no_E，至少 09、Junyi、17 或 NIPS34 三个核心数据集。
-7. A 小实验：transition retrieval、support corruption、A-relevant subgroup、局部地图 case。
-8. E 小实验：actual/shuffle/mean/no_E、同图不同学生、E-strong case。
-9. 讨论：A 是主贡献，E 是个性化 refinement；E 在单概念或低局部历史数据集上可能较弱，这是符合机制的。
+2. 第一层问题 CRG：没有全局学习地图时，模型只看当前题目/学生局部历史，无法知道概念之间的经验学习路径。
+3. CRG 模块：Reliable Global Learning Map，从 train-only 的 item evidence 和 sequence evidence 构建可解释概念地图。
+4. 第二层问题 LCRF：全局地图对所有学生相同，但不同学生的局部学习路径不同。
+5. LCRF 模块：Personalized Local Route Map，在 CRG support 上根据学生历史 mastery/recent state 做 posterior reweighting，不生成新边。
+6. 主实验：full/no_CRG/no_LCRF，09、Junyi、17 三个核心数据集。
+7. CRG 小实验：transition retrieval、support corruption、CRG-relevant subgroup、局部地图 case。
+8. LCRF 小实验：actual/shuffle/mean/no_LCRF、同图不同学生、LCRF-strong case。
+9. 讨论：CRG 是主贡献，LCRF 是个性化 refinement；LCRF 在单概念或低局部历史数据集上可能较弱，这是符合机制的。
 
 ## 下一步执行建议
 
 1. 先停止继续当前 PLRC/残差累加方向的训练，不再新增结构。
 2. 清点服务器 logs/results/checkpoints，找回强消融版本的 commit、配置、run id 和 checkpoint。
-3. 在该版本上重跑或核验 09、Junyi、17/NIPS34 的 full/no_A/no_E。
-4. 不改模型先补 A/E 机制实验脚本，优先不重训的 inference counterfactual。
-5. 只有当机制实验发现明确缺口，再做最小代码改动。例如 E actual 不强时，只改 E 的 personal-state 使用方式；A support corruption 不敏感时，只改 A support 构造，不改预测头。
+3. 在该版本上重跑或核验 09、Junyi、17 的 full/no_CRG/no_LCRF。
+4. 不改模型先补 CRG/LCRF 机制实验脚本，优先不重训的 inference counterfactual。
+5. 只有当机制实验发现明确缺口，再做最小代码改动。例如 LCRF actual 不强时，只改 LCRF 的 personal-state 使用方式；CRG support corruption 不敏感时，只改 CRG support 构造，不改预测头。
 
 ## 不建议的做法
 
-1. 不建议为了消融掉分继续把 A/E 接入更多 residual 路径。这样会让 no_A/no_E 看起来好，但模块无法解释。
-2. 不建议要求每个数据集都达到 1-2 个点的 no_E drop。近期论文更强调目标场景和主副模块关系。
-3. 不建议把 A 写成“学 prerequisite”。sequence transition 最多写 empirical learning-path relation，除非另有先修验证。
-4. 不建议把 E 写成“重新生成学生个性化图”。更稳的是：E 不扩 support，只在 A 的 support 上做局部 posterior reweighting。
+1. 不建议为了消融掉分继续把 CRG/LCRF 接入更多 residual 路径。这样会让 no_CRG/no_LCRF 看起来好，但模块无法解释。
+2. 不建议要求每个数据集都达到 1-2 个点的 no_LCRF drop。近期论文更强调目标场景和主副模块关系。
+3. 不建议把 CRG 写成“学 prerequisite”。sequence transition 最多写 empirical learning-path relation，除非另有先修验证。
+4. 不建议把 LCRF 写成“重新生成学生个性化图”。更稳的是：LCRF 不扩 support，只在 CRG 的 support 上做局部 posterior reweighting。
 5. 不建议把所有新数据集都塞进主表。如果 FrcSub/EdNet/ASSIST12 清洗后消融不稳定，可以放 appendix 或 generalization table。
+
+
+
+
