@@ -2,6 +2,8 @@
 
 本文当前主线不是证明一个黑盒网络更强，而是从数据现象出发，解释认知诊断中一个更具体的问题：学生在测试中遇到的概念，很多时候不能被历史作答直接覆盖，但可以通过训练集中的概念路径被“到达”。因此模型需要先有一张全局路线图，再根据学生个人状态过滤这张路线图。
 
+> 图片引用说明：本大纲引用同目录 `figures/` 下的 5 张 PNG。交给 GPT Pro 时，请同时上传本 md 和 `figures/` 中的 5 张图；如果只复制 md 文本，任何本地图片路径都不会自动可见。
+
 ## 题目占位
 
 **Concept Reachability under Sparse Response Evidence for Cognitive Diagnosis**
@@ -32,7 +34,7 @@
 2. LCRF 再回答：这些可达路线中，哪些对当前学生更可信。
 3. 预测头使用 CRG/LCRF 产生的概念状态校准，而不是让二者成为弱旁路。
 
-![Figure 1: CRG/LCRF mechanism](../../results/crg_lcrf_small_core_20260519_compact/paper_figures/fig1_mechanism_crg_lcrf.png)
+![Figure 1: CRG/LCRF mechanism](figures/fig1_mechanism_crg_lcrf.png)
 
 ## 数据集定位
 
@@ -45,7 +47,7 @@
 | assist_17 | 单概念题约 78.3%，学生历史较长，sequence support 密集。 | CRG 必要性最干净，LCRF same-query posterior 也很强。 |
 | nips34 | 多概念题 100%，direct unseen 约 0，不是稀疏可达性的典型场景。 | 附录或对照，不进入核心三数据集叙事。 |
 
-![Figure 2: Data phenomenon and CRG retrieval](../../results/crg_lcrf_small_core_20260519_compact/paper_figures/fig2_data_and_crg_retrieval.png)
+![Figure 2: Data phenomenon and CRG retrieval](figures/fig2_data_and_crg_retrieval.png)
 
 ## 论文结构草稿
 
@@ -171,7 +173,7 @@ Claim：破坏 CRG support 会伤害预测，说明模型确实依赖可达路�
 
 图：Figure 3。
 
-![Figure 3: CRG support necessity controls](../../results/crg_lcrf_small_core_20260519_compact/paper_figures/fig3_crg_support_necessity_controls.png)
+![Figure 3: CRG support necessity controls](figures/fig3_crg_support_necessity_controls.png)
 
 写法：
 
@@ -185,7 +187,7 @@ Claim：LCRF 的收益来自真实学生状态，不能由打乱或群体平均�
 
 图：Figure 4。
 
-![Figure 4: LCRF counterfactual delta AUC](../../results/crg_lcrf_small_core_20260519_compact/paper_figures/fig4_lcrf_counterfactual_delta_auc.png)
+![Figure 4: LCRF counterfactual delta AUC](figures/fig4_lcrf_counterfactual_delta_auc.png)
 
 写法：
 
@@ -200,7 +202,7 @@ Claim：同一个 query、同一个 CRG support，会被不同学习者过滤成
 
 图：Figure 5。
 
-![Figure 5: LCRF same-query posterior](../../results/crg_lcrf_small_core_20260519_compact/paper_figures/fig5_lcrf_same_query_posterior.png)
+![Figure 5: LCRF same-query posterior](figures/fig5_lcrf_same_query_posterior.png)
 
 关键结果：
 
