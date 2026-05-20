@@ -1,0 +1,10 @@
+dataset,case_id,student_id_anonymized,query_concept_id,query_concept_name,history_len,direct_seen,bridgeable_at_model_k,selected_case_type,clean_pred,evidence_corrupt_pred,degree_random_pred_mean,self_only_pred,prediction_shift_evidence,prediction_shift_degree_random,train_only_support_check_passed
+assist_09,CRG01_row39811,S1,58,C58,,,True,CRG-positive,0.659139096736908,,,0.1121923923492431,0.5469467043876648,,True
+assist_09,CRG02_row10377,S2,89,C89,,,True,degree-random contrast,0.7426267862319946,,,0.2103930413722992,0.5322337448596954,,True
+assist_09,CRG03_row7398,S3,32,C32,,,True,degree-random contrast,0.3298822343349457,,,0.8291335105895996,0.4992512762546539,,True
+junyi,CRG01_row131,S1,13,C13,,,True,CRG-positive,0.7409343123435974,,,0.142263114452362,0.5986711978912354,,True
+junyi,CRG02_row55666,S2,567,C567,,,True,degree-random contrast,0.7377239465713501,,,0.1664899140596389,0.5712340325117111,,True
+junyi,CRG03_row40886,S3,644,C644,,,True,degree-random contrast,0.7339476346969604,,,0.2310984581708908,0.5028491765260696,,True
+assist_17,CRG01_row12124,S1,12,C12,,,True,CRG-positive,0.7362162470817566,,,0.1644347757101059,0.5717814713716507,,True
+assist_17,CRG02_row36680,S2,63,C63,,,True,degree-random contrast,0.1416182965040207,,,0.6887374520301819,0.5471191555261612,,True
+assist_17,CRG03_row68359,S3,24,C24,,,True,degree-random contrast,0.3655956089496612,,,0.8171921968460083,0.451596587896347,,True
