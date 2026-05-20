@@ -111,6 +111,9 @@ def collect_main_ablation(result_csv: Path, output_root: Path, datasets: List[st
             if args_json:
                 _write_simple_yaml(out_dir / "train_config_resolved.yaml", args_json)
         metrics = pd.DataFrame(metrics_rows)
+        for col in ("auc", "bce", "acc", "rmse"):
+            if col in metrics.columns:
+                metrics[col] = pd.to_numeric(metrics[col], errors="coerce")
         ckpts = pd.DataFrame(ckpt_rows)
         metrics.to_csv(out_dir / "metrics_check.csv", index=False)
         ckpts.to_csv(out_dir / "checkpoint_manifest.csv", index=False)
