@@ -75,12 +75,27 @@ label_corruption <- function(x) {
 }
 
 make_table <- function(df, rows = NULL, base_size = 8) {
-  tt <- gridExtra::ttheme_minimal(
-    base_size = base_size,
-    core = list(fg_params = list(fontsize = base_size), padding = unit(c(3, 3), "pt")),
-    colhead = list(fg_params = list(fontsize = base_size, fontface = "bold"), padding = unit(c(3, 3), "pt"))
-  )
-  gridExtra::tableGrob(df, rows = rows, theme = tt)
+  df <- as.data.frame(df, stringsAsFactors = FALSE, check.names = FALSE)
+  nr <- nrow(df)
+  nc <- ncol(df)
+  cell <- expand.grid(row = seq_len(nr + 1), col = seq_len(nc))
+  cell$label <- ""
+  for (j in seq_len(nc)) {
+    cell$label[cell$row == 1 & cell$col == j] <- names(df)[j]
+    for (i in seq_len(nr)) {
+      cell$label[cell$row == i + 1 & cell$col == j] <- as.character(df[i, j])
+    }
+  }
+  cell$fill <- ifelse(cell$row == 1, "#EEF2F6", "white")
+  cell$fontface <- ifelse(cell$row == 1, "bold", "plain")
+  ggplot(cell, aes(col, -row)) +
+    geom_tile(aes(fill = fill), color = "grey86", linewidth = 0.25) +
+    geom_text(aes(label = label, fontface = fontface), size = base_size / 2.8, lineheight = 0.92) +
+    scale_fill_identity() +
+    scale_x_continuous(expand = c(0, 0), limits = c(0.5, nc + 0.5)) +
+    scale_y_continuous(expand = c(0, 0), limits = c(-(nr + 1.5), -0.5)) +
+    coord_fixed(ratio = 0.35, clip = "off") +
+    theme_void()
 }
 
 # ---------------------------------------------------------------------------
@@ -118,7 +133,7 @@ if (nrow(cards) > 0 && nrow(retr) > 0) {
     labs(x = "Hit@10", y = NULL) +
     theme_core()
 
-  g2 <- gridExtra::arrangeGrob(card_grob, p_retr, ncol = 1, heights = c(0.9, 1.25))
+  g2 <- gridExtra::arrangeGrob(card_grob, p_retr, ncol = 1, heights = c(0.85, 1.25))
   ggsave(file.path(fig_dir, "fig2_core3_data_and_crg_retrieval_final.pdf"), g2, width = 7.3, height = 4.6, device = cairo_pdf)
   ggsave(file.path(fig_dir, "fig2_core3_data_and_crg_retrieval_final.png"), g2, width = 7.3, height = 4.6, dpi = 300)
 }
@@ -208,16 +223,8 @@ if (nrow(cf) > 0) {
     labs(x = NULL, y = expression(Delta * "AUC from full")) +
     theme_core() +
     theme(axis.text.x = element_text(angle = 28, hjust = 1))
-  p4_bce <- ggplot(cf, aes(variant_label, bce_increase_from_full, fill = variant)) +
-    geom_col(width = 0.62) +
-    facet_wrap(~ dataset, nrow = 1) +
-    scale_fill_manual(values = palette) +
-    labs(x = NULL, y = expression(Delta * "BCE from full")) +
-    theme_core() +
-    theme(axis.text.x = element_text(angle = 28, hjust = 1))
-  g4 <- gridExtra::arrangeGrob(p4_auc, p4_bce, ncol = 1, heights = c(1, 1))
-  ggsave(file.path(fig_dir, "fig4_core3_lcrf_counterfactual_final.pdf"), g4, width = 7.3, height = 5.2, device = cairo_pdf)
-  ggsave(file.path(fig_dir, "fig4_core3_lcrf_counterfactual_final.png"), g4, width = 7.3, height = 5.2, dpi = 300)
+  ggsave(file.path(fig_dir, "fig4_core3_lcrf_counterfactual_final.pdf"), p4_auc, width = 7.3, height = 3.1, device = cairo_pdf)
+  ggsave(file.path(fig_dir, "fig4_core3_lcrf_counterfactual_final.png"), p4_auc, width = 7.3, height = 3.1, dpi = 300)
 }
 
 # ---------------------------------------------------------------------------
@@ -226,13 +233,13 @@ if (nrow(cf) > 0) {
 same <- read_csv(file.path(root, "lcrf_same_query", "lcrf_same_query_annotated_core3.csv"))
 twostu <- read_csv(file.path(root, "lcrf_same_query", "lcrf_two_student_path_case_core3.csv"))
 if (nrow(same) > 0) {
-  case_id <- if (nrow(twostu) > 0 && any(twostu$dataset == "assist_17")) {
+  chosen_case_id <- if (nrow(twostu) > 0 && any(twostu$dataset == "assist_17")) {
     twostu$case_id[twostu$dataset == "assist_17"][1]
   } else {
     assist17 <- subset(same, dataset == "assist_17")
     if (nrow(assist17) > 0) assist17$case_id[1] else same$case_id[1]
   }
-  one <- subset(same, case_id == case_id)
+  one <- same[same$case_id == chosen_case_id, ]
   one <- one[one$dataset == one$dataset[1], ]
   top_support <- aggregate(abs(posterior_minus_global) ~ support_concept_name, one, mean, na.rm = TRUE)
   top_support <- top_support[order(-top_support$`abs(posterior_minus_global)`), ]
@@ -276,7 +283,7 @@ if (nrow(same) > 0) {
     labs(x = "prediction: global / no-filter / full", y = NULL) +
     theme_core()
 
-  two <- subset(twostu, dataset == one$dataset[1] & case_id == case_id)
+  two <- twostu[twostu$dataset == one$dataset[1] & twostu$case_id == chosen_case_id, ]
   if (nrow(two) > 0) {
     two$support_concept_name <- factor(two$support_concept_name, levels = unique(two$support_concept_name))
     p5d <- ggplot(two, aes(support_concept_name, posterior_prob, fill = learner_id_anonymized)) +
