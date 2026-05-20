@@ -37,6 +37,8 @@ from tools.analyze_a_sufficiency_controls import (  # noqa: E402
     _metrics,
     _predict_model,
     _quantile_bins,
+    _resolve_files,
+    _student_history,
 )
 
 
@@ -219,15 +221,183 @@ def _build_control_masks(
     raise ValueError(f"Unsupported corruption_type={corruption_type!r}")
 
 
+def _story_audit_columns(
+    annotated: pd.DataFrame,
+    info: Mapping[str, Any],
+    dataset_name: str,
+    data_dir: Optional[str],
+) -> pd.DataFrame:
+    """Add reachability subgroup columns used by the CRG/LCRF story audit.
+
+    These columns are derived only from train split histories and the checkpoint
+    CRG priors. They intentionally avoid correctness labels beyond train-set
+    history summaries already used by the model.
+    """
+
+    _, train_file, _, _ = _resolve_files(dataset_name, data_dir)
+    train_df = pd.read_csv(train_file)
+    train_df = train_df[train_df["stu_id"].isin(info["stu_id_map"].keys())].reset_index(drop=True)
+    stu_counts, stu_history, _ = _student_history(train_df, info["cpt_id_map"])
+
+    q_matrix = info["q_matrix"].detach().cpu()
+    item_prior = info["item_prior_matrix"].detach().cpu().float()
+    sequence_prior = info["sequence_prior_matrix"].detach().cpu().float()
+    prior = item_prior + sequence_prior
+    support_mask = prior > 0
+    crg_prob = _row_normalize(prior).numpy()
+    seq_prob = _row_normalize(sequence_prior).numpy()
+
+    direct_seen: List[bool] = []
+    bridge5: List[bool] = []
+    bridge10: List[bool] = []
+    bridge_model: List[bool] = []
+    crg_mass: List[float] = []
+    seq_mass: List[float] = []
+    anon_map: Dict[Any, str] = {}
+
+    for row in annotated.itertuples(index=False):
+        sid = getattr(row, "stu_id")
+        if sid not in anon_map:
+            anon_map[sid] = f"S{len(anon_map) + 1}"
+        hist = set(stu_history.get(sid, set()))
+        mapped_ex = int(getattr(row, "mapped_exercise_id"))
+        concepts = torch.nonzero(q_matrix[mapped_ex] > 0, as_tuple=False).view(-1).cpu().numpy().astype(int).tolist()
+        seen_values: List[bool] = []
+        bridge5_values: List[bool] = []
+        bridge10_values: List[bool] = []
+        bridge_model_values: List[bool] = []
+        crg_values: List[float] = []
+        seq_values: List[float] = []
+        for concept in concepts:
+            seen_values.append(concept in hist)
+            if hist:
+                top5 = np.argsort(crg_prob[concept])[-min(5, crg_prob.shape[1]):]
+                top10 = np.argsort(crg_prob[concept])[-min(10, crg_prob.shape[1]):]
+                bridge5_values.append(bool(set(top5.tolist()) & hist))
+                bridge10_values.append(bool(set(top10.tolist()) & hist))
+                bridge_model_values.append(bool(support_mask[concept, list(hist)].any().item()))
+                crg_values.append(float(crg_prob[concept, list(hist)].sum()))
+                seq_values.append(float(seq_prob[concept, list(hist)].sum()))
+            else:
+                bridge5_values.append(False)
+                bridge10_values.append(False)
+                bridge_model_values.append(False)
+                crg_values.append(0.0)
+                seq_values.append(0.0)
+        direct_seen.append(bool(any(seen_values)))
+        bridge5.append(bool(any(bridge5_values)))
+        bridge10.append(bool(any(bridge10_values)))
+        bridge_model.append(bool(any(bridge_model_values)))
+        crg_mass.append(float(np.mean(crg_values)) if crg_values else 0.0)
+        seq_mass.append(float(np.mean(seq_values)) if seq_values else 0.0)
+
+    out = annotated.copy()
+    out["student_id_anonymized"] = [anon_map[sid] for sid in out["stu_id"].tolist()]
+    out["direct_seen"] = direct_seen
+    out["direct_unseen"] = ~out["direct_seen"]
+    out["bridgeable_at_5"] = bridge5
+    out["bridgeable_at_10"] = bridge10
+    out["bridgeable_at_model_k"] = bridge_model
+    out["direct_unseen_bridgeable"] = out["direct_unseen"] & out["bridgeable_at_model_k"]
+    out["unbridgeable"] = ~out["bridgeable_at_model_k"]
+    out["crg_mass_to_history"] = crg_mass
+    out["seq_mass_to_history"] = seq_mass
+
+    seq_bins = _quantile_bins(out["a_query_seq_top5_mass_mean"])
+    crg_positive = out["crg_mass_to_history"] > 0.0
+    crg_cut = float(np.quantile(out.loc[crg_positive, "crg_mass_to_history"], 0.75)) if crg_positive.any() else float("inf")
+    history_cut = float(np.median(out["student_train_count"].astype(float))) if len(out) else 0.0
+    out["high_seq_support"] = seq_bins.astype(str).eq("q4_high")
+    out["low_seq_support"] = seq_bins.astype(str).isin(["zero", "q1_low"])
+    out["high_crg_mass"] = out["crg_mass_to_history"] >= crg_cut
+    out["low_crg_mass"] = out["crg_mass_to_history"] <= float(np.quantile(out["crg_mass_to_history"], 0.25)) if len(out) else False
+    out["short_history"] = out["student_train_count"].astype(float) <= history_cut
+    out["long_history"] = out["student_train_count"].astype(float) > history_cut
+    return out
+
+
 def _group_masks(annotated: pd.DataFrame) -> Dict[str, np.ndarray]:
     qseq = _quantile_bins(annotated["a_query_seq_top5_mass_mean"])
-    return {
+    groups = {
         "all": np.ones(len(annotated), dtype=bool),
         "graph_hits_history": annotated["group_graph_hits_history"].to_numpy(dtype=bool),
         "high_support_mass": annotated["group_high_support_mass"].to_numpy(dtype=bool),
         "query_seq_top5_q4_high": (qseq == "q4_high").to_numpy(dtype=bool),
         "multi_concept": annotated["group_multi_concept"].to_numpy(dtype=bool),
     }
+    for col in (
+        "direct_unseen_bridgeable",
+        "high_seq_support",
+        "high_crg_mass",
+        "short_history",
+    ):
+        if col in annotated:
+            groups[col] = annotated[col].to_numpy(dtype=bool)
+    return groups
+
+
+def _attach_gap_and_claims(result: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if result.empty:
+        result["evidence_minus_degree_random_auc_drop"] = np.nan
+        result["evidence_minus_degree_random_bce_increase"] = np.nan
+        result["bootstrap_ci_low"] = np.nan
+        result["bootstrap_ci_high"] = np.nan
+        result["claim_status"] = "weak"
+        return result, pd.DataFrame()
+
+    key_cols = ["dataset", "group", "corruption_ratio", "seed"]
+    degree = result[result["corruption_type"] == "degree_matched_random_support"][
+        key_cols + ["auc_drop", "bce_increase"]
+    ].rename(columns={"auc_drop": "degree_auc_drop", "bce_increase": "degree_bce_increase"})
+    out = result.merge(degree, on=key_cols, how="left")
+    out["evidence_minus_degree_random_auc_drop"] = out["auc_drop"] - out["degree_auc_drop"]
+    out["evidence_minus_degree_random_bce_increase"] = out["bce_increase"] - out["degree_bce_increase"]
+
+    ci_rows: List[Dict[str, Any]] = []
+    evidence = out[
+        (out["corruption_type"] == "evidence_support_corruption")
+        & (out["corruption_ratio"].astype(float) == 1.0)
+    ].copy()
+    for (dataset, group), frame in evidence.groupby(["dataset", "group"]):
+        gaps = frame["evidence_minus_degree_random_auc_drop"].dropna().to_numpy(dtype=float)
+        if gaps.size:
+            low, high = np.quantile(gaps, [0.025, 0.975])
+            mean_gap = float(np.mean(gaps))
+        else:
+            low = high = mean_gap = np.nan
+        bce_gaps = frame["evidence_minus_degree_random_bce_increase"].dropna().to_numpy(dtype=float)
+        if bce_gaps.size:
+            bce_low, bce_high = np.quantile(bce_gaps, [0.025, 0.975])
+            bce_mean = float(np.mean(bce_gaps))
+        else:
+            bce_low = bce_high = bce_mean = np.nan
+        auc_drop = float(frame["auc_drop"].dropna().mean()) if frame["auc_drop"].notna().any() else np.nan
+        bce_inc = float(frame["bce_increase"].dropna().mean()) if frame["bce_increase"].notna().any() else np.nan
+        strong = (np.isfinite(low) and low > 0.0) or (np.isfinite(bce_low) and bce_low > 0.0)
+        support_only = (np.isfinite(auc_drop) and auc_drop >= 0.005) or (np.isfinite(bce_inc) and bce_inc >= 0.005)
+        status = "strong_evidence_gap" if strong else ("support_dependence_only" if support_only else "weak")
+        ci_rows.append(
+            {
+                "dataset": dataset,
+                "subgroup": group,
+                "corruption_ratio": 1.0,
+                "evidence_minus_degree_random_auc_drop": mean_gap,
+                "bootstrap_ci_low": float(low) if np.isfinite(low) else np.nan,
+                "bootstrap_ci_high": float(high) if np.isfinite(high) else np.nan,
+                "evidence_minus_degree_random_bce_increase": bce_mean,
+                "bce_bootstrap_ci_low": float(bce_low) if np.isfinite(bce_low) else np.nan,
+                "bce_bootstrap_ci_high": float(bce_high) if np.isfinite(bce_high) else np.nan,
+                "claim_status": status,
+            }
+        )
+    ci = pd.DataFrame(ci_rows)
+    out = out.merge(
+        ci[["dataset", "subgroup", "bootstrap_ci_low", "bootstrap_ci_high", "claim_status"]].rename(columns={"subgroup": "group"}),
+        on=["dataset", "group"],
+        how="left",
+    )
+    out["claim_status"] = out["claim_status"].fillna("weak")
+    return out.drop(columns=["degree_auc_drop", "degree_bce_increase"], errors="ignore"), ci
 
 
 def run(args: argparse.Namespace) -> pd.DataFrame:
@@ -245,6 +415,31 @@ def run(args: argparse.Namespace) -> pd.DataFrame:
         args.dataset_name,
         args.data_dir,
     )
+    annotated = _story_audit_columns(annotated, info, args.dataset_name, args.data_dir)
+    audit_cols = [
+        "student_id_anonymized",
+        "exer_id",
+        "cpt_seq",
+        "label_eval",
+        "prob_clean",
+        "direct_seen",
+        "direct_unseen",
+        "bridgeable_at_5",
+        "bridgeable_at_10",
+        "bridgeable_at_model_k",
+        "direct_unseen_bridgeable",
+        "unbridgeable",
+        "high_seq_support",
+        "low_seq_support",
+        "high_crg_mass",
+        "low_crg_mass",
+        "short_history",
+        "long_history",
+        "student_train_count",
+        "crg_mass_to_history",
+        "seq_mass_to_history",
+    ]
+    annotated[[c for c in audit_cols if c in annotated.columns]].to_csv(out_dir / "sample_level_crg_audit.csv", index=False)
     labels = annotated["label_eval"].to_numpy(dtype=np.float32)
     clean_probs = annotated["prob_clean"].to_numpy(dtype=np.float32)
     groups = _group_masks(annotated)
@@ -303,8 +498,17 @@ def run(args: argparse.Namespace) -> pd.DataFrame:
                 _restore_masks(model, original)
 
     result = pd.DataFrame(rows)
+    result, ci = _attach_gap_and_claims(result)
     out_csv = out_dir / "crg_support_corruption_control.csv"
     result.to_csv(out_csv, index=False)
+    result.rename(
+        columns={
+            "group": "subgroup",
+            "auc_drop": "auc_drop_from_clean",
+            "bce_increase": "bce_increase_from_clean",
+        }
+    ).to_csv(out_dir / "subgroup_crg_necessity_metrics.csv", index=False)
+    ci.to_csv(out_dir / "crg_necessity_bootstrap_gap.csv", index=False)
     print(f"Wrote {len(result)} rows to {out_csv}")
     return result
 
