@@ -1,0 +1,16 @@
+{
+  "dataset": "junyi",
+  "transition_best_hit@10": [
+    {
+      "variant": "A_fused_prior",
+      "pairs": 200943,
+      "weight_sum": 150672.50999999998,
+      "mrr": 0.07174906988157205,
+      "hit@5": 0.0888728806601815,
+      "ndcg@5": 0.05388369752459959,
+      "hit@10": 0.16481506812357477,
+      "ndcg@10": 0.07818473229005643
+    }
+  ],
+  "has_subgroup": false
+}

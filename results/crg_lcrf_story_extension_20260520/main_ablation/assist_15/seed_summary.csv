@@ -1,0 +1,2 @@
+dataset,variant,seeds,auc_mean,bce_mean,acc_mean,rmse_mean
+assist_15,full,1,0.656585451877729,,0.7098944888599283,0.438035562192635

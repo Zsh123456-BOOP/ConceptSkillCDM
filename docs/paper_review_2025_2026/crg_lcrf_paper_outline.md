@@ -47,6 +47,16 @@
 | assist_17 | 单概念题约 78.3%，学生历史较长，sequence support 密集。 | CRG 必要性最干净，LCRF same-query posterior 也很强。 |
 | nips34 | 多概念题 100%，direct unseen 约 0，不是稀疏可达性的典型场景。 | 附录或对照，不进入核心三数据集叙事。 |
 
+本轮扩展筛查额外检查了 `assist_12`、`assist_15` 和 `assist_12_clean15_item50`：
+
+| 数据集 | 数据画像 | 初筛结果 | 论文定位 |
+|---|---|---|---|
+| assist_12 | 单概念 100%，item edge 为 0，bridge-only 约 34.0%，CRG retrieval Hit@10 = 0.876。 | full AUC 0.7020，no_CRG 0.7010，no_LCRF 0.6942。CRG 预测必要性弱，LCRF 有小幅信号。 | 只作为 CRG sufficiency 补充，不晋升主数据集。 |
+| assist_15 | 单概念 100%，item edge 为 0，bridge-only 约 51.8%，CRG retrieval Hit@10 = 0.533。 | full AUC 0.6566，best val AUC 0.6595，预测初筛失败；已停止 no_CRG/no_LCRF。 | 作为负例/数据卡记录，不进入主文 claim。 |
+| assist_12_clean15_item50 | 单概念 100%，item edge 为 0，bridge-only 约 39.5%，CRG retrieval Hit@10 = 0.491。 | 因 assist_12/assist_15 未通过预测初筛，本轮未启动训练。 | 暂不进入主文，可作为后续 appendix 候选。 |
+
+因此当前主线仍保持 `assist_09 / junyi / assist_17`。`assist_12` 和 `assist_15` 可以证明“可达性现象存在”，但不能证明“当前模型在这些新数据集上也形成 prediction-level CRG/LCRF 机制收益”。
+
 ![Figure 2: Data phenomenon and CRG retrieval](figures/fig2_data_and_crg_retrieval.png)
 
 ## 论文结构草稿
@@ -164,6 +174,7 @@ Claim：仅用 train-only CRG，就能检索 held-out 学生轨迹中的后续�
 - assist_09: best CRG Hit@10 约 0.367，random 约 0.136，self 约 0.112；
 - junyi: best CRG Hit@10 约 0.165，random 约 0.017，self 约 0.002；
 - assist_17: best CRG Hit@10 约 0.411，random 约 0.162，self 约 0.132。
+- assist_12 / assist_15 / assist_12_clean15_item50: retrieval 也通过，说明这些数据确实有 train-only route 可检索性；但 prediction-level 初筛未通过，所以只能作为 sufficiency 补充。
 
 这证明 CRG 能作为“找路”的充分证据。
 
@@ -235,6 +246,17 @@ Claim：同一个 query、同一个 CRG support，会被不同学习者过滤成
 | Figure 3 | `fig3_crg_support_necessity_controls.png` | CRG 必要性 | Mechanism experiment |
 | Figure 4 | `fig4_lcrf_counterfactual_delta_auc.png` | LCRF 必要性 | Mechanism experiment |
 | Figure 5 | `fig5_lcrf_same_query_posterior.png` | LCRF 充分性与可解释 case | Mechanism experiment |
+
+## Claim 决策表
+
+| claim | main dataset | supporting dataset | main evidence | success/failure result | paper wording | figure/table location |
+|---|---|---|---|---|---|---|
+| 数据中存在 concept reachability 问题 | junyi | assist_09, assist_17, assist_12, assist_15 | 数据画像：direct unseen、bridge-only、item edge、seq density | Junyi bridge-only 约 100%；assist_12/15 bridge-only 高但预测初筛弱 | “真实平台中当前概念常无法被学生历史直接覆盖，但可由 train-only empirical route 桥接。” | Figure 2 / data card |
+| CRG 具备关系证据充分性 | assist_09, junyi, assist_17 | assist_12, assist_15 | Held-out transition retrieval | 核心三数据集 Hit@10 均明显高于 random/self；assist_12/15 retrieval 更强 | “CRG 能找路，但 retrieval 不等价于预测必要性。” | Figure 2 |
+| CRG 具备预测必要性 | assist_17 | assist_09 | Support corruption control | assist_17 evidence corruption 最干净；assist_09 只能写 support-dependence；Junyi 弱 | “模型在部分高路线依赖场景中依赖 CRG support，不能写成所有数据集上 evidence edge 独占有效。” | Figure 3 |
+| LCRF 的真实学生状态不可替代 | assist_09, assist_17 | Junyi weak | actual/shuffle/mean counterfactual | 09/17 可写；Junyi 谨慎补充 | “LCRF 的主要证据来自真实 learner state 与 shuffle/mean 的反事实差异。” | Figure 4 |
+| LCRF 能把同一 CRG support 过滤成学生局部路线 | assist_17 | assist_09 | same-query posterior + learner heatmap | assist_17/09 过阈值；NIPS34 不作为主例 | “同一全局路线图会被不同学生状态过滤成不同 posterior。” | Figure 5 |
+| 新候选数据集是否能进入主线 | none | assist_12, assist_15 | retrieval + one-seed full/no_CRG/no_LCRF screen | assist_12 retrieval 强但 no_CRG 弱；assist_15 full 失败 | “作为数据现象和负例记录，不纳入主结论。” | review packet / appendix |
 
 ## 需要 GPT Pro 重点审查的问题
 

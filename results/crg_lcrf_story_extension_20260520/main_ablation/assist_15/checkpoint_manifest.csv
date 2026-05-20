@@ -1,0 +1,2 @@
+dataset,seed,variant,checkpoint_dir,checkpoint_path,exists,args_json,test_results_json
+assist_15,42,full,checkpoints/mechanism/crg_lcrf_story_extension_20260520_ablation/phase2/assist_15/full,checkpoints/mechanism/crg_lcrf_story_extension_20260520_ablation/phase2/assist_15/full/best_model.pth,True,checkpoints/mechanism/crg_lcrf_story_extension_20260520_ablation/phase2/assist_15/full/args.json,checkpoints/mechanism/crg_lcrf_story_extension_20260520_ablation/phase2/assist_15/full/test_results.json

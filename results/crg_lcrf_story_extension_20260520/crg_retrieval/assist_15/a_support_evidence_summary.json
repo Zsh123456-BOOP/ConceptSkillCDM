@@ -1,0 +1,16 @@
+{
+  "dataset": "assist_15",
+  "transition_best_hit@10": [
+    {
+      "variant": "A_fused_prior",
+      "pairs": 124121,
+      "weight_sum": 81961.67,
+      "mrr": 0.28267545096864954,
+      "hit@5": 0.3849833708854395,
+      "ndcg@5": 0.27817537767843503,
+      "hit@10": 0.5327036406164004,
+      "ndcg@10": 0.3258971287917722
+    }
+  ],
+  "has_subgroup": false
+}
