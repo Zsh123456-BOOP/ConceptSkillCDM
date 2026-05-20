@@ -52,6 +52,16 @@ palette <- c(
   "shuffle_state" = "#B65F5F"
 )
 
+short_type <- function(x) {
+  dplyr_map <- c(
+    "evidence_support_corruption" = "evidence",
+    "degree_matched_random_support" = "degree-rnd",
+    "sequence_shuffled_support" = "seq-shuf",
+    "self_only_fallback" = "self"
+  )
+  ifelse(x %in% names(dplyr_map), dplyr_map[x], x)
+}
+
 # Fig 2: data cards and retrieval lift
 cards <- read_csv(file.path(root, "data_story", "dataset_story_cards_core3.csv"))
 retr <- read_csv(file.path(fig_dir, "fig2_core3_retrieval_summary.csv"))
@@ -76,7 +86,10 @@ if (nrow(cards) > 0 && nrow(retr) > 0) {
   retr$role2 <- ifelse(retr$role == "best_CRG", "best_CRG",
                        ifelse(retr$variant == "CRG_self_only", "self",
                               ifelse(retr$variant == "CRG_degree_random", "degree_random", "random_or_uniform")))
-  p2 <- ggplot(retr, aes(`hit@10`, role2, color = role2)) +
+  retr$role_label <- factor(retr$role2,
+                            levels = c("self", "random_or_uniform", "degree_random", "best_CRG"),
+                            labels = c("self", "rnd/unif", "degree-rnd", "best CRG"))
+  p2 <- ggplot(retr, aes(`hit@10`, role_label, color = role2)) +
     geom_point(size = 2.3) +
     geom_line(aes(group = dataset), color = "grey80", linewidth = 0.35) +
     facet_wrap(~ dataset, nrow = 1) +
@@ -97,14 +110,17 @@ if (nrow(cards) > 0 && nrow(retr) > 0) {
 support <- read_csv(file.path(root, "crg_support_audit", "crg_support_gap_audit_core3.csv"))
 if (nrow(support) > 0) {
   all_rows <- subset(support, subgroup == "all" & corruption_ratio > 0)
-  p_auc <- ggplot(all_rows, aes(corruption_ratio, auc_drop_from_clean, color = corruption_type)) +
+  all_mean <- aggregate(cbind(auc_drop_from_clean, bce_increase_from_clean) ~ dataset + corruption_type + corruption_ratio,
+                        all_rows, mean, na.rm = TRUE)
+  all_mean$corruption_label <- short_type(all_mean$corruption_type)
+  p_auc <- ggplot(all_mean, aes(corruption_ratio, auc_drop_from_clean, color = corruption_type)) +
     geom_line(linewidth = 0.55) +
     geom_point(size = 1.4) +
     facet_wrap(~ dataset, nrow = 1) +
     scale_color_manual(values = palette) +
     labs(x = "corruption ratio", y = "AUC drop") +
     theme_core()
-  p_bce <- ggplot(all_rows, aes(corruption_ratio, bce_increase_from_clean, color = corruption_type)) +
+  p_bce <- ggplot(all_mean, aes(corruption_ratio, bce_increase_from_clean, color = corruption_type)) +
     geom_line(linewidth = 0.55) +
     geom_point(size = 1.4) +
     facet_wrap(~ dataset, nrow = 1) +
@@ -112,6 +128,7 @@ if (nrow(support) > 0) {
     labs(x = "corruption ratio", y = "BCE increase") +
     theme_core()
   gap <- subset(all_rows, corruption_type == "evidence_support_corruption" & corruption_ratio == 1)
+  gap <- aggregate(evidence_minus_degree_random_auc_drop ~ dataset + claim_status, gap, mean, na.rm = TRUE)
   p_gap <- ggplot(gap, aes(dataset, evidence_minus_degree_random_auc_drop, fill = claim_status)) +
     geom_col(width = 0.55) +
     geom_hline(yintercept = 0, linewidth = 0.25) +
@@ -129,6 +146,7 @@ if (nrow(support) > 0) {
 subgroup <- read_csv(file.path(root, "crg_support_audit", "crg_subgroup_support_dependence_core3.csv"))
 if (nrow(subgroup) > 0) {
   sg <- subset(subgroup, corruption_ratio == 1 & corruption_type %in% c("evidence_support_corruption", "degree_matched_random_support", "sequence_shuffled_support", "self_only_fallback"))
+  sg <- aggregate(auc_drop_from_clean ~ dataset + requested_subgroup + corruption_type, sg, mean, na.rm = TRUE)
   p_sg <- ggplot(sg, aes(requested_subgroup, auc_drop_from_clean, fill = corruption_type)) +
     geom_col(position = position_dodge(width = 0.75), width = 0.65) +
     facet_wrap(~ dataset, nrow = 1, scales = "free_y") +
