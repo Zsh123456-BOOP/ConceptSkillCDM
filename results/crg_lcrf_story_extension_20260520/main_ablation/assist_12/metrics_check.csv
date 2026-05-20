@@ -1,4 +1,0 @@
-dataset,seed,variant,source_variant,checkpoint_path,auc,bce,acc,rmse,history_split,train_only_crg_check_passed,notes
-assist_12,42,full,full,checkpoints/mechanism/crg_lcrf_story_extension_20260520_ablation/phase2/assist_12/full/best_model.pth,0.7019780936804425,,0.690196604710461,0.450954217345494,provided_split,True,collected from run_mechanism_experiments.py
-assist_12,42,no_CRG,no_A,checkpoints/mechanism/crg_lcrf_story_extension_20260520_ablation/phase2/assist_12/no_A/best_model.pth,0.7010050840801034,,0.7542776622156613,0.4140138420691048,provided_split,True,collected from run_mechanism_experiments.py
-assist_12,42,no_LCRF,no_E,checkpoints/mechanism/crg_lcrf_story_extension_20260520_ablation/phase2/assist_12/no_E/best_model.pth,0.6941951171208838,,0.7543447627994364,0.4149534824099575,provided_split,True,collected from run_mechanism_experiments.py

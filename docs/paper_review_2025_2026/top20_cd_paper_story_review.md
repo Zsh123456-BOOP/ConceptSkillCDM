@@ -84,7 +84,7 @@
 - CRG, Concept Reachability Graph：用 train-only item co-occurrence、sequence transition 和 self retention 构造全局概念可达图，解决“当前概念能否从学生历史概念通过全局学习路线到达”的主问题。
 - LCRF, Learner-Conditioned Reachability Filter：在 CRG 给出的同一 support 上，用学生自身历史、近期表现和邻居概念状态过滤路线，解决“可达路线是否适合当前学生”的副问题。
 
-数据统计支持如下，来源为 `results/crg_lcrf_small_core_20260519_compact/data_phenomenon/crg_lcrf_data_readiness.csv`。
+数据统计支持如下，来源为 `results/crg_lcrf_core3_final_20260520/data_story/dataset_story_cards_core3.csv`。
 
 | dataset | single-concept rate | multi-concept rate | item edge density | sequence edge density | test direct-unseen rate | bridge-only reachable | 叙事角色 |
 |---|---:|---:|---:|---:|---:|---:|---|
@@ -95,21 +95,21 @@
 
 这张表直接修正了“单概念题多”的说法：ASSIST09、Junyi、ASSIST17 可以支持该现象，NIPS34 不能。当前论文核心数据集应只保留 ASSIST09、Junyi、ASSIST17；NIPS34 不承担核心 claim。
 
-本轮使用 R 重新绘制了论文图，脚本为 `tools/plot_crg_lcrf_mechanism_figures.R`，输出目录为 `results/crg_lcrf_small_core_20260519_compact/paper_figures/`。重画前额外看了本地 PDF 中的 figure page：AAAI/KDD 的机制图通常不是大标题海报式图，而是短标签、小面板、少 legend、长解释放 caption；因此新图采用 compact small-multiple、line/dot counterfactual 和 posterior heatmap，而不是把所有解释塞进图内。
+本轮使用 R 重新绘制了论文图，脚本为 `tools/plot_crg_lcrf_core3_final.R`，输出目录为 `results/crg_lcrf_core3_final_20260520/paper_figures/`。重画前额外看了本地 PDF 中的 figure page：AAAI/KDD 的机制图通常不是大标题海报式图，而是短标签、小面板、少 legend、长解释放 caption；因此新图采用 compact small-multiple、line/dot counterfactual 和 posterior heatmap，而不是把所有解释塞进图内。
 
 | 图 | 文件 | 证明点 | 当前判断 |
 |---|---|---|---|
 | Figure 1 | `fig1_mechanism_crg_lcrf.png` | 方法机制：train-only evidence -> CRG roadmap -> fixed support -> LCRF posterior -> prediction。 | 可用；作为方法总览图，不承担结果证明。 |
-| Figure 2 | `fig2_data_and_crg_retrieval.png` | 数据现象 + CRG 充分性：稀疏可达现象与 held-out route retrieval。 | 可用；CRG 的主证据应放在 09/Junyi/17。 |
-| Figure 3 | `fig3_crg_support_necessity_controls.png` | CRG 必要性：四类 support corruption control。 | 可用但要精确表述：ASSIST17 最干净，ASSIST09 证明 support-dependence，Junyi 弱。 |
-| Figure 4 | `fig4_lcrf_counterfactual_delta_auc.png` | LCRF 必要性：shuffle/mean learner state 明显伤害 AUC。 | 可用；核心写 09/17，Junyi 谨慎补充，NIPS34 仅附录。 |
-| Figure 5 | `fig5_lcrf_same_query_posterior.png` | LCRF 充分性：同一 CRG support 被不同学生过滤成不同 posterior。 | 可用；主例用 ASSIST09/ASSIST17，不使用 NIPS34 same-query。 |
+| Figure 2 | `fig2_core3_data_and_crg_retrieval_final.png` | 数据现象 + CRG 充分性：稀疏可达现象与 held-out route retrieval。 | 可用；CRG 的主证据应放在 09/Junyi/17。 |
+| Figure 3 | `fig3_core3_support_corruption_final.png` | CRG 必要性：四类 support corruption control。 | 可用但要精确表述：ASSIST17 最干净，ASSIST09 证明 support-dependence，Junyi 弱。 |
+| Figure 4 | `fig4_core3_lcrf_counterfactual_final.png` | LCRF 必要性：shuffle/mean learner state 明显伤害 AUC。 | 可用；核心写 09/17，Junyi 谨慎补充。 |
+| Figure 5 | `fig5_core3_lcrf_same_query_posterior_final.png` | LCRF 充分性：同一 CRG support 被不同学生过滤成不同 posterior。 | 可用；主例用 ASSIST09/ASSIST17，不使用 NIPS34 same-query。 |
 
 按图和 CSV 的结论，后续论文不能写成“CRG/LCRF 在四个数据集上都同等强”。更稳的写法是：
 
 - CRG 的充分性：ASSIST09、Junyi、ASSIST17 的 held-out transition retrieval 均明显强于 degree-random/self-only。
 - CRG 的必要性：新增 control 后，ASSIST17 最干净，100% evidence support corruption AUC drop 约 0.011、BCE increase 约 0.022，且明显强于 degree-random；ASSIST09 也有约 0.015 AUC drop，但 degree-random 接近或略强，因此只能写成模型依赖 support substrate，而不能写成 evidence edge 独占有效；Junyi 弱。
-- LCRF 的必要性：ASSIST09、ASSIST17 的 shuffle/mean counterfactual 明显崩，说明个性化状态不是固定补丁；NIPS34 可作为附录对照，不进入核心三数据集叙事。
+- LCRF 的必要性：ASSIST09、ASSIST17 的 shuffle/mean counterfactual 明显崩，说明个性化状态不是固定补丁。
 - LCRF 的充分性：same-query posterior case 在 ASSIST09 与 ASSIST17 过阈值，mean pairwise L1 分别约 0.173 与 0.710；NIPS34 的 same-query posterior 最高 L1 约 0.053，没有过阈值，不能作为该图主例。
 - LCRF 在 Junyi 上不能夸大：Junyi 主要证明 CRG，因为它是 100% bridge-only；LCRF 在 Junyi 只作为谨慎补充。
 
