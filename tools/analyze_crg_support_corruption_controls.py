@@ -38,6 +38,7 @@ from tools.analyze_a_sufficiency_controls import (  # noqa: E402
     _predict_model,
     _quantile_bins,
     _resolve_files,
+    _row_normalize,
     _student_history,
 )
 
@@ -326,10 +327,13 @@ def _group_masks(annotated: pd.DataFrame) -> Dict[str, np.ndarray]:
         "multi_concept": annotated["group_multi_concept"].to_numpy(dtype=bool),
     }
     for col in (
+        "direct_seen",
+        "direct_unseen",
         "direct_unseen_bridgeable",
         "high_seq_support",
         "high_crg_mass",
         "short_history",
+        "long_history",
     ):
         if col in annotated:
             groups[col] = annotated[col].to_numpy(dtype=bool)

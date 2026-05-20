@@ -265,3 +265,48 @@ Claim：同一个 query、同一个 CRG support，会被不同学习者过滤成
 3. CRG 的充分性、必要性证据是否足够；尤其 Figure 3 中 assist_09 的 degree-random 接近问题是否需要进一步弱化表述。
 4. LCRF 的 same-query posterior 是否足够证明“个性化过滤”，是否还需要补一个更直接的 case caption 或局部路径图。
 5. 当前大纲是否存在过度声称，例如把 sequence transition 写成 prerequisite、把 weak Junyi LCRF 写成强结论。
+
+## Core3 Final Evidence Update
+
+
+This section is generated from `results/crg_lcrf_core3_final_20260520/` and is restricted to
+`assist_09`, `junyi`, and `assist_17`.
+
+### Claim Boundary
+
+- CRG is the main contribution: a train-only concept reachability roadmap built from item co-occurrence, empirical sequence transition, and self retention.
+- LCRF is the secondary contribution: a learner-conditioned filter over the fixed CRG support.
+- Sequence transition must be described as an empirical learning route, not prerequisite knowledge.
+- Do not claim CRG proves evidence-specific superiority on every dataset. Assist_17 is the strongest necessity case, assist_09 supports support-dependence, Junyi is weak at prediction-level corruption but strong as data/retrieval evidence.
+- Do not claim Junyi proves LCRF strongly.
+- Do not claim LCRF creates new graph edges.
+- Do not claim student-ID shortcut is ruled out until the unavailable ID-source audit variants are implemented.
+
+### Core3 Main Table
+
+| dataset | full AUC | no_CRG drop | no_LCRF drop | wording |
+|---|---:|---:|---:|---|
+| assist_09 | 0.7783 | 0.0112 | 0.0149 | balanced benchmark; both modules usable |
+| junyi | 0.8291 | 0.0013 | 0.0005 | CRG reachability/data phenomenon, LCRF weak |
+| assist_17 | 0.7847 | 0.0200 | 0.0018 | main CRG necessity evidence; LCRF state counterfactual strong |
+
+### Figure Plan
+
+| figure | claim | main dataset | status |
+|---|---|---|---|
+| Fig.2 | CRG sufficiency: train-only roadmap retrieves held-out concept routes | assist_09, junyi, assist_17 | use in main |
+| Fig.3 | CRG necessity/support dependence under support corruption | assist_17 primary; assist_09 cautious; junyi weak | use with boundary wording |
+| Fig.S | CRG subgroup support dependence | assist_17/assist_09 | appendix |
+| Fig.4 | LCRF counterfactual: true learner state cannot be replaced by shuffle/mean | assist_09, assist_17 | use in main |
+| Fig.5 | LCRF sufficiency: same CRG support becomes different posterior maps | assist_17 primary; assist_09 secondary | use in main |
+| Fig.S | LCRF timeline/source audit | assist_09, assist_17 | appendix; source audit limited |
+
+### Decision Table
+
+| claim | main evidence | paper wording |
+|---|---|---|
+| CRG can find routes | Hit@10 retrieval lift over self/random/degree-random | CRG provides a sufficient train-only roadmap signal. |
+| CRG is needed by the trained model | support corruption, especially assist_17 evidence gap/BCE increase | The model relies on CRG support in datasets where evidence support is predictive; this is not universal. |
+| LCRF module contributes | no_LCRF drop in main table plus no_filter counterfactual | LCRF improves support-level personalization on balanced/long-history datasets. |
+| real learner state matters | shuffle/mean state drops strongly on assist_09 and assist_17 | LCRF should be described as learner-state conditioned, with ID-source audit as a limitation. |
+| same support, different learners | same-query posterior heatmap and two-student path | LCRF filters a fixed CRG roadmap into learner-specific local routes. |
