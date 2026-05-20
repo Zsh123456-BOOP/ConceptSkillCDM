@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import subprocess
 import sys
@@ -58,7 +59,10 @@ def _num(row: Mapping[str, Any], key: str, default: float = 0.0) -> float:
         value = row.get(key, default)
         if value is None or value == "":
             return default
-        return float(value)
+        out = float(value)
+        if math.isnan(out) or math.isinf(out):
+            return default
+        return out
     except (TypeError, ValueError):
         return default
 
