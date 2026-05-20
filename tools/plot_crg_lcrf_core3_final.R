@@ -24,8 +24,8 @@ read_csv <- function(path) {
 }
 
 save_both <- function(plot, name, width = 7.2, height = 4.2) {
-  ggsave(file.path(fig_dir, paste0(name, ".pdf")), plot, width = width, height = height, units = "in", device = cairo_pdf)
-  ggsave(file.path(fig_dir, paste0(name, ".png")), plot, width = width, height = height, units = "in", dpi = 300)
+  ggsave(file.path(fig_dir, paste0(name, ".pdf")), plot, width = width, height = height, units = "in", device = cairo_pdf, bg = "white")
+  ggsave(file.path(fig_dir, paste0(name, ".png")), plot, width = width, height = height, units = "in", dpi = 300, bg = "white")
 }
 
 theme_core <- function(base_size = 8) {
@@ -134,8 +134,8 @@ if (nrow(cards) > 0 && nrow(retr) > 0) {
     theme_core()
 
   g2 <- gridExtra::arrangeGrob(card_grob, p_retr, ncol = 1, heights = c(0.85, 1.25))
-  ggsave(file.path(fig_dir, "fig2_core3_data_and_crg_retrieval_final.pdf"), g2, width = 7.3, height = 4.6, device = cairo_pdf)
-  ggsave(file.path(fig_dir, "fig2_core3_data_and_crg_retrieval_final.png"), g2, width = 7.3, height = 4.6, dpi = 300)
+  ggsave(file.path(fig_dir, "fig2_core3_data_and_crg_retrieval_final.pdf"), g2, width = 7.3, height = 4.6, device = cairo_pdf, bg = "white")
+  ggsave(file.path(fig_dir, "fig2_core3_data_and_crg_retrieval_final.png"), g2, width = 7.3, height = 4.6, dpi = 300, bg = "white")
 }
 
 # ---------------------------------------------------------------------------
@@ -196,8 +196,8 @@ if (nrow(support) > 0) {
   caption <- "Evidence-specific necessity is dataset dependent: assist_17 is the clean evidence-gap case, assist_09 supports support dependence, and Junyi is weak at prediction-level corruption."
   cap <- textGrob(caption, x = 0, hjust = 0, gp = gpar(fontsize = 7, col = "grey30"))
   g3 <- gridExtra::arrangeGrob(p_auc, p_bce, p_gap, cap, ncol = 1, heights = c(1, 1, 0.85, 0.16))
-  ggsave(file.path(fig_dir, "fig3_core3_support_corruption_final.pdf"), g3, width = 7.3, height = 7.2, device = cairo_pdf)
-  ggsave(file.path(fig_dir, "fig3_core3_support_corruption_final.png"), g3, width = 7.3, height = 7.2, dpi = 300)
+  ggsave(file.path(fig_dir, "fig3_core3_support_corruption_final.pdf"), g3, width = 7.3, height = 7.2, device = cairo_pdf, bg = "white")
+  ggsave(file.path(fig_dir, "fig3_core3_support_corruption_final.png"), g3, width = 7.3, height = 7.2, dpi = 300, bg = "white")
 }
 
 # ---------------------------------------------------------------------------
@@ -223,8 +223,8 @@ if (nrow(cf) > 0) {
     labs(x = NULL, y = expression(Delta * "AUC from full")) +
     theme_core() +
     theme(axis.text.x = element_text(angle = 28, hjust = 1))
-  ggsave(file.path(fig_dir, "fig4_core3_lcrf_counterfactual_final.pdf"), p4_auc, width = 7.3, height = 3.1, device = cairo_pdf)
-  ggsave(file.path(fig_dir, "fig4_core3_lcrf_counterfactual_final.png"), p4_auc, width = 7.3, height = 3.1, dpi = 300)
+  ggsave(file.path(fig_dir, "fig4_core3_lcrf_counterfactual_final.pdf"), p4_auc, width = 7.3, height = 3.1, device = cairo_pdf, bg = "white")
+  ggsave(file.path(fig_dir, "fig4_core3_lcrf_counterfactual_final.png"), p4_auc, width = 7.3, height = 3.1, dpi = 300, bg = "white")
 }
 
 # ---------------------------------------------------------------------------
@@ -306,8 +306,8 @@ if (nrow(same) > 0) {
   left <- gridExtra::arrangeGrob(anno_grob, p5a, ncol = 1, heights = c(1.05, 1.1))
   right <- gridExtra::arrangeGrob(p5b, p5c, p5d, state_grob, ncol = 1, heights = c(1.35, 0.9, 0.95, 0.12))
   g5 <- gridExtra::arrangeGrob(left, right, ncol = 2, widths = c(1.0, 1.75))
-  ggsave(file.path(fig_dir, "fig5_core3_lcrf_same_query_posterior_final.pdf"), g5, width = 7.6, height = 6.2, device = cairo_pdf)
-  ggsave(file.path(fig_dir, "fig5_core3_lcrf_same_query_posterior_final.png"), g5, width = 7.6, height = 6.2, dpi = 300)
+  ggsave(file.path(fig_dir, "fig5_core3_lcrf_same_query_posterior_final.pdf"), g5, width = 7.6, height = 6.2, device = cairo_pdf, bg = "white")
+  ggsave(file.path(fig_dir, "fig5_core3_lcrf_same_query_posterior_final.png"), g5, width = 7.6, height = 6.2, dpi = 300, bg = "white")
 }
 
 # ---------------------------------------------------------------------------
@@ -348,8 +348,8 @@ if (nrow(route_summary) > 0 && nrow(route_edges) > 0) {
     theme(legend.position = "bottom")
   note <- textGrob("History-concept fields and degree-random predictions were not exported in the existing CSV; unavailable values are shown as n/a.", x = 0, hjust = 0, gp = gpar(fontsize = 7, col = "grey35"))
   g_route <- gridExtra::arrangeGrob(pred_grob, p_route, note, ncol = 1, heights = c(0.8, 1.55, 0.16))
-  ggsave(file.path(fig_dir, "figS_crg_local_route_cases_core3.pdf"), g_route, width = 7.6, height = 5.3, device = cairo_pdf)
-  ggsave(file.path(fig_dir, "figS_crg_local_route_cases_core3.png"), g_route, width = 7.6, height = 5.3, dpi = 300)
+  ggsave(file.path(fig_dir, "figS_crg_local_route_cases_core3.pdf"), g_route, width = 7.6, height = 5.3, device = cairo_pdf, bg = "white")
+  ggsave(file.path(fig_dir, "figS_crg_local_route_cases_core3.png"), g_route, width = 7.6, height = 5.3, dpi = 300, bg = "white")
 }
 
 # ---------------------------------------------------------------------------
@@ -369,8 +369,8 @@ if (nrow(timeline) > 0) {
   }
   tl <- head(tl, 6)
   g_tl <- make_table(tl, rows = NULL, base_size = 6)
-  ggsave(file.path(fig_dir, "figS_lcrf_specific_student_timeline_core3.pdf"), g_tl, width = 7.8, height = 2.6, device = cairo_pdf)
-  ggsave(file.path(fig_dir, "figS_lcrf_specific_student_timeline_core3.png"), g_tl, width = 7.8, height = 2.6, dpi = 300)
+  ggsave(file.path(fig_dir, "figS_lcrf_specific_student_timeline_core3.pdf"), g_tl, width = 7.8, height = 2.6, device = cairo_pdf, bg = "white")
+  ggsave(file.path(fig_dir, "figS_lcrf_specific_student_timeline_core3.png"), g_tl, width = 7.8, height = 2.6, dpi = 300, bg = "white")
 }
 
 # ---------------------------------------------------------------------------
@@ -396,6 +396,6 @@ if (nrow(state) > 0) {
     x = 0, hjust = 0, gp = gpar(fontsize = 7, col = "grey35")
   )
   g_state <- gridExtra::arrangeGrob(p_state, note, ncol = 1, heights = c(1, 0.13))
-  ggsave(file.path(fig_dir, "figS_lcrf_state_source_audit_core3.pdf"), g_state, width = 7.4, height = 3.8, device = cairo_pdf)
-  ggsave(file.path(fig_dir, "figS_lcrf_state_source_audit_core3.png"), g_state, width = 7.4, height = 3.8, dpi = 300)
+  ggsave(file.path(fig_dir, "figS_lcrf_state_source_audit_core3.pdf"), g_state, width = 7.4, height = 3.8, device = cairo_pdf, bg = "white")
+  ggsave(file.path(fig_dir, "figS_lcrf_state_source_audit_core3.png"), g_state, width = 7.4, height = 3.8, dpi = 300, bg = "white")
 }
