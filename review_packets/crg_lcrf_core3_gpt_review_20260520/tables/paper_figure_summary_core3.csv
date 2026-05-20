@@ -1,0 +1,8 @@
+figure,claim
+fig2_core3_data_and_crg_retrieval_final,data phenomenon and CRG retrieval sufficiency
+fig3_core3_support_corruption_final,dataset-dependent CRG support corruption evidence
+fig4_core3_lcrf_counterfactual_final,LCRF actual-vs-counterfactual necessity with Junyi weak
+fig5_core3_lcrf_same_query_posterior_final,LCRF same-query posterior sufficiency
+figS_crg_local_route_cases_core3,CRG local route appendix cases
+figS_lcrf_specific_student_timeline_core3,LCRF case-table appendix
+figS_lcrf_state_source_audit_core3,LCRF learner-state source audit limitation
