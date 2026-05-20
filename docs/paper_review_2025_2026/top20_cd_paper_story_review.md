@@ -113,40 +113,6 @@
 - LCRF 的充分性：same-query posterior case 在 ASSIST09 与 ASSIST17 过阈值，mean pairwise L1 分别约 0.173 与 0.710；NIPS34 的 same-query posterior 最高 L1 约 0.053，没有过阈值，不能作为该图主例。
 - LCRF 在 Junyi 上不能夸大：Junyi 主要证明 CRG，因为它是 100% bridge-only；LCRF 在 Junyi 只作为谨慎补充。
 
-### 交给 GPT Pro 的仓库审图提示词
-
-下面这段可以直接交给 GPT Pro。目标不是让它重写方法，而是让它先阅读 git 仓库中的代码和实验数据，再决定哪些图最能证明 CRG/LCRF。如果它判断数据不足，需要输出给 Codex 的补充实验提示词。
-
-```text
-你需要作为 cognitive diagnosis 顶会论文的实验设计 reviewer，先完整阅读这个 git 仓库中的代码、README 和实验结果，再决定如何绘制论文机制图。
-
-仓库中重点阅读：
-1. src/ 中和 CRG/LCRF 对应的模型实现，确认 CRG 是否只用 train-only item cooccurrence、sequence transition、self retention，LCRF 是否只在 CRG support 上做 learner-conditioned filtering。
-2. tools/plot_crg_lcrf_mechanism_figures.R，确认当前 R 图是否符合 AAAI/KDD 论文常见风格：小面板、少标题、短标签、caption 承担解释。
-3. results/crg_lcrf_small_core_20260519_compact/README.md。
-4. results/crg_lcrf_small_core_20260519_compact/data_phenomenon/crg_lcrf_data_readiness.csv。
-5. results/crg_lcrf_small_core_20260519_compact/crg_retrieval/*/crg_transition_retrieval.csv。
-6. results/crg_lcrf_small_core_20260519_compact/crg_support_corruption/*/crg_support_corruption_aggregate.csv。
-7. results/crg_lcrf_small_core_20260519_compact/lcrf_case_studies/*/metrics_check.csv。
-8. results/crg_lcrf_small_core_20260519_compact/paper_figures/paper_figure_summary.csv。
-9. docs/paper_review_2025_2026/top20_cd_paper_story_review.md 中的“最终审计与深读结论”。
-
-请完成四件事：
-1. 判断当前 Figure 1-5 是否足以证明两个模块：
-   - CRG 的充分性：train-only concept reachability 是否能检索 held-out concept transition，并强于 random/self。
-   - CRG 的必要性：support corruption 是否能证明模型依赖 evidence support，而不是任意图。
-   - LCRF 的必要性：actual/shuffle/mean/no-filter counterfactual 是否证明个性化状态不可替代。
-   - LCRF 的充分性：是否还缺少 same query different learners 或 posterior heatmap/case 证据。
-2. 如果图不够，请明确指出要替换哪张图，为什么，应该画成什么类型：heatmap、dumbbell、slope chart、case diagram、subgroup curve、support map、posterior map 等。
-3. 如果需要补充实验，请写成可以直接交给 Codex 的提示词，要求包含：
-   - 需要读取哪些 checkpoint/result CSV；
-   - 是否需要重训，还是只做 inference/counterfactual；
-   - 输出哪些 CSV；
-   - 用 R 画哪些图；
-   - 成功/失败判据是什么。
-4. 输出必须非常具体，不要泛泛说“画更好看的图”。每个建议都要对应 CRG 或 LCRF 的一个可检验 claim。
-```
-
 ### 准入审计结论
 
 主表不再追求凑满 20 篇。严格采用“CCF-A 或中科院一区”后，当前可稳定支撑主叙事的是 AAAI/KDD 论文；IJCAI、CIKM、ICASSP 和未核验一区期刊只能作为附录或条件参考。
