@@ -643,10 +643,18 @@ def _plot_figures(out_root: Path) -> None:
         return
     fig_dir = _ensure_dir(out_root / "paper_figures")
 
-    exp1 = pd.concat(
-        [pd.read_csv(p) for p in out_root.glob("*/main_problem_exp1_history_to_query_route_summary.csv")],
-        ignore_index=True,
-    )
+    def _read_csvs(paths: Iterable[Path]) -> pd.DataFrame:
+        frames: List[pd.DataFrame] = []
+        for path in paths:
+            try:
+                frames.append(pd.read_csv(path))
+            except pd.errors.EmptyDataError:
+                continue
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+    exp1 = _read_csvs(out_root.glob("*/main_problem_exp1_history_to_query_route_summary.csv"))
+    if exp1.empty:
+        return
     focus = exp1[exp1["group"].eq("direct_unseen_bridgeable") & exp1["method"].isin(["self-only", "random", "degree-random", "seq-only", "fused CRG"])].copy()
     if not focus.empty:
         fig, ax = plt.subplots(figsize=(7.0, 3.2))
@@ -670,9 +678,8 @@ def _plot_figures(out_root: Path) -> None:
         fig.savefig(fig_dir / "fig_main_problem_exp1_route_retrieval.png", dpi=220)
         plt.close(fig)
 
-    exp2_files = list(out_root.glob("*/main_problem_exp2_coverage_conditioned_metrics.csv"))
-    if exp2_files:
-        exp2 = pd.concat([pd.read_csv(p) for p in exp2_files], ignore_index=True)
+    exp2 = _read_csvs(out_root.glob("*/main_problem_exp2_coverage_conditioned_metrics.csv"))
+    if not exp2.empty:
         focus2 = exp2[exp2["subgroup"].isin(["direct_seen", "direct_unseen_bridgeable", "high_route_mass"]) & exp2["variant"].isin(["no_CRG", "no_LCRF", "self_only", "degree_random_support"])].copy()
         if not focus2.empty:
             fig, axes = plt.subplots(1, 2, figsize=(8.8, 3.2), sharex=False)
@@ -691,9 +698,8 @@ def _plot_figures(out_root: Path) -> None:
             fig.savefig(fig_dir / "fig_main_problem_exp2_coverage_conditioned_prediction.png", dpi=220)
             plt.close(fig)
 
-    exp3_files = list(out_root.glob("*/main_problem_exp3_direct_evidence_removal_summary.csv"))
-    if exp3_files:
-        exp3 = pd.concat([pd.read_csv(p) for p in exp3_files], ignore_index=True)
+    exp3 = _read_csvs(out_root.glob("*/main_problem_exp3_direct_evidence_removal_summary.csv"))
+    if not exp3.empty:
         focus3 = exp3[exp3.get("subgroup", pd.Series([], dtype=str)).eq("paired_bce_increase")].copy()
         if not focus3.empty:
             fig, ax = plt.subplots(figsize=(7.4, 3.2))
@@ -735,20 +741,27 @@ def _success_exp1(summary: pd.DataFrame) -> pd.DataFrame:
 
 
 def write_review_packet(out_root: Path, missing: Sequence[str]) -> None:
-    exp1_files = list(out_root.glob("*/main_problem_exp1_history_to_query_route_summary.csv"))
-    exp2_files = list(out_root.glob("*/main_problem_exp2_coverage_conditioned_metrics.csv"))
-    exp3_files = list(out_root.glob("*/main_problem_exp3_direct_evidence_removal_summary.csv"))
+    def _read_csvs(paths: Iterable[Path]) -> pd.DataFrame:
+        frames: List[pd.DataFrame] = []
+        for path in paths:
+            try:
+                frames.append(pd.read_csv(path))
+            except pd.errors.EmptyDataError:
+                continue
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+    exp1 = _read_csvs(out_root.glob("*/main_problem_exp1_history_to_query_route_summary.csv"))
+    exp2 = _read_csvs(out_root.glob("*/main_problem_exp2_coverage_conditioned_metrics.csv"))
+    exp3 = _read_csvs(out_root.glob("*/main_problem_exp3_direct_evidence_removal_summary.csv"))
     lines = ["# Main Problem Experiment Review Packet", ""]
     lines.append("This packet uses existing checkpoints only. No retraining or model-structure changes were performed.")
     lines.append("")
-    if exp1_files:
-        exp1 = pd.concat([pd.read_csv(p) for p in exp1_files], ignore_index=True)
+    if not exp1.empty:
         success = _success_exp1(exp1)
         lines.extend(["## Experiment 1: History-to-Query Concept Route Retrieval", ""])
         lines.append(success.to_markdown(index=False))
         lines.append("")
-    if exp2_files:
-        exp2 = pd.concat([pd.read_csv(p) for p in exp2_files], ignore_index=True)
+    if not exp2.empty:
         focus = exp2[
             exp2["subgroup"].isin(["direct_seen", "direct_unseen_bridgeable", "high_route_mass", "weak_direct_evidence"])
             & exp2["variant"].isin(["full", "no_CRG", "no_LCRF", "self_only", "degree_random_support"])
@@ -757,8 +770,7 @@ def write_review_packet(out_root: Path, missing: Sequence[str]) -> None:
         cols = [c for c in ("dataset", "subgroup", "variant", "n_eval", "auc", "bce", "auc_gap_full_minus_variant", "bce_gap_variant_minus_full") if c in focus.columns]
         lines.append(focus[cols].to_markdown(index=False) if not focus.empty else "No usable prediction metrics were produced.")
         lines.append("")
-    if exp3_files:
-        exp3 = pd.concat([pd.read_csv(p) for p in exp3_files], ignore_index=True)
+    if not exp3.empty:
         lines.extend(["## Experiment 3: Direct Concept Evidence Removal Counterfactual", ""])
         lines.append(exp3.to_markdown(index=False) if not exp3.empty else "No usable mask-counterfactual metrics were produced.")
         lines.append("")
@@ -795,9 +807,19 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=20260523)
     parser.add_argument("--exp3-max-samples", type=int, default=3000)
     parser.add_argument("--skip-exp3", action="store_true")
+    parser.add_argument("--plot-only", action="store_true", help="Only redraw figures and review packet from existing CSV outputs.")
     args = parser.parse_args()
 
     out_root = _ensure_dir(Path(args.output_root))
+    if args.plot_only:
+        missing = [
+            "plot-only rerun: reused existing CSV outputs without re-running inference",
+            "global_only control was not evaluated unless an existing exact checkpoint was present",
+            "exp3 is a sampled buffer-level student-concept state mask diagnostic, not exact raw-history recomputation",
+        ]
+        _plot_figures(out_root)
+        write_review_packet(out_root, missing)
+        return
     device = torch.device(args.device if torch.cuda.is_available() and str(args.device).startswith("cuda") else "cpu")
     main_table = _read_main_table(Path(args.main_table))
     missing: List[str] = []
