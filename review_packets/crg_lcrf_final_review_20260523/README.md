@@ -12,6 +12,7 @@
 - `papers_original_pdf/`：20 篇原始论文 PDF 和下载 manifest。
 - `figures_main/`：正文候选图。
 - `figures_appendix/`：附录候选图。
+- `figures/`：`paper_draft_cn.md` 正文直接引用的三张机制图。
 - `figures_editable_svg/`：GPT 生成的可编辑 SVG 草图。
 - `figures_editable_pdf/`：SVG 草图对应 PDF。
 - `tables/`：核心实验数据表。
