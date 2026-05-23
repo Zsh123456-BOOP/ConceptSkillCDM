@@ -141,17 +141,41 @@ f_{\theta}(u,t,c,k)
 
 ## 6. 实验设计
 
-本文实验围绕四个目标展开。首先，通过模块消融评估 CRG-LCRF 的预测性能以及 CRG、LCRF 对完整模型的贡献。其次，检验 CRG 是否能够基于训练阶段获得的概念路线检索 held-out concept transitions。第三，在推理阶段扰动 reachable support，评估预测是否依赖 CRG 给出的支持集合。最后，通过学生状态反事实和 same-query case 分析 LCRF 是否在固定 support 内产生学习者条件化的 posterior 变化。
+本文实验围绕机制证据链展开，而不是只给出单一预测排行榜。实验先确认概念证据缺口现象，再评估 CRG 的 route sufficiency evidence、预测层面的 support dependence evidence、LCRF 的 learner-state dependence evidence，以及 same-query 场景下的 case-level mechanism evidence。
 
 ![机制证据链。实验按照机制问题递进组织：先验证概念证据缺口是否存在，再验证 CRG 是否能用 train-only routes 检索 held-out transition，随后测试预测是否依赖 CRG support，最后通过 learner-state counterfactual 和 same-query posterior case 检验 LCRF 的个性化过滤作用。](figures/fig3_mechanism_evidence_chain.png){#fig:evidence-chain width=100%}
 
-如图 \ref{fig:evidence-chain} 所示，本文实验按照机制证据链组织。第一步通过 dataset cards 描述核心数据集中的 sparse history 与 target concept unseen 现象；第二步通过 held-out transition retrieval 验证 CRG 是否能仅依赖训练阶段路线检索未来概念；第三步通过 support corruption 检查预测是否依赖 CRG 给出的 reachable support；第四步通过 learner-state counterfactual 检验真实学生状态是否可以被群体平均或错配状态替代；第五步通过 same-query posterior case 展示同一 query、同一 CRG support 下，不同学生获得不同 posterior route。该实验链对应 CRG 的路线构造能力、CRG support 的预测贡献，以及 LCRF 在固定 support 内的个性化过滤作用。
+如图 \ref{fig:evidence-chain} 所示，实验链分为五步：dataset cards 描述 sparse history 与 target concept unseen 现象；held-out transition retrieval 检验 CRG 是否能从训练阶段路线恢复未来概念；support perturbation 检查预测是否依赖 CRG 给出的 reachable support；learner-state counterfactual 检验真实学生状态能否被均值或错配状态替代；same-query posterior case 展示同一 query、同一 CRG support 下不同学生获得不同 posterior route。该设计将 CRG 的路线构造能力和 LCRF 的支持约束个性化分开评估。
 
-### 6.1 模块消融
+### 6.1 Experimental Settings
 
-表 2 展示三核心数据集上的主消融结果。`full` 表示 CRG+LCRF 完整模型；`no_CRG` 移除全局路线图；`no_LCRF` 保留 CRG 但移除学习者条件化过滤。
+实验使用三个核心数据集：`assist_09`、`junyi` 和 `assist_17`。它们分别覆盖混合概念场景、单概念且强 bridge-only 场景，以及较长学生历史下的 support-dependence 场景。所有数据集均使用既定 train/validation/test split；CRG 由训练阶段可观测证据估计，并在验证和测试阶段保持固定。评价指标包括 AUC、ACC 和 RMSE，其中 AUC 作为主要预测指标，ACC 与 RMSE 用于补充衡量分类准确性和概率误差。
 
-**表 2：三核心数据集主消融结果**
+本文报告两类结果。第一类是预测性能与模块消融，用于比较完整模型、移除 CRG 的变体和移除 LCRF 的变体。第二类是机制实验，包括 CRG route retrieval、support perturbation、learner-state counterfactual 和 same-query posterior case。正式投稿版本还需要补充与 IRT、MIRT、DINA、NCDM、KaNCD、RCD/SCD/ORCDF 等代表性 CD baseline 的统一对比。
+
+### 6.2 Overall Prediction Performance
+
+表 2 预留主性能对比位置，用于报告 CRG-LCRF 与代表性认知诊断模型的整体预测性能。当前草稿不填入未运行的 baseline 数值；后续应在相同数据划分、指标和调参协议下补齐。
+
+**表 2：Overall prediction performance（待补 baseline）**
+
+| Dataset   | Metric | IRT | MIRT | DINA | NCDM | KaNCD | RCD/SCD/ORCDF | CRG-LCRF |
+| --------- | ------ | --: | ---: | ---: | ---: | ----: | ------------: | -------: |
+| assist_09 | AUC    | TBD |  TBD |  TBD |  TBD |   TBD |           TBD |   0.7783 |
+| assist_09 | ACC    | TBD |  TBD |  TBD |  TBD |   TBD |           TBD |   0.7407 |
+| assist_09 | RMSE   | TBD |  TBD |  TBD |  TBD |   TBD |           TBD |   0.4178 |
+| junyi     | AUC    | TBD |  TBD |  TBD |  TBD |   TBD |           TBD |   0.8291 |
+| junyi     | ACC    | TBD |  TBD |  TBD |  TBD |   TBD |           TBD |   0.7688 |
+| junyi     | RMSE   | TBD |  TBD |  TBD |  TBD |   TBD |           TBD |   0.4008 |
+| assist_17 | AUC    | TBD |  TBD |  TBD |  TBD |   TBD |           TBD |   0.7847 |
+| assist_17 | ACC    | TBD |  TBD |  TBD |  TBD |   TBD |           TBD |   0.7151 |
+| assist_17 | RMSE   | TBD |  TBD |  TBD |  TBD |   TBD |           TBD |   0.4321 |
+
+### 6.3 Ablation Study
+
+表 3 展示三核心数据集上的模块消融结果。`full` 表示 CRG+LCRF 完整模型；`no_CRG` 移除全局路线图；`no_LCRF` 保留 CRG 但移除学习者条件化过滤。
+
+**表 3：三核心数据集模块消融结果**
 
 | 数据集    | 模型变体 |    AUC |    ACC |   RMSE | 相对 Full 的 AUC 下降 |
 | --------- | -------- | -----: | -----: | -----: | --------------------: |
@@ -165,13 +189,13 @@ f_{\theta}(u,t,c,k)
 | assist_17 | no_CRG   | 0.7647 | 0.6973 | 0.4413 |                0.0200 |
 | assist_17 | no_LCRF  | 0.7829 | 0.7132 | 0.4359 |                0.0018 |
 
-表 2 展示了 CRG-LCRF 及其模块消融的预测性能。完整模型在 `assist_09` 和 `assist_17` 上均取得最高 AUC，相比 `no_CRG` 分别提升 1.12% 和 2.00%。移除 LCRF 在 `assist_09` 上带来更明显下降，而在 `junyi` 与 `assist_17` 的直接模块删除设置下影响较小。该结果表明，CRG 提供主要的 reachable-support 信号；LCRF 的作用则需要结合第 6.4 节的学习者状态反事实进一步分析。
+表 3 显示，完整模型在 `assist_09` 和 `assist_17` 上均取得最高 AUC，相比 `no_CRG` 分别提升 1.12% 和 2.00%。移除 LCRF 在 `assist_09` 上带来更明显下降，而在 `junyi` 与 `assist_17` 的直接模块删除设置下影响较小。该结果表明，CRG 提供主要的 reachable-support 信号；LCRF 的作用进一步由第 6.6 节的学习者状态反事实分析刻画。
 
-### 6.2 CRG 路线检索：held-out transition retrieval
+### 6.4 CRG Route Retrieval
 
-为了验证 CRG 是否具备 train-only 找路能力，本文使用训练集构造 CRG，并在 held-out concept transition 上评估检索。对比方法包括 self-only、random/uniform、degree-random 和 best CRG。
+本节检验 CRG 是否具备 route sufficiency evidence。我们使用训练集构造 CRG，并在 held-out concept transition 上评估检索。对比方法包括 self-only、random/uniform、degree-random 和 best CRG。
 
-**表 3：CRG held-out transition retrieval 结果**
+**表 4：CRG held-out transition retrieval 结果**
 
 | 数据集    | Self Hit@10 | Random/Uniform Hit@10 | Degree-random Hit@10 | Best CRG Hit@10 | Best CRG NDCG@10 | Best CRG MRR |
 | --------- | ----------: | --------------------: | -------------------: | --------------: | ---------------: | -----------: |
@@ -179,13 +203,13 @@ f_{\theta}(u,t,c,k)
 | junyi     |      0.0020 |                0.0219 |               0.0171 |          0.1648 |           0.0782 |       0.0717 |
 | assist_17 |      0.1320 |                0.1544 |               0.1618 |          0.4113 |           0.2293 |       0.1987 |
 
-结果显示，Best CRG 在三个数据集上均显著强于 self-only 和 random baselines。`junyi` 尤其重要，因为其 item edge density 为 0，说明 CRG 的检索能力并不依赖题内多概念共现；sequence route 可以成为主要路线来源。
+结果显示，Best CRG 在三个数据集上均显著强于 self-only 和 random baselines。`junyi` 的 item edge density 为 0，因此该结果说明 CRG 的路线检索能力并不依赖题内多概念共现；sequence route 可以成为主要路线来源。
 
-### 6.3 CRG 支持依赖：support corruption
+### 6.5 CRG Support Perturbation
 
-Retrieval 评估 CRG 的路线恢复能力。为了进一步分析预测过程对 CRG support 的依赖，本文进行 support corruption：在不重训的情况下，替换或破坏 CRG support，并观察预测性能变化。对照包括 evidence support corruption、degree-matched random support、sequence-shuffled support 和 self-only fallback。
+Retrieval 评估 CRG 的路线恢复能力；support perturbation 进一步分析预测层面的 support dependence evidence。我们在不重训的情况下替换或破坏 CRG support，并观察预测性能变化。对照包括 evidence support corruption、degree-matched random support、sequence-shuffled support 和 self-only fallback。
 
-**表 4：100% support corruption 下的预测损伤（all subgroup）**
+**表 5：100% support corruption 下的预测损伤（all subgroup）**
 
 | 数据集    | 破坏类型            |  AUC drop | BCE increase |
 | --------- | ------------------- | --------: | -----------: |
@@ -197,13 +221,13 @@ Retrieval 评估 CRG 的路线恢复能力。为了进一步分析预测过程�
 | assist_17 | degree-random       | 约 0.0032 |    约 0.0178 |
 | assist_17 | sequence-shuffled   | 约 0.0001 |    约 0.0001 |
 
-表 4 表明，CRG support perturbation 会改变模型预测表现。`assist_17` 中 evidence corruption 明显强于 degree-random，尤其 AUC drop gap 更突出，说明模型对 evidence-supported routes 具有较强依赖。`assist_09` 中 evidence corruption 与 degree-random 接近，体现出模型对候选 support substrate 的依赖。`junyi` 的 AUC 变化较小，但 BCE increase 仍显示 support 扰动会影响概率校准。
+表 5 表明，CRG support perturbation 会改变模型预测表现。`assist_17` 中 evidence corruption 明显强于 degree-random，尤其 AUC drop gap 更突出，说明模型对 evidence-supported routes 具有较强依赖。`assist_09` 中 evidence corruption 与 degree-random 接近，体现出模型对候选 support substrate 的依赖。`junyi` 的 AUC 变化较小，但 BCE increase 仍显示 support 扰动会影响概率校准。
 
-### 6.4 LCRF 学生状态反事实
+### 6.6 Learner-State Counterfactual
 
-本文通过三种反事实变体分析 LCRF 对学习者状态的使用方式：`no_filter` 表示移除 LCRF；`mean_state` 用群体平均学生状态替代真实状态；`shuffle_state` 打乱学生状态。
+本节检验 LCRF 的 learner-state dependence evidence。我们使用三种反事实变体分析 LCRF 对学习者状态的使用方式：`no_filter` 表示移除 LCRF；`mean_state` 用群体平均学生状态替代真实状态；`shuffle_state` 打乱学生状态。
 
-**表 5：LCRF counterfactual 结果**
+**表 6：LCRF counterfactual 结果**
 
 | 数据集    | 变体          |    AUC |   RMSE | 相对 Full 的 AUC 下降 |
 | --------- | ------------- | -----: | -----: | --------------------: |
@@ -217,15 +241,15 @@ Retrieval 评估 CRG 的路线恢复能力。为了进一步分析预测过程�
 | assist_17 | mean_state    | 0.6441 | 0.4865 |                0.1406 |
 | assist_17 | shuffle_state | 0.5966 | 0.5196 |                0.1881 |
 
-表 5 区分了模块移除和状态替换两类干预。`no_filter` 反映移除 LCRF 后的整体预测变化；`mean_state` 和 `shuffle_state` 进一步检验真实学习者状态是否可以由群体平均状态或错配状态替代。`assist_09` 和 `assist_17` 在 mean/shuffle 干预下出现明显下降，说明 LCRF 的 posterior route 依赖学习者条件化状态，而不是固定全局补丁。
+![LCRF learner-state counterfactual。图中比较 no-filter、mean-state 和 shuffle-state 相对 full 的 AUC/BCE 变化，用于展示真实学习者状态对 posterior route 的影响。](figures/fig4_core3_lcrf_counterfactual_final.png){#fig:lcrf-counterfactual width=100%}
 
-### 6.5 LCRF same-query posterior case
+表 6 与图 \ref{fig:lcrf-counterfactual} 区分了模块移除和状态替换两类干预。`no_filter` 反映移除 LCRF 后的整体预测变化；`mean_state` 和 `shuffle_state` 进一步检验真实学习者状态是否可以由群体平均状态或错配状态替代。`assist_09` 和 `assist_17` 在 mean/shuffle 干预下出现明显下降，说明 LCRF 的 posterior route 依赖学习者条件化状态，而不是固定全局补丁。
 
-为了验证 LCRF 是否真的在同一 CRG support 内做个性化过滤，本文固定同一个 query concept 和相同 CRG support，比较不同学生得到的 posterior route 分布。
+### 6.7 Same-Query Posterior Case
 
-`assist_17` 的主 case 为 `assist_17_Q14_S25`。该 case 中所有学生共享相同 support，support size 为 25；候选统计显示 mean pairwise L1 最高可达到约 0.801，JS 约 0.129。two-student case 中，S1 与 S7 的 posterior route 差异明显。
+为了展示 case-level mechanism evidence，本文固定同一个 query concept 和相同 CRG support，比较不同学生得到的 posterior route 分布。`assist_17` 的主 case 为 `assist_17_Q14_S25`。该 case 中所有学生共享相同 support，support size 为 25；候选统计显示 mean pairwise L1 最高可达到约 0.801，JS 约 0.129。two-student case 中，S1 与 S7 的 posterior route 差异明显。
 
-**表 6：assist_17 two-student same-query posterior case**
+**表 7：assist_17 two-student same-query posterior case**
 
 | 学生 | true label | query mastery | recent mastery | pred_global | pred_full | top support | posterior prob | global prob | posterior-global |
 | ---- | ---------: | ------------: | -------------: | ----------: | --------: | ----------- | -------------: | ----------: | ---------------: |
@@ -236,63 +260,52 @@ Retrieval 评估 CRG 的路线恢复能力。为了进一步分析预测过程�
 | S7   |          0 |        -0.568 |         -0.409 |       0.427 |     0.324 | C7          |          0.287 |       0.243 |            0.044 |
 | S7   |          0 |        -0.568 |         -0.409 |       0.427 |     0.324 | C4          |          0.169 |       0.096 |            0.073 |
 
-该 case 展示了 LCRF 的个性化过滤机制：在同一 query、同一 CRG support 下，不同学生会得到不同 posterior route。
-
 ![LCRF same-query posterior case。图中固定同一 query 和同一 CRG support，展示不同学生的 posterior-minus-global 分布、预测变化和局部路线差异。](figures/fig5_core3_lcrf_same_query_posterior_final.png){#fig:lcrf-same-query width=100%}
 
-图 \ref{fig:lcrf-same-query} 进一步可视化了 LCRF 如何把同一全局 support 过滤成学生局部 posterior route。两个学生共享相同 CRG support，但 posterior mass 集中到不同 support concepts，预测概率也随之发生不同幅度的变化。
-
-### 6.6 学习者状态来源分析
-
-表 7 展示 LCRF learner-state source analysis。已有结果显示，`mean_state_keep_id` 和 `shuffle_state_keep_id` 会显著伤害 `assist_09` 和 `assist_17`，说明 query mastery、recent mastery 和 route-neighbor state 等学习者状态是 LCRF posterior 变化的重要来源。
-
-**表 7：LCRF learner-state source analysis**
-
-| 数据集    | 变体                  |    AUC | AUC drop |
-| --------- | --------------------- | -----: | -------: |
-| assist_09 | full                  | 0.7783 |   0.0000 |
-| assist_09 | shuffle_state_keep_id | 0.5751 |   0.2032 |
-| assist_09 | mean_state_keep_id    | 0.6065 |   0.1718 |
-| assist_09 | global_only           | 0.7634 |   0.0149 |
-| assist_17 | full                  | 0.7847 |   0.0000 |
-| assist_17 | shuffle_state_keep_id | 0.5966 |   0.1881 |
-| assist_17 | mean_state_keep_id    | 0.6441 |   0.1406 |
-| assist_17 | global_only           | 0.7829 |   0.0018 |
-| junyi     | full                  | 0.8291 |   0.0000 |
-| junyi     | shuffle_state_keep_id | 0.8188 |   0.0103 |
-| junyi     | mean_state_keep_id    | 0.8259 |   0.0033 |
-
-这些结果与第 6.4 节的状态反事实相互印证：当真实学习者状态被平均化或错配替换时，LCRF 的后验路线分布和预测表现都会发生明显变化。更细粒度的学生状态来源分解可作为后续扩展方向。
+表 7 与图 \ref{fig:lcrf-same-query} 展示了 LCRF 的支持约束个性化机制：在同一 query、同一 CRG support 下，不同学生会得到不同 posterior route。两个学生共享相同 CRG support，但 posterior mass 集中到不同 support concepts，预测概率也随之发生不同幅度的变化。
 
 ---
 
 ## 7. 讨论
 
-本文将概念诊断中的证据来源拆解为两个层次。第一层是全局可审计路线图：在学生历史缺少目标概念直接证据时，模型需要识别哪些历史概念可以通过训练阶段路线支持当前概念。第二层是局部个性化过滤：同一条路线对不同学生不一定同样可信，需要由学生状态决定 posterior route mass。
+**Why route evidence matters.** 概念证据缺口要求模型在目标概念缺少直接历史覆盖时仍能获得可审计 support。CRG 将题内共现、经验序列路线、自保持和可靠性统计组织成 CRG roadmap，并通过 held-out transition retrieval 展示其路线检索能力。尤其在题内共现稀疏或缺失的数据中，sequence route 为目标概念提供了重要的桥接信号。
 
-实验结果揭示了两种互补机制。在题内共现较稀疏的数据中，序列路线为概念可达性提供主要桥接信号；在 support-dependence 更明显的数据中，扰动 CRG support 会直接影响预测，说明模型利用了检索到的路线支持，而不是仅依赖全局先验。LCRF 则进一步在相同 support 内引入学习者条件化 posterior shift，使不同学生在同一 query 下可以强调不同支撑概念。
+**Why support-constrained personalization matters.** 全局路线只回答“哪些概念可以作为 support”，但不同学生对同一路线的掌握状态并不相同。LCRF 在 fixed support \(S_A(c)\) 内调整 posterior route，使个性化诊断发生在可审计候选集合内部。Learner-state counterfactual 与 same-query posterior case 共同说明，真实学习者状态会影响 posterior mass 的分配。
 
-这组发现与模块定位一致：CRG 提供面向概念证据缺口的全局路线支持，LCRF 在固定 support 内进行学习者条件化过滤。二者共同使模型能够从“是否存在可审计路线”和“该路线是否适合当前学生”两个层次组织诊断证据。
+**Evidence regimes across datasets.** 三个核心数据集呈现不同 evidence regime。`junyi` 更突出 CRG route retrieval，因为其题内共现缺失且 direct-unseen 比例高；`assist_17` 更突出 prediction-level support dependence 和 same-query posterior case；`assist_09` 则体现混合概念场景下 CRG 与 LCRF 的共同作用。这种差异说明，CRG-LCRF 的证据链不依赖单一数据现象，而是围绕 support construction 与 support-constrained personalization 两个层次展开。
 
 ---
 
 ## 8. 结论
 
-本文提出面向概念证据缺口的可审计概念可达性认知诊断框架。CRG 从训练集题内共现、序列转移和自保持证据中构造全局概念路线图，用于连接学生历史概念和当前目标概念；LCRF 在 CRG 固定 support 内，根据学生状态重排 posterior route，实现局部个性化过滤。
+本文研究认知诊断中的概念证据缺口问题：当目标概念缺少学生历史中的直接证据时，模型需要先获得可审计概念 support，再判断该 support 是否适合当前学生。为此，本文提出 CRG-LCRF 框架。CRG 从训练阶段可观测的题内共现、序列转移和自保持证据中构造 CRG roadmap，并为目标概念提供 fixed support \(S_A(c)\)；LCRF 在该 support 内根据学习者状态重排 posterior route，实现 support-constrained personalization。
 
-三核心数据集上的实验表明，CRG 能有效检索 held-out concept transitions，support perturbation 会影响预测表现；LCRF 在 `assist_09` 和 `assist_17` 上通过 mean/shuffle counterfactual 展示真实学生状态的重要性，并通过 same-query case 展示同一 support 被不同学生过滤成不同 posterior。该框架为认知诊断中的可审计概念路线建模和个性化路线过滤提供了一种有效方案。未来工作将进一步扩展 CRG 的高阶概念路线建模，并研究更细粒度的学习者状态来源审计。
+三核心数据集上的实验表明，CRG 能有效检索 held-out concept transitions，support perturbation 会影响预测表现；LCRF 在 `assist_09` 和 `assist_17` 上通过 mean/shuffle counterfactual 展示真实学生状态的重要性，并通过 same-query case 展示同一 support 被不同学生过滤成不同 posterior。该框架为稀疏概念证据场景下的可审计路线建模和个性化过滤提供了一种 route-support 视角。未来工作将进一步扩展 CRG 的高阶概念路线建模，并研究更细粒度的学习者状态来源分解。
 
 ---
 
-## 参考文献占位
+## BibTeX TODO
 
-> 注：正式投稿时需要统一 BibTeX。以下只列本草稿中应引用的文献类型。
+正式投稿前需要将以下条目替换为完整 BibTeX，并在相关工作、实验 baseline 和方法对比中统一引用。
 
-1. Neural Cognitive Diagnosis / NCDM 原始论文。
-2. RCD、SCD、KaNCD 等图式或神经认知诊断代表方法。
-3. KCD：冷启动场景和 LLM prior alignment。
-4. DBCD：MNAR / counterfactual debiasing。
-5. NCDLA：噪声鲁棒认知诊断与谱结构分析。
-6. ISG-CD：图边异质性与不确定性，support corruption/control。
-7. ESR-CD：student-concept sparsity barrier 相关问题设定参考。
-8. DFCD / LRCD：open / zero-shot 认知诊断场景。
+```bibtex
+% Classical cognitive diagnosis / psychometrics
+@todo{irt, note = {Item Response Theory baseline}}
+@todo{mirt, note = {Multidimensional IRT baseline}}
+@todo{dina, note = {DINA cognitive diagnosis baseline}}
+
+% Neural and graph-based cognitive diagnosis baselines
+@todo{ncdm, note = {Neural Cognitive Diagnosis Model}}
+@todo{kancd, note = {Knowledge-aware Neural Cognitive Diagnosis}}
+@todo{rcd, note = {Relation-aware Cognitive Diagnosis}}
+@todo{scd, note = {Graph or structured cognitive diagnosis baseline}}
+@todo{orcdf, note = {Recent graph-based / debiased CD baseline if used}}
+
+% Recent problem settings and mechanism references
+@todo{kcd, note = {Cold-start / LLM-prior cognitive diagnosis reference}}
+@todo{isgcd, note = {Graph edge heterogeneity / uncertainty in CD}}
+@todo{dbcd, note = {MNAR / counterfactual debiasing in CD}}
+@todo{ncdla, note = {Noise-robust CD and spectral structure analysis}}
+@todo{dfcd, note = {Open / zero-shot or distributional CD reference}}
+@todo{lrcd, note = {Recent learner-relation or open-setting CD reference}}
+```
