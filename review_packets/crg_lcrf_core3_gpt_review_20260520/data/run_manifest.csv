@@ -1,3 +1,0 @@
-script,input,output,checkpoint,retrained,train_only_support_check,recommend_main_text,exists
-tools/plot_crg_lcrf_core3_final.R,results/crg_lcrf_core3_final_20260520/*.csv,"results/crg_lcrf_core3_final_20260520/paper_figures/*_final.{png,pdf}",not used,False,inherited from retained diagnostics,True,True
-tools/plot_crg_lcrf_core3_final.R,results/crg_lcrf_core3_final_20260520/*.csv,"results/crg_lcrf_core3_final_20260520/paper_figures/figS_*.{png,pdf}",not used,False,inherited from retained diagnostics,False,True
