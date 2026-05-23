@@ -753,13 +753,28 @@ def write_review_packet(out_root: Path, missing: Sequence[str]) -> None:
     exp1 = _read_csvs(out_root.glob("*/main_problem_exp1_history_to_query_route_summary.csv"))
     exp2 = _read_csvs(out_root.glob("*/main_problem_exp2_coverage_conditioned_metrics.csv"))
     exp3 = _read_csvs(out_root.glob("*/main_problem_exp3_direct_evidence_removal_summary.csv"))
+
+    def _md_table(frame: pd.DataFrame) -> str:
+        if frame.empty:
+            return ""
+        cols = list(frame.columns)
+        out = ["| " + " | ".join(cols) + " |", "| " + " | ".join(["---"] * len(cols)) + " |"]
+        for row in frame.itertuples(index=False):
+            vals: List[str] = []
+            for value in row:
+                if isinstance(value, float):
+                    vals.append("" if not np.isfinite(value) else f"{value:.6f}")
+                else:
+                    vals.append(str(value))
+            out.append("| " + " | ".join(vals) + " |")
+        return "\n".join(out)
     lines = ["# Main Problem Experiment Review Packet", ""]
     lines.append("This packet uses existing checkpoints only. No retraining or model-structure changes were performed.")
     lines.append("")
     if not exp1.empty:
         success = _success_exp1(exp1)
         lines.extend(["## Experiment 1: History-to-Query Concept Route Retrieval", ""])
-        lines.append(success.to_markdown(index=False))
+        lines.append(_md_table(success))
         lines.append("")
     if not exp2.empty:
         focus = exp2[
@@ -768,11 +783,11 @@ def write_review_packet(out_root: Path, missing: Sequence[str]) -> None:
         ].copy()
         lines.extend(["## Experiment 2: Coverage-conditioned Prediction", ""])
         cols = [c for c in ("dataset", "subgroup", "variant", "n_eval", "auc", "bce", "auc_gap_full_minus_variant", "bce_gap_variant_minus_full") if c in focus.columns]
-        lines.append(focus[cols].to_markdown(index=False) if not focus.empty else "No usable prediction metrics were produced.")
+        lines.append(_md_table(focus[cols]) if not focus.empty else "No usable prediction metrics were produced.")
         lines.append("")
     if not exp3.empty:
         lines.extend(["## Experiment 3: Direct Concept Evidence Removal Counterfactual", ""])
-        lines.append(exp3.to_markdown(index=False) if not exp3.empty else "No usable mask-counterfactual metrics were produced.")
+        lines.append(_md_table(exp3) if not exp3.empty else "No usable mask-counterfactual metrics were produced.")
         lines.append("")
     lines.extend(["## Recommendation", ""])
     recommendation = (
