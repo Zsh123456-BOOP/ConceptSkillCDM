@@ -837,6 +837,19 @@ LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，回�
 4. 不建议把 LCRF 写成“重新生成学生个性化图”。更稳的是：LCRF 不扩 support，只在 CRG 的 support 上做局部 posterior reweighting。
 5. 不建议把所有新数据集都塞进主表。如果 FrcSub/EdNet/ASSIST12 清洗后消融不稳定，可以放 appendix 或 generalization table。
 
+## 2026-05-23 中文初稿对齐说明
+
+后续论文草稿以 `docs/paper_review_2025_2026/crg_lcrf_cn_paper_draft.md` 为准。旧的 “Reliable Global Learning Map / Personalized Local Route Map” 只是中间命名讨论，不再作为正式稿件组件名。
+
+当前正式叙事更新为：
+
+1. 主问题：**概念证据缺口**，即目标概念在学生历史中缺少直接作答证据，但可能通过训练集经验路线获得可审计 support。
+2. 主模块：**Concept Reachability Graph, CRG**，只用 train-only item co-occurrence、sequence transition 和 self-retention 构造全局概念路线图。
+3. 副模块：**Learner-Conditioned Reachability Filter, LCRF**，不新增图边，只在 CRG 固定 support 内根据学生状态重排 posterior route。
+4. 实验边界：CRG 是主路线图；LCRF 是固定 support 内的个性化过滤；Junyi 主讲 CRG，不强讲 LCRF；student-ID shortcut 只能作为 limitation，不写成已完全排除。
+
+完整中文初稿包已经放入 `review_packets/crg_lcrf_cn_draft_review_20260523/`，可直接上传给师兄或 GPT Pro 复审。
+
 
 
 

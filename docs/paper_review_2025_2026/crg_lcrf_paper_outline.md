@@ -1,20 +1,22 @@
 # CRG/LCRF 论文大纲稿
 
-本文当前主线不是证明一个黑盒网络更强，而是从数据现象出发，解释认知诊断中一个更具体的问题：学生在测试中遇到的概念，很多时候不能被历史作答直接覆盖，但可以通过训练集中的概念路径被“到达”。因此模型需要先有一张全局路线图，再根据学生个人状态过滤这张路线图。
+本文当前主线不是证明一个黑盒网络更强，而是从数据现象出发，解释认知诊断中一个更具体的问题：学生在测试中遇到的概念，很多时候不能被历史作答直接覆盖，但可以通过训练集中的概念路径被“到达”。因此模型需要先有一张全局路线图，再根据学生个人状态过滤这张路线图。中文初稿已经统一改为 **“概念证据缺口”** 叙事，避免把问题窄化为题内多知识点共现。
 
 > 图片引用说明：本大纲引用同目录 `figures/` 下的 5 张 PNG。交给 GPT Pro 时，请同时上传本 md 和 `figures/` 中的 5 张图；如果只复制 md 文本，任何本地图片路径都不会自动可见。
+>
+> 中文初稿位置：`docs/paper_review_2025_2026/crg_lcrf_cn_paper_draft.md`；完整可上传初稿包位置：`review_packets/crg_lcrf_cn_draft_review_20260523/` 或 `review_packets/crg_lcrf_cn_draft_review_20260523.zip`。
 
 ## 题目占位
 
 **Concept Reachability under Sparse Response Evidence for Cognitive Diagnosis**
 
-中文暂定：**稀疏作答证据下的概念可达性认知诊断**
+中文暂定：**面向概念证据缺口的可审计概念可达性认知诊断**
 
 ## 核心问题
 
 现实学习平台中，学生不会完整练习所有知识点，测试题的目标概念也不一定在该学生历史中直接出现。此时诊断模型如果只依赖学生已作答概念，容易缺少连接当前概念的依据。
 
-本文把这个问题定义为 **concept reachability under sparse response evidence**：
+本文把这个问题定义为 **concept evidence gap / concept reachability under sparse response evidence**：
 
 - 学生历史中可能没有当前 query concept 的直接证据；
 - 但历史概念和当前概念可能通过训练集中的 item co-occurrence 或 sequence transition 连接；
