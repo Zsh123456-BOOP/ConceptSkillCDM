@@ -53,3 +53,7 @@
 - 模型/实验类任务优先给真实 run id、日志路径、结果 CSV、checkpoint 路径和验证命令。
 - 如果指标明显停滞或数值异常，先停实验并看日志/诊断指标，不要盲目把所有 epoch 跑完。
 - 若用户要求清理 logs/results，清理前先保存必要 summary；除非用户明确要求，否则不要删除可复现所需的最佳配置和小型结果表。
+
+## 论文写作补充
+
+- 修改 CRG/LCRF 或认知诊断论文稿件前，先阅读 `docs/paper_review_2025_2026/codex_cd_writing_guardrails.md`，遵守其中的去 AI 味、去防御性表达和实验表述边界。
