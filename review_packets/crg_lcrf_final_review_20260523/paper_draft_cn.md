@@ -16,9 +16,9 @@
 
 概念证据缺口并不等同于简单的数据稀疏。对于认知诊断而言，关键不只是学生历史长度是否短，而是当前目标概念是否能从学生历史概念中获得可审计连接。即使一道题只对应一个知识点，训练集日志中仍可能存在从历史概念到目标概念的经验性学习路线，例如不同概念在学生训练序列中的转移关系。相反，如果只依赖题内多概念共现，那么在 `junyi` 这类 100% 单概念题数据集中，概念图将退化为近似空图。因此，本文不把“题内概念共现”作为唯一关系来源，而是把它作为训练集经验路线的一种可用证据。
 
-为解决这一问题，本文提出 CRG/LCRF 两阶段机制。CRG 首先估计全局概念可达 support，用于刻画当前目标概念能否从学生历史概念通过训练集路线被连接；LCRF 随后在该固定 support 上建模学习者条件化 posterior，用于判断同一条可达路线对当前学生的可信程度。CRG 的 support 是可审计的、由训练阶段证据估计的；LCRF 的 posterior 只在该 support 内重排，不生成新图。
+为解决这一问题，本文提出 CRG/LCRF 两阶段机制。CRG 首先估计全局概念可达 support，用于刻画当前目标概念能否从学生历史概念通过训练集路线被连接；LCRF 随后在该固定 support 上建模学习者条件化 posterior，用于判断同一条可达路线对当前学生的可信程度。CRG 的 support 是可审计的、由训练阶段证据估计的；LCRF 的 posterior 在该 support 内完成学习者条件化重排。
 
-![概念证据缺口与支持约束个性化。当学生历史只覆盖少量历史概念 \(h_1,h_2,h_3\)，而当前目标概念 \(c\) 未被直接观测时，模型面临 direct evidence gap。CRG 使用训练集中的题内共现、序列转移、自保持和可靠性统计构造可审计的可达 support；LCRF 不新增 support，而是在相同 support 内根据学生状态重排 posterior weight。](figures/fig1_concept_gap.png){#fig:concept-gap width=100%}
+![概念证据缺口与支持约束个性化。当学生历史只覆盖少量历史概念 \(h_1,h_2,h_3\)，而当前目标概念 \(c\) 未被直接观测时，模型面临 direct evidence gap。CRG 使用训练集中的题内共现、序列转移、自保持和可靠性统计构造可审计的可达 support；LCRF 在相同 support 内根据学生状态重排 posterior weight。](figures/fig1_concept_gap.png){#fig:concept-gap width=100%}
 
 如图 \ref{fig:concept-gap} 所示，概念证据缺口描述的是目标概念与学生历史概念之间缺少直接可审计连接的场景。左侧的学生历史包含已观测过的概念及有限正确、错误、未观测记录，目标概念 \(c\) 需要被预测，但并未出现在该学生的历史概念集合中。中间的 CRG 利用训练集中的经验路线把历史概念连接到目标概念，其中 sequence transition 表示训练日志中的经验学习路线，而非严格先修关系。右侧的 LCRF 进一步在 CRG 给出的固定 support 内进行个性化后验重排，使 posterior mass 随学生状态变化而变化。
 
@@ -26,7 +26,7 @@
 
 1. 提出“概念证据缺口”视角，将直接覆盖不足场景下的认知诊断转化为训练集概念路线的检索与过滤问题。
 2. 设计 CRG，只使用训练集题内共现、序列转移和自保持证据构造可审计全局概念路线图。
-3. 设计 LCRF，在不新增 support 的前提下，根据学生 mastery、recent mastery 和历史计数对同一 CRG support 进行后验过滤。
+3. 设计 LCRF，根据学生 mastery、recent mastery 和历史计数对同一 CRG support 进行后验过滤。
 4. 设计一组机制实验链：retrieval 验证 CRG 找路能力，support corruption 验证模型是否依赖 CRG support，state counterfactual 分析 LCRF 对学习者状态的使用，same-query case 展示同一 support 的个性化过滤。
 
 ---
@@ -51,37 +51,9 @@
 
 ## 3. 问题定义：概念证据缺口
 
-设学生集合为 \(\mathcal{U}\)，题目集合为 \(\mathcal{E}\)，概念集合为 \(\mathcal{C}\)。题目-概念矩阵为：
+设学生、题目和概念集合分别为 \(\mathcal{U}\)、\(\mathcal{E}\) 和 \(\mathcal{C}\)。题目-概念矩阵 \(Q\) 描述每道题涉及的概念，学生作答日志 \(\mathcal{R}\) 由学生、题目和二值作答结果组成。给定学生 \(u\) 在时间 \(t\) 的 query exercise，记 \(H_{u,t}\) 为该学生此前作答历史中出现过的概念集合。
 
-\[
-Q\in\{0,1\}^{|\mathcal{E}|\times |\mathcal{C}|},
-\]
-
-其中 \(Q_{e,c}=1\) 表示题目 \(e\) 涉及概念 \(c\)。学生作答日志为：
-
-\[
-\mathcal{R}=\{(u,e_t,r_{u,t})\mid u\in\mathcal{U}, e_t\in\mathcal{E}, r_{u,t}\in\{0,1\}\}.
-\]
-
-学生 \(u\) 在时间 \(t\) 前的历史概念集合定义为：
-
-\[
-H_{u,t}=\bigcup_{\tau<t} \{c\in\mathcal{C}: Q_{e_{u,\tau},c}=1\}.
-\]
-
-对当前题目 \(e_t\) 的目标概念 \(c\)，定义直接历史证据指示：
-
-\[
-D_{u,t}(c)=\mathbb{I}[c\in H_{u,t}].
-\]
-
-当 \(D_{u,t}(c)=0\) 时，学生历史中没有目标概念 \(c\) 的直接证据。此时，如果训练集构造的概念路线图 \(A_{\mathrm{CRG}}\) 能够将历史概念连接到目标概念，则该目标概念仍具有可达支持：
-
-\[
-R_{u,t}(c)=\max_{h\in H_{u,t}} A_{\mathrm{CRG}}(h,c).
-\]
-
-本文使用 \(D_{u,t}(c)\) 描述目标概念是否被学生历史直接覆盖，使用 \(R_{u,t}(c)\) 描述目标概念是否能由 CRG 从历史概念获得可达支持。这两个量用于刻画 query 的证据条件，而不是限制预测任务本身；模型仍在完整作答样本上训练与评估，机制分析重点关注 direct-unseen but reachable 场景。概念可达图仅由训练阶段可观测的概念关系估计，并在验证与测试阶段保持固定。
+本文使用两个诊断量刻画 query 的概念证据条件。直接覆盖 \(D_{u,t}(c)\) 表示目标概念 \(c\) 是否已经出现在 \(H_{u,t}\) 中；CRG reachability 表示目标概念是否能在 CRG 给出的固定 support \(S_A(c)\) 中获得证据支持。这两个量用于数据现象分析和机制解释，而不是限制预测任务本身；模型仍在完整作答样本上训练与评估。概念可达图由训练阶段可观测的概念关系估计，并在验证与测试阶段保持固定。
 
 ---
 
@@ -91,13 +63,13 @@ R_{u,t}(c)=\max_{h\in H_{u,t}} A_{\mathrm{CRG}}(h,c).
 
 **表 1：三核心数据集的概念可达性画像**
 
-| 数据集    | 单概念比例 | 多概念比例 | item edge density | sequence edge density | direct-unseen rate | bridge-only rate | 历史长度中位数 | 论文角色                                                  |
-| --------- | ---------: | ---------: | ----------------: | --------------------: | -----------------: | ---------------: | -------------: | --------------------------------------------------------- |
-| assist_09 |      82.8% |      17.2% |              0.9% |                 64.3% |               3.1% |             3.1% |             41 | 平衡主例，CRG/LCRF 都可分析                               |
-| junyi     |     100.0% |       0.0% |              0.0% |                 25.2% |             100.0% |           99.97% |             25 | 最强 CRG 数据现象，无题内共现但可通过 sequence route 桥接 |
-| assist_17 |      78.3% |      21.7% |              6.2% |                 76.3% |               2.8% |             2.8% |            148 | CRG support corruption 和 LCRF case 最干净                |
+| 数据集    | 单概念比例 | 多概念比例 | item edge density | sequence edge density | direct-unseen rate | bridge-only rate | 历史长度中位数 |
+| --------- | ---------: | ---------: | ----------------: | --------------------: | -----------------: | ---------------: | -------------: |
+| assist_09 |      82.8% |      17.2% |              0.9% |                 64.3% |               3.1% |             3.1% |             41 |
+| junyi     |     100.0% |       0.0% |              0.0% |                 25.2% |             100.0% |           99.97% |             25 |
+| assist_17 |      78.3% |      21.7% |              6.2% |                 76.3% |               2.8% |             2.8% |            148 |
 
-从表 1 可以看出，三组数据集均呈现不同形式的概念证据缺口。`junyi` 没有题内概念共现，但 direct-unseen rate 与 bridge-only rate 均很高，构成检验 sequence route 可达性的压力场景。`assist_09` 和 `assist_17` 则更接近常规 benchmark 场景，少量题内共现与较强序列路线共同存在。上述差异说明，概念可达性不能仅由题内多概念共现刻画，还需要训练日志中的经验学习路线提供补充支持。
+从表 1 可以看出，三组数据集均呈现不同形式的概念证据缺口。`junyi` 没有题内概念共现，但 direct-unseen rate 与 bridge-only rate 均很高，适合检验 sequence route 的可达支持。`assist_09` 和 `assist_17` 则更接近常规 benchmark 场景，少量题内共现与较强序列路线共同存在。上述差异说明，概念可达性不能仅由题内多概念共现刻画，还需要训练日志中的经验学习路线提供补充支持。
 
 ---
 
@@ -108,94 +80,64 @@ R_{u,t}(c)=\max_{h\in H_{u,t}} A_{\mathrm{CRG}}(h,c).
 本文框架包括两个递进组件：CRG 和 LCRF。CRG 是主模块，用于构造全局、可审计、训练集约束的概念路线图；LCRF 是副模块，用于在同一 CRG support 内根据学生状态重排 posterior route。整体流程为：
 
 \[
-\text{train-only evidence}\rightarrow A_{\mathrm{CRG}}\rightarrow S_c\rightarrow P_{u,t}(k|c)\rightarrow \hat{r}_{u,e}.
+\text{train-only evidence}\rightarrow A_{\mathrm{CRG}}\rightarrow S_A(c)\rightarrow P_{u,t}(k|c)\rightarrow \hat{r}_{u,e}.
 \]
 
-其中 \(S_c\) 是概念 \(c\) 的固定 CRG support，\(P_{u,t}(k|c)\) 是 LCRF 产生的学生条件化后验路线分布。
+其中 \(S_A(c)\) 是概念 \(c\) 的固定 CRG support，\(P_{u,t}(k|c)\) 是 LCRF 产生的学生条件化后验路线分布。
 
 ![CRG/LCRF 机制架构。CRG 从 train-only evidence 构造全局可审计路线图 \(A\)，并为目标概念定义固定 support \(S_A(c)\)。LCRF 只接收学习者状态信号，并在 CRG 固定 support 内生成 support-constrained posterior。最终预测基于个性化 posterior 与诊断预测头得到 \(p(\mathrm{correct})\)。](figures/fig2_crg_lcrf_architecture.png){#fig:model-architecture width=100%}
 
-图 \ref{fig:model-architecture} 展示了 CRG/LCRF 的整体机制路径。首先，CRG 只从训练阶段证据中构造概念路线图，证据包括题内共现、序列转移、自保持以及 source/receiver reliability；这些证据共同形成一个全局、可审计、行随机化的概念关系图 \(A_{\mathrm{CRG}}\)。随后，CRG 为当前 query concept 给出固定 support \(S_A(c)\)，该 support 决定了后续可被使用的候选概念范围。LCRF 不参与 support 构造，也不扩展 support，而是根据 query mastery、recent mastery、route-neighbor mastery、readiness gap 和 support count 等学习者状态信号，对同一 support 内的 posterior weight 进行个性化重排。该设计使 CRG 负责构造可审计路线，LCRF 负责在同一路线集合内进行学习者条件化过滤。
+图 \ref{fig:model-architecture} 展示了 CRG/LCRF 的整体机制路径。首先，CRG 只从训练阶段证据中构造概念路线图，证据包括题内共现、序列转移、自保持以及 source/receiver reliability；这些证据共同形成一个全局、可审计、行随机化的概念关系图 \(A_{\mathrm{CRG}}\)。随后，CRG 为当前 query concept 给出固定 support \(S_A(c)\)，该 support 决定了后续可被使用的候选概念范围。LCRF 根据 query mastery、recent mastery、route-neighbor mastery、readiness gap 和 support count 等学习者状态信号，对同一 support 内的 posterior weight 进行个性化重排。该设计使 CRG 负责构造可审计路线，LCRF 负责在同一路线集合内进行学习者条件化过滤。
 
 ### 5.2 概念可达图 CRG
 
-CRG 只使用训练集中的可观察证据。对概念对 \((c,k)\)，定义三类证据：
-
-**题内共现证据**：
+CRG 为 query concept \(c\) 和候选 support concept \(k\) 估计全局路线分数。路线证据包括题内共现、经验序列转移、自保持，以及 source/receiver reliability。设归一化后的证据向量为：
 
 \[
-M^{\mathrm{item}}_{c,k}=\sum_{e\in\mathcal{E}^{tr}} Q_{e,c}Q_{e,k}.
+\phi_{c,k}=
+\left[
+\tilde M^{\mathrm{item}}_{c,k},
+\tilde M^{\mathrm{seq}}_{c,k},
+\mathbb{I}(c=k),
+\mathrm{rel}^{src}_{c},
+\mathrm{rel}^{rec}_{k}
+\right],
+\quad
+s_{c,k}=\mathbf{w}^{\top}\phi_{c,k}.
 \]
 
-它表示同一题内两个概念共同出现的次数。若数据集中每道题只对应一个概念，则该项自然为 0。
-
-**序列转移证据**：
+其中 \(\tilde M^{\mathrm{item}}\) 表示题内共现证据，\(\tilde M^{\mathrm{seq}}\) 表示训练日志中的经验学习路线；本文不将 sequence transition 解释为严格先修关系或因果依赖。CRG 先收集 evidence-supported candidates，再在固定候选集合 \(S_A(c)\) 上进行行归一化：
 
 \[
-M^{\mathrm{seq}}_{c,k}=\sum_{u}\sum_t \mathbb{I}[c\in C(e_{u,t})]\mathbb{I}[k\in C(e_{u,t+1})].
+A_{\mathrm{CRG}}(c,k)=
+\operatorname{softmax}_{k\in S_A(c)}
+\left(\frac{s_{c,k}}{\tau}\right).
 \]
 
-它表示训练集中概念 \(c\) 后接概念 \(k\) 的经验学习路线。本文不将其解释为严格先修关系，也不声称存在因果依赖。
-
-**自保持证据**：
-
-\[
-M^{\mathrm{self}}_{c,k}=\mathbb{I}[c=k].
-\]
-
-三类证据归一化后进行融合：
-
-\[
-s(c,k)=\lambda_{item}z_{item}(c,k)+\lambda_{seq}z_{seq}(c,k)+\lambda_{self}\mathbb{I}[c=k]+b_k.
-\]
-
-最终得到行随机化的 CRG：
-
-\[
-A_{\mathrm{CRG}}(c,k)=\operatorname{softmax}_{k\in S_c}\left(\frac{s(c,k)}{\tau}\right),
-\]
-
-其中 \(S_c\) 是概念 \(c\) 的候选 support，\(\tau\) 是温度参数。所有 \(M^{item}\)、\(M^{seq}\) 和 \(M^{self}\) 均仅从训练集构造。
+因此，\(A_{\mathrm{CRG}}\) 是由训练阶段证据估计得到的全局概念路线图，\(S_A(c)\) 是后续 LCRF 可使用的固定 support。
 
 ### 5.3 学习者条件化可达性过滤器 LCRF
 
-CRG 给出全局 support，但同一条路线对不同学生不一定同等可信。LCRF 在 CRG support 内计算学生条件化后验：
+CRG 给出全局 support，但同一条路线对不同学生不一定同等可信。LCRF 在 \(S_A(c)\) 内计算学生条件化后验：
 
 \[
-P_{u,t}(k|c)=\operatorname{softmax}_{k\in S_c}\left(\log A_{\mathrm{CRG}}(c,k)+\alpha_{u,t,c}\Delta_{u,t,c,k}\right).
+P_{u,t}(k|c)=
+\operatorname{softmax}_{k\in S_A(c)}
+\left[
+\log A_{\mathrm{CRG}}(c,k)+
+f_{\theta}(u,t,c,k)
+\right].
 \]
 
-其中 \(\Delta_{u,t,c,k}\) 由学生状态构成：
+其中 \(f_{\theta}(u,t,c,k)\) 由 query mastery、recent mastery、route-neighbor mastery、readiness gap 和 support count 等学生状态信号计算。由于 softmax 被限制在 \(S_A(c)\) 内，LCRF 不新增 support concept，只改变 CRG 候选路线上的 posterior mass。预测时，posterior 可用于聚合 route-neighbor mastery：
 
 \[
-\Delta_{u,t,c,k}=f_{\theta}\left[m_{u,t}(c),\rho_{u,t}(c),n_{u,t}(c),m_{u,t}(k),\rho_{u,t}(k),n_{u,t}(k)\right].
+\tilde{m}_{u,t}(c)=
+(1-\gamma)m_{u,t}(c)+
+\gamma\sum_{k\in S_A(c)}P_{u,t}(k|c)m_{u,t}(k).
 \]
 
-这里 \(m_{u,t}(c)\) 表示学生在 query concept 上的历史掌握估计，\(\rho_{u,t}(c)\) 表示近期掌握状态，\(n_{u,t}(c)\) 表示历史计数或可靠性。同理，\(k\) 对应 CRG support concept。
-
-LCRF 的关键约束是：
-
-\[
-\operatorname{supp}(P_{u,t}(\cdot|c))\subseteq S_c.
-\]
-
-也就是说，LCRF 不新增 support concept，只在同一 support 内改变 posterior mass。预测时可将局部概念状态写成：
-
-\[
-\tilde{m}_{u,t}(c)=(1-\gamma)m_{u,t}(c)+\gamma\sum_{k\in S_c}P_{u,t}(k|c)m_{u,t}(k).
-\]
-
-最终预测头基于 \(\tilde{m}_{u,t}(c)\)、题目参数和概念集合输出学生对题目 \(e\) 的作答概率：
-
-\[
-\hat{r}_{u,e}=g_{\phi}\left(\{\tilde{m}_{u,t}(c):Q_{e,c}=1\},\;\text{item features}\right).
-\]
-
-训练目标采用标准二分类交叉熵：
-
-\[
-\mathcal{L}_{\mathrm{BCE}}=-\sum_{(u,e,r)\in\mathcal{R}^{tr}}\left[r\log \hat{r}_{u,e}+(1-r)\log(1-\hat{r}_{u,e})\right].
-\]
+最终，support-aware mastery representation 被送入诊断预测头得到作答概率 \(\hat r_{u,e}\)。模型使用训练作答上的二分类交叉熵进行优化。
 
 ## 6. 实验设计
 
