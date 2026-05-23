@@ -165,11 +165,11 @@ f_{\theta}(u,t,c,k)
 
 **表 2：history-to-query route retrieval 结果**
 
-| 数据集 | random Hit@10 | seq-only Hit@10 | fused Hit@10 | 结论 |
-| --- | ---: | ---: | ---: | --- |
-| assist_09 | 0.0673 | 0.1781 | 0.1574 | seq-only 与 fused 均高于 random |
-| junyi | 0.0191 | 0.1379 | 0.1379 | 无题内共现时仍能依赖序列路线检索 |
-| assist_17 | -- | -- | -- | 未显著超过 random，不作为本实验正向结果 |
+| 数据集 | random Hit@10 | seq-only Hit@10 | fused Hit@10 |
+| --- | ---: | ---: | ---: |
+| assist_09 | 0.0673 | 0.1781 | 0.1574 |
+| junyi | 0.0191 | 0.1379 | 0.1379 |
+| assist_17 | -- | -- | -- |
 
 表 2 显示，`assist_09` 和 `junyi` 上的序列路线能够从学生历史概念中检索当前查询概念。`junyi` 尤其重要：该数据集没有题内多概念共现，但 seq-only 和 fused 仍明显高于 random，说明本文方法并不依赖多知识点题，而是可以利用训练序列中的概念路线。`assist_17` 在该检索设置下未超过 random，因此本文不将其作为 history-to-query retrieval 的主要数据集，而是在后续预测子场景、支持集扰动和同题个案中分析其作用。
 
@@ -179,19 +179,22 @@ History-to-query retrieval 说明 CRG 可以在部分数据集上找到从历史
 
 **表 3：coverage-conditioned prediction 汇总**
 
-| 数据集 | 条件子场景 | 对比对象 | 主要观察 | 论文角色 |
-| --- | --- | --- | --- | --- |
-| assist_09 | direct-unseen-bridgeable | full vs. no_CRG / no_LCRF | full 在 BCE 上优于两个消融变体 | 主要覆盖条件预测结果 |
-| assist_17 | high-route / weak-direct | full vs. no_CRG | 子组中呈现更清晰的 BCE/AUC 差异 | 支持预测层面的路线作用 |
-| junyi | direct-unseen / bridge-only | full vs. ablations | prediction-level gap 较弱 | 主要用于数据现象和路线检索 |
+| 数据集 | 条件子场景 | n | Full AUC/BCE | no_CRG AUC/BCE | ΔAUC / ΔBCE vs. no_CRG | no_LCRF AUC/BCE | ΔAUC / ΔBCE vs. no_LCRF |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| assist_09 | direct-unseen-bridgeable | 1,584 | 0.8264 / 0.3811 | 0.8314 / 0.4029 | -0.0049 / +0.0219 [0.0051, 0.0377] | 0.8263 / 0.4193 | +0.0001 / +0.0382 [0.0188, 0.0577] |
+| assist_09 | weak-direct | 3,882 | 0.8100 / 0.4169 | 0.8059 / 0.4323 | +0.0041 / +0.0154 [0.0068, 0.0242] | 0.7912 / 0.4519 | +0.0188 / +0.0350 [0.0244, 0.0457] |
+| assist_09 | high-route | 15,327 | 0.7565 / 0.5020 | 0.7483 / 0.5080 | +0.0081 / +0.0059 [0.0026, 0.0092] | 0.7445 / 0.5128 | +0.0119 / +0.0107 [0.0066, 0.0152] |
+| assist_17 | direct-unseen-bridgeable | 5,402 | 0.7355 / 0.6137 | 0.7294 / 0.6329 | +0.0061 / +0.0191 [0.0115, 0.0273] | 0.7409 / 0.6628 | -0.0055 / +0.0491 [0.0412, 0.0568] |
+| assist_17 | weak-direct | 11,552 | 0.7627 / 0.5830 | 0.7476 / 0.6015 | +0.0151 / +0.0185 [0.0138, 0.0230] | 0.7630 / 0.6099 | -0.0003 / +0.0270 [0.0220, 0.0317] |
+| assist_17 | high-route | 23,187 | 0.7876 / 0.5508 | 0.7725 / 0.5644 | +0.0151 / +0.0136 [0.0108, 0.0161] | 0.7856 / 0.5628 | +0.0020 / +0.0120 [0.0096, 0.0145] |
+| junyi | direct-unseen-bridgeable | 60,478 | 0.8291 / 0.4890 | 0.8279 / 0.4903 | +0.0012 / +0.0013 [-0.0005, 0.0029] | 0.8286 / 0.4859 | +0.0005 / -0.0032 [-0.0048, -0.0017] |
+| junyi | high-route | 18,148 | 0.7980 / 0.3856 | 0.7955 / 0.3874 | +0.0025 / +0.0018 [-0.0004, 0.0042] | 0.7963 / 0.3843 | +0.0017 / -0.0012 [-0.0032, 0.0008] |
 
-<!-- 正式投稿前请用精确数值替换表 3：dataset, subgroup, n_eval, Full AUC/BCE, no_CRG AUC/BCE, no_LCRF AUC/BCE, ΔBCE, ΔAUC, bootstrap CI。不要在没有数值时声称全数据集平均显著提升。 -->
-
-表 3 表明，CRG-LCRF 的预测收益并非在所有样本上均匀出现，而是集中在目标概念直接覆盖不足、但存在可达路线的子场景中。`assist_09` 在 direct-unseen-bridgeable 样本上同时体现 CRG 与 LCRF 的作用；`assist_17` 在 high-route / weak-direct 子组中提供更清晰的预测层面结果；`junyi` 的预测差异较弱，因此主要作为数据现象和路线检索结果使用。
+表 3 中的差值均以 Full 为参照，ΔBCE 的 95% 置信区间由 500 次 test-sample bootstrap 得到。`assist_09` 的 direct-unseen-bridgeable 子场景中，Full 的 BCE 分别低于 no_CRG 和 no_LCRF 0.0219 与 0.0382；在 weak-direct 与 high-route 子场景中，Full 也保持更低 BCE，且 high-route 子场景同时呈现稳定 AUC 提升。`assist_17` 的 high-route 与 weak-direct 子场景中，Full 相比 no_CRG 的 AUC 提升均约为 0.0151，BCE 差值也保持为正；相比 no_LCRF 时，AUC 差异较小，但 BCE 仍有明显改善。`junyi` 的 prediction-level 差异较小，因此本文将其主要用于无题内共现条件下的路线检索与数据现象分析。
 
 ### 6.4 Ablation Study
 
-表 2 展示三个数据集上的模块消融结果。`full` 表示 CRG+LCRF 完整模型；`no_CRG` 移除全局路线图；`no_LCRF` 保留 CRG 但移除学习者条件化过滤。
+表 4 展示三个数据集上的模块消融结果。`full` 表示 CRG+LCRF 完整模型；`no_CRG` 移除全局路线图；`no_LCRF` 保留 CRG 但移除学习者条件化过滤。
 
 **表 4：三个数据集上的模块消融结果**
 
