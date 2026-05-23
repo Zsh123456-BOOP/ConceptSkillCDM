@@ -1,0 +1,3 @@
+- exp3 is a sampled buffer-level student-concept state mask diagnostic, not exact raw-history recomputation
+- global_only control was not evaluated unless an existing exact checkpoint was present
+- plot-only rerun: reused existing CSV outputs without re-running inference

@@ -1,0 +1,10 @@
+dataset,experiment,rows,output
+assist_09,exp1,742188,/home/zsh/ConceptSkillCDM/results/main_problem_experiments_20260523/assist_09
+assist_09,exp2,35,/home/zsh/ConceptSkillCDM/results/main_problem_experiments_20260523/assist_09
+assist_09,exp3,6000,/home/zsh/ConceptSkillCDM/results/main_problem_experiments_20260523/assist_09
+junyi,exp1,1088796,/home/zsh/ConceptSkillCDM/results/main_problem_experiments_20260523/junyi
+junyi,exp2,35,/home/zsh/ConceptSkillCDM/results/main_problem_experiments_20260523/junyi
+junyi,exp3,0,/home/zsh/ConceptSkillCDM/results/main_problem_experiments_20260523/junyi
+assist_17,exp1,959544,/home/zsh/ConceptSkillCDM/results/main_problem_experiments_20260523/assist_17
+assist_17,exp2,35,/home/zsh/ConceptSkillCDM/results/main_problem_experiments_20260523/assist_17
+assist_17,exp3,6000,/home/zsh/ConceptSkillCDM/results/main_problem_experiments_20260523/assist_17

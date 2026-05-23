@@ -1,0 +1,17 @@
+dataset,subgroup,variant,n_eval,auc,bce,rmse,acc,mask_type,paired_n,target_bce_increase,random_bce_increase
+assist_17,direct_seen_sample,full,500.0,0.8179402424006741,0.5192645368008529,0.41738048981477893,0.728,original,,,
+assist_17,direct_seen_sample,full,500.0,0.8178592261326074,0.5193756561811403,0.4174642442011312,0.728,random_history_mask,,,
+assist_17,direct_seen_sample,full,500.0,0.8100816643982112,0.5350738347515137,0.42404124767435714,0.734,target_concept_mask,,,
+assist_17,direct_seen_sample,no_CRG,500.0,0.7886285566141682,0.5519222104265877,0.43263303229871053,0.724,original,,,
+assist_17,direct_seen_sample,no_CRG,500.0,0.7886285566141682,0.5519222104265877,0.43263303229871053,0.724,random_history_mask,,,
+assist_17,direct_seen_sample,no_CRG,500.0,0.7886285566141682,0.5519222104265877,0.43263303229871053,0.724,target_concept_mask,,,
+assist_17,direct_seen_sample,no_LCRF,500.0,0.8109728433469441,0.5363512970072751,0.4252859126893296,0.722,original,,,
+assist_17,direct_seen_sample,no_LCRF,500.0,0.8109728433469441,0.5363512970072751,0.4252859126893296,0.722,random_history_mask,,,
+assist_17,direct_seen_sample,no_LCRF,500.0,0.8109728433469441,0.5363512970072751,0.4252859126893296,0.722,target_concept_mask,,,
+assist_17,direct_seen_sample,self_only,500.0,0.8094173310000649,0.5430038642022033,0.4295661211469913,0.732,original,,,
+assist_17,direct_seen_sample,self_only,500.0,0.8098062090867847,0.5426395526637215,0.42945404352002475,0.732,random_history_mask,,,
+assist_17,direct_seen_sample,self_only,500.0,0.8015587529976019,0.5399822434960797,0.4270270076257659,0.708,target_concept_mask,,,
+assist_17,paired_bce_increase,full,,,,,,,500.0,0.01580929795066075,0.00011111938028731255
+assist_17,paired_bce_increase,no_CRG,,,,,,,500.0,0.0,0.0
+assist_17,paired_bce_increase,no_LCRF,,,,,,,500.0,0.0,0.0
+assist_17,paired_bce_increase,self_only,,,,,,,500.0,-0.0030216207061236245,-0.0003643115384817255
