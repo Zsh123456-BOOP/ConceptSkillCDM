@@ -350,7 +350,10 @@ def _metric_row(dataset: str, subgroup: str, variant: str, labels: np.ndarray, p
 
 def _annotate_coverage(frame: pd.DataFrame, assets: DatasetAssets) -> pd.DataFrame:
     history = _student_history_stats(assets.train_df, assets.info["cpt_id_map"])
-    fused = _row_normalize(assets.info["item_prior_matrix"] + assets.info["sequence_prior_matrix"]).numpy()
+    fused = _row_normalize(
+        assets.info["item_prior_matrix"].detach().cpu()
+        + assets.info["sequence_prior_matrix"].detach().cpu()
+    ).numpy()
     direct_seen: List[bool] = []
     bridgeable: List[bool] = []
     weak_direct: List[bool] = []
