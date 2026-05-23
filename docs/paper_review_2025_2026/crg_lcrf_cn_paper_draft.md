@@ -77,7 +77,7 @@
 
 ### 5.1 框架总览
 
-本文框架包括两个递进组件：CRG 和 LCRF。CRG 是主模块，用于构造全局、可审计、训练集约束的概念路线图；LCRF 是副模块，用于在同一 CRG support 内根据学生状态重排 posterior route。整体流程为：
+本文框架包括两个递进组件：CRG 和 LCRF。CRG 负责全局路线构造，用于形成可审计、训练集约束的概念路线图；LCRF 负责在固定 CRG support 上进行学习者条件化后验过滤。整体流程为：
 
 \[
 \text{train-only evidence}\rightarrow A_{\mathrm{CRG}}\rightarrow S_A(c)\rightarrow P_{u,t}(k|c)\rightarrow \hat{r}_{u,e}.
@@ -153,17 +153,17 @@ f_{\theta}(u,t,c,k)
 
 **表 2：三核心数据集主消融结果**
 
-| 数据集    | 模型变体 |    AUC |    ACC |   RMSE | 相对 Full 的 AUC 下降 | 解释                           |
-| --------- | -------- | -----: | -----: | -----: | --------------------: | ------------------------------ |
-| assist_09 | full     | 0.7783 | 0.7407 | 0.4178 |                0.0000 | 完整模型                       |
-| assist_09 | no_CRG   | 0.7671 | 0.7320 | 0.4222 |                0.0112 | 移除路线图                     |
-| assist_09 | no_LCRF  | 0.7634 | 0.7309 | 0.4247 |                0.0149 | 移除个性化过滤                 |
-| junyi     | full     | 0.8291 | 0.7688 | 0.4008 |                0.0000 | 完整模型                       |
-| junyi     | no_CRG   | 0.8278 | 0.7691 | 0.4011 |                0.0013 | 移除路线图影响较小             |
-| junyi     | no_LCRF  | 0.8286 | 0.7701 | 0.3994 |                0.0005 | 移除个性化过滤影响较小         |
-| assist_17 | full     | 0.7847 | 0.7151 | 0.4321 |                0.0000 | 完整模型                       |
-| assist_17 | no_CRG   | 0.7647 | 0.6973 | 0.4413 |                0.0200 | CRG 消融较强                   |
-| assist_17 | no_LCRF  | 0.7829 | 0.7132 | 0.4359 |                0.0018 | 移除个性化过滤                 |
+| 数据集    | 模型变体 |    AUC |    ACC |   RMSE | 相对 Full 的 AUC 下降 |
+| --------- | -------- | -----: | -----: | -----: | --------------------: |
+| assist_09 | full     | 0.7783 | 0.7407 | 0.4178 |                0.0000 |
+| assist_09 | no_CRG   | 0.7671 | 0.7320 | 0.4222 |                0.0112 |
+| assist_09 | no_LCRF  | 0.7634 | 0.7309 | 0.4247 |                0.0149 |
+| junyi     | full     | 0.8291 | 0.7688 | 0.4008 |                0.0000 |
+| junyi     | no_CRG   | 0.8278 | 0.7691 | 0.4011 |                0.0013 |
+| junyi     | no_LCRF  | 0.8286 | 0.7701 | 0.3994 |                0.0005 |
+| assist_17 | full     | 0.7847 | 0.7151 | 0.4321 |                0.0000 |
+| assist_17 | no_CRG   | 0.7647 | 0.6973 | 0.4413 |                0.0200 |
+| assist_17 | no_LCRF  | 0.7829 | 0.7132 | 0.4359 |                0.0018 |
 
 表 2 展示了 CRG-LCRF 及其模块消融的预测性能。完整模型在 `assist_09` 和 `assist_17` 上均取得最高 AUC，相比 `no_CRG` 分别提升 1.12% 和 2.00%。移除 LCRF 在 `assist_09` 上带来更明显下降，而在 `junyi` 与 `assist_17` 的直接模块删除设置下影响较小。该结果表明，CRG 提供主要的 reachable-support 信号；LCRF 的作用则需要结合第 6.4 节的学习者状态反事实进一步分析。
 
@@ -187,15 +187,15 @@ Retrieval 评估 CRG 的路线恢复能力。为了进一步分析预测过程�
 
 **表 4：100% support corruption 下的预测损伤（all subgroup）**
 
-| 数据集    | 破坏类型            |  AUC drop | BCE increase | 解释                                        |
-| --------- | ------------------- | --------: | -----------: | ------------------------------------------- |
-| assist_09 | evidence corruption |    0.0148 |       0.0086 | support 被破坏后预测下降                    |
-| assist_09 | degree-random       | 约 0.0146 |    约 0.0071 | 与 evidence 接近，体现 support-dependence |
-| assist_09 | sequence-shuffled   | 约 0.0043 |   约 -0.0007 | 影响较小                                    |
-| junyi     | evidence corruption |    0.0019 |       0.0095 | AUC 变化较小，BCE 有变化                    |
-| assist_17 | evidence corruption |    0.0111 |       0.0223 | 清晰的 CRG support-dependence 信号          |
-| assist_17 | degree-random       | 约 0.0032 |    约 0.0178 | evidence 的 AUC 损伤明显更强                |
-| assist_17 | sequence-shuffled   | 约 0.0001 |    约 0.0001 | 近似无损伤                                  |
+| 数据集    | 破坏类型            |  AUC drop | BCE increase |
+| --------- | ------------------- | --------: | -----------: |
+| assist_09 | evidence corruption |    0.0148 |       0.0086 |
+| assist_09 | degree-random       | 约 0.0146 |    约 0.0071 |
+| assist_09 | sequence-shuffled   | 约 0.0043 |   约 -0.0007 |
+| junyi     | evidence corruption |    0.0019 |       0.0095 |
+| assist_17 | evidence corruption |    0.0111 |       0.0223 |
+| assist_17 | degree-random       | 约 0.0032 |    约 0.0178 |
+| assist_17 | sequence-shuffled   | 约 0.0001 |    约 0.0001 |
 
 表 4 表明，CRG support perturbation 会改变模型预测表现。`assist_17` 中 evidence corruption 明显强于 degree-random，尤其 AUC drop gap 更突出，说明模型对 evidence-supported routes 具有较强依赖。`assist_09` 中 evidence corruption 与 degree-random 接近，体现出模型对候选 support substrate 的依赖。`junyi` 的 AUC 变化较小，但 BCE increase 仍显示 support 扰动会影响概率校准。
 
@@ -205,17 +205,17 @@ Retrieval 评估 CRG 的路线恢复能力。为了进一步分析预测过程�
 
 **表 5：LCRF counterfactual 结果**
 
-| 数据集    | 变体          |    AUC |   RMSE | 相对 Full 的 AUC 下降 | 解释                 |
-| --------- | ------------- | -----: | -----: | --------------------: | -------------------- |
-| assist_09 | no_filter     | 0.7634 | 0.4247 |                0.0149 | 移除 LCRF 有损伤     |
-| assist_09 | mean_state    | 0.6065 | 0.4827 |                0.1718 | 平均状态不可替代     |
-| assist_09 | shuffle_state | 0.5751 | 0.5070 |                0.2032 | 错配状态严重伤害预测 |
-| junyi     | no_filter     | 0.8286 | 0.3994 |                0.0005 | 状态过滤影响较小     |
-| junyi     | mean_state    | 0.8259 | 0.4017 |                0.0033 | 平均状态影响较小     |
-| junyi     | shuffle_state | 0.8188 | 0.4049 |                0.0103 | 错配状态影响较小     |
-| assist_17 | no_filter     | 0.7829 | 0.4359 |                0.0018 | 去掉过滤器整体损伤小 |
-| assist_17 | mean_state    | 0.6441 | 0.4865 |                0.1406 | 平均状态不可替代     |
-| assist_17 | shuffle_state | 0.5966 | 0.5196 |                0.1881 | 错配状态严重伤害预测 |
+| 数据集    | 变体          |    AUC |   RMSE | 相对 Full 的 AUC 下降 |
+| --------- | ------------- | -----: | -----: | --------------------: |
+| assist_09 | no_filter     | 0.7634 | 0.4247 |                0.0149 |
+| assist_09 | mean_state    | 0.6065 | 0.4827 |                0.1718 |
+| assist_09 | shuffle_state | 0.5751 | 0.5070 |                0.2032 |
+| junyi     | no_filter     | 0.8286 | 0.3994 |                0.0005 |
+| junyi     | mean_state    | 0.8259 | 0.4017 |                0.0033 |
+| junyi     | shuffle_state | 0.8188 | 0.4049 |                0.0103 |
+| assist_17 | no_filter     | 0.7829 | 0.4359 |                0.0018 |
+| assist_17 | mean_state    | 0.6441 | 0.4865 |                0.1406 |
+| assist_17 | shuffle_state | 0.5966 | 0.5196 |                0.1881 |
 
 表 5 区分了模块移除和状态替换两类干预。`no_filter` 反映移除 LCRF 后的整体预测变化；`mean_state` 和 `shuffle_state` 进一步检验真实学习者状态是否可以由群体平均状态或错配状态替代。`assist_09` 和 `assist_17` 在 mean/shuffle 干预下出现明显下降，说明 LCRF 的 posterior route 依赖学习者条件化状态，而不是固定全局补丁。
 
@@ -236,29 +236,33 @@ Retrieval 评估 CRG 的路线恢复能力。为了进一步分析预测过程�
 | S7   |          0 |        -0.568 |         -0.409 |       0.427 |     0.324 | C7          |          0.287 |       0.243 |            0.044 |
 | S7   |          0 |        -0.568 |         -0.409 |       0.427 |     0.324 | C4          |          0.169 |       0.096 |            0.073 |
 
-该 case 展示了 LCRF 的个性化过滤机制：在同一 query、同一 CRG support 下，不同学生会得到不同 posterior route。Figure 5 进一步可视化了 LCRF 如何把同一全局 support 过滤成学生局部 posterior route。
+该 case 展示了 LCRF 的个性化过滤机制：在同一 query、同一 CRG support 下，不同学生会得到不同 posterior route。
 
-### 6.6 学生状态来源分析
+![LCRF same-query posterior case。图中固定同一 query 和同一 CRG support，展示不同学生的 posterior-minus-global 分布、预测变化和局部路线差异。](figures/fig5_core3_lcrf_same_query_posterior_final.png){#fig:lcrf-same-query width=100%}
 
-表 7 展示 LCRF state-source analysis。已有结果显示，`mean_state_keep_id` 和 `shuffle_state_keep_id` 会显著伤害 `assist_09` 和 `assist_17`，说明 query mastery、recent mastery 和 route-neighbor state 等学习者状态是 LCRF posterior 变化的重要来源。
+图 \ref{fig:lcrf-same-query} 进一步可视化了 LCRF 如何把同一全局 support 过滤成学生局部 posterior route。两个学生共享相同 CRG support，但 posterior mass 集中到不同 support concepts，预测概率也随之发生不同幅度的变化。
 
-**表 7：LCRF state-source audit**
+### 6.6 学习者状态来源分析
 
-| 数据集    | 变体                  |    AUC | AUC drop | 解释             |
-| --------- | --------------------- | -----: | -------: | ---------------- |
-| assist_09 | full                  | 0.7783 |   0.0000 | baseline         |
-| assist_09 | shuffle_state_keep_id | 0.5751 |   0.2032 | 打乱状态严重损伤 |
-| assist_09 | mean_state_keep_id    | 0.6065 |   0.1718 | 平均状态严重损伤 |
-| assist_09 | global_only           | 0.7634 |   0.0149 | 等价 no-filter   |
-| assist_17 | full                  | 0.7847 |   0.0000 | baseline         |
-| assist_17 | shuffle_state_keep_id | 0.5966 |   0.1881 | 打乱状态严重损伤 |
-| assist_17 | mean_state_keep_id    | 0.6441 |   0.1406 | 平均状态严重损伤 |
-| assist_17 | global_only           | 0.7829 |   0.0018 | 等价 no-filter   |
-| junyi     | full                  | 0.8291 |   0.0000 | baseline         |
-| junyi     | shuffle_state_keep_id | 0.8188 |   0.0103 | 状态扰动影响较小 |
-| junyi     | mean_state_keep_id    | 0.8259 |   0.0033 | 状态扰动影响较小 |
+表 7 展示 LCRF learner-state source analysis。已有结果显示，`mean_state_keep_id` 和 `shuffle_state_keep_id` 会显著伤害 `assist_09` 和 `assist_17`，说明 query mastery、recent mastery 和 route-neighbor state 等学习者状态是 LCRF posterior 变化的重要来源。
 
-这些结果与第 6.4 节的状态反事实相互印证：当真实学习者状态被平均化或错配替换时，LCRF 的后验路线分布和预测表现都会发生明显变化。完整的 ID-source disentanglement 可以作为后续更细粒度的审计方向。
+**表 7：LCRF learner-state source analysis**
+
+| 数据集    | 变体                  |    AUC | AUC drop |
+| --------- | --------------------- | -----: | -------: |
+| assist_09 | full                  | 0.7783 |   0.0000 |
+| assist_09 | shuffle_state_keep_id | 0.5751 |   0.2032 |
+| assist_09 | mean_state_keep_id    | 0.6065 |   0.1718 |
+| assist_09 | global_only           | 0.7634 |   0.0149 |
+| assist_17 | full                  | 0.7847 |   0.0000 |
+| assist_17 | shuffle_state_keep_id | 0.5966 |   0.1881 |
+| assist_17 | mean_state_keep_id    | 0.6441 |   0.1406 |
+| assist_17 | global_only           | 0.7829 |   0.0018 |
+| junyi     | full                  | 0.8291 |   0.0000 |
+| junyi     | shuffle_state_keep_id | 0.8188 |   0.0103 |
+| junyi     | mean_state_keep_id    | 0.8259 |   0.0033 |
+
+这些结果与第 6.4 节的状态反事实相互印证：当真实学习者状态被平均化或错配替换时，LCRF 的后验路线分布和预测表现都会发生明显变化。更细粒度的学生状态来源分解可作为后续扩展方向。
 
 ---
 
