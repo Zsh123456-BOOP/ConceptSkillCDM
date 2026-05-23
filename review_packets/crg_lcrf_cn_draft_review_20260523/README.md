@@ -11,6 +11,9 @@
 
 - `paper_draft_cn.md`：完整中文论文初稿，含数据表和公式。
 - `figure_prompts_cn.md`：后续使用 image2 / Figma / PPT 重画问题图和模型图的提示词。
+- `docs/top20_cd_paper_story_review.md`：25-26 年 CD 顶会/顶刊论文故事线复盘，用于核对当前写法是否贴近近期论文。
+- `docs/crg_lcrf_paper_outline.md`：CRG/LCRF 论文大纲、图表计划和 claim 边界。
+- `docs/crg_lcrf_core3_review_packet.md`：core3 机制实验证据边界摘要。
 - `figures_svg/`：可编辑 SVG 草图。
 - `figures_pdf/`：对应 PDF 图，包括 SVG 生成图和部分已有实验图 PDF 版本。
 - `figures_existing_png/`：从证据包复制的已有主图/附录图 PNG。
