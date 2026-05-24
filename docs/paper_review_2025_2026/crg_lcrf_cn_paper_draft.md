@@ -193,11 +193,11 @@ History-to-query retrieval 说明 CRG 可以在部分数据集上找到从历史
 
 图 2 同时展示了 history-to-query retrieval 和全局 held-out transition retrieval。前者评估给定学生历史概念集合时，训练日志路线能否检索当前 query concept；后者评估 CRG 是否能够恢复全局层面的留出概念转移。`assist_09` 和 `junyi` 的 history-to-query 面板显示 seq-only 或 fused CRG 明显高于 random；held-out transition 面板进一步显示 Best CRG 在三个数据集上均优于 self-only 与 random controls。
 
-路线检索评估 CRG 的恢复能力；支持集扰动进一步分析预测对支持集的敏感性。我们在不重训的情况下替换或破坏 CRG 支持集，并观察预测性能变化。图 4 中包含 route corruption、degree-matched random support、sequence-shuffled support 和 self-only fallback 等对照。
+路线检索评估 CRG 的恢复能力；支持集扰动进一步分析预测对支持集的敏感性。我们在不重训的情况下替换或破坏 CRG 支持集，并观察预测性能变化。图 4 中包含 evidence support replacement、degree-matched random support、sequence-shuffled support 和 self-only fallback 等对照。
 
 ![图 4：CRG 支持集扰动结果。图中比较不同支持集替换或扰动方式下的预测变化。](figures_preview_png/fig4_nature_crg_support_corruption.png)
 
-图 4 表明，替换 CRG 支持集会改变模型预测表现。`assist_17` 中 route corruption 明显强于 degree-random，尤其 AUC drop gap 更突出，说明模型对 CRG routes 具有较强依赖。`assist_09` 中 route corruption 与 degree-random 接近，体现出模型对候选支持空间的依赖。`junyi` 的 AUC 变化较小，但 BCE increase 显示支持集扰动会影响概率校准。完整支持集扰动数值见附录 B。
+图 4 表明，替换 CRG 支持集会改变模型预测表现。`assist_17` 中 evidence support replacement 明显强于 degree-random，尤其 AUC drop gap 更突出，说明模型对 CRG routes 具有较强依赖。`assist_09` 中 evidence replacement 与 degree-random 接近，体现出模型对候选支持空间的依赖。`junyi` 的 AUC 变化较小，但 BCE increase 显示支持集扰动会影响概率校准。完整支持集扰动数值见附录 B。
 
 ### 6.5 学习者条件化过滤
 
