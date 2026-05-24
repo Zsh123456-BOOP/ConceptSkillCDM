@@ -2,7 +2,7 @@
 
 本文当前主线不是证明一个黑盒网络更强，而是从数据现象出发，解释认知诊断中一个更具体的问题：学生在测试中遇到的概念，很多时候不能被历史作答直接覆盖，但可以通过训练集中的概念路径被“到达”。因此模型需要先有一张全局路线图，再根据学生个人状态过滤这张路线图。中文初稿已经统一改为 **“概念证据缺口”** 叙事，避免把问题窄化为题内多知识点共现。
 
-> 图片引用说明：本大纲引用同目录 `figures_main_pdf/` 下的正式 PDF 图。交给 GPT Pro 时，请同时上传本 md 和 `figures_main_pdf/` 中的图；如果只复制 md 文本，任何本地图片路径都不会自动可见。
+> 图片引用说明：为兼容 VSCode Markdown 预览，本大纲正文使用 `figures_preview_png/` 中的预览图；正式投稿与打包使用的 PDF 图保留在同目录 `figures_main_pdf/`。交给 GPT Pro 时，请同时上传本 md、`figures_preview_png/` 和 `figures_main_pdf/`。
 >
 > 中文初稿位置：`docs/paper_review_2025_2026/crg_lcrf_cn_paper_draft.md`；原始参考论文 PDF 统一放在 `docs/paper_review_2025_2026/papers_original_pdf/`。
 
@@ -36,7 +36,7 @@
 2. LCRF 再回答：这些可达路线中，哪些对当前学生更可信。
 3. 预测头使用 CRG/LCRF 产生的概念状态校准，而不是让二者成为弱旁路。
 
-![Figure 1: Concept evidence gap](figures_main_pdf/fig1_problem_concept_evidence_gap.pdf)
+![Figure 1: Concept evidence gap](figures_preview_png/fig1_problem_concept_evidence_gap.png)
 
 ## 数据集定位
 
@@ -50,7 +50,7 @@
 
 三数据集的角色必须分开写：`junyi` 主讲 CRG retrieval 和数据现象；`assist_17` 主讲 CRG prediction-level support dependence；`assist_09` 作为平衡 benchmark，同时支撑 LCRF 反事实和 same-query posterior。
 
-![Figure 2: Data phenomenon and CRG retrieval](figures_main_pdf/fig2_nature_data_and_crg_retrieval.pdf)
+![Figure 2: Data phenomenon and CRG retrieval](figures_preview_png/fig2_nature_data_and_crg_retrieval.png)
 
 ## 论文结构草稿
 
@@ -175,7 +175,7 @@ Claim：破坏 CRG support 会伤害预测，说明模型确实依赖可达路�
 
 图：Figure 4。
 
-![Figure 4: CRG support dependence controls](figures_main_pdf/fig4_nature_crg_support_corruption.pdf)
+![Figure 4: CRG support dependence controls](figures_preview_png/fig4_nature_crg_support_corruption.png)
 
 写法：
 
@@ -189,7 +189,7 @@ Claim：LCRF 的收益在 `assist_09` 和 `assist_17` 上主要来自真实学�
 
 图：Figure 5。
 
-![Figure 5: LCRF counterfactual delta](figures_main_pdf/fig5_nature_lcrf_counterfactual_delta.pdf)
+![Figure 5: LCRF counterfactual delta](figures_preview_png/fig5_nature_lcrf_counterfactual_delta.png)
 
 写法：
 
@@ -204,7 +204,7 @@ Claim：同一个 query、同一个 CRG support，会被不同学习者过滤成
 
 图：Figure 6。
 
-![Figure 6: LCRF same-query posterior](figures_main_pdf/fig6_nature_lcrf_same_query_posterior.pdf)
+![Figure 6: LCRF same-query posterior](figures_preview_png/fig6_nature_lcrf_same_query_posterior.png)
 
 关键结果：
 

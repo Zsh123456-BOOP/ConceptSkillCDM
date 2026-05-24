@@ -1,5 +1,7 @@
 # 面向稀疏概念覆盖的概念可达性认知诊断
 
+> 预览说明：正文使用 `figures_preview_png/` 中的 PNG 以兼容 VSCode Markdown 预览；正式投稿与打包使用的 PDF 版本保留在 `figures_main_pdf/` 中。
+
 ## 摘要
 
 认知诊断旨在根据学生历史作答记录估计其对知识概念的掌握状态。现有神经认知诊断与图认知诊断模型通常依赖学生-题目响应日志和题目-概念矩阵进行预测，但在真实学习平台中，学生历史并不总是直接覆盖当前题目涉及的目标概念。当目标概念缺少历史覆盖时，模型需要从学生已练习概念和训练日志中的概念关系中寻找可用支撑。为此，本文提出概念可达图（Concept Reachability Graph, CRG）和学习者条件化可达性过滤器（Learner-Conditioned Reachability Filter, LCRF）。CRG 基于训练日志中的题内概念共现、序列转移、自保持和可靠性统计构造全局概念路线图，并为目标概念给出固定支持集；LCRF 在该支持集内根据学生掌握度、近期表现、路线邻居状态和历史计数重排后验路线权重。三个真实数据集上的实验表明，CRG 能够恢复训练日志中的概念转移，并在 `assist_09` 和 `junyi` 上从学生历史概念检索当前查询概念。进一步的覆盖条件预测、支持集扰动和学习者状态替换实验显示，CRG-LCRF 的收益主要出现在目标概念直接覆盖不足但存在可达路线的场景中。
@@ -18,9 +20,9 @@
 
 基于这一观察，本文提出 CRG/LCRF 两阶段框架。CRG 首先构造全局概念路线图，并为每个目标概念给出固定支持集；LCRF 随后在该固定支持集上建模学习者条件化后验路线分布，用于判断哪些候选路线更适合当前学生。两者分别对应全局路线构造和局部学生过滤。
 
-![直接概念覆盖不足与支持约束个性化。学生历史只覆盖少量历史概念，而当前目标概念未被直接观测。CRG 利用训练日志中的题内共现、序列转移、自保持和可靠性统计构造可达支持集；LCRF 在相同支持集内根据学生状态重排后验路线权重。](figures_main_pdf/fig1_problem_concept_evidence_gap.pdf){#fig:concept-gap width=100%}
+![图 1：直接概念覆盖不足与支持约束个性化。学生历史只覆盖少量历史概念，而当前目标概念未被直接观测。CRG 利用训练日志中的题内共现、序列转移、自保持和可靠性统计构造可达支持集；LCRF 在相同支持集内根据学生状态重排后验路线权重。](figures_preview_png/fig1_problem_concept_evidence_gap.png)
 
-如图 \ref{fig:concept-gap} 所示，左侧学生历史包含已观测过的概念及有限正确、错误、未观测记录，目标概念 \(c\) 需要被预测，但没有出现在该学生的历史概念集合中。中间的 CRG 利用训练日志中的经验路线将历史概念连接到目标概念，其中 sequence transition 表示日志中观察到的学习顺序，而非严格先修关系。右侧的 LCRF 在 CRG 给出的固定支持集内进行个性化后验重排，使后验权重随学生状态变化而变化。
+如图 1 所示，左侧学生历史包含已观测过的概念及有限正确、错误、未观测记录，目标概念 \(c\) 需要被预测，但没有出现在该学生的历史概念集合中。中间的 CRG 利用训练日志中的经验路线将历史概念连接到目标概念，其中 sequence transition 表示日志中观察到的学习顺序，而非严格先修关系。右侧的 LCRF 在 CRG 给出的固定支持集内进行个性化后验重排，使后验权重随学生状态变化而变化。
 
 本文贡献如下：
 
@@ -73,9 +75,9 @@
 
 从表 1 可以看出，三组数据集均呈现不同形式的直接概念覆盖不足。`junyi` 没有题内概念共现，但 direct-unseen rate 与 bridge-only rate 均很高，适合检验序列路线的可达支持。`assist_09` 和 `assist_17` 更接近常规 benchmark 场景，少量题内共现与较强序列路线共同存在。上述差异说明，概念可达性不能仅由题内多概念共现刻画，还需要训练日志中的经验学习路线提供补充。
 
-![数据画像与 CRG 路线检索。上半部分给出三个数据集的概念覆盖条件，下半部分分别展示从学生历史概念检索当前查询概念，以及在留出概念转移上比较 self-only、random、degree-random 与 Best CRG。](figures_main_pdf/fig2_nature_data_and_crg_retrieval.pdf){#fig:data-crg-retrieval width=100%}
+![图 2：数据画像与 CRG 路线检索。上半部分给出三个数据集的概念覆盖条件，下半部分分别展示从学生历史概念检索当前查询概念，以及在留出概念转移上比较 self-only、random、degree-random 与 Best CRG。](figures_preview_png/fig2_nature_data_and_crg_retrieval.png)
 
-图 \ref{fig:data-crg-retrieval} 将数据画像、history-to-query retrieval 和全局留出概念转移检索放在同一视图中。数据画像显示不同数据集中的未直接覆盖与可桥接场景；history-to-query 面板显示 `assist_09` 和 `junyi` 中的序列路线可以从学生历史概念中检索当前查询概念；held-out transition 面板显示 Best CRG 在三个数据集上均优于 self-only 和 random controls。尤其在 `junyi` 中，题内共现完全缺失，CRG 仍能通过序列路线恢复一部分留出概念转移，说明概念路线还需要 item co-occurrence 之外的训练序列信号。
+图 2 将数据画像、history-to-query retrieval 和全局留出概念转移检索放在同一视图中。数据画像显示不同数据集中的未直接覆盖与可桥接场景；history-to-query 面板显示 `assist_09` 和 `junyi` 中的序列路线可以从学生历史概念中检索当前查询概念；held-out transition 面板显示 Best CRG 在三个数据集上均优于 self-only 和 random controls。尤其在 `junyi` 中，题内共现完全缺失，CRG 仍能通过序列路线恢复一部分留出概念转移，说明概念路线还需要 item co-occurrence 之外的训练序列信号。
 
 ---
 
@@ -163,9 +165,9 @@ f_{\theta}(u,t,c,k)
 
 History-to-query retrieval 说明 CRG 可以在部分数据集上找到从历史概念到目标概念的路线。进一步地，本节分析这些路线是否会在预测中带来收益。与全体样本平均结果相比，coverage-conditioned prediction 更关注目标概念直接覆盖不足、但存在可达路线的子场景。
 
-![覆盖条件预测结果。点表示 Full 相对消融变体的提升，横线为 500 次 test-sample bootstrap 的 95% 置信区间；正向 ΔBCE 表示 Full 的 BCE 更低。](figures_main_pdf/fig3_nature_coverage_conditioned_prediction.pdf){#fig:coverage-conditioned width=100%}
+![图 3：覆盖条件预测结果。点表示 Full 相对消融变体的提升，横线为 500 次 test-sample bootstrap 的 95% 置信区间；正向 ΔBCE 表示 Full 的 BCE 更低。](figures_preview_png/fig3_nature_coverage_conditioned_prediction.png)
 
-图 \ref{fig:coverage-conditioned} 将完整数值表压缩为覆盖条件子场景的 forest plot。`assist_09` 的 direct-unseen-bridgeable、weak-direct 与 high-route 子场景中，Full 相对 `no_CRG` 和 `no_LCRF` 均保持更低 BCE，其中 direct-unseen-bridgeable 子场景的 BCE 差值分别为 0.0219 和 0.0382。`assist_17` 的 high-route 与 weak-direct 子场景中，Full 相比 `no_CRG` 的 AUC 提升约为 0.0151，BCE 差值也保持为正；相比 `no_LCRF` 时，AUC 差异较小，但 BCE 仍有改善。`junyi` 的预测层差异较小，因此本文更多用它说明无题内共现条件下的路线可达性。完整 coverage-conditioned 数值表见附录 B。
+图 3 将完整数值表压缩为覆盖条件子场景的 forest plot。`assist_09` 的 direct-unseen-bridgeable、weak-direct 与 high-route 子场景中，Full 相对 `no_CRG` 和 `no_LCRF` 均保持更低 BCE，其中 direct-unseen-bridgeable 子场景的 BCE 差值分别为 0.0219 和 0.0382。`assist_17` 的 high-route 与 weak-direct 子场景中，Full 相比 `no_CRG` 的 AUC 提升约为 0.0151，BCE 差值也保持为正；相比 `no_LCRF` 时，AUC 差异较小，但 BCE 仍有改善。`junyi` 的预测层差异较小，因此本文更多用它说明无题内共现条件下的路线可达性。完整 coverage-conditioned 数值表见附录 B。
 
 ### 6.3 模块消融
 
@@ -189,27 +191,27 @@ History-to-query retrieval 说明 CRG 可以在部分数据集上找到从历史
 
 ### 6.4 路线与支持集分析
 
-图 \ref{fig:data-crg-retrieval} 同时展示了 history-to-query retrieval 和全局 held-out transition retrieval。前者评估给定学生历史概念集合时，训练日志路线能否检索当前 query concept；后者评估 CRG 是否能够恢复全局层面的留出概念转移。`assist_09` 和 `junyi` 的 history-to-query 面板显示 seq-only 或 fused CRG 明显高于 random；held-out transition 面板进一步显示 Best CRG 在三个数据集上均优于 self-only 与 random controls。
+图 2 同时展示了 history-to-query retrieval 和全局 held-out transition retrieval。前者评估给定学生历史概念集合时，训练日志路线能否检索当前 query concept；后者评估 CRG 是否能够恢复全局层面的留出概念转移。`assist_09` 和 `junyi` 的 history-to-query 面板显示 seq-only 或 fused CRG 明显高于 random；held-out transition 面板进一步显示 Best CRG 在三个数据集上均优于 self-only 与 random controls。
 
-路线检索评估 CRG 的恢复能力；支持集扰动进一步分析预测对支持集的敏感性。我们在不重训的情况下替换或破坏 CRG 支持集，并观察预测性能变化。图 \ref{fig:crg-support-corruption} 中包含 route corruption、degree-matched random support、sequence-shuffled support 和 self-only fallback 等对照。
+路线检索评估 CRG 的恢复能力；支持集扰动进一步分析预测对支持集的敏感性。我们在不重训的情况下替换或破坏 CRG 支持集，并观察预测性能变化。图 4 中包含 route corruption、degree-matched random support、sequence-shuffled support 和 self-only fallback 等对照。
 
-![CRG 支持集扰动结果。图中比较不同支持集替换或扰动方式下的预测变化。](figures_main_pdf/fig4_nature_crg_support_corruption.pdf){#fig:crg-support-corruption width=100%}
+![图 4：CRG 支持集扰动结果。图中比较不同支持集替换或扰动方式下的预测变化。](figures_preview_png/fig4_nature_crg_support_corruption.png)
 
-图 \ref{fig:crg-support-corruption} 表明，替换 CRG 支持集会改变模型预测表现。`assist_17` 中 route corruption 明显强于 degree-random，尤其 AUC drop gap 更突出，说明模型对 CRG routes 具有较强依赖。`assist_09` 中 route corruption 与 degree-random 接近，体现出模型对候选支持空间的依赖。`junyi` 的 AUC 变化较小，但 BCE increase 显示支持集扰动会影响概率校准。完整支持集扰动数值见附录 B。
+图 4 表明，替换 CRG 支持集会改变模型预测表现。`assist_17` 中 route corruption 明显强于 degree-random，尤其 AUC drop gap 更突出，说明模型对 CRG routes 具有较强依赖。`assist_09` 中 route corruption 与 degree-random 接近，体现出模型对候选支持空间的依赖。`junyi` 的 AUC 变化较小，但 BCE increase 显示支持集扰动会影响概率校准。完整支持集扰动数值见附录 B。
 
 ### 6.5 学习者条件化过滤
 
 本节分析 LCRF 对学习者状态的使用方式。我们使用三种变体：`no_filter` 表示移除 LCRF；`mean_state` 用群体平均学生状态替代真实状态；`shuffle_state` 打乱学生状态。
 
-![LCRF 学习者状态反事实结果。图中比较 no-filter、mean-state 和 shuffle-state 相对完整模型的变化。](figures_main_pdf/fig5_nature_lcrf_counterfactual_delta.pdf){#fig:lcrf-counterfactual width=100%}
+![图 5：LCRF 学习者状态反事实结果。图中比较 no-filter、mean-state 和 shuffle-state 相对完整模型的变化。](figures_preview_png/fig5_nature_lcrf_counterfactual_delta.png)
 
-图 \ref{fig:lcrf-counterfactual} 区分了模块移除和状态替换两类干预。`no_filter` 反映移除 LCRF 后的整体预测变化；`mean_state` 和 `shuffle_state` 进一步检验真实学习者状态是否可以由群体平均状态或错配状态替代。`assist_09` 和 `assist_17` 在 mean/shuffle 干预下出现明显下降，说明 LCRF 的后验路线分布依赖学习者状态。`junyi` 中变化较小，更接近 CRG-dominant 的数据集类型。
+图 5 区分了模块移除和状态替换两类干预。`no_filter` 反映移除 LCRF 后的整体预测变化；`mean_state` 和 `shuffle_state` 进一步检验真实学习者状态是否可以由群体平均状态或错配状态替代。`assist_09` 和 `assist_17` 在 mean/shuffle 干预下出现明显下降，说明 LCRF 的后验路线分布依赖学习者状态。`junyi` 中变化较小，更接近 CRG-dominant 的数据集类型。
 
 为了观察局部行为，本文固定同一个 query concept 和相同 CRG 支持集，比较不同学生得到的后验路线分布。`assist_17` 的主 case 为 `assist_17_Q14_S25`。该 case 中所有学生共享相同支持集，support size 为 25；候选统计显示 mean pairwise L1 最高可达到 0.801，JS 为 0.129。two-student case 中，S1 与 S7 的后验路线差异明显。
 
-![Same-query posterior case。在同一 query concept 和同一 CRG 支持集下，不同学生获得不同后验路线权重。](figures_main_pdf/fig6_nature_lcrf_same_query_posterior.pdf){#fig:lcrf-same-query width=100%}
+![图 6：Same-query posterior case。在同一 query concept 和同一 CRG 支持集下，不同学生获得不同后验路线权重。](figures_preview_png/fig6_nature_lcrf_same_query_posterior.png)
 
-图 \ref{fig:lcrf-same-query} 展示了 LCRF 的个性化过滤行为：在同一 query、同一 CRG 支持集下，不同学生会得到不同后验路线分布。S1 的后验权重更集中于 C7，而 S7 更强调 C12；这说明 LCRF 并非为所有学生复用同一全局路线分布，而是在固定支持集内根据学习者状态调整路线权重。完整 same-query posterior 行表见附录 B。
+图 6 展示了 LCRF 的个性化过滤行为：在同一 query、同一 CRG 支持集下，不同学生会得到不同后验路线分布。S1 的后验权重更集中于 C7，而 S7 更强调 C12；这说明 LCRF 并非为所有学生复用同一全局路线分布，而是在固定支持集内根据学习者状态调整路线权重。完整 same-query posterior 行表见附录 B。
 
 ---
 
