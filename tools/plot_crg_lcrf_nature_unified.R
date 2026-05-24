@@ -175,35 +175,6 @@ global <- read_csv_base(global_retr_path) %>%
     method = factor(method, levels = c("Self", "Rand", "Deg-rand", "Best CRG"))
   )
 
-card_long <- cards %>%
-  transmute(
-    dataset,
-    Single = fmt_pct(single_concept_rate),
-    `Item edge` = fmt_pct(item_edge_density),
-    `Seq edge` = fmt_pct(seq_edge_density),
-    Unseen = fmt_pct(direct_unseen_rate),
-    Bridge = fmt_pct(bridge_only_rate),
-    `Hist med` = sprintf("%.0f", history_len_median)
-  ) %>%
-  pivot_longer(-dataset, names_to = "metric", values_to = "value") %>%
-  mutate(
-    metric = factor(metric, levels = c("Single", "Item edge", "Seq edge", "Unseen", "Bridge", "Hist med")),
-    family = case_when(
-      metric %in% c("Item edge", "Seq edge") ~ "route evidence",
-      metric %in% c("Unseen", "Bridge") ~ "evidence gap",
-      TRUE ~ "data scale"
-    )
-  )
-
-p_cards <- ggplot(card_long, aes(metric, dataset)) +
-  geom_tile(aes(fill = family), color = "white", linewidth = 1.2, alpha = 0.12) +
-  geom_text(aes(label = value), size = 2.5, fontface = "bold", colour = c0("neutral_dark")) +
-  geom_text(aes(label = metric, y = as.numeric(dataset) - 0.34), size = 1.75, colour = "grey40") +
-  scale_fill_manual(values = c("route evidence" = c0("crg"), "evidence gap" = c0("evidence"), "data scale" = c0("neutral"))) +
-  scale_y_discrete(limits = rev(dataset_levels)) +
-  labs(x = NULL, y = NULL, title = "Dataset evidence-gap profile", subtitle = "Percentages are shown explicitly; history is median interactions.") +
-  theme(axis.text.x = element_blank(), axis.ticks = element_blank(), legend.position = "none", panel.grid = element_blank())
-
 p_hist <- ggplot(hist, aes(dataset, hit10, fill = method)) +
   geom_col(position = position_dodge(width = 0.72), width = 0.62) +
   scale_fill_manual(values = method_pal) +
@@ -220,15 +191,14 @@ p_global <- ggplot(global, aes(dataset, `hit@10`, fill = method)) +
   guides(fill = guide_legend(nrow = 1, byrow = TRUE)) +
   theme(legend.position = "bottom", panel.grid.major.x = element_blank())
 
-fig2 <- p_cards / (p_hist | p_global) +
-  plot_layout(heights = c(0.82, 1.18)) +
+fig2 <- p_hist | p_global +
+  plot_layout(widths = c(1, 1.05)) +
   plot_annotation(tag_levels = "a") &
   theme(plot.tag = element_text(face = "bold", size = 8))
-save_figure(fig2, "fig2_nature_data_and_crg_retrieval", 183, 126)
+save_figure(fig2, "fig2_nature_data_and_crg_retrieval", 183, 86)
 
-add_audit("Figure 2", "a", "Dataset coverage regimes", cards_path, "single_concept_rate,item_edge_density,seq_edge_density,direct_unseen_rate,bridge_only_rate,history_len_median", "dataset in core3")
-add_audit("Figure 2", "b", "History-to-query route retrieval", paste(history_paths, collapse = ";"), "hit10", "group=direct_unseen_bridgeable; methods=random,seq-only,fused CRG")
-add_audit("Figure 2", "c", "Held-out transition retrieval", global_retr_path, "hit@10", "Self/Rand/Deg-rand/Best CRG")
+add_audit("Figure 4", "a", "History-to-query route retrieval", paste(history_paths, collapse = ";"), "hit10", "group=direct_unseen_bridgeable; methods=random,seq-only,fused CRG")
+add_audit("Figure 4", "b", "Held-out transition retrieval", global_retr_path, "hit@10", "Self/Rand/Deg-rand/Best CRG")
 
 # -------------------------------------------------------------------------
 # Figure 3. Coverage-conditioned prediction.
@@ -280,8 +250,8 @@ fig3 <- (p_bce | p_auc) +
   theme(plot.tag = element_text(face = "bold", size = 8))
 save_figure(fig3, "fig3_nature_coverage_conditioned_prediction", 183, 116)
 
-add_audit("Figure 3", "a", "Coverage-conditioned BCE gain", coverage_path, "delta_bce,delta_bce_ci_low,delta_bce_ci_high,n_eval", "direct_unseen_bridgeable,weak_direct_evidence,high_route_mass; junyi weak-direct omitted")
-add_audit("Figure 3", "b", "Coverage-conditioned AUC companion", coverage_path, "delta_auc,delta_auc_ci_low,delta_auc_ci_high,n_eval", "same rows as panel a")
+add_audit("Figure 5", "a", "Coverage-conditioned BCE gain", coverage_path, "delta_bce,delta_bce_ci_low,delta_bce_ci_high,n_eval", "direct_unseen_bridgeable,weak_direct_evidence,high_route_mass; junyi weak-direct omitted")
+add_audit("Figure 5", "b", "Coverage-conditioned AUC companion", coverage_path, "delta_auc,delta_auc_ci_low,delta_auc_ci_high,n_eval", "same rows as panel a")
 
 # -------------------------------------------------------------------------
 # Figure 4. CRG support corruption.
@@ -347,8 +317,8 @@ fig4 <- p_curves / p_gap +
   theme(plot.tag = element_text(face = "bold", size = 8))
 save_figure(fig4, "fig4_nature_crg_support_corruption", 183, 146)
 
-add_audit("Figure 4", "a", "AUC/BCE response to support perturbation", support_path, "auc_drop_from_clean,bce_increase_from_clean", "subgroup=all; ratios=25,50,75,100")
-add_audit("Figure 4", "b", "Evidence-minus-degree random gap", support_path, "evidence_minus_degree_random_auc_drop", "100% evidence support replacement")
+add_audit("Figure 6", "a", "AUC/BCE response to support perturbation", support_path, "auc_drop_from_clean,bce_increase_from_clean", "subgroup=all; ratios=25,50,75,100")
+add_audit("Figure 6", "b", "Evidence-minus-degree random gap", support_path, "evidence_minus_degree_random_auc_drop", "100% evidence support replacement")
 
 # -------------------------------------------------------------------------
 # Figure 5. LCRF learner-state counterfactual.
@@ -391,7 +361,7 @@ p5 <- ggplot(cf, aes(variant_label, auc_drop_from_full, color = variant_label)) 
 
 save_figure(p5, "fig5_nature_lcrf_counterfactual_delta", 183, 78)
 
-add_audit("Figure 5", "all", "Learner-state replacement changes prediction", counter_path, "auc_drop_from_full", "variants=no_filter,mean_state,shuffle_state")
+add_audit("Figure 7", "all", "Learner-state replacement changes prediction", counter_path, "auc_drop_from_full", "variants=no_filter,mean_state,shuffle_state")
 
 # -------------------------------------------------------------------------
 # Figure 6. Same-query posterior case.
@@ -423,9 +393,37 @@ if (!is.na(chosen_case_id)) {
     slice_head(n = 6) %>%
     pull(support_concept_name)
 
-  two <- two %>%
+  prior_lookup <- two %>%
     filter(support_concept_name %in% support_keep) %>%
-    mutate(support_concept_name = factor(support_concept_name, levels = rev(support_keep)))
+    group_by(support_concept_name) %>%
+    summarise(global_support_prob = max(global_support_prob, na.rm = TRUE), .groups = "drop")
+
+  learner_meta <- two %>%
+    distinct(learner_id_anonymized, query_mastery, query_recent_mastery, pred_global, pred_full, true_label)
+
+  two_complete <- as_tibble(expand.grid(
+    learner_id_anonymized = levels(two$learner_id_anonymized),
+    support_concept_name = support_keep,
+    stringsAsFactors = FALSE
+  ))
+
+  two <- two_complete %>%
+    left_join(two %>% filter(support_concept_name %in% support_keep), by = c("learner_id_anonymized", "support_concept_name")) %>%
+    left_join(prior_lookup, by = "support_concept_name", suffix = c("", ".prior")) %>%
+    left_join(learner_meta, by = "learner_id_anonymized", suffix = c("", ".meta")) %>%
+    mutate(
+      learner_id_anonymized = factor(learner_id_anonymized, levels = c("S1", "S7")),
+      global_support_prob = coalesce(global_support_prob, global_support_prob.prior),
+      posterior_prob = coalesce(posterior_prob, 0),
+      posterior_minus_global = posterior_prob - global_support_prob,
+      query_mastery = coalesce(query_mastery, query_mastery.meta),
+      query_recent_mastery = coalesce(query_recent_mastery, query_recent_mastery.meta),
+      pred_global = coalesce(pred_global, pred_global.meta),
+      pred_full = coalesce(pred_full, pred_full.meta),
+      true_label = coalesce(true_label, true_label.meta),
+      support_concept_name = factor(support_concept_name, levels = rev(support_keep))
+    ) %>%
+    select(-ends_with(".prior"), -ends_with(".meta"))
 
   prior <- two %>%
     group_by(support_concept_name) %>%
@@ -437,41 +435,60 @@ if (!is.na(chosen_case_id)) {
     labs(x = "CRG prior", y = NULL, title = "Fixed CRG support") +
     theme(panel.grid.major.y = element_blank())
 
-  p6b <- ggplot(two, aes(posterior_prob, support_concept_name, fill = learner_id_anonymized)) +
-    geom_col(position = position_dodge(width = 0.72), width = 0.6) +
-    scale_fill_manual(values = method_pal) +
-    scale_x_continuous(labels = number_format(accuracy = 0.01), expand = expansion(mult = c(0, 0.08))) +
-    labs(x = "LCRF posterior", y = NULL, title = "Two learners, same support") +
+  posterior_wide <- two %>%
+    select(learner_id_anonymized, support_concept_name, posterior_prob) %>%
+    tidyr::pivot_wider(names_from = learner_id_anonymized, values_from = posterior_prob)
+
+  p6b <- ggplot(posterior_wide, aes(y = support_concept_name)) +
+    geom_segment(aes(x = S1, xend = S7, yend = support_concept_name), linewidth = 0.45, color = "grey72") +
+    geom_point(aes(x = S1, color = "S1"), size = 2.1) +
+    geom_point(aes(x = S7, color = "S7"), size = 2.1) +
+    scale_color_manual(values = method_pal) +
+    scale_x_continuous(labels = number_format(accuracy = 0.01), expand = expansion(mult = c(0.02, 0.10))) +
+    labs(x = "LCRF posterior", y = NULL, title = "Posterior route split") +
     theme(legend.position = "bottom", panel.grid.major.y = element_blank())
 
-  p6c <- ggplot(two, aes(support_concept_name, learner_id_anonymized, fill = posterior_minus_global)) +
-    geom_tile(color = "white", linewidth = 0.35) +
-    scale_fill_gradient2(low = "#2B6CB0", mid = "white", high = c0("lcrf"), midpoint = 0) +
-    labs(x = NULL, y = NULL, title = "Posterior - global") +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "right", panel.grid = element_blank())
+  p6c <- ggplot(two, aes(posterior_minus_global, support_concept_name, fill = learner_id_anonymized)) +
+    geom_vline(xintercept = 0, linewidth = 0.28, colour = "grey40") +
+    geom_col(position = position_dodge(width = 0.72), width = 0.58) +
+    scale_fill_manual(values = method_pal) +
+    scale_x_continuous(labels = number_format(accuracy = 0.01), expand = expansion(mult = c(0.12, 0.08))) +
+    labs(x = "Posterior - CRG prior", y = NULL, title = "Route reweighting") +
+    theme(legend.position = "none", panel.grid.major.y = element_blank())
 
   pred <- two %>%
-    distinct(learner_id_anonymized, query_mastery, query_recent_mastery, pred_global, pred_full, true_label)
+    group_by(learner_id_anonymized) %>%
+    slice_max(order_by = posterior_prob, n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    transmute(
+      learner_id_anonymized,
+      query_mastery,
+      query_recent_mastery,
+      pred_global,
+      pred_full,
+      true_label,
+      top_route = as.character(support_concept_name)
+    )
 
   p6d <- ggplot(pred, aes(y = learner_id_anonymized)) +
     geom_segment(aes(x = pred_global, xend = pred_full, yend = learner_id_anonymized), linewidth = 0.55, color = "grey65") +
     geom_point(aes(x = pred_global), size = 1.9, color = "grey55") +
     geom_point(aes(x = pred_full, color = learner_id_anonymized), size = 2.2) +
-    geom_text(aes(x = pmax(pred_global, pred_full) + 0.025, label = paste0("y=", true_label, "\nq=", sprintf("%.2f", query_mastery), ", r=", sprintf("%.2f", query_recent_mastery))), size = 2.1, hjust = 0, colour = "grey25") +
+    geom_text(aes(x = pmax(pred_global, pred_full) + 0.025, label = paste0("top ", top_route, "\ny=", true_label, "; q=", sprintf("%.2f", query_mastery), "\nr=", sprintf("%.2f", query_recent_mastery))), size = 2.05, hjust = 0, colour = "grey25", lineheight = 0.9) +
     scale_color_manual(values = method_pal) +
     scale_x_continuous(limits = c(min(c(pred$pred_global, pred$pred_full), na.rm = TRUE) - 0.04, max(c(pred$pred_global, pred$pred_full), na.rm = TRUE) + 0.22), labels = number_format(accuracy = 0.01)) +
     labs(x = "Prediction: global to LCRF", y = NULL, title = "Prediction shift and learner state") +
     theme(legend.position = "none", panel.grid.major.y = element_blank())
 
   fig6 <- (p6a | p6b) / (p6c | p6d) +
-    plot_layout(heights = c(0.92, 1.08), guides = "collect") +
-    plot_annotation(tag_levels = "a", caption = "The two students share the same query and CRG support; LCRF changes posterior mass within that fixed support.") &
+    plot_layout(heights = c(0.92, 1.08)) +
+    plot_annotation(tag_levels = "a", caption = "The two students share the same query and CRG support; LCRF redirects posterior mass without adding support concepts.") &
     theme(plot.tag = element_text(face = "bold", size = 8))
 
   save_figure(fig6, "fig6_nature_lcrf_same_query_posterior", 183, 128)
 }
 
-add_audit("Figure 6", "a-d", "Same-query posterior routes differ across learners", paste(same_path, two_path, sep = ";"), "global_support_prob,posterior_prob,posterior_minus_global,pred_global,pred_full,query_mastery,query_recent_mastery", paste0("case_id=", chosen_case_id))
+add_audit("Figure 8", "a-d", "Same-query posterior routes differ across learners", paste(same_path, two_path, sep = ";"), "global_support_prob,posterior_prob,posterior_minus_global,pred_global,pred_full,query_mastery,query_recent_mastery", paste0("case_id=", chosen_case_id))
 
 audit <- bind_rows(audit_rows)
 audit_path <- file.path(repo_root, "docs", "paper_review_2025_2026", "figure_data_audit.csv")
