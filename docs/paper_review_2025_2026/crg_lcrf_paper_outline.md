@@ -2,9 +2,9 @@
 
 本文当前主线不是证明一个黑盒网络更强，而是从数据现象出发，解释认知诊断中一个更具体的问题：学生在测试中遇到的概念，很多时候不能被历史作答直接覆盖，但可以通过训练集中的概念路径被“到达”。因此模型需要先有一张全局路线图，再根据学生个人状态过滤这张路线图。中文初稿已经统一改为 **“概念证据缺口”** 叙事，避免把问题窄化为题内多知识点共现。
 
-> 图片引用说明：本大纲引用同目录 `figures/` 下的 5 张 PNG。交给 GPT Pro 时，请同时上传本 md 和 `figures/` 中的 5 张图；如果只复制 md 文本，任何本地图片路径都不会自动可见。
+> 图片引用说明：本大纲引用同目录 `figures_main_pdf/` 下的正式 PDF 图。交给 GPT Pro 时，请同时上传本 md 和 `figures_main_pdf/` 中的图；如果只复制 md 文本，任何本地图片路径都不会自动可见。
 >
-> 中文初稿位置：`docs/paper_review_2025_2026/crg_lcrf_cn_paper_draft.md`；完整可上传初稿包位置：`review_packets/crg_lcrf_cn_draft_review_20260523/` 或 `review_packets/crg_lcrf_cn_draft_review_20260523.zip`。
+> 中文初稿位置：`docs/paper_review_2025_2026/crg_lcrf_cn_paper_draft.md`；原始参考论文 PDF 统一放在 `docs/paper_review_2025_2026/papers_original_pdf/`。
 
 ## 题目占位
 
@@ -36,7 +36,7 @@
 2. LCRF 再回答：这些可达路线中，哪些对当前学生更可信。
 3. 预测头使用 CRG/LCRF 产生的概念状态校准，而不是让二者成为弱旁路。
 
-![Figure 1: CRG/LCRF mechanism](figures/fig1_mechanism_crg_lcrf.png)
+![Figure 1: Concept evidence gap](figures_main_pdf/fig1_problem_concept_evidence_gap.pdf)
 
 ## 数据集定位
 
@@ -50,7 +50,7 @@
 
 三数据集的角色必须分开写：`junyi` 主讲 CRG retrieval 和数据现象；`assist_17` 主讲 CRG prediction-level support dependence；`assist_09` 作为平衡 benchmark，同时支撑 LCRF 反事实和 same-query posterior。
 
-![Figure 2: Data phenomenon and CRG retrieval](figures/fig2_core3_data_and_crg_retrieval_final.png)
+![Figure 2: Data phenomenon and CRG retrieval](figures_main_pdf/fig2_nature_data_and_crg_retrieval.pdf)
 
 ## 论文结构草稿
 
@@ -175,7 +175,7 @@ Claim：破坏 CRG support 会伤害预测，说明模型确实依赖可达路�
 
 图：Figure 3。
 
-![Figure 3: CRG support necessity controls](figures/fig3_core3_support_corruption_final.png)
+![Figure 3: CRG support necessity controls](figures_main_pdf/fig3_nature_crg_support_corruption.pdf)
 
 写法：
 
@@ -189,7 +189,7 @@ Claim：LCRF 的收益在 `assist_09` 和 `assist_17` 上主要来自真实学�
 
 图：Figure 4。
 
-![Figure 4: LCRF counterfactual delta AUC](figures/fig4_core3_lcrf_counterfactual_final.png)
+![Figure 4: LCRF counterfactual delta](figures_main_pdf/fig4_nature_lcrf_counterfactual_delta.pdf)
 
 写法：
 
@@ -204,7 +204,7 @@ Claim：同一个 query、同一个 CRG support，会被不同学习者过滤成
 
 图：Figure 5。
 
-![Figure 5: LCRF same-query posterior](figures/fig5_core3_lcrf_same_query_posterior_final.png)
+![Figure 5: LCRF same-query posterior](figures_main_pdf/fig5_nature_lcrf_same_query_posterior.pdf)
 
 关键结果：
 
@@ -231,11 +231,11 @@ Claim：同一个 query、同一个 CRG support，会被不同学习者过滤成
 
 | 图 | 文件 | 主要 claim | 推荐正文位置 |
 |---|---|---|---|
-| Figure 1 | `fig1_mechanism_crg_lcrf.png` | CRG/LCRF 结构关系 | Method overview |
-| Figure 2 | `fig2_core3_data_and_crg_retrieval_final.png` | 三数据集数据现象 + CRG retrieval 充分性 | Problem + mechanism experiment |
-| Figure 3 | `fig3_core3_support_corruption_final.png` | dataset-dependent CRG support dependence | Mechanism experiment |
-| Figure 4 | `fig4_core3_lcrf_counterfactual_final.png` | LCRF 反事实必要性，Junyi 标注 weak | Mechanism experiment |
-| Figure 5 | `fig5_core3_lcrf_same_query_posterior_final.png` | assist_17 same-query posterior + two-student local path | Mechanism experiment |
+| Figure 1 | `figures_main_pdf/fig1_problem_concept_evidence_gap.pdf` | 概念证据缺口与支持约束个性化 | Introduction |
+| Figure 2 | `figures_main_pdf/fig2_nature_data_and_crg_retrieval.pdf` | 三数据集数据现象 + CRG route retrieval | Problem + mechanism experiment |
+| Figure 3 | `figures_main_pdf/fig3_nature_crg_support_corruption.pdf` | dataset-dependent CRG support dependence | Mechanism experiment |
+| Figure 4 | `figures_main_pdf/fig4_nature_lcrf_counterfactual_delta.pdf` | LCRF learner-state counterfactual | Mechanism experiment |
+| Figure 5 | `figures_main_pdf/fig5_nature_lcrf_same_query_posterior.pdf` | assist_17 same-query posterior + two-student local path | Mechanism experiment |
 
 ## Claim 决策表
 

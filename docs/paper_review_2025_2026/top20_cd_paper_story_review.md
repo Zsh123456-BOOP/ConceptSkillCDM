@@ -51,7 +51,7 @@
 | NCDLA | Noise-Aware Graph-based CD Through Low-Rank Alignment | 2026 | AAAI | `aaai26_ncdla.pdf` | CCF 2026: A | PDF 已本地化；正式 AAAI 论文 | 核心深读 |
 | DBCD | Debiased Cognitive Diagnosis | 2026 | AAAI | `aaai26_dbcd.pdf` | CCF 2026: A | PDF 已本地化；正式 AAAI 论文 | 核心深读 |
 | KCD | Knowledge is Power | 2025 | AAAI | `aaai25_kcd.pdf` | CCF 2026: A | PDF 已本地化；代码/数据链接见论文 | 核心深读 |
-| DMC-CDM | Multi-Perspective Consolidation | 2025 | AAAI | `aaai25_dmccdm.pdf` | CCF 2026: A | PDF 已本地化；代码链接见论文 | 核心深读 |
+| DMC-CDM | Multi-Perspective Consolidation | 2025 | AAAI | `aaai25_dmc_cdm.pdf` | CCF 2026: A | PDF 已本地化；代码链接见论文 | 核心深读 |
 | AD4CD | Causal-Guided Anomaly Detection | 2025 | AAAI | `aaai25_ad4cd.pdf` | CCF 2026: A | PDF 已本地化；任务强相关 | 核心深读 |
 | FACD | Fast-Adaptive Cognitive Diagnosis | 2025 | IJCAI | `ijcai25_facd.pdf` | CCF 2026: B | PDF 已本地化；若按旧 CCF 目录可恢复 | 条件参考 |
 | KAN2CD | KAN for Neural CD | 2025 | IJCAI | `ijcai25_kan2cd.pdf` | CCF 2026: B | PDF 已本地化；若按旧 CCF 目录可恢复 | 条件参考 |
@@ -99,11 +99,11 @@
 
 | 图 | 文件 | 证明点 | 当前判断 |
 |---|---|---|---|
-| Figure 1 | `fig1_mechanism_crg_lcrf.png` | 方法机制：train-only evidence -> CRG roadmap -> fixed support -> LCRF posterior -> prediction。 | 可用；作为方法总览图，不承担结果证明。 |
-| Figure 2 | `fig2_core3_data_and_crg_retrieval_final.png` | 数据现象 + CRG 充分性：稀疏可达现象与 held-out route retrieval。 | 可用；CRG 的主证据应放在 09/Junyi/17。 |
-| Figure 3 | `fig3_core3_support_corruption_final.png` | CRG 必要性：四类 support corruption control。 | 可用但要精确表述：ASSIST17 最干净，ASSIST09 证明 support-dependence，Junyi 弱。 |
-| Figure 4 | `fig4_core3_lcrf_counterfactual_final.png` | LCRF 必要性：shuffle/mean learner state 明显伤害 AUC。 | 可用；核心写 09/17，Junyi 谨慎补充。 |
-| Figure 5 | `fig5_core3_lcrf_same_query_posterior_final.png` | LCRF 充分性：同一 CRG support 被不同学生过滤成不同 posterior。 | 可用；主例用 ASSIST09/ASSIST17，不使用 NIPS34 same-query。 |
+| Figure 1 | `figures_main_pdf/fig1_problem_concept_evidence_gap.pdf` | 概念证据缺口与支持约束个性化。 | 可用；作为引言问题图。 |
+| Figure 2 | `figures_main_pdf/fig2_nature_data_and_crg_retrieval.pdf` | 数据现象 + CRG route retrieval。 | 可用；CRG 的主要结果放在 09/Junyi/17。 |
+| Figure 3 | `figures_main_pdf/fig3_nature_crg_support_corruption.pdf` | CRG support corruption control。 | 可用但要精确表述：ASSIST17 最干净，ASSIST09 体现 support-dependence，Junyi 差异较小。 |
+| Figure 4 | `figures_main_pdf/fig4_nature_lcrf_counterfactual_delta.pdf` | LCRF learner-state counterfactual。 | 可用；核心写 09/17，Junyi 谨慎补充。 |
+| Figure 5 | `figures_main_pdf/fig5_nature_lcrf_same_query_posterior.pdf` | 同一 CRG support 下的 learner-conditioned posterior。 | 可用；主例用 ASSIST09/ASSIST17。 |
 
 按图和 CSV 的结论，后续论文不能写成“CRG/LCRF 在四个数据集上都同等强”。更稳的写法是：
 
@@ -374,26 +374,26 @@ LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，回�
 
 | ID | 论文 | 场景/问题 | 参考价值 | 本地 PDF |
 |---|---|---|---|---|
-| NCDLA | AAAI 2026, Noise-Aware Graph-based CD Through Low-Rank Alignment | 图 CD 噪声鲁棒 | CRG 的可靠图/边噪声实验 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/aaai26_ncdla.pdf` |
-| DBCD | AAAI 2026, Debiased Cognitive Diagnosis | 选择性作答/MNAR/反事实 | 模块主次贡献写法 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/aaai26_dbcd.pdf` |
-| KCD | AAAI 2025, Knowledge is Power | LLM 先验、冷启动 | case、t-SNE、dropout 冷启动 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/aaai25_kcd.pdf` |
-| DMC-CDM | AAAI 2025, Multi-Perspective Consolidation | CD 逆问题/信息缺失 | 多视角证据链 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/aaai25_dmccdm.pdf` |
-| AD4CD | AAAI 2025, Causal-Guided Anomaly Detection | 猜测/失误/异常行为 | 因果故事 + 异常样本 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/aaai25_ad4cd.pdf` |
-| FACD | IJCAI 2025, Fast-Adaptive CD | CAT 早期诊断 | CRG/LCRF 递进关系最像 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/ijcai25_facd.pdf` |
-| KAN2CD | IJCAI 2025, KAN for Neural CD | 可解释神经 CD | 小收益也能靠解释性成立 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/ijcai25_kan2cd.pdf` |
-| OSCD | KDD 2026, One-Shot NAS for Robust CD | 噪声架构搜索 | 结构鲁棒性/扰动实验 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/kdd26_oscd.pdf` |
-| DFCD | KDD 2025, Dual-Fusion CD | 开放学习环境/未见实体 | 场景拆分而非全局均值 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/kdd25_dfcd.pdf` |
-| ISG-CD | KDD 2025, Informative and Stable Graph CD | 异质边/不确定边 | 可靠边与图结构证据 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/kdd25_isgcd.pdf` |
-| LRCD | KDD 2025, Language Representation CD | 零样本跨域 | 标准 AUC 不是唯一证据 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/kdd25_lrcd.pdf` |
-| LLM4CD | CIKM 2025 候选, LLM4CD | 文本语义 + 状态建模 | 状态/文本双模块消融 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/cikm25_llm4cd.pdf` |
-| ESR-CD | FCS 2025, Enhancing Student Representations | 学生-概念稀疏屏障 | 子群/弱覆盖实验 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/fcs25_esrcd.pdf` |
-| FineCD | FCS 2025, Foundation Model Enhanced Derivative-Free CD | 小样本个体诊断 | 小样本任务重定义 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/fcs25_fdecd.pdf` |
-| LCST | FDE 2025, LLM-Guided Cognitive State Transfer | 跨域状态迁移 | 概念关系推理图 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/fde25_lcst.pdf` |
-| PromptCD | IEEE TCSS 2025 | 双方面跨域 CD | 个性化 prompt 作为主模块 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/tcss25_promptcd.pdf` |
-| Generative CD | IEEE TLT 2026 | 生成式诊断范式 | 诊断可靠性/可识别性 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/tlt26_generative_cd.pdf` |
-| Transfer-Q | Acta Psychologica Sinica 2026 | 迁移学习 + Q 矩阵约束 | Q 约束与迁移故事 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/psyacta26_transfer_qmatrix.pdf` |
-| DiaCDM | ICASSP 2026 | 师生对话诊断 | 新数据形态和过程证据 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/icassp26_diacdm.pdf` |
-| Exploratory DeepCDM | Psychometrika 2026 | 可识别深层生成 CDM | 热力图/可识别性实验 | `review_packets/crg_lcrf_final_review_20260523/papers_original_pdf/psychometrika25_exploratory_deepcdm.pdf` |
+| NCDLA | AAAI 2026, Noise-Aware Graph-based CD Through Low-Rank Alignment | 图 CD 噪声鲁棒 | CRG 的可靠图/边噪声实验 | `docs/paper_review_2025_2026/papers_original_pdf/aaai26_ncdla.pdf` |
+| DBCD | AAAI 2026, Debiased Cognitive Diagnosis | 选择性作答/MNAR/反事实 | 模块主次贡献写法 | `docs/paper_review_2025_2026/papers_original_pdf/aaai26_dbcd.pdf` |
+| KCD | AAAI 2025, Knowledge is Power | LLM 先验、冷启动 | case、t-SNE、dropout 冷启动 | `docs/paper_review_2025_2026/papers_original_pdf/aaai25_kcd.pdf` |
+| DMC-CDM | AAAI 2025, Multi-Perspective Consolidation | CD 逆问题/信息缺失 | 多视角证据链 | `docs/paper_review_2025_2026/papers_original_pdf/aaai25_dmc_cdm.pdf` |
+| AD4CD | AAAI 2025, Causal-Guided Anomaly Detection | 猜测/失误/异常行为 | 因果故事 + 异常样本 | `docs/paper_review_2025_2026/papers_original_pdf/aaai25_ad4cd.pdf` |
+| FACD | IJCAI 2025, Fast-Adaptive CD | CAT 早期诊断 | CRG/LCRF 递进关系最像 | `docs/paper_review_2025_2026/papers_original_pdf/ijcai25_facd.pdf` |
+| KAN2CD | IJCAI 2025, KAN for Neural CD | 可解释神经 CD | 小收益也能靠解释性成立 | `docs/paper_review_2025_2026/papers_original_pdf/ijcai25_kan2cd.pdf` |
+| OSCD | KDD 2026, One-Shot NAS for Robust CD | 噪声架构搜索 | 结构鲁棒性/扰动实验 | `docs/paper_review_2025_2026/papers_original_pdf/kdd26_oscd.pdf` |
+| DFCD | KDD 2025, Dual-Fusion CD | 开放学习环境/未见实体 | 场景拆分而非全局均值 | `docs/paper_review_2025_2026/papers_original_pdf/kdd25_dfcd.pdf` |
+| ISG-CD | KDD 2025, Informative and Stable Graph CD | 异质边/不确定边 | 可靠边与图结构证据 | `docs/paper_review_2025_2026/papers_original_pdf/kdd25_isgcd.pdf` |
+| LRCD | KDD 2025, Language Representation CD | 零样本跨域 | 标准 AUC 不是唯一证据 | `docs/paper_review_2025_2026/papers_original_pdf/kdd25_lrcd.pdf` |
+| LLM4CD | CIKM 2025 候选, LLM4CD | 文本语义 + 状态建模 | 状态/文本双模块消融 | `docs/paper_review_2025_2026/papers_original_pdf/cikm25_llm4cd.pdf` |
+| ESR-CD | FCS 2025, Enhancing Student Representations | 学生-概念稀疏屏障 | 子群/弱覆盖实验 | `docs/paper_review_2025_2026/papers_original_pdf/fcs25_esrcd.pdf` |
+| FineCD | FCS 2025, Foundation Model Enhanced Derivative-Free CD | 小样本个体诊断 | 小样本任务重定义 | `docs/paper_review_2025_2026/papers_original_pdf/fcs25_fdecd.pdf` |
+| LCST | FDE 2025, LLM-Guided Cognitive State Transfer | 跨域状态迁移 | 概念关系推理图 | `docs/paper_review_2025_2026/papers_original_pdf/fde25_lcst.pdf` |
+| PromptCD | IEEE TCSS 2025 | 双方面跨域 CD | 个性化 prompt 作为主模块 | `docs/paper_review_2025_2026/papers_original_pdf/tcss25_promptcd.pdf` |
+| Generative CD | IEEE TLT 2026 | 生成式诊断范式 | 诊断可靠性/可识别性 | `docs/paper_review_2025_2026/papers_original_pdf/tlt26_generative_cd.pdf` |
+| Transfer-Q | Acta Psychologica Sinica 2026 | 迁移学习 + Q 矩阵约束 | Q 约束与迁移故事 | `docs/paper_review_2025_2026/papers_original_pdf/psyacta26_transfer_qmatrix.pdf` |
+| DiaCDM | ICASSP 2026 | 师生对话诊断 | 新数据形态和过程证据 | `docs/paper_review_2025_2026/papers_original_pdf/icassp26_diacdm.pdf` |
+| Exploratory DeepCDM | Psychometrika 2026 | 可识别深层生成 CDM | 热力图/可识别性实验 | `docs/paper_review_2025_2026/papers_original_pdf/psychometrika25_exploratory_deepcdm.pdf` |
 
 ## 1. NCDLA, AAAI 2026
 
@@ -848,7 +848,8 @@ LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，回�
 3. 副模块：**Learner-Conditioned Reachability Filter, LCRF**，不新增图边，只在 CRG 固定 support 内根据学生状态重排 posterior route。
 4. 实验边界：CRG 是主路线图；LCRF 是固定 support 内的个性化过滤；Junyi 主讲 CRG，不强讲 LCRF；student-ID shortcut 只能作为 limitation，不写成已完全排除。
 
-完整中文初稿包已经放入 `review_packets/crg_lcrf_cn_draft_review_20260523/`，可直接上传给师兄或 GPT Pro 复审。
+当前中文初稿保留在 `docs/paper_review_2025_2026/crg_lcrf_cn_paper_draft.md`，正式 PDF 图保留在 `docs/paper_review_2025_2026/figures_main_pdf/`，原始参考论文保留在 `docs/paper_review_2025_2026/papers_original_pdf/`。
+
 
 
 
