@@ -101,9 +101,10 @@
 |---|---|---|---|
 | Figure 1 | `figures_main_pdf/fig1_problem_concept_evidence_gap.pdf` | 概念证据缺口与支持约束个性化。 | 可用；作为引言问题图。 |
 | Figure 2 | `figures_main_pdf/fig2_nature_data_and_crg_retrieval.pdf` | 数据现象 + CRG route retrieval。 | 可用；CRG 的主要结果放在 09/Junyi/17。 |
-| Figure 3 | `figures_main_pdf/fig3_nature_crg_support_corruption.pdf` | CRG support corruption control。 | 可用但要精确表述：ASSIST17 最干净，ASSIST09 体现 support-dependence，Junyi 差异较小。 |
-| Figure 4 | `figures_main_pdf/fig4_nature_lcrf_counterfactual_delta.pdf` | LCRF learner-state counterfactual。 | 可用；核心写 09/17，Junyi 谨慎补充。 |
-| Figure 5 | `figures_main_pdf/fig5_nature_lcrf_same_query_posterior.pdf` | 同一 CRG support 下的 learner-conditioned posterior。 | 可用；主例用 ASSIST09/ASSIST17。 |
+| Figure 3 | `figures_main_pdf/fig3_nature_coverage_conditioned_prediction.pdf` | 覆盖条件子场景下的预测收益。 | 可用；主文展示 direct-unseen / high-route / weak-direct 的主要趋势。 |
+| Figure 4 | `figures_main_pdf/fig4_nature_crg_support_corruption.pdf` | CRG support corruption control。 | 可用但要精确表述：ASSIST17 最干净，ASSIST09 体现 support-dependence，Junyi 差异较小。 |
+| Figure 5 | `figures_main_pdf/fig5_nature_lcrf_counterfactual_delta.pdf` | LCRF learner-state counterfactual。 | 可用；核心写 09/17，Junyi 谨慎补充。 |
+| Figure 6 | `figures_main_pdf/fig6_nature_lcrf_same_query_posterior.pdf` | 同一 CRG support 下的 learner-conditioned posterior。 | 可用；主例用 ASSIST09/ASSIST17。 |
 
 按图和 CSV 的结论，后续论文不能写成“CRG/LCRF 在四个数据集上都同等强”。更稳的写法是：
 

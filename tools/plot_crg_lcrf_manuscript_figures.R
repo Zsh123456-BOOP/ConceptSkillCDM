@@ -5,7 +5,6 @@ suppressPackageStartupMessages({
   library(patchwork)
   library(dplyr)
   library(tidyr)
-  library(readr)
   library(scales)
   library(grid)
 })
@@ -67,7 +66,7 @@ read_csv_silent <- function(path) {
     warning("missing file: ", path)
     return(tibble())
   }
-  suppressMessages(readr::read_csv(path, show_col_types = FALSE))
+  as_tibble(utils::read.csv(path, check.names = FALSE, stringsAsFactors = FALSE))
 }
 
 save_pdf <- function(plot, name, width_mm = 180, height_mm = 115) {
@@ -190,7 +189,7 @@ plot_fig3 <- function() {
 
   p_bce <- ggplot(cov, aes(delta_bce, y_label, color = comparison_label, alpha = dataset_alpha)) +
     geom_vline(xintercept = 0, linewidth = 0.35, colour = "grey45") +
-    geom_errorbarh(aes(xmin = delta_bce_ci_low, xmax = delta_bce_ci_high), height = 0.18, linewidth = 0.5, position = position_dodge(width = 0.48)) +
+    geom_errorbar(aes(xmin = delta_bce_ci_low, xmax = delta_bce_ci_high), orientation = "y", width = 0.18, linewidth = 0.5, position = position_dodge(width = 0.48)) +
     geom_point(size = 1.8, position = position_dodge(width = 0.48)) +
     scale_color_manual(values = method_pal) +
     scale_alpha_identity() +
@@ -205,7 +204,7 @@ plot_fig3 <- function() {
 
   p_auc <- ggplot(cov, aes(delta_auc, y_label, color = comparison_label, alpha = dataset_alpha)) +
     geom_vline(xintercept = 0, linewidth = 0.35, colour = "grey45") +
-    geom_errorbarh(aes(xmin = delta_auc_ci_low, xmax = delta_auc_ci_high), height = 0.18, linewidth = 0.5, position = position_dodge(width = 0.48)) +
+    geom_errorbar(aes(xmin = delta_auc_ci_low, xmax = delta_auc_ci_high), orientation = "y", width = 0.18, linewidth = 0.5, position = position_dodge(width = 0.48)) +
     geom_point(size = 1.8, position = position_dodge(width = 0.48)) +
     scale_color_manual(values = method_pal) +
     scale_alpha_identity() +
@@ -235,4 +234,3 @@ plot_fig3 <- function() {
 
 plot_fig2()
 plot_fig3()
-

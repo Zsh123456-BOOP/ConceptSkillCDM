@@ -173,9 +173,9 @@ Claim：仅用 train-only CRG，就能检索 held-out 学生轨迹中的后续�
 
 Claim：破坏 CRG support 会伤害预测，说明模型确实依赖可达路线，而不是任意图。
 
-图：Figure 3。
+图：Figure 4。
 
-![Figure 3: CRG support necessity controls](figures_main_pdf/fig3_nature_crg_support_corruption.pdf)
+![Figure 4: CRG support dependence controls](figures_main_pdf/fig4_nature_crg_support_corruption.pdf)
 
 写法：
 
@@ -187,9 +187,9 @@ Claim：破坏 CRG support 会伤害预测，说明模型确实依赖可达路�
 
 Claim：LCRF 的收益在 `assist_09` 和 `assist_17` 上主要来自真实学生状态，不能由打乱或群体平均状态替代。`junyi` 只报告为 weak，不作为 LCRF 主证据。
 
-图：Figure 4。
+图：Figure 5。
 
-![Figure 4: LCRF counterfactual delta](figures_main_pdf/fig4_nature_lcrf_counterfactual_delta.pdf)
+![Figure 5: LCRF counterfactual delta](figures_main_pdf/fig5_nature_lcrf_counterfactual_delta.pdf)
 
 写法：
 
@@ -202,9 +202,9 @@ Claim：LCRF 的收益在 `assist_09` 和 `assist_17` 上主要来自真实学�
 
 Claim：同一个 query、同一个 CRG support，会被不同学习者过滤成不同 posterior，并与预测变化对应。
 
-图：Figure 5。
+图：Figure 6。
 
-![Figure 5: LCRF same-query posterior](figures_main_pdf/fig5_nature_lcrf_same_query_posterior.pdf)
+![Figure 6: LCRF same-query posterior](figures_main_pdf/fig6_nature_lcrf_same_query_posterior.pdf)
 
 关键结果：
 
@@ -233,9 +233,10 @@ Claim：同一个 query、同一个 CRG support，会被不同学习者过滤成
 |---|---|---|---|
 | Figure 1 | `figures_main_pdf/fig1_problem_concept_evidence_gap.pdf` | 概念证据缺口与支持约束个性化 | Introduction |
 | Figure 2 | `figures_main_pdf/fig2_nature_data_and_crg_retrieval.pdf` | 三数据集数据现象 + CRG route retrieval | Problem + mechanism experiment |
-| Figure 3 | `figures_main_pdf/fig3_nature_crg_support_corruption.pdf` | dataset-dependent CRG support dependence | Mechanism experiment |
-| Figure 4 | `figures_main_pdf/fig4_nature_lcrf_counterfactual_delta.pdf` | LCRF learner-state counterfactual | Mechanism experiment |
-| Figure 5 | `figures_main_pdf/fig5_nature_lcrf_same_query_posterior.pdf` | assist_17 same-query posterior + two-student local path | Mechanism experiment |
+| Figure 3 | `figures_main_pdf/fig3_nature_coverage_conditioned_prediction.pdf` | coverage-conditioned prediction under direct-unseen / high-route scenes | Main analysis |
+| Figure 4 | `figures_main_pdf/fig4_nature_crg_support_corruption.pdf` | dataset-dependent CRG support dependence | Mechanism experiment |
+| Figure 5 | `figures_main_pdf/fig5_nature_lcrf_counterfactual_delta.pdf` | LCRF learner-state counterfactual | Mechanism experiment |
+| Figure 6 | `figures_main_pdf/fig6_nature_lcrf_same_query_posterior.pdf` | assist_17 same-query posterior + two-student local path | Mechanism experiment |
 
 ## Claim 决策表
 
@@ -243,9 +244,10 @@ Claim：同一个 query、同一个 CRG support，会被不同学习者过滤成
 |---|---|---|---|---|---|---|
 | 数据中存在 concept reachability 问题 | junyi | assist_09, assist_17 | 数据画像：direct unseen、bridge-only、item edge、seq density | Junyi bridge-only 约 100%；09/17 提供平衡和长历史场景 | “真实平台中当前概念常无法被学生历史直接覆盖，但可由 train-only empirical route 桥接。” | Figure 2 / data card |
 | CRG 具备关系证据充分性 | assist_09, junyi, assist_17 | none | Held-out transition retrieval | 核心三数据集 Hit@10 均明显高于 random/self | “CRG 能找路，但 retrieval 不等价于预测必要性。” | Figure 2 |
-| CRG 具备预测必要性 | assist_17 | assist_09 | Support corruption control | assist_17 evidence corruption 最干净；assist_09 只能写 support-dependence；Junyi 弱 | “模型在部分高路线依赖场景中依赖 CRG support，不能写成所有数据集上 evidence edge 独占有效。” | Figure 3 |
-| LCRF 的真实学生状态不可替代 | assist_09, assist_17 | Junyi weak | actual/shuffle/mean counterfactual | 09/17 可写；Junyi 谨慎补充 | “LCRF 的主要证据来自真实 learner state 与 shuffle/mean 的反事实差异。” | Figure 4 |
-| LCRF 能把同一 CRG support 过滤成学生局部路线 | assist_17 | assist_09 | same-query posterior + learner heatmap | assist_17/09 可用；Junyi 不作为主例 | “同一全局路线图会被不同学生状态过滤成不同 posterior。” | Figure 5 |
+| CRG-LCRF 在覆盖条件子场景中带来预测收益 | assist_09, assist_17 | junyi | Coverage-conditioned prediction | 09/17 子场景更清楚；Junyi 预测层差异小 | “预测收益更集中地出现在 direct-unseen-bridgeable、high-route 或 weak-direct 子场景。” | Figure 3 |
+| CRG 具备预测必要性 | assist_17 | assist_09 | Support corruption control | assist_17 evidence corruption 最干净；assist_09 只能写 support-dependence；Junyi 弱 | “模型在部分高路线依赖场景中依赖 CRG support，不能写成所有数据集上 evidence edge 独占有效。” | Figure 4 |
+| LCRF 的真实学生状态不可替代 | assist_09, assist_17 | Junyi weak | actual/shuffle/mean counterfactual | 09/17 可写；Junyi 谨慎补充 | “LCRF 的主要证据来自真实 learner state 与 shuffle/mean 的反事实差异。” | Figure 5 |
+| LCRF 能把同一 CRG support 过滤成学生局部路线 | assist_17 | assist_09 | same-query posterior + learner heatmap | assist_17/09 可用；Junyi 不作为主例 | “同一全局路线图会被不同学生状态过滤成不同 posterior。” | Figure 6 |
 
 ## 需要 GPT Pro 重点审查的问题
 
