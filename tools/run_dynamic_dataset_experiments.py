@@ -49,6 +49,8 @@ DATASET_ALIASES = {
     "ednet_ktl": "ednet_kt1_clean15_sample5000",
     "ednet_kt1": "ednet_kt1_clean15_sample5000",
     "ednet_kt1_clean15_sample5000": "ednet_kt1_clean15_sample5000",
+    "ednet_gap": "ednet_kt1_gap",
+    "ednet_kt1_gap": "ednet_kt1_gap",
     "assist12": "assist_12_clean15_item50",
     "assist_12": "assist_12_clean15_item50",
     "assist 12": "assist_12_clean15_item50",
@@ -61,6 +63,7 @@ DEFAULT_DATASETS = (
     "frcsub",
     "nips34",
     "ednet_kt1_clean15_sample5000",
+    "ednet_kt1_gap",
     "assist_12_clean15_item50",
 )
 

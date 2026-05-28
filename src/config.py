@@ -381,6 +381,11 @@ DATASET_DEFAULTS["ednet_kt1_clean15_sample5000"] = {
     "data_dir": "./data/ednet_kt1_clean15_sample5000",
 }
 
+DATASET_DEFAULTS["ednet_kt1_gap"] = {
+    **DATASET_DEFAULTS["ednet_kt1"],
+    "data_dir": "./data/ednet_kt1_gap",
+}
+
 GRID_SEARCH_SPACE = {
     "assist_09": {
         "base": {},
