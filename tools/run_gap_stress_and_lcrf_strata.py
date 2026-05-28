@@ -514,6 +514,13 @@ def run_direct_mask_stress(
     stress = _select_stress_frame(frame, max_samples=max_samples, seed=seed)
     if max_rows > 0 and len(stress) > max_rows:
         stress = stress.sample(n=max_rows, random_state=seed + 7).sort_values("event_id").reset_index(drop=True)
+    if stress.empty:
+        pd.DataFrame().to_csv(out_dir / "direct_mask_stress_samples.csv", index=False)
+        pd.DataFrame().to_csv(out_dir / "direct_mask_stress_metrics.csv", index=False)
+        missing.append(
+            f"{assets.dataset}: stress test skipped because no direct_cov_cnt > 0 samples were available"
+        )
+        return pd.DataFrame(), pd.DataFrame()
     sample_parts: List[pd.DataFrame] = []
     metric_rows: List[Dict[str, Any]] = []
     for variant in STRESS_VARIANTS:
