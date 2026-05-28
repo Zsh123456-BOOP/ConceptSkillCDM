@@ -87,6 +87,13 @@ def normalize_int(value: Any) -> Optional[int]:
         return None
 
 
+def normalize_question_int(value: Any) -> Optional[int]:
+    text = str(value).strip()
+    if text[:1].lower() == "q":
+        text = text[1:]
+    return normalize_int(text)
+
+
 def load_question_map(contents_zip: Path) -> Dict[str, Tuple[int, str, str]]:
     with zipfile.ZipFile(contents_zip) as zf:
         q_name = next((n for n in zf.namelist() if n.endswith("contents/questions.csv")), None)
@@ -96,7 +103,7 @@ def load_question_map(contents_zip: Path) -> Dict[str, Tuple[int, str, str]]:
     out: Dict[str, Tuple[int, str, str]] = {}
     for row in q_df.itertuples(index=False):
         qid_text = str(getattr(row, "question_id")).strip()
-        qid = normalize_int(qid_text)
+        qid = normalize_question_int(qid_text)
         tags = parse_tags(getattr(row, "tags"))
         correct = str(getattr(row, "correct_answer")).strip().lower()
         if qid is not None and tags and correct:
