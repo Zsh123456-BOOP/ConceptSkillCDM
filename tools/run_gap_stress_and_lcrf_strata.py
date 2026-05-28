@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.dataset import CognitiveDiagnosisDataset  # noqa: E402
 from tools.export_ae_case_studies import _apply_personal_counterfactual  # noqa: E402
 from tools.run_main_problem_experiments import (  # noqa: E402
     CONTROL_VARIANTS,
@@ -384,39 +385,93 @@ def _single_predict(model: torch.nn.Module, row: pd.Series, info: Mapping[str, A
         return float(torch.sigmoid(logit)[0].detach().cpu().item())
 
 
+def _save_and_apply_batch_mask(
+    model: torch.nn.Module,
+    pairs: Sequence[Tuple[int, int]],
+    ratio: float,
+) -> Dict[str, Dict[Tuple[int, int], torch.Tensor]]:
+    ratio = min(max(float(ratio), 0.0), 1.0)
+    if ratio <= 0.0 or not pairs:
+        return {}
+    unique_pairs = sorted({(int(student), int(concept)) for student, concept in pairs})
+    saved: Dict[str, Dict[Tuple[int, int], torch.Tensor]] = {}
+    with torch.no_grad():
+        for name in MASK_ATTRS:
+            tensor = getattr(model, name, None)
+            if tensor is None or not torch.is_tensor(tensor):
+                continue
+            attr_saved: Dict[Tuple[int, int], torch.Tensor] = {}
+            for student, concept in unique_pairs:
+                attr_saved[(student, concept)] = tensor[student, concept].detach().clone()
+                tensor[student, concept] = tensor[student, concept] * float(1.0 - ratio)
+            saved[name] = attr_saved
+    return saved
+
+
+def _restore_batch_mask(
+    model: torch.nn.Module,
+    saved: Mapping[str, Mapping[Tuple[int, int], torch.Tensor]],
+) -> None:
+    if not saved:
+        return
+    with torch.no_grad():
+        for name, values in saved.items():
+            tensor = getattr(model, name, None)
+            if tensor is None or not torch.is_tensor(tensor):
+                continue
+            for (student, concept), value in values.items():
+                tensor[int(student), int(concept)] = value.to(device=tensor.device, dtype=tensor.dtype)
+
+
 def _predict_mask_ratio_samples(
     model: torch.nn.Module,
     frame: pd.DataFrame,
     assets: DatasetAssets,
     device: torch.device,
     ratio: float,
+    batch_size: int,
+    num_workers: int,
 ) -> pd.DataFrame:
-    rows: List[Dict[str, Any]] = []
     model.eval()
-    for row in frame.itertuples(index=False):
-        row_s = pd.Series(row._asdict())
-        concepts = _event_concepts(row, assets.info["cpt_id_map"])
-        mapped_student = int(assets.info["stu_id_map"][getattr(row, "stu_id")])
-        saved = _mask_student_concepts_ratio(model, mapped_student, concepts, ratio)
-        prob = _single_predict(model, row_s, assets.info, device)
-        _restore_student_concepts_ratio(model, mapped_student, concepts, saved)
-        label = float(getattr(row, "label"))
-        p = min(max(prob, 1e-8), 1.0 - 1e-8)
-        bce = -(label * math.log(p) + (1.0 - label) * math.log(1.0 - p))
-        rows.append(
-            {
-                "event_id": int(getattr(row, "event_id")),
-                "stu_id": getattr(row, "stu_id"),
-                "exer_id": getattr(row, "exer_id"),
-                "label": label,
-                "pred_prob": prob,
-                "bce": bce,
-                "query_concepts_mapped": ",".join(str(c) for c in concepts),
-                "mask_ratio": float(ratio),
-                "mask_scope": "student_concept_state_buffer_ratio_mask",
-            }
-        )
-    return pd.DataFrame(rows)
+    concepts_by_row = [_event_concepts(row, assets.info["cpt_id_map"]) for row in frame.itertuples(index=False)]
+    dataset = CognitiveDiagnosisDataset(
+        frame,
+        assets.info["stu_id_map"],
+        assets.info["exer_id_map"],
+        assets.info["cpt_id_map"],
+    )
+    loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    probs: List[np.ndarray] = []
+    labels: List[np.ndarray] = []
+    offset = 0
+    with torch.no_grad():
+        for student_ids, exercise_ids, y in loader:
+            student_ids = student_ids.to(device)
+            exercise_ids = exercise_ids.to(device)
+            this_concepts = concepts_by_row[offset : offset + int(student_ids.numel())]
+            pairs = [
+                (int(student_ids[i].detach().cpu().item()), int(concept))
+                for i, concepts in enumerate(this_concepts)
+                for concept in concepts
+            ]
+            saved = _save_and_apply_batch_mask(model, pairs, ratio)
+            try:
+                logits = model(student_ids, exercise_ids, return_details=False, return_logits=True).reshape(-1)
+                prob = torch.sigmoid(logits)
+            finally:
+                _restore_batch_mask(model, saved)
+            probs.append(prob.detach().cpu().numpy().astype(np.float32))
+            labels.append(y.detach().cpu().numpy().astype(np.float32))
+            offset += int(student_ids.numel())
+    out = frame[["event_id", "stu_id", "exer_id", "query_concepts_mapped"]].copy()
+    out["label"] = np.concatenate(labels).astype(np.float32)
+    out["pred_prob"] = np.concatenate(probs).astype(np.float32)
+    p = out["pred_prob"].to_numpy(dtype=np.float64).clip(1e-8, 1.0 - 1e-8)
+    y = out["label"].to_numpy(dtype=np.float64)
+    out["bce"] = -(y * np.log(p) + (1.0 - y) * np.log(1.0 - p))
+    out["mask_ratio"] = float(ratio)
+    out["mask_scope"] = "student_concept_state_buffer_ratio_mask"
+    return out
 
 
 def _select_stress_frame(frame: pd.DataFrame, max_samples: int, seed: int) -> pd.DataFrame:
@@ -452,6 +507,8 @@ def run_direct_mask_stress(
     missing: List[str],
     max_samples: int,
     max_rows: int,
+    batch_size: int,
+    num_workers: int,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     frame = _annotate_query_coverage(_make_eval_frame(assets), assets)
     stress = _select_stress_frame(frame, max_samples=max_samples, seed=seed)
@@ -467,7 +524,7 @@ def run_direct_mask_stress(
         try:
             for ratio in MASK_RATIOS:
                 print(f"[{assets.dataset}] stress {variant} mask_ratio={ratio:.2f} n={len(stress)}", flush=True)
-                pred = _predict_mask_ratio_samples(model, stress, assets, device, ratio)
+                pred = _predict_mask_ratio_samples(model, stress, assets, device, ratio, batch_size, num_workers)
                 pred.insert(0, "variant", variant)
                 pred.insert(0, "dataset", assets.dataset)
                 sample_parts.append(pred)
@@ -865,6 +922,8 @@ def main() -> None:
                 missing,
                 args.stress_max_samples,
                 args.max_rows,
+                args.batch_size,
+                args.num_workers,
             )
     (out_root / "missing_report.md").write_text("\n".join(f"- {item}" for item in missing) + "\n", encoding="utf-8")
     plot_outputs(out_root)
