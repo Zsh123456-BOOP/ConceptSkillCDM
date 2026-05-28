@@ -369,8 +369,6 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
         "graph_propagation_alpha": 0.06,
         "graph_query_readout_scale": 0.06,
         "graph_query_readout_2hop_scale": 0.02,
-        "student_global_scale": 1.0,
-        "student_global_mode": "vector",
         "lambda_sparse_personal": 0.0005,
         "lambda_alpha": 0.0,
         "lambda_personal_kl": 0.01,
