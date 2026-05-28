@@ -61,3 +61,18 @@ data/assist_12_clean15_item50/*.csv
 data/ednet_kt1_clean15_sample5000/*.csv
 data/nips34_l3/*.csv
 data/public_benchmarks_processed_*.tar.gz
+
+# LaTeX / paper build intermediates and local preview artifacts
+*.aux
+*.bbl
+*.log
+*.blg
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+docs/paper_review_2025_2026/**/*.zip
+docs/paper_review_2025_2026/**/_pdf_preview/
+docs/paper_review_2025_2026/**/preview_cn/
+docs/paper_review_2025_2026/**/preview_en/
+docs/paper_review_2025_2026/**/preview_pdf_check/

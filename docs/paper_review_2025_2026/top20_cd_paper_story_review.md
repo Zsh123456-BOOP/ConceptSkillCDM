@@ -840,7 +840,7 @@ LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，回�
 
 ## 2026-05-23 中文初稿对齐说明
 
-后续论文草稿以 `docs/paper_review_2025_2026/crg_lcrf_cn_paper_draft.md` 为准。旧的 “Reliable Global Learning Map / Personalized Local Route Map” 只是中间命名讨论，不再作为正式稿件组件名。
+后续论文草稿以 `docs/paper_review_2025_2026/icdm2026_template/IEEEtran_CTAN/IEEEtran/main_cn.tex` 和 `docs/paper_review_2025_2026/icdm2026_template/IEEEtran_CTAN/IEEEtran/main_en.tex` 为准。旧的 “Reliable Global Learning Map / Personalized Local Route Map” 只是中间命名讨论，不再作为正式稿件组件名。
 
 当前正式叙事更新为：
 
@@ -849,7 +849,7 @@ LCRF：Learner-Conditioned Reachability Filter，个性化辅导过滤器，回�
 3. 副模块：**Learner-Conditioned Reachability Filter, LCRF**，不新增图边，只在 CRG 固定 support 内根据学生状态重排 posterior route。
 4. 实验边界：CRG 是主路线图；LCRF 是固定 support 内的个性化过滤；Junyi 主讲 CRG，不强讲 LCRF；student-ID shortcut 只能作为 limitation，不写成已完全排除。
 
-当前中文初稿保留在 `docs/paper_review_2025_2026/crg_lcrf_cn_paper_draft.md`，正式 PDF 图保留在 `docs/paper_review_2025_2026/figures_main_pdf/`，原始参考论文保留在 `docs/paper_review_2025_2026/papers_original_pdf/`。
+当前维护版本只保留中英文 TeX 稿件；正式 PDF 图保留在 `docs/paper_review_2025_2026/figures_main_pdf/`，原始参考论文保留在 `docs/paper_review_2025_2026/papers_original_pdf/`。
 
 
 
