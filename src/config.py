@@ -386,6 +386,17 @@ DATASET_DEFAULTS["ednet_kt1_gap"] = {
     "data_dir": "./data/ednet_kt1_gap",
 }
 
+for _ednet_gap_sweep_name in (
+    "ednet_kt1_gap_t70u5000",
+    "ednet_kt1_gap_t60u5000",
+    "ednet_kt1_gap_t50u5000",
+    "ednet_kt1_gap_t65u3000_long",
+):
+    DATASET_DEFAULTS[_ednet_gap_sweep_name] = {
+        **DATASET_DEFAULTS["ednet_kt1"],
+        "data_dir": f"./data/{_ednet_gap_sweep_name}",
+    }
+
 GRID_SEARCH_SPACE = {
     "assist_09": {
         "base": {},

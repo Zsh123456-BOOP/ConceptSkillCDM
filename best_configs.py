@@ -447,6 +447,14 @@ BEST_CFG: Dict[str, Dict[str, Any]] = {
     },
 }
 
+for _ednet_gap_sweep_name in (
+    "ednet_kt1_gap_t70u5000",
+    "ednet_kt1_gap_t60u5000",
+    "ednet_kt1_gap_t50u5000",
+    "ednet_kt1_gap_t65u3000_long",
+):
+    BEST_CFG[_ednet_gap_sweep_name] = dict(BEST_CFG["ednet_kt1_gap"])
+
 STRUCT_V2_CFG: Dict[str, Dict[str, Any]] = {
     "assist_09_abce_struct_v2": dict(BEST_CFG["assist_09"]),
     "junyi_abce_struct_v2": dict(BEST_CFG["junyi"]),
