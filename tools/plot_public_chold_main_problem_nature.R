@@ -326,7 +326,7 @@ p_route <- ggplot(route, aes(route_bin, auc_recovery, fill = variant)) +
   labs(
     x = "Route-support strength",
     y = "AUC recovery\nFull - control",
-    title = "C  Route-conditioned recovery",
+    title = "A  Route-conditioned recovery",
     subtitle = "Direct-unseen bridgeable queries"
   ) +
   theme(
@@ -343,7 +343,7 @@ p_target <- ggplot(target_metrics, aes(subgroup_label, auc_gap_full_minus_varian
   labs(
     x = NULL,
     y = "AUC recovery\nFull - control",
-    title = "D  Problem-defined cohorts"
+    title = "B  Problem-defined cohorts"
   ) +
   theme(
     axis.text.x = element_text(angle = 0, hjust = 0.5),
