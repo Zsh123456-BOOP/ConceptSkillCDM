@@ -268,6 +268,12 @@ def plot_deltas(delta: pd.DataFrame, out_prefix: Path) -> None:
 
 
 def write_report(out_path: Path, profile: pd.DataFrame, results: pd.DataFrame, delta: pd.DataFrame) -> None:
+    def _table(frame: pd.DataFrame) -> str:
+        try:
+            return frame.to_markdown(index=False, floatfmt=".4f")
+        except ImportError:
+            return "```csv\n" + frame.to_csv(index=False) + "```"
+
     missing = []
     for dataset in DATASET_ORDER:
         for variant in VARIANT_ORDER:
@@ -282,16 +288,15 @@ def write_report(out_path: Path, profile: pd.DataFrame, results: pd.DataFrame, d
         "",
         "## Gap Profile",
         "",
-        profile.to_markdown(index=False, floatfmt=".4f"),
+        _table(profile),
         "",
         "## Aggregate Metrics",
         "",
-        results[["dataset", "variant", "status", "test_auc", "test_acc", "test_rmse", "best_val_auc", "best_epoch"]]
-        .to_markdown(index=False, floatfmt=".4f"),
+        _table(results[["dataset", "variant", "status", "test_auc", "test_acc", "test_rmse", "best_val_auc", "best_epoch"]]),
         "",
         "## Full-vs-Control Deltas",
         "",
-        delta.to_markdown(index=False, floatfmt=".4f") if not delta.empty else "No complete control deltas available yet.",
+        _table(delta) if not delta.empty else "No complete control deltas available yet.",
         "",
         "## Completion",
         "",
