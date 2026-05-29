@@ -391,6 +391,10 @@ for _ednet_gap_sweep_name in (
     "ednet_kt1_gap_t60u5000",
     "ednet_kt1_gap_t50u5000",
     "ednet_kt1_gap_t65u3000_long",
+    "ednet_kt1_gap_small_t70u2000",
+    "ednet_kt1_gap_small_t60u2200",
+    "ednet_kt1_gap_small_t50u2600",
+    "ednet_kt1_gap_small_t65u1200_long",
 ):
     DATASET_DEFAULTS[_ednet_gap_sweep_name] = {
         **DATASET_DEFAULTS["ednet_kt1"],

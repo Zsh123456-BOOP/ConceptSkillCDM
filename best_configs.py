@@ -452,6 +452,10 @@ for _ednet_gap_sweep_name in (
     "ednet_kt1_gap_t60u5000",
     "ednet_kt1_gap_t50u5000",
     "ednet_kt1_gap_t65u3000_long",
+    "ednet_kt1_gap_small_t70u2000",
+    "ednet_kt1_gap_small_t60u2200",
+    "ednet_kt1_gap_small_t50u2600",
+    "ednet_kt1_gap_small_t65u1200_long",
 ):
     BEST_CFG[_ednet_gap_sweep_name] = dict(BEST_CFG["ednet_kt1_gap"])
 
