@@ -189,7 +189,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--recipes", default="all", help="Comma-separated recipe names or 'all'.")
     parser.add_argument("--raw-dir", type=Path, default=Path("data/_public_raw/ednet_kt1"))
-    parser.add_argument("--max-users-scan", type=int, default=0)
+    parser.add_argument("--max-users-scan", type=int, default=40000)
     parser.add_argument("--run_id", default=f"ednet_gap_split_sweep_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     parser.add_argument(
         "--variants",
