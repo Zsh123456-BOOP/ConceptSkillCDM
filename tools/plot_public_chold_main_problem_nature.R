@@ -40,9 +40,9 @@ dataset_labels <- c(
 )
 route_levels <- c("low_route", "mid_route", "high_route")
 route_labels <- c(
-  low_route = "Low route",
-  mid_route = "Medium route",
-  high_route = "High route"
+  low_route = "Low",
+  mid_route = "Medium",
+  high_route = "High"
 )
 variant_labels <- c(
   no_CRG = "w/o CRG",
@@ -268,8 +268,8 @@ target_metrics <- list.files(
     dataset_label = dataset_labels[as.character(dataset)],
     subgroup_label = recode(
       subgroup,
-      direct_unseen_bridgeable = "Direct-unseen bridgeable",
-      high_route_mass = "High-route evidence gap"
+      direct_unseen_bridgeable = "Direct-unseen\nbridgeable",
+      high_route_mass = "High-route\ngap"
     ),
     variant = factor(variant, levels = names(variant_labels), labels = variant_labels)
   )
@@ -324,13 +324,13 @@ p_route <- ggplot(route, aes(route_bin, auc_recovery, fill = variant)) +
   scale_fill_manual(values = variant_pal, drop = FALSE) +
   scale_y_continuous(labels = label_number(accuracy = 0.001)) +
   labs(
-    x = NULL,
+    x = "Route-support strength",
     y = "AUC recovery\nFull - control",
-    title = "C  Route-conditioned recovery in direct-unseen bridgeable queries",
-    subtitle = "Positive values mean the full model ranks responses better than the control"
+    title = "C  Route-conditioned recovery",
+    subtitle = "Direct-unseen bridgeable queries"
   ) +
   theme(
-    axis.text.x = element_text(angle = 18, hjust = 1),
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
     legend.position = "bottom"
   )
 
@@ -343,10 +343,10 @@ p_target <- ggplot(target_metrics, aes(subgroup_label, auc_gap_full_minus_varian
   labs(
     x = NULL,
     y = "AUC recovery\nFull - control",
-    title = "D  Recovery is present in the problem-defined cohorts"
+    title = "D  Problem-defined cohorts"
   ) +
   theme(
-    axis.text.x = element_text(angle = 18, hjust = 1),
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
     legend.position = "bottom"
   )
 
@@ -368,14 +368,14 @@ p_compact <- ggplot(route, aes(route_bin, auc_recovery, group = variant, colour 
   scale_colour_manual(values = variant_pal, drop = FALSE) +
   scale_y_continuous(labels = label_number(accuracy = 0.001)) +
   labs(
-    x = NULL,
+    x = "Route-support strength",
     y = "AUC recovery (Full - control)",
     title = "Route-conditioned gap recovery",
-    subtitle = "Direct-unseen bridgeable queries; larger values favor the proposed route-support model"
+    subtitle = "Direct-unseen bridgeable queries"
   ) +
-  theme(axis.text.x = element_text(angle = 18, hjust = 1))
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5))
 
-save_figure(p_compact, "fig_public_chold_route_conditioned_auc_recovery", width_mm = 88, height_mm = 58)
+save_figure(p_compact, "fig_public_chold_route_conditioned_auc_recovery", width_mm = 100, height_mm = 58)
 
 audit <- bind_rows(
   profile %>%
