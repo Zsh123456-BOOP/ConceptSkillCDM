@@ -463,6 +463,13 @@ for _ednet_gap_sweep_name in (
 ):
     BEST_CFG[_ednet_gap_sweep_name] = dict(BEST_CFG["ednet_kt1_gap"])
 
+for _public_chold_name, _public_chold_base in (
+    ("assist_09_chold", "assist_09"),
+    ("junyi_chold", "junyi"),
+    ("assist_17_chold", "assist_17"),
+):
+    BEST_CFG[_public_chold_name] = dict(BEST_CFG[_public_chold_base])
+
 STRUCT_V2_CFG: Dict[str, Dict[str, Any]] = {
     "assist_09_abce_struct_v2": dict(BEST_CFG["assist_09"]),
     "junyi_abce_struct_v2": dict(BEST_CFG["junyi"]),

@@ -405,6 +405,16 @@ for _ednet_gap_sweep_name in (
         "data_dir": f"./data/{_ednet_gap_sweep_name}",
     }
 
+for _public_chold_name, _public_chold_base in (
+    ("assist_09_chold", "assist_09"),
+    ("junyi_chold", "junyi"),
+    ("assist_17_chold", "assist_17"),
+):
+    DATASET_DEFAULTS[_public_chold_name] = {
+        **DATASET_DEFAULTS[_public_chold_base],
+        "data_dir": f"./data/{_public_chold_name}",
+    }
+
 GRID_SEARCH_SPACE = {
     "assist_09": {
         "base": {},
