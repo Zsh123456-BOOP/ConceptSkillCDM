@@ -15,17 +15,19 @@ run_id <- if (length(args) >= 2) args[[2]] else "public_chold_full_20260529_v1"
 
 run_dir <- file.path(repo_root, "results", run_id)
 fig_dir <- file.path(run_dir, "paper_figures")
+archive_dir <- file.path(fig_dir, "archive")
 dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(archive_dir, recursive = TRUE, showWarnings = FALSE)
 
 pal <- c(
-  evidence = "#E56A00",
-  crg = "#0B57D0",
-  lcrf = "#D71920",
-  learner = "#16833A",
-  neutral = "#7D8590",
-  neutral_dark = "#252A2E",
-  neutral_light = "#EEF2F6",
-  purple = "#7F6BB5",
+  blue = "#244C8F",
+  blue_mid = "#5E84BF",
+  teal = "#3A9D9A",
+  teal_light = "#9ED5CF",
+  grey = "#B8B8B8",
+  grey_dark = "#555555",
+  orange = "#D98C32",
+  red = "#C8524A",
   paper = "#FFFFFF"
 )
 c0 <- function(name) unname(pal[[name]])
@@ -48,32 +50,30 @@ variant_labels <- c(
   degree_random_support = "Degree-random"
 )
 variant_pal <- c(
-  "w/o CRG" = c0("crg"),
-  "Self-only" = c0("neutral"),
-  "Degree-random" = c0("evidence")
+  "w/o CRG" = c0("blue"),
+  "Self-only" = c0("grey_dark"),
+  "Degree-random" = c0("orange")
 )
 
 theme_nature <- function(base_size = 6.8, base_family = "Arial") {
   theme_classic(base_size = base_size, base_family = base_family) +
     theme(
-      axis.line = element_line(linewidth = 0.28, colour = "grey20"),
-      axis.ticks = element_line(linewidth = 0.28, colour = "grey20"),
-      axis.text = element_text(colour = "grey15"),
-      axis.title = element_text(colour = "grey10"),
+      axis.line = element_line(linewidth = 0.35, colour = "black"),
+      axis.ticks = element_line(linewidth = 0.30, colour = "black"),
+      axis.text = element_text(size = base_size - 0.4, colour = "black"),
+      axis.title = element_text(size = base_size, colour = "black"),
       strip.background = element_blank(),
-      strip.text = element_text(face = "bold", size = base_size),
+      strip.text = element_text(face = "bold", size = base_size - 0.2),
       legend.title = element_blank(),
       legend.text = element_text(size = base_size - 0.7),
       legend.key.height = unit(3.5, "mm"),
       legend.key.width = unit(6.0, "mm"),
       legend.position = "bottom",
       plot.title = element_text(size = base_size + 0.8, face = "bold", hjust = 0),
-      plot.subtitle = element_text(size = base_size - 0.4, colour = "grey35", hjust = 0),
-      plot.caption = element_text(size = base_size - 0.8, colour = "grey35", hjust = 0),
-      panel.grid.major.y = element_line(linewidth = 0.16, colour = "grey90"),
-      panel.grid.major.x = element_blank(),
-      panel.grid.minor = element_blank(),
-      plot.margin = margin(4, 4, 4, 4)
+      plot.subtitle = element_text(size = base_size - 0.5, colour = c0("grey_dark"), hjust = 0),
+      plot.caption = element_text(size = base_size - 0.8, colour = c0("grey_dark"), hjust = 0),
+      panel.grid = element_blank(),
+      plot.margin = margin(3, 3, 3, 3)
     )
 }
 theme_set(theme_nature())
@@ -99,6 +99,29 @@ save_figure <- function(plot, name, width_mm = 183, height_mm = 120, dpi = 600) 
   )
   ggsave(
     file.path(fig_dir, paste0(name, ".png")),
+    plot,
+    width = w,
+    height = h,
+    units = "in",
+    dpi = dpi,
+    bg = "white"
+  )
+}
+
+save_archive <- function(plot, name, width_mm = 183, height_mm = 70, dpi = 600) {
+  w <- width_mm / 25.4
+  h <- height_mm / 25.4
+  ggsave(
+    file.path(archive_dir, paste0(name, ".pdf")),
+    plot,
+    width = w,
+    height = h,
+    units = "in",
+    device = grDevices::cairo_pdf,
+    bg = "white"
+  )
+  ggsave(
+    file.path(archive_dir, paste0(name, ".png")),
     plot,
     width = w,
     height = h,
@@ -269,15 +292,15 @@ profile_long <- profile %>%
 p_gap_split <- ggplot(profile_long, aes(dataset_label, ratio, fill = split)) +
   geom_col(width = 0.62, colour = "white", linewidth = 0.18) +
   geom_hline(yintercept = c(0.7, 0.8), linewidth = 0.22, linetype = c("dashed", "dotted"), colour = "grey45") +
-  scale_fill_manual(values = c(Train = c0("crg"), Valid = c0("evidence"), Test = c0("learner"))) +
+  scale_fill_manual(values = c(Train = c0("blue"), Valid = c0("orange"), Test = c0("teal"))) +
   scale_y_continuous(labels = percent_format(accuracy = 1), limits = c(0, 1.02), expand = expansion(mult = c(0, 0.02))) +
   labs(x = NULL, y = "Row share", title = "A  Student-conditioned concept-heldout split") +
   guides(fill = guide_legend(nrow = 1)) +
   theme(legend.position = "bottom")
 
 p_gap_rate <- ggplot(profile, aes(dataset_label)) +
-  geom_col(aes(y = test_direct_unseen_rate), width = 0.56, fill = c0("crg"), alpha = 0.92) +
-  geom_point(aes(y = test_train_concept_overlap_rate), size = 1.8, colour = c0("evidence")) +
+  geom_col(aes(y = test_direct_unseen_rate), width = 0.56, fill = c0("blue"), alpha = 0.92) +
+  geom_point(aes(y = test_train_concept_overlap_rate), size = 1.8, colour = c0("orange")) +
   geom_text(
     aes(y = pmin(test_direct_unseen_rate + 0.045, 1.04), label = paste0("n=", comma(test_direct_unseen_rows))),
     size = 2.0,
@@ -290,6 +313,9 @@ p_gap_rate <- ggplot(profile, aes(dataset_label)) +
     title = "B  Query-level target-concept gap",
     subtitle = "Bars: direct-unseen; dots: train-test concept overlap"
   )
+
+fig_ab <- p_gap_split | p_gap_rate
+save_archive(fig_ab, "fig_public_chold_gap_profile_ab", width_mm = 183, height_mm = 62)
 
 p_route <- ggplot(route, aes(route_bin, auc_recovery, fill = variant)) +
   geom_hline(yintercept = 0, linewidth = 0.22, colour = "grey35") +
@@ -324,11 +350,11 @@ p_target <- ggplot(target_metrics, aes(subgroup_label, auc_gap_full_minus_varian
     legend.position = "bottom"
   )
 
-fig <- (p_gap_split | p_gap_rate) / p_route / p_target +
-  plot_layout(heights = c(0.92, 1.20, 1.05), guides = "collect") &
+fig_cd <- p_route / p_target +
+  plot_layout(heights = c(1.03, 0.97), guides = "collect") &
   theme(legend.position = "bottom")
 
-save_figure(fig, "fig_public_chold_gap_existence_solution", width_mm = 183, height_mm = 150)
+save_figure(fig_cd, "fig_public_chold_cd_gap_recovery", width_mm = 183, height_mm = 105)
 
 auc_summary <- route %>%
   group_by(dataset_label, variant) %>%
