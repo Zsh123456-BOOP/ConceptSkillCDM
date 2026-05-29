@@ -48,9 +48,9 @@ variant_labels <- c(
   degree_random_support = "Degree-random"
 )
 variant_pal <- c(
-  no_CRG = c0("crg"),
-  self_only = c0("neutral"),
-  degree_random_support = c0("evidence")
+  "w/o CRG" = c0("crg"),
+  "Self-only" = c0("neutral"),
+  "Degree-random" = c0("evidence")
 )
 
 theme_nature <- function(base_size = 6.8, base_family = "Arial") {
