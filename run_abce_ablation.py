@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import io
 import json
 import os
 import re
@@ -38,9 +37,6 @@ RESULT_CSV = Path("results") / "abce_ablation_diagnosis.csv"
 SUMMARY_CSV = Path("results") / "abce_ablation_summary.csv"
 MEAN_SUMMARY_CSV = Path("results") / "abce_ablation_summary_mean.csv"
 NUM_RE = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
-ROW_START_RE = re.compile(
-    r"(?<![\r\n])(?=(assist_09|assist_17|junyi),\d+,(best|ae_dominant),(full|no_A|no_E|no_E_bs64),)"
-)
 BOOLEAN_OPTIONAL_KEYS = {
     "use_personal_graph",
     "personal_disable_student_global_context",
@@ -132,7 +128,6 @@ MIN_EARLY_STOP_PATIENCE = 3
 STABILITY_SAFE_ABLATION_PATIENCE = {
     ("junyi", "no_A"): 3,
     ("junyi", "no_E"): 3,
-    ("junyi", "no_E_bs64"): 3,
 }
 
 
@@ -157,7 +152,7 @@ class JobSpec:
     cmd: List[str]
 
 
-BASE_SINGLE_ABLATIONS: Tuple[AblationSpec, ...] = (
+BASE_ABLATIONS: Tuple[AblationSpec, ...] = (
     AblationSpec(name="full", flags={}, overrides={}),
     AblationSpec(
         name="no_A",
@@ -509,12 +504,6 @@ def _failure_from_metadata(
     return "", ""
 
 
-def pick_base_ablations(component_set: str) -> List[AblationSpec]:
-    if component_set != "single":
-        raise ValueError(f"Unknown component_set: {component_set}")
-    return list(BASE_SINGLE_ABLATIONS)
-
-
 def build_command(job: JobSpec, generate_diagnosis: bool) -> List[str]:
     cmd = [
         sys.executable,
@@ -821,25 +810,15 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
             writer.writeheader()
         writer.writerow({key: row.get(key, "") for key in fieldnames})
 
-
-def _repair_glued_csv_rows(text: str) -> Tuple[str, int]:
-    repaired, count = ROW_START_RE.subn("\n", text)
-    return repaired, int(count)
-
-
 def load_result_rows(path: Path, run_id: str) -> List[Dict[str, Any]]:
     if not path.exists():
         return []
     with open(path, "r", encoding="utf-8-sig", errors="ignore") as f:
-        text = f.read()
-    repaired_text, repaired_count = _repair_glued_csv_rows(text)
-    if repaired_count > 0:
-        print(f"[WARN] Auto-repaired {repaired_count} glued row boundary/boundaries in {path}.")
-    rows: List[Dict[str, Any]] = []
-    for row in csv.DictReader(io.StringIO(repaired_text)):
-        if run_id and run_id not in row.get("save_dir", ""):
-            continue
-        rows.append(row)
+        rows = [
+            row
+            for row in csv.DictReader(f)
+            if not run_id or run_id in row.get("save_dir", "")
+        ]
     return rows
 
 
@@ -1040,7 +1019,6 @@ def write_summary(
         full_auc = try_float(full.get("test_auc"))
         no_a_auc = try_float(mp.get("no_A", {}).get("test_auc"))
         no_e_auc = try_float(mp.get("no_E", {}).get("test_auc"))
-        no_e_matched_auc = try_float(mp.get("no_E_bs64", {}).get("test_auc"))
         no_a_any = all_mp.get("no_A", {})
         no_a_failed = bool(
             no_a_any
@@ -1051,17 +1029,11 @@ def write_summary(
 
         delta_a = None if no_a_failed else ((full_auc - no_a_auc) if (full_auc is not None and no_a_auc is not None) else None)
         delta_e = (full_auc - no_e_auc) if (full_auc is not None and no_e_auc is not None) else None
-        delta_e_matched = (
-            (full_auc - no_e_matched_auc)
-            if (full_auc is not None and no_e_matched_auc is not None)
-            else None
-        )
-        effective_delta_e = delta_e_matched if delta_e_matched is not None else delta_e
 
-        diagnosis_reason = diagnose_reason(full, delta_a, effective_delta_e)
+        diagnosis_reason = diagnose_reason(full, delta_a, delta_e)
         comp_state = {
             "A": "untested_failed" if no_a_failed else classify_delta(delta_a, threshold),
-            "E": classify_delta(effective_delta_e, threshold),
+            "E": classify_delta(delta_e, threshold),
         }
         if comp_state["A"] == "non_positive" and any(tag in diagnosis_reason for tag in ("graph-uniform-risk", "A-near-identity", "A-state-delta-low")):
             comp_state["A"] = "harmful_or_unstable"
@@ -1091,10 +1063,8 @@ def write_summary(
             "no_A_failed": no_a_failed,
             "no_A_failure_reason": no_a_failure_reason,
             "no_E_auc": no_e_auc,
-            "no_E_matched_auc": no_e_matched_auc,
             "delta_A_full_minus_noA": delta_a,
             "delta_E_full_minus_noE": delta_e,
-            "delta_E_full_minus_noE_matched": delta_e_matched,
             "full_effective_use_concept_graph": full.get("effective_use_concept_graph"),
             "full_effective_use_personal_graph": full.get("effective_use_personal_graph"),
             "full_clean_baseline": full.get("clean_baseline"),
@@ -1211,10 +1181,8 @@ def write_summary(
         "no_A_failed",
         "no_A_failure_reason",
         "no_E_auc",
-        "no_E_matched_auc",
         "delta_A_full_minus_noA",
         "delta_E_full_minus_noE",
-        "delta_E_full_minus_noE_matched",
         "full_effective_use_concept_graph",
         "full_effective_use_personal_graph",
         "full_clean_baseline",
@@ -1334,12 +1302,7 @@ def write_summary(
 
     for (dataset, profile), grp in sorted(mean_group.items()):
         deltas_a = [try_float(x.get("delta_A_full_minus_noA")) for x in grp]
-        deltas_e = [
-            try_float(x.get("delta_E_full_minus_noE_matched"))
-            if try_float(x.get("delta_E_full_minus_noE_matched")) is not None
-            else try_float(x.get("delta_E_full_minus_noE"))
-            for x in grp
-        ]
+        deltas_e = [try_float(x.get("delta_E_full_minus_noE")) for x in grp]
         full_aucs = [try_float(x.get("full_auc")) for x in grp]
 
         def mean_valid(values: List[Optional[float]]) -> Optional[float]:
@@ -1408,7 +1371,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run AE-only ablations with diagnosis summary.")
     parser.add_argument("--datasets", type=str, default="assist_09,junyi")
     parser.add_argument("--seeds", type=str, default=None, help="Comma-separated seeds. Default uses DEFAULT_SEEDS.")
-    parser.add_argument("--profiles", type=str, default=None, help="Optional filter: best,ae_dominant")
     parser.add_argument("--gpus", type=str, default="0")
     parser.add_argument("--max_concurrent", type=int, default=1)
     parser.add_argument("--max_per_gpu", type=int, default=1)
@@ -1418,7 +1380,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rerun_existing", action="store_true")
     parser.add_argument("--analyze_only", action="store_true", help="Skip running and only summarize existing rows.")
     parser.add_argument("--generate_diagnosis", action="store_true", help="Enable post-training diagnosis artifacts.")
-    parser.add_argument("--component_set", type=str, default="single", choices=["single"])
     parser.add_argument("--ablations", type=str, default=None, help="Optional filter: full,no_A,no_E")
     parser.add_argument("--delta_threshold", type=float, default=0.003, help="Threshold for useful/neutral/harmful labels.")
     parser.add_argument("--epochs", type=int, default=None)
@@ -1435,113 +1396,7 @@ def parse_args() -> argparse.Namespace:
         metavar="KEY=VALUE",
         help="Override any model/training parameter for all selected jobs; repeat for multiple keys.",
     )
-    parser.add_argument("--include_matched_no_e", action="store_true", help="Add junyi no_E control with matched batch_size=64.")
     return parser.parse_args()
-
-
-def _profile_overrides(profile: str, dataset: str, args: argparse.Namespace) -> Dict[str, Any]:
-    if profile == "best":
-        return {}
-    if profile == "ae_dominant":
-        if dataset == "assist_09":
-            return {
-                "graph_identity_residual": 0.05,
-                "graph_propagation_alpha": 0.24,
-                "graph_query_readout_scale": 0.50,
-                "graph_query_readout_2hop_scale": 0.14,
-                "graph_prior_logit_scale": 0.65,
-                "ae_query_residual_scale": 0.0,
-                "ae_logit_residual_scale": 0.70,
-                "ae_logit_residual_clip": 1.20,
-                "ae_irt_logit_scale": 0.20,
-                "ae_interaction_logit_scale": 1.00,
-                "ae_logit_dim": 64,
-                "ae_posterior_prior_scale": 1.0,
-                "ae_lr_mult": 8.0,
-                "ae_stat_prior_scale": 1.0,
-                "personal_warmup_epochs": 6,
-                "personal_reg_warmup_epochs": 6,
-                "personal_max_alpha": 0.30,
-                "personal_delta_scale": 4.8,
-                "lambda_alpha": 0.0,
-                "lambda_alpha_min": 0.10,
-                "alpha_min_target": 0.05,
-                "lambda_personal_kl": 0.03,
-                "lambda_personal_query_residual": 0.05,
-                "personal_query_residual_margin": 0.16,
-                "personal_alpha_temperature": 2.4,
-                "personal_alpha_budget": 0.12,
-                "personal_alpha_base_init": 0.05,
-                "personal_alpha_bias_scale": 0.0,
-                "personal_disable_student_global_context": True,
-                "personal_local_hops": 1,
-                "personal_include_neighbor_rows": False,
-                "personal_query_row_budget": 1.0,
-                "personal_neighbor_row_budget": 0.40,
-                "personal_support_only": True,
-                "personal_query_correction_scale": 1.80,
-                "personal_query_correction_max_ratio": 0.40,
-                "personal_query_correction_min_graph_anchor": 0.02,
-                "personal_state_lr_mult": 1.0,
-                "personal_id_lr_mult": 0.5,
-                "share_concept_embeddings": True,
-            }
-        return {
-            "graph_identity_residual": 0.05,
-            "graph_propagation_alpha": 0.25,
-            "graph_query_readout_scale": 0.36,
-            "graph_query_readout_2hop_scale": 0.09,
-            "graph_prior_logit_scale": 0.50,
-            "ae_query_residual_scale": 0.0,
-            "ae_logit_residual_scale": 0.45,
-            "ae_logit_residual_clip": 1.00,
-            "ae_irt_logit_scale": 0.20,
-            "ae_interaction_logit_scale": 1.00,
-            "ae_logit_dim": 64,
-            "ae_posterior_prior_scale": 1.0,
-            "ae_lr_mult": 1.5,
-            "ae_stat_prior_scale": 0.8,
-            "personal_warmup_epochs": 4,
-            "personal_reg_warmup_epochs": 4,
-            "personal_max_alpha": 0.28,
-            "personal_delta_scale": 5.0,
-            "lambda_alpha": 0.0,
-            "lambda_alpha_min": 0.08,
-            "alpha_min_target": 0.04,
-            "lambda_personal_kl": 0.04,
-            "lambda_personal_query_residual": 0.06,
-            "personal_query_residual_margin": 0.14,
-            "personal_alpha_temperature": 1.7,
-            "personal_alpha_budget": 0.10,
-            "personal_alpha_base_init": 0.04,
-            "personal_alpha_bias_scale": 0.0,
-            "personal_disable_student_global_context": True,
-            "personal_local_hops": 1,
-            "personal_include_neighbor_rows": False,
-            "personal_query_row_budget": 1.5,
-            "personal_neighbor_row_budget": 0.25,
-            "personal_support_only": True,
-            "personal_query_correction_scale": 1.30,
-            "personal_query_correction_max_ratio": 0.40,
-            "personal_query_correction_min_graph_anchor": 0.01,
-            "personal_state_lr_mult": 1.5,
-            "personal_id_lr_mult": 0.25,
-            "share_concept_embeddings": True,
-        }
-    raise ValueError(f"Unknown profile '{profile}'.")
-
-
-def _selected_profiles(all_profiles: List[str], filters: Optional[str]) -> List[str]:
-    if not filters:
-        return all_profiles
-    names = set(parse_csv_tokens(filters))
-    chosen = [profile for profile in all_profiles if profile in names]
-    missing = names - set(all_profiles)
-    if missing:
-        raise ValueError(f"Unknown profile names: {sorted(missing)}")
-    if not chosen:
-        raise ValueError("No profiles selected after filtering.")
-    return chosen
 
 
 def _selected_ablations(all_abls: List[AblationSpec], filters: Optional[str]) -> List[AblationSpec]:
@@ -1560,8 +1415,7 @@ def _selected_ablations(all_abls: List[AblationSpec], filters: Optional[str]) ->
 def make_jobs(args: argparse.Namespace, run_id: str) -> List[JobSpec]:
     datasets = parse_csv_tokens(args.datasets)
     seeds = list(DEFAULT_SEEDS) if args.seeds is None else parse_int_csv(args.seeds)
-    base_abls = _selected_ablations(pick_base_ablations(args.component_set), args.ablations)
-    profiles = _selected_profiles(["best", "ae_dominant"], args.profiles)
+    base_abls = _selected_ablations(list(BASE_ABLATIONS), args.ablations)
     param_overrides = parse_param_overrides(getattr(args, "param_overrides", []))
 
     jobs: List[JobSpec] = []
@@ -1569,76 +1423,58 @@ def make_jobs(args: argparse.Namespace, run_id: str) -> List[JobSpec]:
         if dataset not in BEST_CFG:
             raise ValueError(f"Dataset '{dataset}' not found in BEST_CFG.")
         base_cfg = dict(BEST_CFG[dataset])
-        dataset_abls = list(base_abls)
-        if dataset == "junyi" and bool(getattr(args, "include_matched_no_e", False)):
-            dataset_abls.append(
-                AblationSpec(
-                    name="no_E_bs64",
-                    flags={},
-                    overrides={
-                        "use_personal_graph": False,
-                        "lambda_sparse_personal": 0.0,
-                        "lambda_alpha": 0.0,
-                        "lambda_alpha_min": 0.0,
-                        "alpha_min_target": 0.0,
-                        "batch_size": 64,
-                    },
+        profile = "best"
+
+        for ablation in base_abls:
+            for seed in seeds:
+                params = dict(base_cfg)
+                params.update(ablation.overrides)
+                params["debug_graph_diag"] = True
+                params["diag_batches"] = 1
+
+                if args.epochs is not None:
+                    params["epochs"] = int(args.epochs)
+                if args.early_stop_patience is not None:
+                    params["early_stop_patience"] = int(args.early_stop_patience)
+                if args.learning_rate is not None:
+                    params["learning_rate"] = float(args.learning_rate)
+                if args.max_train_batches is not None:
+                    params["max_train_batches"] = int(args.max_train_batches)
+                if args.max_val_batches is not None:
+                    params["max_val_batches"] = int(args.max_val_batches)
+                if args.max_test_batches is not None:
+                    params["max_test_batches"] = int(args.max_test_batches)
+                params.update(param_overrides)
+
+                for key in set(ablation.drop_keys) | set(ablation.flags.keys()):
+                    params.pop(key, None)
+
+                _apply_ablation_stability_overrides(dataset, ablation, params)
+                _apply_oom_safety_overrides(dataset, ablation, params)
+
+                model_variant = f"{dataset}_abce_{profile}_{ablation.name}"
+                save_dir = Path("checkpoints") / "abce_diag" / run_id / dataset / f"seed{seed}" / f"{profile}_{ablation.name}"
+                log_dir = Path("logs") / "abce_diag" / run_id / dataset / f"seed{seed}" / f"{profile}_{ablation.name}"
+
+                if (not args.rerun_existing) and (save_dir / "test_results.json").exists():
+                    continue
+
+                save_dir.mkdir(parents=True, exist_ok=True)
+                log_dir.mkdir(parents=True, exist_ok=True)
+
+                job = JobSpec(
+                    dataset=dataset,
+                    seed=int(seed),
+                    profile=profile,
+                    ablation=ablation,
+                    model_variant=model_variant,
+                    save_dir=save_dir,
+                    log_dir=log_dir,
+                    params=params,
+                    cmd=[],
                 )
-            )
-
-        for profile in profiles:
-            profile_cfg = _profile_overrides(profile, dataset, args)
-            for ablation in dataset_abls:
-                for seed in seeds:
-                    params = dict(base_cfg)
-                    params.update(profile_cfg)
-                    params.update(ablation.overrides)
-                    params["debug_graph_diag"] = True
-                    params["diag_batches"] = 1
-
-                    if args.epochs is not None:
-                        params["epochs"] = int(args.epochs)
-                    if args.early_stop_patience is not None:
-                        params["early_stop_patience"] = int(args.early_stop_patience)
-                    if args.learning_rate is not None:
-                        params["learning_rate"] = float(args.learning_rate)
-                    if args.max_train_batches is not None:
-                        params["max_train_batches"] = int(args.max_train_batches)
-                    if args.max_val_batches is not None:
-                        params["max_val_batches"] = int(args.max_val_batches)
-                    if args.max_test_batches is not None:
-                        params["max_test_batches"] = int(args.max_test_batches)
-                    params.update(param_overrides)
-
-                    for key in set(ablation.drop_keys) | set(ablation.flags.keys()):
-                        params.pop(key, None)
-
-                    _apply_ablation_stability_overrides(dataset, ablation, params)
-                    _apply_oom_safety_overrides(dataset, ablation, params)
-
-                    model_variant = f"{dataset}_abce_{profile}_{ablation.name}"
-                    save_dir = Path("checkpoints") / "abce_diag" / run_id / dataset / f"seed{seed}" / f"{profile}_{ablation.name}"
-                    log_dir = Path("logs") / "abce_diag" / run_id / dataset / f"seed{seed}" / f"{profile}_{ablation.name}"
-
-                    if (not args.rerun_existing) and (save_dir / "test_results.json").exists():
-                        continue
-
-                    save_dir.mkdir(parents=True, exist_ok=True)
-                    log_dir.mkdir(parents=True, exist_ok=True)
-
-                    job = JobSpec(
-                        dataset=dataset,
-                        seed=int(seed),
-                        profile=profile,
-                        ablation=ablation,
-                        model_variant=model_variant,
-                        save_dir=save_dir,
-                        log_dir=log_dir,
-                        params=params,
-                        cmd=[],
-                    )
-                    job.cmd = build_command(job, generate_diagnosis=bool(args.generate_diagnosis))
-                    jobs.append(job)
+                job.cmd = build_command(job, generate_diagnosis=bool(args.generate_diagnosis))
+                jobs.append(job)
     return jobs
 
 

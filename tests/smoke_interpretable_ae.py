@@ -191,9 +191,7 @@ def _check_runner_keeps_three_patience_rounds() -> None:
     args = SimpleNamespace(
         datasets="junyi",
         seeds="42",
-        component_set="single",
         ablations="full,no_A,no_E",
-        profiles="best",
         rerun_existing=True,
         epochs=None,
         early_stop_patience=1,
@@ -203,7 +201,6 @@ def _check_runner_keeps_three_patience_rounds() -> None:
         max_val_batches=None,
         max_test_batches=None,
         param_overrides=None,
-        include_matched_no_e=True,
     )
     jobs = make_jobs(args, run_id="smoke_interpretable_patience")
     for job in jobs:

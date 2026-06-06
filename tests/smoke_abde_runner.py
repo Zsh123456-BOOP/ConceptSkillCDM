@@ -15,15 +15,13 @@ def _assert(condition: bool, message: str) -> None:
 def _check_run_abce_supports_ae_only() -> None:
     import run_abce_ablation as runner
 
-    ablations = runner.pick_base_ablations("single")
+    ablations = list(runner.BASE_ABLATIONS)
     names = {ab.name for ab in ablations}
     _assert(names == {"full", "no_A", "no_E"}, f"unexpected AE-only ablations: {sorted(names)}")
 
     args = runner.parse_args()
     args.datasets = "assist_09"
     args.seeds = "42"
-    args.profiles = "best"
-    args.component_set = "single"
     args.ablations = "full,no_A,no_E"
     args.dry_run = True
     args.rerun_existing = True

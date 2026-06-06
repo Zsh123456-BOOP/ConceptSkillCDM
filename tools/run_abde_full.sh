@@ -10,9 +10,7 @@ fi
 
 DATASETS="${DATASETS:-assist_09,junyi}"
 SEEDS="${SEEDS:-42}"
-PROFILES="${PROFILES:-ae_dominant}"
-ABLATIONS="${ABLATIONS:-full,no_A,no_B,no_D,no_E,B_q_only,B_no_q}"
-COMPONENT_SET="${COMPONENT_SET:-single_plus}"
+ABLATIONS="${ABLATIONS:-full,no_A,no_E}"
 MAX_GPUS="${MAX_GPUS:-2}"
 AUTO_GPUS="${AUTO_GPUS:-1}"
 GPU_MEM_USED_MAX_MB="${GPU_MEM_USED_MAX_MB:-256}"
@@ -55,9 +53,7 @@ fi
 echo "[INFO] repo=$ROOT_DIR"
 echo "[INFO] datasets=$DATASETS"
 echo "[INFO] seeds=$SEEDS"
-echo "[INFO] profiles=$PROFILES"
 echo "[INFO] ablations=$ABLATIONS"
-echo "[INFO] component_set=$COMPONENT_SET"
 echo "[INFO] gpus=$GPUS max_concurrent=$MAX_CONCURRENT max_per_gpu=$MAX_PER_GPU"
 
 if [[ "$SKIP_CLEAN" == "1" ]]; then
@@ -72,8 +68,6 @@ CMD=(
   "$PYTHON_BIN" run_abce_ablation.py
   --datasets "$DATASETS"
   --seeds "$SEEDS"
-  --profiles "$PROFILES"
-  --component_set "$COMPONENT_SET"
   --ablations "$ABLATIONS"
   --gpus "$GPUS"
   --max_concurrent "$MAX_CONCURRENT"

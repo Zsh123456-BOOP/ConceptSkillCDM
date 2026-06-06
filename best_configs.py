@@ -470,9 +470,4 @@ for _public_chold_name, _public_chold_base in (
 ):
     BEST_CFG[_public_chold_name] = dict(BEST_CFG[_public_chold_base])
 
-STRUCT_V2_CFG: Dict[str, Dict[str, Any]] = {
-    "assist_09_abce_struct_v2": dict(BEST_CFG["assist_09"]),
-    "junyi_abce_struct_v2": dict(BEST_CFG["junyi"]),
-}
-
 DEFAULT_SEEDS = [42]
