@@ -412,10 +412,6 @@ def parse_args():
 def main():
     parser = parse_args()
 
-    # 
-    if any(arg.startswith("--ablate_exercise_graph") for arg in sys.argv):
-        raise SystemExit("error: --ablate_exercise_graph is removed. Use --ablate_concept_graph instead.")
-
     raw_argv = sys.argv[1:]
     args = parser.parse_args(raw_argv)
     explicit_dests = collect_explicit_arg_dests(raw_argv, parser)

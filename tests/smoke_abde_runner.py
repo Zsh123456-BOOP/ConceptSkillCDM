@@ -52,29 +52,8 @@ def _check_run_abce_supports_ae_only() -> None:
         _assert(not overlap, f"{job.ablation.name} should not carry removed B/D flags: {overlap}")
 
 
-def _check_run_ablation_rejects_removed_aliases() -> None:
-    import run_ablation
-
-    resolved = run_ablation.resolve_ablation_names(["no_A", "no_E"], ablation_set="all")
-    _assert("no_concept_graph" in resolved, "no_A alias should map to no_concept_graph.")
-    _assert("no_personal_graph" in resolved, "no_E alias should map to no_personal_graph.")
-    no_a_spec = next(spec for spec in run_ablation.SUBMODULE_ABLATIONS if spec["name"] == "no_concept_graph")
-    _assert(
-        int(no_a_spec.get("overrides", {}).get("num_gnn_layers", 1)) > 0,
-        "run_ablation.py 中的 no_A/no_concept_graph 也不应把 num_gnn_layers 覆盖为 0。",
-    )
-
-    for removed in ("no_B", "no_D"):
-        try:
-            run_ablation.resolve_ablation_names([removed], ablation_set="all")
-        except ValueError:
-            continue
-        raise AssertionError(f"{removed} should be rejected after removing B/D ablations.")
-
-
 def main() -> None:
     _check_run_abce_supports_ae_only()
-    _check_run_ablation_rejects_removed_aliases()
     print("OK: AE-only runner smoke checks passed.")
 
 

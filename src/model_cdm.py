@@ -24,8 +24,7 @@ class CognitiveDiagnosisModel(nn.Module):
     - Module 1: ConceptStructureModeling（A + E）
     - Fixed Prediction Head: CognitiveDiagnosisHead（D）
 
-    仅支持 ablate_module1。
-    D 固定存在，不再提供 no_D；B 已物理移除。
+    仅支持整块关闭 Module 1；子模块实验由 AE runner 统一调度。
     """
 
     def __init__(

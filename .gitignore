@@ -62,6 +62,10 @@ data/ednet_kt1_clean15_sample5000/*.csv
 data/nips34_l3/*.csv
 data/public_benchmarks_processed_*.tar.gz
 
+# Generated concept-holdout and EdNet gap split datasets stay server/local only.
+data/*_chold/
+data/ednet_kt1_gap*/
+
 # LaTeX / paper build intermediates and local preview artifacts
 *.aux
 *.bbl

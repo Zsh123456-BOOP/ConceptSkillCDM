@@ -82,9 +82,9 @@ FAIR_GLOBAL_POSTERIOR_OVERRIDES = {
 
 
 PHASE1_PERSONAL_ACTIVE_DEFAULTS = {
-    # The BEST_CFG files preserve some high-AUC runs where the old E writeback
-    # path was intentionally muted.  Phase1 is a mechanism test, so full-like E
-    # variants must exercise the posterior and bounded query writeback.
+    # Phase1 is a mechanism test, so full-like E variants must exercise the
+    # posterior and bounded query writeback even when BEST_CFG favors a quieter
+    # high-AUC setting.
     "personal_delta_scale": 1.0,
     "ae_posterior_prior_scale": 1.0,
     "personal_query_correction_scale": 0.15,
