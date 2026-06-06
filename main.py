@@ -29,6 +29,36 @@ def _normalize_bool(value, default=False):
     return bool(value)
 
 
+def _load_config_file(path):
+    if not path:
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+    if not isinstance(payload, dict):
+        raise SystemExit(f"error: config_file must contain a JSON object: {path}")
+    return payload
+
+
+def _apply_config_file(args, parser, explicit_dests):
+    config_path = getattr(args, "config_file", None)
+    config = _load_config_file(config_path)
+    if not config:
+        return args, set()
+
+    known_dests = {action.dest for action in getattr(parser, "_actions", [])}
+    unknown = sorted(set(config) - known_dests)
+    if unknown:
+        raise SystemExit(f"error: unknown key(s) in config_file {config_path}: {unknown}")
+
+    config_dests = set()
+    for key, value in config.items():
+        if key in explicit_dests:
+            continue
+        setattr(args, key, value)
+        config_dests.add(key)
+    return args, config_dests
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Cognitive Diagnosis Model Training and Testing")
     bool_action = argparse.BooleanOptionalAction
@@ -36,6 +66,8 @@ def parse_args():
     # ======================
     # Data
     # ======================
+    parser.add_argument("--config_file", type=str, default=None,
+                        help="JSON file with run parameters; explicit CLI arguments override it.")
     parser.add_argument(
         "--dataset_name",
         type=str,
@@ -415,7 +447,8 @@ def main():
     raw_argv = sys.argv[1:]
     args = parser.parse_args(raw_argv)
     explicit_dests = collect_explicit_arg_dests(raw_argv, parser)
-    args = apply_dataset_defaults(args, parser, explicit_dests=explicit_dests)
+    args, config_dests = _apply_config_file(args, parser, explicit_dests)
+    args = apply_dataset_defaults(args, parser, explicit_dests=explicit_dests | config_dests)
 
     args.graph_query_readout_scale = float(getattr(args, "graph_query_readout_scale", 0.35))
     args.graph_query_readout_2hop_scale = float(getattr(args, "graph_query_readout_2hop_scale", 0.15))

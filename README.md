@@ -86,24 +86,11 @@ full > LCRF_shuffle_student
 
 ## 5. 验证方式
 
-本仓库 smoke 文件是可直接执行脚本，不以 pytest collection 为主。
-
-常用验证：
+常用静态验证：
 
 ```bash
 python -m py_compile main.py run_abce_ablation.py src/config.py src/dataset.py src/experiment_utils.py src/model.py src/model_cdm.py src/model_cdm_forward.py src/model_graph.py src/model_ops.py src/model_personal.py src/model_regularization.py src/model_structure.py src/model_structure_forward.py src/module_activity.py src/prediction_head.py src/trainer.py
-python tests/smoke_interpretable_ae.py
-python tests/smoke_ae_reliability_features.py
-python tests/smoke_runtime_regressions.py
 ```
-
-最小真实训练 smoke：
-
-```bash
-python main.py --dataset_name assist_09 --model_variant assist_09_abce_best_full --epochs 1 --batch_size 128 --max_train_batches 2 --max_val_batches 1 --max_test_batches 1 --num_workers 0 --no_cuda --save_dir checkpoints/local_crg_lcrf_smoke --log_dir logs/local_crg_lcrf_smoke
-```
-
-该 smoke 只用于确认训练链路、日志和 checkpoint 写入正常，不代表正式指标。
 
 ## 6. 远程服务器规范
 

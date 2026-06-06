@@ -344,7 +344,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--phase1_max_test_batches", type=int, default=60)
     parser.add_argument("--phase2_epochs", type=int, default=45)
     parser.add_argument("--phase2_patience", type=int, default=8)
-    parser.add_argument("--limit_jobs", type=int, default=0, help="Optional total cap for smoke testing.")
+    parser.add_argument("--limit_jobs", type=int, default=0, help="Optional total cap for debug runs.")
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--rerun_existing", action="store_true")
     parser.add_argument("--generate_diagnosis", action="store_true")

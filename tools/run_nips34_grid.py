@@ -67,7 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--early_stop_patience", type=int, default=8)
     parser.add_argument("--patience", type=int, default=8)
     parser.add_argument("--num_workers", type=int, default=4)
-    parser.add_argument("--limit_jobs", type=int, default=0, help="Optional cap for smoke testing.")
+    parser.add_argument("--limit_jobs", type=int, default=0, help="Optional cap for debug runs.")
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--rerun_existing", action="store_true")
     parser.add_argument("--generate_diagnosis", action="store_true")

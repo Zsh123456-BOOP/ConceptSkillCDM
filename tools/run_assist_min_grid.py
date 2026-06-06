@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--clean", action="store_true", help="Remove logs/results/checkpoints before running.")
     parser.add_argument("--dry_run", action="store_true")
-    parser.add_argument("--limit_jobs", type=int, default=0, help="Optional cap for smoke testing.")
+    parser.add_argument("--limit_jobs", type=int, default=0, help="Optional cap for debug runs.")
     parser.add_argument("--no_generate_diagnosis", action="store_true")
     return parser.parse_args()
 
