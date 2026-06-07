@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader
 warnings.filterwarnings("ignore", message="Was asked to gather along dimension 0")
 
 from src.dataset import CognitiveDiagnosisDataset, create_dataloaders
-from src.model import CognitiveDiagnosisModel
+from src.model_cdm import CognitiveDiagnosisModel
 from src.experiment_utils import (
     compute_metrics,
     select_device,

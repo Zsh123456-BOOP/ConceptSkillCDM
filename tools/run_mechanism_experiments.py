@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from best_configs import BEST_CFG  # noqa: E402
+from best_configs import BEST_CFG, get_effective_config  # noqa: E402
 from gpu_utils import calc_effective_max_concurrent, parse_gpu_ids, pick_gpu_with_slot_round_robin  # noqa: E402
 from run_abce_ablation import AblationSpec, JobSpec, _build_job_env, build_command, collect_result  # noqa: E402
 
@@ -734,7 +734,7 @@ def _phase_params(phase: str, args: argparse.Namespace) -> Dict[str, Any]:
 
 
 def _base_params(dataset: str, args: argparse.Namespace) -> Dict[str, Any]:
-    params = dict(BEST_CFG.get(dataset, {}))
+    params = get_effective_config(dataset) if dataset in BEST_CFG else {}
     params.pop("seed", None)
     params.pop("model_variant", None)
     params["num_workers"] = int(args.num_workers)

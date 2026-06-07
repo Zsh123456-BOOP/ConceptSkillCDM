@@ -41,7 +41,6 @@ LCRF 不生成新边，不读 valid/test，不使用 student-id embedding 作为
 
 模型主入口：
 
-- `src/model.py`：公开 `CognitiveDiagnosisModel`。
 - `src/model_cdm.py`：顶层 CDM 模型、CRG/LCRF logit 组装。
 - `src/model_cdm_forward.py`：主 forward 路径。
 - `src/model_graph.py`：CRG，概念可达图。
@@ -89,7 +88,7 @@ full > LCRF_shuffle_student
 常用静态验证：
 
 ```bash
-python -m py_compile main.py run_abce_ablation.py src/config.py src/dataset.py src/experiment_utils.py src/model.py src/model_cdm.py src/model_cdm_forward.py src/model_graph.py src/model_ops.py src/model_personal.py src/model_regularization.py src/model_structure.py src/model_structure_forward.py src/module_activity.py src/prediction_head.py src/trainer.py
+python -m py_compile main.py run_abce_ablation.py src/config.py src/dataset.py src/experiment_utils.py src/model_cdm.py src/model_cdm_forward.py src/model_graph.py src/model_ops.py src/model_personal.py src/model_regularization.py src/model_structure.py src/model_structure_forward.py src/module_activity.py src/prediction_head.py src/trainer.py
 ```
 
 ## 6. 远程服务器规范

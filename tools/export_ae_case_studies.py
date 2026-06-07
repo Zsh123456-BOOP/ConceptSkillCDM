@@ -34,7 +34,7 @@ if str(ROOT) not in sys.path:
 
 from src.dataset import CognitiveDiagnosisDataset, _parse_concept_seq  # noqa: E402
 from src.experiment_utils import compute_metrics  # noqa: E402
-from src.model import CognitiveDiagnosisModel  # noqa: E402
+from src.model_cdm import CognitiveDiagnosisModel  # noqa: E402
 from src.trainer import _hard_ablation_effective_hparams, _strip_module_prefix  # noqa: E402
 
 

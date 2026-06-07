@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from src.model import CognitiveDiagnosisModel
+from src.model_cdm import CognitiveDiagnosisModel
 
 
 def _get_base_model(model) -> CognitiveDiagnosisModel:

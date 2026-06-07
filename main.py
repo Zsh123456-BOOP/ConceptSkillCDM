@@ -618,7 +618,7 @@ def main():
             loaded_args = checkpoint.get("args", {})
             
             # 
-            from src.model import CognitiveDiagnosisModel
+            from src.model_cdm import CognitiveDiagnosisModel
             model = CognitiveDiagnosisModel(
                 num_students=info_dict["num_students"],
                 num_exercises=info_dict["num_exercises"],

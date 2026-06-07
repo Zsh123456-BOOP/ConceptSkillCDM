@@ -27,7 +27,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.dataset import CognitiveDiagnosisDataset
 from src.experiment_utils import compute_metrics
-from src.model import CognitiveDiagnosisModel
+from src.model_cdm import CognitiveDiagnosisModel
 from src.trainer import _hard_ablation_effective_hparams, _strip_module_prefix
 
 

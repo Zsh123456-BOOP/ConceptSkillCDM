@@ -13,7 +13,7 @@ import subprocess
 import time
 from typing import Dict, List, Tuple
 
-from best_configs import BEST_CFG
+from best_configs import BEST_CFG, get_effective_config
 from gpu_utils import (
     calc_effective_max_concurrent,
     parse_gpu_ids,
@@ -105,7 +105,7 @@ def main():
     for dataset in datasets:
         if dataset not in BEST_CFG:
             raise ValueError(f"Dataset '{dataset}' not in BEST_CFG.")
-        required_gpus = max(1, int(BEST_CFG[dataset].get("num_gpus", 1)))
+        required_gpus = max(1, int(get_effective_config(dataset).get("num_gpus", 1)))
         if required_gpus > len(gpus):
             raise ValueError(
                 f"Dataset '{dataset}' requires num_gpus={required_gpus}, "
@@ -134,7 +134,7 @@ def main():
 
         while job_idx < len(jobs) and len(running) < effective_max_concurrent:
             dataset = jobs[job_idx]
-            cfg = BEST_CFG[dataset]
+            cfg = get_effective_config(dataset)
             required_gpus = max(1, int(cfg.get("num_gpus", 1)))
             selected_gpus = pick_gpus_for_job(required_gpus, gpus, gpu_load, max_per_gpu)
             if selected_gpus is None:
