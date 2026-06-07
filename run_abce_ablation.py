@@ -176,6 +176,8 @@ def _apply_oom_safety_overrides(dataset: str, ablation: AblationSpec, params: Di
 
 def _apply_ablation_stability_overrides(dataset: str, ablation: AblationSpec, params: Dict[str, Any]) -> None:
     patience_floor = STABILITY_SAFE_ABLATION_PATIENCE.get((dataset, ablation.name), MIN_EARLY_STOP_PATIENCE)
+    if "early_stop_patience" not in params and patience_floor <= MIN_EARLY_STOP_PATIENCE:
+        return
     current_patience = int(params.get("early_stop_patience", patience_floor))
     params["early_stop_patience"] = max(current_patience, int(patience_floor))
 
