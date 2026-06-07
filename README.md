@@ -88,7 +88,7 @@ full > LCRF_shuffle_student
 常用静态验证：
 
 ```bash
-python -m py_compile main.py run_abce_ablation.py src/config.py src/dataset.py src/experiment_utils.py src/model_cdm.py src/model_cdm_forward.py src/model_graph.py src/model_ops.py src/model_personal.py src/model_regularization.py src/model_structure.py src/model_structure_forward.py src/module_activity.py src/prediction_head.py src/trainer.py
+python -m py_compile main.py run_abce_ablation.py src/config.py src/dataset.py src/experiment_utils.py src/model_cdm.py src/model_cdm_forward.py src/model_graph.py src/model_ops.py src/model_personal.py src/model_regularization.py src/model_structure.py src/model_structure_forward.py src/prediction_head.py src/trainer.py
 ```
 
 ## 6. 远程服务器规范

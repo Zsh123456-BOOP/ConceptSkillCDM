@@ -25,11 +25,6 @@ from src.experiment_utils import (
     save_epoch_history_csv,
     append_summary_csv,
 )
-from src.module_activity import (
-    compute_module_activity,
-    format_activity_brief,
-    format_activity_report,
-)
 
 # =========================
 # Global toggles
@@ -2843,14 +2838,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             )
             logger.info("%s Checkpoint saved: %s", run_tag, checkpoint_path)
 
-            # 模块活跃度检测（每 save_interval 输出简报）
-            try:
-                activity = compute_module_activity(model, val_loader, device, num_samples=300)
-                brief = format_activity_brief(activity)
-                logger.info("%s [Module Activity] Epoch %d: %s", run_tag, epoch, brief)
-            except Exception as e:
-                logger.warning("%s [Module Activity] Failed: %s", run_tag, str(e))
-
     history["best_epoch"] = best_epoch
     history["best_val_auc"] = best_val_auc
     history["last_debug_diag"] = last_diag
@@ -2861,25 +2848,6 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         json.dump(history, f, indent=4)
 
     logger.info("%s Training completed! Best Val AUC=%.4f @ epoch %d", run_tag, best_val_auc, best_epoch)
-
-    # ========== 训练结束：输出完整的模块活跃度报告 ==========
-    try:
-        activity = compute_module_activity(model, val_loader, device, num_samples=500)
-        report = format_activity_report(
-            activity,
-            dataset_name=getattr(args, 'dataset_name', 'unknown'),
-            seed=getattr(args, 'seed', 42),
-            epoch=epoch,
-        )
-        logger.info("\n%s", report)
-
-        # 保存活跃度数据到 JSON
-        activity_path = os.path.join(args.save_dir, "module_activity.json")
-        with open(activity_path, "w") as f:
-            json.dump(activity, f, indent=4)
-        logger.info("%s Module activity saved to %s", run_tag, activity_path)
-    except Exception as e:
-        logger.warning("%s [Module Activity Report] Failed: %s", run_tag, str(e))
 
     return best_val_auc, best_epoch
 

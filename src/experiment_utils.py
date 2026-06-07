@@ -314,6 +314,8 @@ def append_summary_csv(
         "data_dir",
         "gpu_candidates",
         "generate_diagnosis",
+        "debug_graph_diag",
+        "diag_batches",
     }
 
     for k, v in sorted(vars(args).items()):

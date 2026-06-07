@@ -271,7 +271,6 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
         "warn_graph_uniform_count": 0,
         "warn_alpha_collapse_count": 0,
         "warn_personal_count": 0,
-        "module_activity_epoch10": "",
     }
     if log_file is None or not log_file.exists():
         return out
@@ -370,9 +369,6 @@ def parse_log_metrics(log_file: Optional[Path]) -> Dict[str, Any]:
                 out["warn_alpha_collapse_count"] += 1
             if "[Diag Warning][E]" in line:
                 out["warn_personal_count"] += 1
-
-            if "[Module Activity] Epoch 10:" in line:
-                out["module_activity_epoch10"] = line.strip()
 
     return out
 
@@ -649,7 +645,6 @@ def append_result_row(path: Path, row: Dict[str, Any]) -> None:
         "warn_graph_uniform_count",
         "warn_alpha_collapse_count",
         "warn_personal_count",
-        "module_activity_epoch10",
         "failure_reason",
         "failure_stage",
         "ablation_valid",
@@ -1006,7 +1001,6 @@ def write_summary(
             "full_warn_graph_uniform_count": full.get("warn_graph_uniform_count"),
             "full_warn_alpha_collapse_count": full.get("warn_alpha_collapse_count"),
             "full_warn_personal_count": full.get("warn_personal_count"),
-            "full_module_activity_epoch10": full.get("module_activity_epoch10", ""),
             "state_A": comp_state["A"],
             "state_E": comp_state["E"],
             "suggest_keep": ",".join(keep),
@@ -1086,7 +1080,6 @@ def write_summary(
         "full_warn_graph_uniform_count",
         "full_warn_alpha_collapse_count",
         "full_warn_personal_count",
-        "full_module_activity_epoch10",
         "state_A",
         "state_E",
         "suggest_keep",
@@ -1235,8 +1228,6 @@ def make_jobs(args: argparse.Namespace, run_id: str) -> List[JobSpec]:
             for seed in seeds:
                 params = dict(base_cfg)
                 params.update(ablation.overrides)
-                params["debug_graph_diag"] = True
-                params["diag_batches"] = 1
 
                 if args.epochs is not None:
                     params["epochs"] = int(args.epochs)
