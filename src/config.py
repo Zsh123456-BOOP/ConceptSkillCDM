@@ -409,6 +409,60 @@ for _public_chold_name, _public_chold_base in (
         "data_dir": f"./data/{_public_chold_name}",
     }
 
+
+MAIN_DATASET_RECIPE_DEFAULTS = {
+    "assist_09": {
+        "batch_size": 128,
+        "learning_rate": 3e-4,
+        "dropout": 0.20,
+        "early_stop_patience": 3,
+        "knowledge_dim": 64,
+        "num_relation_heads": 2,
+        "lambda_sparse": 0.2,
+        "graph_entropy_min": 0.25,
+        "graph_entropy_max": 0.75,
+        "lambda_graph_diag": 0.02,
+        "lambda_graph_uniform": 0.01,
+        "graph_reg_warmup_epochs": 4,
+    },
+    "junyi": {
+        "batch_size": 256,
+        "early_stop_patience": 3,
+        "patience": 1,
+    },
+    "assist_17": {
+        "learning_rate": 0.001,
+        "dropout": 0.25,
+        "early_stop_patience": 3,
+        "personal_rank": 8,
+        "personal_student_dim": 64,
+        "personal_alpha_budget": 0.10,
+        "ae_logit_residual_scale": 1.00,
+        "ae_logit_residual_clip": 6.00,
+        "ae_irt_logit_scale": 0.20,
+        "ae_interaction_logit_scale": 1.00,
+        "ae_logit_dim": 64,
+        "ae_lr_mult": 5.0,
+        "ae_stat_prior_scale": 1.0,
+    },
+}
+
+
+for _dataset_name, _recipe_defaults in MAIN_DATASET_RECIPE_DEFAULTS.items():
+    DATASET_DEFAULTS[_dataset_name].update(_recipe_defaults)
+
+for _public_chold_name, _public_chold_base in (
+    ("assist_09_chold", "assist_09"),
+    ("junyi_chold", "junyi"),
+    ("assist_17_chold", "assist_17"),
+):
+    DATASET_DEFAULTS[_public_chold_name].update(
+        {
+            **MAIN_DATASET_RECIPE_DEFAULTS[_public_chold_base],
+            "data_dir": f"./data/{_public_chold_name}",
+        }
+    )
+
 GRID_SEARCH_SPACE = {
     "assist_09": {
         "base": {},
