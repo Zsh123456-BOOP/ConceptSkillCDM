@@ -81,11 +81,13 @@ class ConceptStructureModeling(nn.Module):
         graph_prior_matrix: Optional[torch.Tensor] = None,
         graph_sequence_prior_matrix: Optional[torch.Tensor] = None,
         graph_prior_logit_scale: float = 0.0,
+        decouple_support: bool = False,
         # 完全消融开关
         enable_module: bool = True,
     ):
         super().__init__()
         self.enable_module = bool(enable_module)
+        self.decouple_support = bool(decouple_support)
 
         # 保存形状信息：用于完全消融时构造全0张量
         self.num_concepts = int(num_concepts)
@@ -201,6 +203,13 @@ class ConceptStructureModeling(nn.Module):
         else:
             self.adaptive_gate = None
             self.personal_generator = None
+
+    def _support_relation_matrices(self, relation_matrices: torch.Tensor) -> torch.Tensor:
+        if not self.decouple_support:
+            return relation_matrices
+        if not (self.use_concept_graph and self.relation_learning is not None):
+            return relation_matrices
+        return self.relation_learning.decoupled_support_matrices(relation_matrices)
 
     def set_epoch(self, epoch: int) -> None:
         self._current_epoch = max(1, int(epoch))

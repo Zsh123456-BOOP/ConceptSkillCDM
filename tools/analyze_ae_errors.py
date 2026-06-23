@@ -212,6 +212,7 @@ def _build_model(checkpoint: Mapping[str, Any], device: torch.device) -> Cogniti
         graph_edge_bias_rank=_get(loaded_args, "graph_edge_bias_rank", 8),
         graph_query_adapter_enable=_get(loaded_args, "graph_query_adapter_enable", True),
         graph_prior_logit_scale=_get(loaded_args, "graph_prior_logit_scale", 0.0),
+        decouple_support=_get(loaded_args, "decouple_support", False),
         ae_query_residual_scale=_get(loaded_args, "ae_query_residual_scale", 0.0),
         ae_logit_residual_scale=_get(loaded_args, "ae_logit_residual_scale", 0.0),
         ae_logit_residual_clip=_get(loaded_args, "ae_logit_residual_clip", 1.0),

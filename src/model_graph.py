@@ -57,6 +57,12 @@ class MultiHeadRelationLearning(nn.Module):
         self.register_buffer("sequence_prior_logit_scores", seq_scores, persistent=False)
         self.register_buffer("item_support_mask", self._build_topk_support_mask(item_support_scores), persistent=False)
         self.register_buffer("sequence_support_mask", self._build_topk_support_mask(seq_support_scores), persistent=False)
+        self.register_buffer("decoupled_item_support_mask", self.item_support_mask.detach().clone(), persistent=False)
+        self.register_buffer(
+            "decoupled_sequence_support_mask",
+            self.sequence_support_mask.detach().clone(),
+            persistent=False,
+        )
 
         # 保留 concept_embeddings 只是为了和 knowledge encoder 共享同一概念坐标系；A 的边权不再由它生成。
         self.concept_embeddings = nn.Parameter(torch.zeros(num_concepts, concept_dim))
@@ -236,6 +242,38 @@ class MultiHeadRelationLearning(nn.Module):
             "support_item_seq_overlap": ((item_mask & seq_mask).to(dtype=dtype).sum() / overlap_union).detach(),
             "support_self_retention_rate": _survival_rate(eye).detach(),
         }
+
+    def decoupled_support_matrices(self, reference: torch.Tensor) -> torch.Tensor:
+        """Return an independent row-stochastic support tensor for LCRF only.
+
+        The graph backbone still uses ``item_support_mask``/``sequence_support_mask``
+        to build A.  This tensor is initialized from the same top-k evidence mask
+        but can be randomized independently at inference time for E4 controls.
+        """
+        if reference.dim() != 3:
+            raise ValueError(f"reference must have shape (H, C, C), got {tuple(reference.shape)}")
+        H, C, _ = reference.shape
+        device = reference.device
+        dtype = reference.dtype
+        support = (
+            self.decoupled_item_support_mask.to(device=device)
+            | self.decoupled_sequence_support_mask.to(device=device)
+        )
+        if self.allow_self_loop:
+            support = support | torch.eye(C, device=device, dtype=torch.bool)
+        support_f = support.to(dtype=dtype)
+        row_sum = support_f.sum(dim=-1, keepdim=True)
+        if self.allow_self_loop and bool((row_sum.squeeze(-1) <= 0).any()):
+            support_f = support_f.clone()
+            empty = torch.nonzero(row_sum.squeeze(-1) <= 0, as_tuple=False).view(-1)
+            support_f[empty, :] = 0.0
+            support_f[empty, empty] = 1.0
+            row_sum = support_f.sum(dim=-1, keepdim=True)
+        elif bool((row_sum.squeeze(-1) <= 0).any()):
+            support_f = torch.where(row_sum > 0, support_f, torch.ones_like(support_f))
+            row_sum = support_f.sum(dim=-1, keepdim=True)
+        support_prob = support_f / row_sum.clamp(min=1e-12)
+        return support_prob.unsqueeze(0).expand(H, C, C).contiguous()
 
     def forward(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """

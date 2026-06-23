@@ -206,6 +206,7 @@ def _build_config_hash(args) -> str:
         "graph_headwise_query_gate",
         "graph_edge_bias_rank",
         "graph_prior_logit_scale",
+        "decouple_support",
         "ae_query_residual_scale",
         "ae_logit_residual_scale",
         "roadmap_logit_residual_scale",

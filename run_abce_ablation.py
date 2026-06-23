@@ -54,6 +54,7 @@ BOOLEAN_OPTIONAL_KEYS = {
     "share_concept_embeddings",
     "graph_headwise_query_gate",
     "graph_query_adapter_enable",
+    "decouple_support",
 }
 STRUCTURAL_SWITCH_KEYS = (
     "graph_prior_mode",
@@ -96,6 +97,7 @@ STRUCTURAL_SWITCH_KEYS = (
     "graph_headwise_query_gate",
     "graph_edge_bias_rank",
     "graph_prior_logit_scale",
+    "decouple_support",
     "ae_query_residual_scale",
     "ae_logit_residual_scale",
     "roadmap_logit_residual_scale",

@@ -226,6 +226,7 @@ def run_cdm_forward(
         "use_personal_graph": torch.tensor(int(model.use_personal_graph), device=device),
         "share_concept_embeddings": torch.tensor(int(model.share_concept_embeddings), device=device),
         "graph_prior_logit_scale": torch.tensor(float(model.graph_prior_logit_scale), device=device),
+        "decouple_support": torch.tensor(int(getattr(model, "decouple_support", False)), device=device),
         "ae_query_residual_scale": torch.tensor(float(model.ae_query_residual_scale), device=device),
         "ae_logit_residual_scale": torch.tensor(float(model.ae_logit_residual_scale), device=device),
         "roadmap_logit_residual_scale": torch.tensor(float(model.roadmap_logit_residual_scale), device=device),

@@ -53,6 +53,11 @@ def run_structure_forward(
         support_diagnostics = getattr(module.relation_learning, "_last_support_diagnostics", {}) or {}
     else:
         relation_matrices = identity_relations
+    support_relation_matrices = (
+        module._support_relation_matrices(relation_matrices)
+        if hasattr(module, "_support_relation_matrices")
+        else relation_matrices
+    )
 
     knowledge_state = module.knowledge_encoder(student_ids, relation_matrices)
     student_repr = knowledge_state.mean(dim=1)
@@ -139,7 +144,7 @@ def run_structure_forward(
     knowledge_state_personal_delta = relation_matrices.new_tensor(0.0)
     local_row_mask = module._build_local_row_mask(
         concept_mask,
-        relation_matrices if (module.use_concept_graph and module.relation_learning is not None) else None,
+        support_relation_matrices if (module.use_concept_graph and module.relation_learning is not None) else None,
     )
     if local_row_mask is not None:
         local_row_ratio = local_row_mask.mean()
@@ -216,7 +221,7 @@ def run_structure_forward(
             if module.use_concept_graph:
                 if module.personal_support_include_graph:
                     support_cache = _build_support_cache(
-                        relation_matrices,
+                        support_relation_matrices,
                         allow_full_support=not module.personal_support_only,
                         force_self_support=module.personal_support_include_query_self,
                     )
@@ -395,6 +400,8 @@ def run_structure_forward(
 
                 relation_used = {
                     "global_matrices": relation_matrices,
+                    "support_matrices": support_relation_matrices,
+                    "decouple_support": relation_matrices.new_tensor(int(getattr(module, "decouple_support", False))),
                     "active_row_index": active_row_index,
                     "active_row_valid_mask": active_row_valid_mask,
                     "query_row_active_mask": query_row_active_mask,
@@ -418,6 +425,7 @@ def run_structure_forward(
 
     return {
         "relation_matrices": relation_matrices,
+        "support_relation_matrices": support_relation_matrices,
         "relation_used": relation_used,
         "personal_relation_spec": personal_relation_spec,
         "knowledge_state": knowledge_state,

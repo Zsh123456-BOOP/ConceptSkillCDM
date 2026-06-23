@@ -79,6 +79,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "graph_headwise_query_gate",
     "graph_edge_bias_rank",
     "graph_prior_logit_scale",
+    "decouple_support",
     "ae_query_residual_scale",
     "ae_logit_residual_scale",
     "roadmap_logit_residual_scale",
@@ -2279,6 +2280,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         graph_headwise_query_gate=getattr(args, "graph_headwise_query_gate", True),
         graph_edge_bias_rank=getattr(args, "graph_edge_bias_rank", 8),
         graph_prior_logit_scale=getattr(args, "graph_prior_logit_scale", 0.0),
+        decouple_support=getattr(args, "decouple_support", False),
         ae_query_residual_scale=getattr(args, "ae_query_residual_scale", 0.0),
         ae_logit_residual_scale=getattr(args, "ae_logit_residual_scale", 0.0),
         roadmap_logit_residual_scale=getattr(args, "roadmap_logit_residual_scale", 1.0),
@@ -3138,6 +3140,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         graph_prior_logit_scale=loaded_args.get(
             "graph_prior_logit_scale", getattr(args, "graph_prior_logit_scale", 0.0)
+        ),
+        decouple_support=loaded_args.get(
+            "decouple_support", getattr(args, "decouple_support", False)
         ),
         ae_query_residual_scale=loaded_args.get(
             "ae_query_residual_scale", getattr(args, "ae_query_residual_scale", 0.0)

@@ -106,6 +106,7 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_edge_bias_rank: int = 8,
         graph_query_adapter_enable: bool = True,
         graph_prior_logit_scale: float = 0.0,
+        decouple_support: bool = False,
         ae_query_residual_scale: float = 0.0,
         ae_logit_residual_scale: float = 0.0,
         roadmap_logit_residual_scale: float = 1.0,
@@ -208,6 +209,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_edge_bias_rank = max(1, int(graph_edge_bias_rank))
         self.graph_query_adapter_enable = bool(graph_query_adapter_enable)
         self.graph_prior_logit_scale = max(0.0, float(graph_prior_logit_scale))
+        self.decouple_support = bool(decouple_support)
         self.ae_query_residual_scale = max(0.0, float(ae_query_residual_scale))
         self.ae_logit_residual_scale = max(0.0, float(ae_logit_residual_scale))
         self.roadmap_logit_residual_scale = max(0.0, float(roadmap_logit_residual_scale))
@@ -310,6 +312,7 @@ class CognitiveDiagnosisModel(nn.Module):
             graph_prior_matrix=self.item_prior_matrix,
             graph_sequence_prior_matrix=self.sequence_prior_matrix if sequence_prior_matrix is not None else None,
             graph_prior_logit_scale=self.graph_prior_logit_scale,
+            decouple_support=self.decouple_support,
             enable_module=self.enable_module1,
         )
         self.graph_query_gate = nn.Linear(knowledge_dim, 1)

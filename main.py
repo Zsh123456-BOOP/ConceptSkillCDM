@@ -344,6 +344,8 @@ def parse_args():
                         help="Low-rank edge bias rank added to A's adjacency logits.")
     parser.add_argument("--graph_prior_logit_scale", type=float, default=0.0,
                         help="Logit scale for the train-Q concept co-occurrence prior injected into A.")
+    parser.add_argument("--decouple_support", action=bool_action, default=None,
+                        help="Use an independent S_support tensor for LCRF while keeping A for GNN propagation.")
     parser.add_argument("--ae_query_residual_scale", type=float, default=0.0,
                         help="Scale for the A/E-only nonlinear query-state residual before the fixed diagnosis head.")
     parser.add_argument("--ae_logit_residual_scale", type=float, default=0.0,
@@ -423,6 +425,7 @@ def main():
 
     args.graph_query_readout_scale = float(getattr(args, "graph_query_readout_scale", 0.35))
     args.graph_query_readout_2hop_scale = float(getattr(args, "graph_query_readout_2hop_scale", 0.15))
+    args.decouple_support = bool(getattr(args, "decouple_support", False))
 
     # =========================================================
     # -1) main  launcher 
@@ -754,6 +757,9 @@ def main():
                 ),
                 graph_prior_logit_scale=loaded_args.get(
                     "graph_prior_logit_scale", getattr(args, "graph_prior_logit_scale", 0.0)
+                ),
+                decouple_support=loaded_args.get(
+                    "decouple_support", getattr(args, "decouple_support", False)
                 ),
                 ae_query_residual_scale=loaded_args.get(
                     "ae_query_residual_scale", getattr(args, "ae_query_residual_scale", 0.0)
