@@ -467,8 +467,10 @@ for _ednet_gap_sweep_name in (
 
 for _public_chold_name, _public_chold_base in (
     ("assist_09_chold", "assist_09"),
+    ("assist_09_coldconcept", "assist_09"),
     ("junyi_chold", "junyi"),
     ("assist_17_chold", "assist_17"),
+    ("assist_17_coldconcept", "assist_17"),
 ):
     BEST_CFG[_public_chold_name] = dict(BEST_CFG[_public_chold_base])
 
