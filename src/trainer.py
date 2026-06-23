@@ -2217,6 +2217,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         graph_dropout=_resolve_optional_graph_dropout(getattr(args, "graph_dropout", -1.0)),
         graph_tau_init=getattr(args, "graph_tau_init", 1.0),
         graph_propagation_alpha=getattr(args, "graph_propagation_alpha", 0.20),
+        graph_evidence_scale=getattr(args, "graph_evidence_scale", 1.0),
+        graph_evidence_reliability_smoothing=getattr(args, "graph_evidence_reliability_smoothing", 8.0),
         graph_query_readout_scale=getattr(args, "graph_query_readout_scale", 0.35),
         graph_query_readout_2hop_scale=getattr(args, "graph_query_readout_2hop_scale", 0.15),
         personal_rank=getattr(args, "personal_rank", 4),
@@ -2976,6 +2978,13 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         graph_reg_cap_ratio=loaded_args.get("graph_reg_cap_ratio", getattr(args, "graph_reg_cap_ratio", 6.0)),
         graph_propagation_alpha=loaded_args.get(
             "graph_propagation_alpha", getattr(args, "graph_propagation_alpha", 0.20)
+        ),
+        graph_evidence_scale=loaded_args.get(
+            "graph_evidence_scale", getattr(args, "graph_evidence_scale", 1.0)
+        ),
+        graph_evidence_reliability_smoothing=loaded_args.get(
+            "graph_evidence_reliability_smoothing",
+            getattr(args, "graph_evidence_reliability_smoothing", 8.0),
         ),
         graph_query_readout_scale=loaded_args.get(
             "graph_query_readout_scale", getattr(args, "graph_query_readout_scale", 0.35)

@@ -167,6 +167,23 @@ def parse_args():
         help="Teleport strength for APPNP-style concept propagation.",
     )
     parser.add_argument(
+        "--graph_evidence_scale",
+        type=float,
+        default=1.0,
+        help=(
+            "Scale for injecting the student's train-only per-concept observed evidence "
+            "(mastery/recency/reliability) into the concept-graph node states so the graph "
+            "routes real evidence from observed concepts to the (unobserved) query concept. "
+            "Set 0 to ablate evidence-grounded reachability (graph keeps only the ID embedding)."
+        ),
+    )
+    parser.add_argument(
+        "--graph_evidence_reliability_smoothing",
+        type=float,
+        default=8.0,
+        help="Count smoothing for evidence reliability gating: reliability = count / (count + smoothing).",
+    )
+    parser.add_argument(
         "--graph_query_readout_scale",
         type=float,
         default=0.35,
@@ -645,6 +662,13 @@ def main():
                 ),
                 graph_propagation_alpha=loaded_args.get(
                     "graph_propagation_alpha", getattr(args, "graph_propagation_alpha", 0.20)
+                ),
+                graph_evidence_scale=loaded_args.get(
+                    "graph_evidence_scale", getattr(args, "graph_evidence_scale", 1.0)
+                ),
+                graph_evidence_reliability_smoothing=loaded_args.get(
+                    "graph_evidence_reliability_smoothing",
+                    getattr(args, "graph_evidence_reliability_smoothing", 8.0),
                 ),
                 graph_query_readout_scale=loaded_args.get(
                     "graph_query_readout_scale", getattr(args, "graph_query_readout_scale", 0.35)

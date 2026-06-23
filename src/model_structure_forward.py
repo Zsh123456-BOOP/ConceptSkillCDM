@@ -54,7 +54,17 @@ def run_structure_forward(
     else:
         relation_matrices = identity_relations
 
-    knowledge_state = module.knowledge_encoder(student_ids, relation_matrices)
+    # Evidence-grounded reachability: feed the student's train-only per-concept
+    # observed evidence into the GNN node states so the graph propagates real
+    # evidence from observed concepts toward the (unobserved) query concept.
+    evidence_state = module.knowledge_encoder.encode_evidence(
+        mastery=student_concept_prior,
+        recent=student_concept_recent_prior,
+        count=student_concept_count,
+    )
+    knowledge_state = module.knowledge_encoder(
+        student_ids, relation_matrices, evidence_state=evidence_state
+    )
     student_repr = knowledge_state.mean(dim=1)
 
     gate_alpha = None
@@ -126,7 +136,9 @@ def run_structure_forward(
     neighbor_row_active_mask = None
     relation_used = relation_matrices
     personal_relation_spec = None
-    initial_state = module.knowledge_encoder.compose_initial_state(student_ids)
+    initial_state = module.knowledge_encoder.compose_initial_state(
+        student_ids, evidence_state=evidence_state
+    )
     knowledge_state_pre_personal = knowledge_state
     knowledge_state_backbone_delta = (knowledge_state_pre_personal - initial_state).pow(2).mean().sqrt()
     if module.use_concept_graph and module.relation_learning is not None:

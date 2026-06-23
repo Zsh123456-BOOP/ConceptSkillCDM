@@ -167,6 +167,8 @@ def _build_model(checkpoint: Mapping[str, Any], device: torch.device) -> Cogniti
         else float(_get(loaded_args, "graph_dropout", -1.0)),
         graph_tau_init=_get(loaded_args, "graph_tau_init", 1.0),
         graph_propagation_alpha=_get(loaded_args, "graph_propagation_alpha", 0.20),
+        graph_evidence_scale=_get(loaded_args, "graph_evidence_scale", 1.0),
+        graph_evidence_reliability_smoothing=_get(loaded_args, "graph_evidence_reliability_smoothing", 8.0),
         graph_query_readout_scale=_get(loaded_args, "graph_query_readout_scale", 0.35),
         graph_query_readout_2hop_scale=_get(loaded_args, "graph_query_readout_2hop_scale", 0.15),
         prediction_l2_lambda=_get(loaded_args, "prediction_l2_lambda", 5e-5),

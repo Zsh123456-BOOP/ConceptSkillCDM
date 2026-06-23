@@ -17,11 +17,12 @@ class MultiHeadRelationLearning(nn.Module):
     """
     可解释概念邻接 A_h（row-stochastic）。
 
-    A 不再用 query/key attention 或低秩边 MLP 学边。每条边只由 train-only evidence 与少量校正量决定：
+    A starts from train-only evidence and a small set of calibrated corrections:
     - item cooccurrence prior：同一习题内概念共同出现的强弱；
     - sequence transition prior：同一学生训练序列中概念接续的强弱；
     - receiver_bias：某个概念作为依赖来源的全局倾向；
     - self_loop_logit：保留本概念状态的强度。
+    - learned low-rank edge correction：零门控初始化，由训练数据决定是否启用。
     """
 
     def __init__(
@@ -38,6 +39,7 @@ class MultiHeadRelationLearning(nn.Module):
         prior_matrix: Optional[torch.Tensor] = None,
         sequence_prior_matrix: Optional[torch.Tensor] = None,
         prior_logit_scale: float = 0.0,
+        learnable_edges: bool = True,
     ):
         super().__init__()
         self.num_concepts = int(num_concepts)
@@ -48,6 +50,10 @@ class MultiHeadRelationLearning(nn.Module):
         self.identity_residual = float(max(0.0, min(1.0, identity_residual))) if self.allow_self_loop else 0.0
         self.edge_bias_rank = max(1, int(edge_bias_rank))
         self.prior_logit_scale = max(0.0, float(prior_logit_scale))
+        # 学习型边权：在 train-only 先验之上叠加一个由概念坐标决定的低秩双线性项。
+        # 这样边权不再是被冻结的共现/转移统计量，而是端到端训练得到的可达强度。
+        # 初始化为 0，使图在训练开始时与纯先验图完全一致（零回归风险）。
+        self.learnable_edges = bool(learnable_edges) and self.num_concepts > 1
 
         item_scores, item_support_scores = self._build_prior_buffers(prior_matrix, "prior_matrix")
         seq_scores, seq_support_scores = self._build_prior_buffers(sequence_prior_matrix, "sequence_prior_matrix")
@@ -67,6 +73,19 @@ class MultiHeadRelationLearning(nn.Module):
         self.receiver_bias = nn.Parameter(torch.zeros(num_heads, num_concepts))
         self.self_loop_logit = nn.Parameter(torch.full((num_heads,), 0.75))
         self.temperature_raw = nn.Parameter(torch.full((num_heads,), float(tau_init)))
+
+        if self.learnable_edges:
+            r = self.edge_bias_rank
+            self.edge_query_proj = nn.Parameter(torch.empty(num_heads, concept_dim, r))
+            self.edge_key_proj = nn.Parameter(torch.empty(num_heads, concept_dim, r))
+            nn.init.normal_(self.edge_query_proj, std=0.02)
+            nn.init.normal_(self.edge_key_proj, std=0.02)
+            # 零初始化的逐头门控：训练开始时学习边项贡献为 0。
+            self.learned_edge_scale = nn.Parameter(torch.zeros(num_heads))
+        else:
+            self.register_parameter("edge_query_proj", None)
+            self.register_parameter("edge_key_proj", None)
+            self.register_parameter("learned_edge_scale", None)
 
         self.dropout = nn.Dropout(dropout)
         self._last_support_diagnostics: Dict[str, torch.Tensor] = {}
@@ -262,6 +281,13 @@ class MultiHeadRelationLearning(nn.Module):
         for h in range(self.num_heads):
             scores = item_strength[h] * item_prior_scores + seq_strength[h] * seq_prior_scores
             scores = scores + self.receiver_bias[h].to(device=x.device, dtype=x.dtype).view(1, C)
+            if self.learnable_edges:
+                # 由学习到的概念坐标决定的可达强度（低秩双线性）。
+                # 行 c 为 query 概念，列 k 为支持概念，方向与先验一致。
+                q_proj = x @ self.edge_query_proj[h].to(device=x.device, dtype=x.dtype)  # (C, r)
+                k_proj = x @ self.edge_key_proj[h].to(device=x.device, dtype=x.dtype)    # (C, r)
+                learned_scores = (q_proj @ k_proj.t()) / math.sqrt(max(1, q_proj.size(-1)))
+                scores = scores + self.learned_edge_scale[h].to(dtype=scores.dtype) * learned_scores
             scores = scores / tau[h]
             scores = scores - scores.mean(dim=-1, keepdim=True)
 
@@ -436,6 +462,9 @@ class StudentKnowledgeEncoder(nn.Module):
         dropout: float = 0.1,
         gnn_residual_weight: float = 0.5,
         propagation_alpha: float = 0.20,
+        graph_evidence_scale: float = 1.0,
+        graph_evidence_reliability_smoothing: float = 8.0,
+        evidence_hidden_dim: Optional[int] = None,
     ):
         super().__init__()
         self.num_students = int(num_students)
@@ -443,9 +472,34 @@ class StudentKnowledgeEncoder(nn.Module):
         self.knowledge_dim = int(knowledge_dim)
         self.gnn_residual_weight = float(gnn_residual_weight)
         self.propagation_alpha = max(0.0, min(1.0, float(propagation_alpha)))
+        self.graph_evidence_scale = max(0.0, float(graph_evidence_scale))
+        self.graph_evidence_reliability_smoothing = max(0.0, float(graph_evidence_reliability_smoothing))
 
         self.student_global = nn.Embedding(num_students, knowledge_dim)
         self.concept_emb = nn.Embedding(num_concepts, knowledge_dim)
+
+        # Evidence encoder：把该学生在训练集中对每个概念的观测证据
+        # （掌握 logit、近期表现、观测可靠度）编码为节点初始状态的一部分。
+        # 这是机制的核心：图传播的是“这名学生已观测概念上的真实证据”，
+        # 由此把证据沿概念关系路由到未观测的目标概念。
+        # 最后一层零初始化 → 训练开始时初始状态严格等于 concept_emb + student_global。
+        # Features: [mastery, recency, reliability, observed-indicator].
+        # The vector is gated once by reliability at the end of encode_evidence,
+        # which makes the effective evidence ~linear in reliability and keeps the
+        # held-out (count==0) node exactly blank — so we do NOT pre-multiply the
+        # mastery/recency channels by reliability here (avoids redundant rel**2).
+        self.evidence_feature_dim = 4
+        if self.graph_evidence_scale > 0.0:
+            hid = int(evidence_hidden_dim) if evidence_hidden_dim else max(8, knowledge_dim // 2)
+            self.evidence_proj = nn.Sequential(
+                nn.Linear(self.evidence_feature_dim, hid),
+                nn.GELU(),
+                nn.Linear(hid, knowledge_dim),
+            )
+            nn.init.zeros_(self.evidence_proj[-1].weight)
+            nn.init.zeros_(self.evidence_proj[-1].bias)
+        else:
+            self.evidence_proj = None
 
         self.gnn_layers = nn.ModuleList([
             ConceptGraphConv(knowledge_dim, knowledge_dim, num_heads=num_relation_heads, dropout=dropout)
@@ -460,14 +514,67 @@ class StudentKnowledgeEncoder(nn.Module):
         nn.init.xavier_normal_(self.student_global.weight)
         nn.init.xavier_normal_(self.concept_emb.weight)
 
-    def compose_initial_state(self, student_ids: torch.Tensor) -> torch.Tensor:
+    def encode_evidence(
+        self,
+        mastery: Optional[torch.Tensor] = None,
+        recent: Optional[torch.Tensor] = None,
+        count: Optional[torch.Tensor] = None,
+    ) -> Optional[torch.Tensor]:
+        """Build a (B, C, D) per-(student, concept) evidence state.
+
+        - ``mastery`` / ``recent``: (B, C) train-only mastery/recency logits.
+        - ``count``: (B, C) train-only observation counts (reliability source).
+
+        The evidence vector is multiplied by reliability so that concepts the
+        student never observed (e.g. the held-out target concept) contribute
+        exactly zero and can only be estimated through graph propagation.
+        Returns ``None`` when evidence is disabled or unavailable.
+        """
+        if self.evidence_proj is None or self.graph_evidence_scale <= 0.0 or mastery is None:
+            return None
+        weight = self.concept_emb.weight
+        device, dtype = weight.device, weight.dtype
+        mastery = mastery.to(device=device, dtype=dtype)
+        recent = recent.to(device=device, dtype=dtype) if recent is not None else torch.zeros_like(mastery)
+        if count is not None:
+            count = count.to(device=device, dtype=dtype).clamp(min=0.0)
+            smooth = self.graph_evidence_reliability_smoothing
+            reliability = count / (count + smooth) if smooth > 0.0 else (count > 0).to(dtype=dtype)
+            observed = (count > 0).to(dtype=dtype)
+        else:
+            reliability = torch.ones_like(mastery)
+            observed = torch.ones_like(mastery)
+        features = torch.stack(
+            [mastery, recent, reliability, observed],
+            dim=-1,
+        )  # (B, C, 4)
+        evidence = self.evidence_proj(features)  # (B, C, D)
+        # Final reliability gate: count==0 -> reliability==0 -> evidence==0 exactly,
+        # so the held-out target node carries no direct evidence and must be filled
+        # by graph propagation from the student's observed concepts.
+        evidence = evidence * reliability.unsqueeze(-1) * self.graph_evidence_scale
+        return evidence
+
+    def compose_initial_state(
+        self,
+        student_ids: torch.Tensor,
+        evidence_state: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         B = student_ids.size(0)
         s = self.student_global(student_ids)
         c = self.concept_emb.weight.unsqueeze(0).expand(B, -1, -1)
-        return self.dropout(c + s.unsqueeze(1))
+        h0 = self.dropout(c + s.unsqueeze(1))
+        if evidence_state is not None:
+            h0 = h0 + evidence_state.to(device=h0.device, dtype=h0.dtype)
+        return h0
 
-    def forward(self, student_ids: torch.Tensor, relation_matrices: torch.Tensor) -> torch.Tensor:
-        h0 = self.compose_initial_state(student_ids)
+    def forward(
+        self,
+        student_ids: torch.Tensor,
+        relation_matrices: torch.Tensor,
+        evidence_state: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        h0 = self.compose_initial_state(student_ids, evidence_state=evidence_state)
         h = h0
         hop_states = [h0]
 

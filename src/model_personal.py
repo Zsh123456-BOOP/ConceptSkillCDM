@@ -160,6 +160,11 @@ class PersonalRelationGenerator(nn.Module):
         self.max_student_mix = 0.0
         self.state_mix_logit = nn.Parameter(torch.tensor(1.0986123))
         self.student_mix_logit = nn.Parameter(torch.tensor(-20.0), requires_grad=False)
+        # 可靠度偏好：在固定支持集内，优先把路由权重分给该学生真正观测过
+        # （计数高、证据可靠）的支持概念。这样路由依赖的是真实证据，
+        # 也使 E_shuffle_student 成为有效的反事实对照。
+        # 零初始化 → 训练开始时该项不改变 LCRF 后验（零回归），由数据决定其符号与强度。
+        self.reliability_pref = nn.Parameter(torch.zeros(()))
 
     def _build_student_concept_prior_scores(
         self,
@@ -211,6 +216,35 @@ class PersonalRelationGenerator(nn.Module):
             scores = (scores - (scores * valid).sum(dim=-1, keepdim=True) / denom) * valid
             reliability_mean = (reliability.to(dtype=scores.dtype) * valid).sum() / valid.sum().clamp(min=1.0)
         return scores, reliability_mean
+
+    def _build_reliability_pref_scores(
+        self,
+        *,
+        count: torch.Tensor,
+        knowledge_state: torch.Tensor,
+        support_row_cache: Dict[str, torch.Tensor],
+        row_budget_values: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """Prefer support concepts the student has actually observed (reliable)."""
+        counts = count.to(device=knowledge_state.device, dtype=knowledge_state.dtype).clamp(min=0.0)
+        B, H, R, K = support_row_cache["support_col_index"].shape
+        smooth = self.mastery_count_smoothing
+        if smooth > 0.0:
+            reliability = counts / (counts + smooth)
+        else:
+            reliability = (counts > 0).to(dtype=counts.dtype)
+        rel_heads = reliability.unsqueeze(1).expand(B, H, self.num_concepts)
+        support_cols = support_row_cache["support_col_index"].clamp(min=0)
+        support_rel = torch.gather(
+            rel_heads,
+            2,
+            support_cols.reshape(B, H, R * K),
+        ).reshape(B, H, R, K)
+        return _normalize_sparse_scores(
+            support_rel,
+            support_row_cache["support_valid_mask"],
+            row_budget=row_budget_values,
+        )
 
     def forward(
         self,
@@ -284,6 +318,17 @@ class PersonalRelationGenerator(nn.Module):
                 prior_count=student_concept_count,
             )
             residual = residual + self.recent_mastery_prior_scale * recent_mastery_scores
+        reliability_pref_scores = torch.zeros_like(residual)
+        reliability_pref = residual.new_tensor(0.0)
+        if student_concept_count is not None and student_concept_count.dim() == 2:
+            reliability_pref = self.reliability_pref.to(dtype=residual.dtype)
+            reliability_pref_scores = self._build_reliability_pref_scores(
+                count=student_concept_count,
+                knowledge_state=knowledge_state,
+                support_row_cache=support_row_cache,
+                row_budget_values=row_budget_values,
+            )
+            residual = residual + reliability_pref * reliability_pref_scores
         state_mix = self.max_state_mix * torch.sigmoid(self.state_mix_logit)
         scores = state_mix * residual
         scores = torch.tanh(scores) * support_row_cache["support_valid_mask"].to(dtype=scores.dtype)
@@ -307,6 +352,8 @@ class PersonalRelationGenerator(nn.Module):
             "recent_mastery_prior_scale": scores.new_tensor(self.recent_mastery_prior_scale),
             "recent_mastery_scores_absmean": (recent_mastery_scores.abs() * valid).sum() / valid.sum().clamp(min=1.0),
             "recent_mastery_reliability_mean": recent_mastery_reliability_mean,
+            "reliability_pref": reliability_pref.detach() if isinstance(reliability_pref, torch.Tensor) else scores.new_tensor(float(reliability_pref)),
+            "reliability_pref_scores_absmean": (reliability_pref_scores.abs() * valid).sum() / valid.sum().clamp(min=1.0),
             "student_scores_absmean": scores.new_tensor(0.0),
             "scores_absmax": scores.abs().max(),
             "active_row_count_mean": active_count,

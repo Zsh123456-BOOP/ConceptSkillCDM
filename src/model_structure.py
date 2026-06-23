@@ -49,6 +49,8 @@ class ConceptStructureModeling(nn.Module):
         allow_self_loop: bool,
         graph_identity_residual: float,
         graph_propagation_alpha: float,
+        graph_evidence_scale: float,
+        graph_evidence_reliability_smoothing: float,
         # personal graph
         use_personal_graph: bool,
         personal_rank: int,
@@ -92,6 +94,8 @@ class ConceptStructureModeling(nn.Module):
         self.knowledge_dim = int(knowledge_dim)
         self.num_relation_heads = int(num_relation_heads)
         self.personal_max_alpha = float(personal_max_alpha)
+        self.graph_evidence_scale = max(0.0, float(graph_evidence_scale))
+        self.graph_evidence_reliability_smoothing = max(0.0, float(graph_evidence_reliability_smoothing))
         self.personal_delta_scale = max(0.0, float(personal_delta_scale))
         self.personal_warmup_epochs = max(0, int(personal_warmup_epochs))
         self.personal_reg_warmup_epochs = (
@@ -168,6 +172,8 @@ class ConceptStructureModeling(nn.Module):
             dropout=dropout,
             gnn_residual_weight=gnn_residual_weight,
             propagation_alpha=graph_propagation_alpha,
+            graph_evidence_scale=self.graph_evidence_scale,
+            graph_evidence_reliability_smoothing=self.graph_evidence_reliability_smoothing,
         )
 
         # E) 个性化图（可选）

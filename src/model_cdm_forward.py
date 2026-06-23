@@ -20,18 +20,30 @@ def run_cdm_forward(
     device = student_ids.device
     q_vector = concept_vector if concept_vector is not None else model.q_matrix[exercise_ids]
 
+    # The graph encoder needs the student's observed per-concept evidence even
+    # when the LCRF mastery/recency scales are zero, so feed the train-only
+    # buffers whenever the concept graph is active. LCRF self-gates on its own
+    # scales, so passing these unconditionally does not change LCRF behavior.
+    graph_evidence_active = (
+        model.enable_module1
+        and model.use_concept_graph
+        and getattr(model, "graph_evidence_scale", 0.0) > 0.0
+    )
     s_out = model.structure_module(
         student_ids,
         identity_relations=model.identity_relations,
         concept_mask=q_vector,
         student_concept_prior=model.ae_student_concept_prior_logit[student_ids]
-        if model.use_personal_graph and getattr(model, "personal_mastery_prior_scale", 0.0) > 0.0
+        if graph_evidence_active
+        or (model.use_personal_graph and getattr(model, "personal_mastery_prior_scale", 0.0) > 0.0)
         else None,
         student_concept_recent_prior=model.ae_student_concept_recent_logit[student_ids]
-        if model.use_personal_graph and getattr(model, "personal_recent_mastery_prior_scale", 0.0) > 0.0
+        if graph_evidence_active
+        or (model.use_personal_graph and getattr(model, "personal_recent_mastery_prior_scale", 0.0) > 0.0)
         else None,
         student_concept_count=model.ae_student_concept_observed_count[student_ids]
-        if model.use_personal_graph and getattr(model, "personal_mastery_count_smoothing", 0.0) > 0.0
+        if graph_evidence_active
+        or (model.use_personal_graph and getattr(model, "personal_mastery_count_smoothing", 0.0) > 0.0)
         else None,
     )
     relation_matrices = s_out["relation_matrices"]

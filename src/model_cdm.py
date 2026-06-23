@@ -59,6 +59,8 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_dropout: Optional[float] = None,
         graph_tau_init: float = 1.0,
         graph_propagation_alpha: float = 0.20,
+        graph_evidence_scale: float = 1.0,
+        graph_evidence_reliability_smoothing: float = 8.0,
         graph_query_readout_scale: float = 0.35,
         graph_query_readout_2hop_scale: float = 0.15,
         prediction_l2_lambda: float = 5e-5,
@@ -155,6 +157,8 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_tau_init = float(graph_tau_init)
         self.graph_identity_residual = max(0.0, min(1.0, float(graph_identity_residual)))
         self.graph_propagation_alpha = max(0.0, min(1.0, float(graph_propagation_alpha)))
+        self.graph_evidence_scale = max(0.0, float(graph_evidence_scale))
+        self.graph_evidence_reliability_smoothing = max(0.0, float(graph_evidence_reliability_smoothing))
         self.graph_query_readout_scale = max(0.0, float(graph_query_readout_scale))
         self.graph_query_readout_2hop_scale = max(0.0, float(graph_query_readout_2hop_scale))
         self._current_epoch = 1
@@ -278,6 +282,8 @@ class CognitiveDiagnosisModel(nn.Module):
             allow_self_loop=allow_self_loop,
             graph_identity_residual=self.graph_identity_residual,
             graph_propagation_alpha=self.graph_propagation_alpha,
+            graph_evidence_scale=self.graph_evidence_scale,
+            graph_evidence_reliability_smoothing=self.graph_evidence_reliability_smoothing,
             use_personal_graph=self.use_personal_graph,
             personal_rank=personal_rank,
             personal_max_alpha=self.personal_max_alpha,
