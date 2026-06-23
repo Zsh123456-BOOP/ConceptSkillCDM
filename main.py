@@ -346,6 +346,12 @@ def parse_args():
                         help="Logit scale for the train-Q concept co-occurrence prior injected into A.")
     parser.add_argument("--decouple_support", action=bool_action, default=None,
                         help="Use an independent S_support tensor for LCRF while keeping A for GNN propagation.")
+    parser.add_argument("--support_only_unseen", action=bool_action, default=None,
+                        help="For direct-unseen query rows (no train history on the target concept for this "
+                             "student), route the target representation through the LCRF support aggregation so "
+                             "support becomes load-bearing. Default off.")
+    parser.add_argument("--support_only_unseen_strength", type=float, default=1.0,
+                        help="Substitution weight kappa in [0,1] for support_only_unseen (1.0 = full substitution).")
     parser.add_argument("--ae_query_residual_scale", type=float, default=0.0,
                         help="Scale for the A/E-only nonlinear query-state residual before the fixed diagnosis head.")
     parser.add_argument("--ae_logit_residual_scale", type=float, default=0.0,
@@ -426,6 +432,8 @@ def main():
     args.graph_query_readout_scale = float(getattr(args, "graph_query_readout_scale", 0.35))
     args.graph_query_readout_2hop_scale = float(getattr(args, "graph_query_readout_2hop_scale", 0.15))
     args.decouple_support = bool(getattr(args, "decouple_support", False))
+    args.support_only_unseen = bool(getattr(args, "support_only_unseen", False))
+    args.support_only_unseen_strength = float(getattr(args, "support_only_unseen_strength", 1.0))
 
     # =========================================================
     # -1) main  launcher 

@@ -66,6 +66,7 @@ def run_cdm_forward(
         query_row_post_local_rms,
         query_row_delta_local_rms_raw,
         query_row_message_projection_gain,
+        query_row_post_local_full,
     ) = model._build_personal_query_correction(
         knowledge_state=knowledge_state,
         relation_spec=personal_relation_spec,
@@ -95,7 +96,23 @@ def run_cdm_forward(
     )
     query_rows = q_vector.float().unsqueeze(-1).bool()
     total_query_correction = global_query_context + personal_query_correction + ae_query_state_residual
-    prediction_state = torch.where(query_rows, knowledge_state + total_query_correction, knowledge_state)
+    base_state = knowledge_state
+    if (
+        getattr(model, "support_only_unseen", False)
+        and isinstance(query_row_post_local_full, torch.Tensor)
+        and query_row_post_local_full.shape == knowledge_state.shape
+        and query_row_post_local_full.abs().sum() > 0
+    ):
+        # For query rows whose target concept has no training history for this
+        # student (direct-unseen), replace the direct target representation with
+        # the LCRF-support-weighted aggregation so prediction flows through the
+        # support route. Other rows and the non-query path are untouched.
+        observed = model.ae_student_concept_observed_count[student_ids].to(device=device)
+        unseen = (observed <= 0).unsqueeze(-1) & query_rows  # (B, C, 1)
+        kappa = float(getattr(model, "support_only_unseen_strength", 1.0))
+        substituted = (1.0 - kappa) * knowledge_state + kappa * query_row_post_local_full
+        base_state = torch.where(unseen, substituted, knowledge_state)
+    prediction_state = torch.where(query_rows, base_state + total_query_correction, knowledge_state)
     readout_query_delta = model._masked_query_rms(total_query_correction, q_vector)
     query_row_personal_message_delta_raw = model._masked_query_rms(scaled_personal_query_correction, q_vector)
     query_row_personal_message_delta = model._masked_query_rms(personal_query_correction, q_vector)

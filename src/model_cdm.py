@@ -107,6 +107,8 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_query_adapter_enable: bool = True,
         graph_prior_logit_scale: float = 0.0,
         decouple_support: bool = False,
+        support_only_unseen: bool = False,
+        support_only_unseen_strength: float = 1.0,
         ae_query_residual_scale: float = 0.0,
         ae_logit_residual_scale: float = 0.0,
         roadmap_logit_residual_scale: float = 1.0,
@@ -210,6 +212,12 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_query_adapter_enable = bool(graph_query_adapter_enable)
         self.graph_prior_logit_scale = max(0.0, float(graph_prior_logit_scale))
         self.decouple_support = bool(decouple_support)
+        # Path-2 method change: for direct-unseen query rows (no train history on the
+        # target concept for this student), replace the direct target representation
+        # with the LCRF-support-weighted aggregation so the prediction MUST flow
+        # through the support route. Default off => exact current behavior.
+        self.support_only_unseen = bool(support_only_unseen)
+        self.support_only_unseen_strength = max(0.0, min(1.0, float(support_only_unseen_strength)))
         self.ae_query_residual_scale = max(0.0, float(ae_query_residual_scale))
         self.ae_logit_residual_scale = max(0.0, float(ae_logit_residual_scale))
         self.roadmap_logit_residual_scale = max(0.0, float(roadmap_logit_residual_scale))
@@ -1764,6 +1772,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 zero_scalar,
                 zero_scalar,
                 zero_scalar,
+                zero_tensor,  # post_local_full (support-aggregated query-row state)
             )
 
         active_row_index = relation_spec.get("active_row_index")
@@ -1781,6 +1790,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 zero_scalar,
                 zero_scalar,
                 zero_scalar,
+                zero_tensor,  # post_local_full (support-aggregated query-row state)
             )
 
         local_basis = self._build_personal_message_basis(knowledge_state, relation_spec)
@@ -1821,6 +1831,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 zero_scalar,
                 zero_scalar,
                 zero_scalar,
+                zero_tensor,  # post_local_full (support-aggregated query-row state)
             )
 
         global_local = local_messages["global_local"].mean(dim=1)
@@ -1897,6 +1908,7 @@ class CognitiveDiagnosisModel(nn.Module):
             query_row_post_local_rms,
             query_row_delta_local_rms_raw,
             query_row_message_projection_gain,
+            post_local_full,  # absolute LCRF-support-weighted query-row representation
         )
 
     def _apply_personal_alignment_gate(

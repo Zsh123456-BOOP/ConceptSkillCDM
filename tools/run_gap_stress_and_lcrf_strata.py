@@ -50,7 +50,18 @@ from tools.analyze_a_support_evidence import _row_normalize  # noqa: E402
 
 
 DATASETS = ("assist_09", "junyi", "assist_17")
-LCRF_VARIANTS = ("full", "no_filter", "mean_state", "shuffle_state", "no_LCRF")
+# lcrf_state_off: clean inference-time removal of the learner-state correction
+#   (z_state) on the full checkpoint, keeping CRG-prior support mixing. This is
+#   the valid "remove filtering, keep support" ablation.
+# no_LCRF: separately-trained no-LCRF checkpoint (retrained ablation baseline).
+# mean_state / shuffle_state: student-identity-scramble DIAGNOSTICS (they permute
+#   per-student buffers), NOT evidence for the LCRF support filter.
+# (The old "no_filter" inference-disable of use_personal_graph was removed: on a
+#  checkpoint trained with the personal graph on it causes a train/inference
+#  mismatch and degenerate below-chance AUC.)
+LCRF_VARIANTS = ("full", "lcrf_state_off", "mean_state", "shuffle_state", "no_LCRF")
+# Variants that scramble the student dimension; reported as diagnostics only.
+LCRF_CONFOUND_VARIANTS = ("mean_state", "shuffle_state")
 STRESS_VARIANTS = ("full", "no_CRG", "no_LCRF", "self_only", "degree_random_support")
 MASK_RATIOS = (0.0, 0.25, 0.50, 0.75, 1.0)
 GROUP_ORDER = (
@@ -221,6 +232,39 @@ def _restore_personal_enabled(model: torch.nn.Module, original: Mapping[str, Any
         structure.use_personal_graph = bool(original["structure.use_personal_graph"])
 
 
+def _set_personal_delta_scale(model: torch.nn.Module, value: float) -> Dict[str, Any]:
+    """Clean inference-time learner-state-correction knob.
+
+    ``model_structure_forward`` computes ``posterior_delta = personal_delta_scale *
+    personal_delta`` (the LCRF learner-state correction z_state).  Setting it to 0
+    zeros z_state while keeping the CRG-prior support mixing (z_prior) intact and
+    the personal graph enabled.  This is the clean "remove filtering, keep support"
+    ablation -- unlike disabling ``use_personal_graph`` on a checkpoint trained with
+    it on, which produces a train/inference mismatch and degenerate below-chance AUC.
+    """
+    original: Dict[str, Any] = {}
+    original["model.personal_delta_scale"] = getattr(model, "personal_delta_scale", None)
+    if hasattr(model, "personal_delta_scale"):
+        model.personal_delta_scale = float(value)
+    structure = getattr(model, "structure_module", None)
+    original["structure.personal_delta_scale"] = getattr(structure, "personal_delta_scale", None)
+    if structure is not None and hasattr(structure, "personal_delta_scale"):
+        structure.personal_delta_scale = float(value)
+    return original
+
+
+def _restore_personal_delta_scale(model: torch.nn.Module, original: Mapping[str, Any]) -> None:
+    if original.get("model.personal_delta_scale") is not None and hasattr(model, "personal_delta_scale"):
+        model.personal_delta_scale = float(original["model.personal_delta_scale"])
+    structure = getattr(model, "structure_module", None)
+    if (
+        structure is not None
+        and original.get("structure.personal_delta_scale") is not None
+        and hasattr(structure, "personal_delta_scale")
+    ):
+        structure.personal_delta_scale = float(original["structure.personal_delta_scale"])
+
+
 def _predict_lcrf_variant(
     assets: DatasetAssets,
     variant: str,
@@ -235,10 +279,10 @@ def _predict_lcrf_variant(
     model = _load_model_for_variant(assets, base_variant, device, missing)
     if model is None:
         return None
-    personal_original: Optional[Dict[str, Any]] = None
+    delta_original: Optional[Dict[str, Any]] = None
     try:
-        if variant == "no_filter":
-            personal_original = _set_personal_enabled(model, False)
+        if variant == "lcrf_state_off":
+            delta_original = _set_personal_delta_scale(model, 0.0)
         elif variant == "mean_state":
             _apply_personal_counterfactual(model, "mean", seed=seed)
         elif variant == "shuffle_state":
@@ -247,8 +291,8 @@ def _predict_lcrf_variant(
         pred = pred.rename(columns={"prob": f"prob_{variant}"})
         return pred[["event_id", "stu_id", "exer_id", "label_eval", f"prob_{variant}"]]
     finally:
-        if personal_original is not None:
-            _restore_personal_enabled(model, personal_original)
+        if delta_original is not None:
+            _restore_personal_delta_scale(model, delta_original)
         del model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -607,9 +651,9 @@ def _md_table(frame: pd.DataFrame, *, max_rows: int = 80) -> str:
 
 
 def _plot_heatmap(ax: Any, table: pd.DataFrame, dataset: str) -> None:
-    sub = table[(table["dataset"].eq(dataset)) & (table["variant"].isin(["no_filter", "mean_state", "shuffle_state", "no_LCRF"]))]
+    sub = table[(table["dataset"].eq(dataset)) & (table["variant"].isin(["lcrf_state_off", "mean_state", "shuffle_state", "no_LCRF"]))]
     groups = [g for g in GROUP_ORDER if g in set(sub["subgroup"])]
-    variants = [v for v in ["no_filter", "mean_state", "shuffle_state", "no_LCRF"] if v in set(sub["variant"])]
+    variants = [v for v in ["lcrf_state_off", "mean_state", "shuffle_state", "no_LCRF"] if v in set(sub["variant"])]
     mat = np.full((len(variants), len(groups)), np.nan, dtype=np.float64)
     for i, variant in enumerate(variants):
         for j, group in enumerate(groups):
@@ -714,7 +758,7 @@ def _lcrf_dataset_gate(lcrf: pd.DataFrame, dataset: str) -> Tuple[bool, List[str
         if not (auc_drop > all_auc_drop):
             passed = False
             reasons.append(f"{variant}: target AUC drop not larger than overall")
-    for variant in ("no_filter", "no_LCRF"):
+    for variant in ("lcrf_state_off", "no_LCRF"):
         row = target[target["variant"].eq(variant)]
         if row.empty:
             passed = False
@@ -799,7 +843,7 @@ def write_report(out_root: Path) -> pd.DataFrame:
     if not lcrf.empty:
         focus = lcrf[
             lcrf["subgroup"].isin(["all", "direct_unseen_bridgeable", "weak_direct_high_route"])
-            & lcrf["variant"].isin(["mean_state", "shuffle_state", "no_filter", "no_LCRF"])
+            & lcrf["variant"].isin(["mean_state", "shuffle_state", "lcrf_state_off", "no_LCRF"])
         ][
             [
                 "dataset",

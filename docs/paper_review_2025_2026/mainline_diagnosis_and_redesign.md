@@ -162,6 +162,95 @@ deletion/corruption/shuffle/counterfactual 已被 E3（corruption + degree + shu
 
 ---
 
+## 6.5 Codex 实验闭环回收（run `mainline_evidence_20260623_065509`，已核对原始 CSV）
+
+> ⚠️ `results/.../mainline_review_packet.md` 标“全 pass”不可信：它的 gate 过宽（E4 只要 `bce_increase>0` 即 pass，连 4e-05 也算；E2 只要 no_CRG **或** degree_random 任一动了就 pass）。可信的是各实验自带的 `success_gate_summary.csv` 与原始 metrics CSV。下面结论全部基于原始数。
+
+**核心新发现：连“校准靠特定支持”这个收窄后的主线也被 E4 证伪。支持集与 LCRF 重加权对预测基本是装饰；CRG 的全部贡献来自图骨干（度结构驱动）。**
+
+| 实验 | 干净判据结果 | 原始关键数 | 含义 |
+|---|---|---|---|
+| **E4 解耦支持（决定性）** | 实质 **FAIL**（packet 误标 pass） | 冻结 A、只扰动解耦支持集：direct_unseen ΔBCE = **0.003 / 0.0005 / 0.0004**（09/junyi/17），且 `evidence_minus_degree ≈ 0`，CI 多跨 0（17: ci_low −0.0004） | 支持集**非承载**。E3 的校准效应来自 A 的骨干角色，不是支持 |
+| E2 缺口校准 | no_CRG 显著、degree_random≈0 | bucket0 ΔBCE：no_CRG +0.0176/+0.0191（CI>0），degree_random +0.0015/+0.0005（CI 跨 0） | 同一结论：动**骨干**有效，动**支持**无效 |
+| E3 关系特定性（纠缠） | support_pass=True，但 posterior_pass=False，overall FAIL | direct_unseen ev−deg ΔBCE +0.0337/+0.0710 | 纠缠测试（mask 同时是 A+支持）→ 效应被 E4 归因到骨干 |
+| E5 LCRF 干净 | **FAIL**（三数据集） | 标签被重排：新 `no_LCRF`(=旧干净 no_filter) 在 unseen ΔAUC≈**0.001**、ΔBCE≈0.033；新 `no_filter` AUC=**0.4367<随机**（退化变体，无效）；mean/shuffle 仍是学生身份混淆 | LCRF 干净效应小且**非缺口定向**；大数字是混淆/退化 |
+
+**两条独立干净对照（E4 解耦扰动、E2 degree_random 支持腐蚀）一致表明支持集不承载**；E5 严格 gate 表明 LCRF 过滤非缺口定向。师兄的质疑被进一步坐实，且我先前提出的“校准收窄主线”也不成立。
+
+### 决策点（下一步）
+- **路径 1（诚实降级，低风险/低新意）**：放弃 CRG-as-reachability 与 LCRF-as-filtering 作为贡献，写成“train-only 概念图结构先验改善 CD（尤其低证据样本的校准）”。支持集/LCRF 退为“试过但非承载”的组件或删除。新意薄。
+- **路径 2（让命题为真后再证，高投入/真贡献，推荐）**：当前任务让 per-student/per-concept embedding + 骨干就能记住一切，所以路线支持从不被需要 → 支持/LCRF 必然退化。要让支持承载，须改**任务+方法**：
+  - 任务：构造真正的 concept-evidence-gap split（把目标概念从该学生的**训练历史**中挖空 / cold-concept-per-student / cold-concept 迁移），使模型无法靠直接目标概念 embedding 作答；
+  - 方法：让目标概念掌握度**必须经由** LCRF 加权支持聚合得到（限制骨干对目标概念的直接编码），使支持成为唯一跨概念通路；
+  - 复跑 E4：若解耦支持扰动这时出现稳健、超越 degree 的效应 → 命题被真正证明。
+
+## 6.6 已落地的修复与 Path 2 第一步（2026-06-23，本地已验证）
+
+**修复 1 — review packet 诚实化**（`tools/build_mainline_review_packet.py`）：gate 改为要求 幅度阈值(`--min-bce-effect`,默认 0.005)+CI 下界>0+(支持类)击败 degree 对照；E2 把 backbone(no_CRG) 与 support(degree_random) 分开报；E4 要求 击败 degree 才算 pass；E5 排除退化变体(AUC<0.55)且要求有效 overall 基线。复跑既有 run 的诚实结论：**E2=backbone-only(support 装饰)；E4=fail；E3=pass(需 E4 确认,纠缠)；E5=仅 assist_17 用 retrained no_LCRF 有 gap-specific 弱信号**。
+
+**修复 2 — E5 变体纠正**（`tools/run_gap_stress_and_lcrf_strata.py`）：删除退化的 `no_filter`（在训练时开启 personal graph 的 checkpoint 上推理期禁用 → 训练/推理失配 → AUC 0.44<随机）；新增干净的 `lcrf_state_off`（推理期把 `personal_delta_scale=0`，只去掉 z_state、保留 CRG 先验支持混合，见 `src/model_structure_forward.py:329`）；`mean_state/shuffle_state` 明确标注为学生身份置换诊断。**需服务器用 checkpoint 重生成 E5 CSV。**
+
+**Path 2 第一步 — cold-concept-per-student split**（`tools/build_cold_concept_split.py`，本地已生成并验证）：
+- 把某概念从“该学生”训练历史整体挖空（其它学生仍保留 → CRG 仍能为该概念建支持边），保留该学生测试查询 → 制造真正“目标概念零训练历史”的缺口。
+- 结果(holdout_frac=0.30, seed42)：assist_09 cold-query rate **32.9%**(17285)、assist_17 **27.9%**(21552)、junyi **0%**(其本就 native-cold)；概念全局保留 112/112、79/79。产物在 `data/<ds>_coldconcept/`。
+- ⚠️ **junyi 警示**：junyi 本就 100% direct-unseen 且 E4 仍显示支持装饰 → 仅改任务可能不足以让支持承载。因此采用**增量验证**：先在 cold split 上复跑 E4，若支持仍装饰，再做方法改动。
+
+### Path 2 增量计划（方法改动已实现）
+1. （已完成）造 cold-concept split：`tools/build_cold_concept_split.py`。
+2. （已完成，待服务器验证）方法改动 `--support_only_unseen`：对 direct-unseen 查询行（该学生该目标概念训练观测数=0），把目标概念表征替换为 LCRF 支持加权聚合 `post_local_full`(=Σ P·value(support))，强制预测经支持路由；默认 off=数值不变。实现：[model_cdm_forward.py](../../src/model_cdm_forward.py)(替换逻辑)、[model_cdm.py](../../src/model_cdm.py)(flag + `post_local_full` 返回)、main/trainer 透传，冒烟测试 `tests/smoke_support_only_unseen.py`。
+3. （服务器）两组对照训练（cold split，超参沿用基数据集）：
+   - **Run A（仅任务）**：full `--decouple_support True`。
+   - **Run B（任务+方法）**：full `--decouple_support True --support_only_unseen True`。
+4. 判读（区分两类证据，避免循环论证）：
+   - **充分性（Run B 的非循环核心指标）**：Run B 在 cold-unseen 查询上的 AUC/BCE 是否与 Run A 相当（不崩）。相当 → 支持是缺口下**充分**的诊断信号（命题成立）；崩 → 支持不足以替代直接证据（命题证伪，诚实写）。
+   - **承载性（E4）**：Run A 上解耦支持扰动是否 ΔBCE≥0.005、CI>0、超 degree → 任务本身是否已让支持承载。（Run B 上 E4 必然受影响，属构造性，只用来验证“特定关系>degree”，不单独当承载证据。）
+   - **特定性**：两组 E4 的 `evidence_minus_degree` 是否>0（特定 train-only 关系优于同度随机）。
+   - junyi 不参与（native-cold，且单概念无可桥接支持）。
+
+## 6.7 Codex 服务器运行提示词（Path 2：cold-concept 任务 + 方法改动 + 两项修复重生成）
+
+```text
+背景:分支 codex/recover-pre-cleanup-e92e448。目标=验证“缺口下 CRG 支持是否真的承载并充分”。
+本轮已在本地完成的代码改动(只需在服务器运行,勿重写):
+  - tools/build_cold_concept_split.py(造 cold-concept-per-student split)
+  - 方法改动 --support_only_unseen(model_cdm_forward.py / model_cdm.py / trainer.py / main.py),默认 off=数值不变
+  - 冒烟测试 tests/smoke_support_only_unseen.py
+  - 修复:tools/build_mainline_review_packet.py(诚实 gate)、tools/run_gap_stress_and_lcrf_strata.py(lcrf_state_off 替换退化 no_filter)
+硬约束:不改既有实验数值;新产物落新目录(带日期戳);真实 checkpoint 在 /home/zsh/ConceptSkillCDM/checkpoints/...。
+
+步骤 0(冒烟,必须先过):
+  python tests/smoke_support_only_unseen.py        # 验证 off==baseline 且 unseen 时 on 改变预测且有限
+  python tests/smoke_ablation_flags.py             # 既有 flag 冒烟
+  若 smoke 失败,先报错停下,不要继续训练。
+
+步骤 1(数据):
+  python tools/build_cold_concept_split.py --dataset assist_09 assist_17 --holdout-frac 0.30 --seed 42
+  检查 summary:cold_concepts_lost_from_global_train=0,cold-query rate≈0.25~0.35。junyi 跳过(native-cold)。
+
+步骤 2(训练,GPU,tools/select_idle_gpus.py 选卡;超参沿用基数据集,--data_dir 指向 data/<ds>_coldconcept,日志确认路径):
+  Run A(仅任务):  full  --decouple_support True
+  Run B(任务+方法):full  --decouple_support True  --support_only_unseen True
+  各数据集(assist_09/assist_17) seed 42(可加 43/44)。两组 checkpoint 分目录,勿覆盖旧。
+
+步骤 3(推理评测,仅 cold-query 子群 test_cold_annotation.is_cold_query==True;Run A、Run B 各跑):
+  - 充分性(Run B 核心):在 cold-unseen 查询上算 Run B 的 AUC/BCE,与 Run A 比较(同子群)。
+  - E4:tools/run_decoupled_support_control.py(冻结 A、只扰动解耦支持集;evidence vs degree_matched_random)。
+  - E2:tools/run_gap_calibration_curve.py;E5:tools/run_gap_stress_and_lcrf_strata.py(已修,产 lcrf_state_off);E3:tools/analyze_crg_support_corruption_controls.py。
+
+步骤 4(汇总,诚实 gate):
+  python tools/build_mainline_review_packet.py --run-root <新run目录> --min-bce-effect 0.005
+  python tools/diagnose_mainline_evidence.py --new-run-root <新run目录>
+
+判据(区分两类,避免循环论证):
+  - 充分性[非循环,主判据]:Run B 在 cold-unseen 上 AUC/BCE 是否与 Run A 相当(差距 ΔAUC≤~0.01)。
+    * 相当 → 支持是缺口下充分诊断信号,命题成立,主线=“缺口下经支持路由的诊断”。
+    * 崩(ΔAUC≫0.01 或 BCE 飙升)→ 支持不足,命题证伪,如实写,不硬解释。
+  - 承载性 E4@RunA:解耦支持扰动 ΔBCE 在 cold 子群 ≥0.005、CI>0、超 degree → 仅任务即让支持承载。
+  - 特定性:两组 E4 的 minus_degree_random_bce_increase>0(特定关系优于同度随机)。
+  - Run B 的 E4 受影响是构造性的,只用于验证“特定>degree”,不单独当承载证据。
+  - junyi 不参与;assist_09/assist_17 分开下结论。不通过判据一律标 fail(遵循 codex_cd_writing_guardrails.md)。
+```
+
 ## 7. 待办（按依赖排序）
 1. 纯推理即可的 E0/E3-分层/E5/E7 聚合 → 复用 checkpoint，无需重训（见 §8 Codex 提示词）。
 2. E2 校准曲线分桶聚合 → 复用 checkpoint 推理。
