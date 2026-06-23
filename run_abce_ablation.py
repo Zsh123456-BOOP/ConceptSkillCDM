@@ -839,7 +839,8 @@ def load_result_rows(path: Path, run_id: str) -> List[Dict[str, Any]]:
         print(f"[WARN] Auto-repaired {repaired_count} glued row boundary/boundaries in {path}.")
     rows: List[Dict[str, Any]] = []
     for row in csv.DictReader(io.StringIO(repaired_text)):
-        if run_id and run_id not in row.get("save_dir", ""):
+        save_dir = str(row.get("save_dir") or "")
+        if run_id and run_id not in save_dir:
             continue
         rows.append(row)
     return rows
