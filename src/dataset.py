@@ -900,27 +900,3 @@ def create_dataloaders(
     }
 
     return train_loader, val_loader, test_loader, info_dict
-
-
-# 使用示例
-if __name__ == "__main__":
-    # 创建数据加载器
-    train_loader, val_loader, test_loader, info = create_dataloaders(
-        train_file='./data/assist-09/process_data/train.csv',
-        val_file='./data/assist-09/process_data/valid.csv',
-        test_file='./data/assist-09/process_data/test.csv',
-        batch_size=64,
-        num_workers=4
-    )
-
-    # 测试数据加载
-    print("\n" + "=" * 50)
-    print("测试数据加载:")
-    for batch_idx, (stu_ids, exer_ids, labels) in enumerate(train_loader):
-        print(f"\n批次 {batch_idx + 1}:")
-        print(f"学生ID形状: {stu_ids.shape}")
-        print(f"习题ID形状: {exer_ids.shape}")
-        print(f"标签形状: {labels.shape}")
-
-        # 只显示第一个批次
-        break
