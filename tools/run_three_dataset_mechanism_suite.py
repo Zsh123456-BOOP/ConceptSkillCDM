@@ -415,8 +415,12 @@ def write_success_report(out_root: Path) -> pd.DataFrame:
         target_best = float(target_rows["bce_increase"].astype(float).max()) if not target_rows.empty else float("nan")
         support_pass = not strong.empty
         coverage_pass = bool(np.isfinite(target_best) and np.isfinite(overall_best) and target_best >= overall_best)
-        actual = ds_posterior[ds_posterior["mode"].eq("actual")]
-        controls = ds_posterior[ds_posterior["mode"].isin(["mean_state", "shuffle_state"])]
+        if not ds_posterior.empty and "mode" in ds_posterior.columns:
+            actual = ds_posterior[ds_posterior["mode"].eq("actual")]
+            controls = ds_posterior[ds_posterior["mode"].isin(["mean_state", "shuffle_state"])]
+        else:
+            actual = pd.DataFrame()
+            controls = pd.DataFrame()
         if not actual.empty and not controls.empty:
             actual_js = float(actual.iloc[0]["posterior_js_mean"])
             actual_var = float(actual.iloc[0]["same_query_posterior_js_var"])
