@@ -730,8 +730,10 @@ def _lcrf_dataset_gate(lcrf: pd.DataFrame, dataset: str) -> Tuple[bool, List[str
 
 
 def _stress_dataset_gate(stress: pd.DataFrame, dataset: str) -> Tuple[bool, List[str]]:
-    sub = stress[stress["dataset"].eq(dataset)]
     reasons: List[str] = []
+    if stress.empty or "dataset" not in stress.columns:
+        return False, ["missing stress metrics"]
+    sub = stress[stress["dataset"].eq(dataset)]
     if sub.empty:
         return False, ["missing stress metrics"]
     if int(pd.to_numeric(sub["n_eval"], errors="coerce").max()) < 500:
