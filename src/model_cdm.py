@@ -109,6 +109,8 @@ class CognitiveDiagnosisModel(nn.Module):
         decouple_support: bool = False,
         support_only_unseen: bool = False,
         support_only_unseen_strength: float = 1.0,
+        route_mastery_unseen: bool = False,
+        route_mastery_unseen_scale: float = 1.0,
         ae_query_residual_scale: float = 0.0,
         ae_logit_residual_scale: float = 0.0,
         roadmap_logit_residual_scale: float = 1.0,
@@ -218,6 +220,15 @@ class CognitiveDiagnosisModel(nn.Module):
         # through the support route. Default off => exact current behavior.
         self.support_only_unseen = bool(support_only_unseen)
         self.support_only_unseen_strength = max(0.0, min(1.0, float(support_only_unseen_strength)))
+        # Path-A method change: for direct-unseen query rows, add a strong route-
+        # weighted neighbor-MASTERY term to the logit residual, implementing the
+        # paper's claimed mechanism (prior performance on related concepts supports
+        # the target). The model already computes graph_sc_prior = sum_k route(k)*
+        # m_student(k), but only as a small tanh-bounded residual diluted by larger
+        # terms. This flag routes it through a dedicated, cold-query-gated channel
+        # with a controllable scale so it can be load-bearing. Default off => no change.
+        self.route_mastery_unseen = bool(route_mastery_unseen)
+        self.route_mastery_unseen_scale = max(0.0, float(route_mastery_unseen_scale))
         self.ae_query_residual_scale = max(0.0, float(ae_query_residual_scale))
         self.ae_logit_residual_scale = max(0.0, float(ae_logit_residual_scale))
         self.roadmap_logit_residual_scale = max(0.0, float(roadmap_logit_residual_scale))
@@ -1388,6 +1399,18 @@ class CognitiveDiagnosisModel(nn.Module):
                         scalar_feats * feature_weight.to(dtype=dtype, device=device).view(1, -1)
                     ).sum(dim=1)
                     tutor_local_navigation_logit = tutor_local_navigation_logit + explicit_feature_logit
+                if getattr(self, "route_mastery_unseen", False) and self.route_mastery_unseen_scale > 0.0:
+                    # Cold-query-gated route-mastery transfer (Path A). unseen_gate ~ 1
+                    # when the student has no direct history on the query concept
+                    # (tutor_query_reliability ~ 0) and ~ 0 for direct-seen queries.
+                    # graph_sc_prior = sum_k route(k) * m_student(k); query_sc_prior is
+                    # the target's own (uninformative for cold). Adding this BEFORE the
+                    # residual clip lets neighbor performance reach the prediction for
+                    # cold targets and makes the support set load-bearing for them.
+                    unseen_gate = (1.0 - tutor_query_reliability).clamp(min=0.0, max=1.0)
+                    tutor_local_navigation_logit = tutor_local_navigation_logit + (
+                        self.route_mastery_unseen_scale * unseen_gate * (graph_sc_prior - query_sc_prior)
+                    )
 
         # A is the global roadmap; E is the local tutor map.  Scale them before
         # clipping so no_E keeps only the roadmap term instead of sharing one

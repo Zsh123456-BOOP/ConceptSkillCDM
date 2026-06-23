@@ -57,6 +57,30 @@ def _check_off_equivalence_and_load_bearing() -> None:
     )
 
 
+def _check_route_mastery_unseen() -> None:
+    """route_mastery_unseen: off==baseline with no unseen rows; on changes cold rows."""
+    model = _build_small_model()  # observed_counts all = 4.0 (no unseen rows)
+    logits_off = _forward_logits(model)
+
+    # flag on but no unseen rows -> unseen_gate ~ 0 (reliability ~ 1) -> ~no change.
+    model.route_mastery_unseen = True
+    model.route_mastery_unseen_scale = 1.0
+    logits_on_nounseen = _forward_logits(model)
+    _assert(
+        torch.allclose(logits_off, logits_on_nounseen, atol=1e-5),
+        "route_mastery_unseen with fully-observed history should ~equal the baseline.",
+    )
+
+    # zero the observed counts -> cold queries -> route-mastery term activates.
+    model.ae_student_concept_observed_count.zero_()
+    logits_on_unseen = _forward_logits(model)
+    _assert(torch.isfinite(logits_on_unseen).all().item(), "route-mastery logits should be finite.")
+    _assert(
+        not torch.allclose(logits_off, logits_on_unseen, atol=1e-6),
+        "with cold queries, route_mastery_unseen must change predictions (neighbor mastery is load-bearing).",
+    )
+
+
 def _check_constructor_accepts_kwargs() -> None:
     from src.model import CognitiveDiagnosisModel
 
@@ -76,15 +100,20 @@ def _check_constructor_accepts_kwargs() -> None:
         graph_topk=1,
         support_only_unseen=True,
         support_only_unseen_strength=0.5,
+        route_mastery_unseen=True,
+        route_mastery_unseen_scale=1.5,
     )
     _assert(model.support_only_unseen is True, "constructor should store support_only_unseen.")
     _assert(abs(model.support_only_unseen_strength - 0.5) < 1e-8, "constructor should store strength.")
+    _assert(model.route_mastery_unseen is True, "constructor should store route_mastery_unseen.")
+    _assert(abs(model.route_mastery_unseen_scale - 1.5) < 1e-8, "constructor should store route scale.")
 
 
 def main() -> None:
     _check_constructor_accepts_kwargs()
     _check_off_equivalence_and_load_bearing()
-    print("OK: support_only_unseen smoke checks passed.")
+    _check_route_mastery_unseen()
+    print("OK: support_only_unseen + route_mastery_unseen smoke checks passed.")
 
 
 if __name__ == "__main__":

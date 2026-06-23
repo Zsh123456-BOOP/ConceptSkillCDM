@@ -82,6 +82,8 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "decouple_support",
     "support_only_unseen",
     "support_only_unseen_strength",
+    "route_mastery_unseen",
+    "route_mastery_unseen_scale",
     "ae_query_residual_scale",
     "ae_logit_residual_scale",
     "roadmap_logit_residual_scale",
@@ -2285,6 +2287,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         decouple_support=getattr(args, "decouple_support", False),
         support_only_unseen=getattr(args, "support_only_unseen", False),
         support_only_unseen_strength=getattr(args, "support_only_unseen_strength", 1.0),
+        route_mastery_unseen=getattr(args, "route_mastery_unseen", False),
+        route_mastery_unseen_scale=getattr(args, "route_mastery_unseen_scale", 1.0),
         ae_query_residual_scale=getattr(args, "ae_query_residual_scale", 0.0),
         ae_logit_residual_scale=getattr(args, "ae_logit_residual_scale", 0.0),
         roadmap_logit_residual_scale=getattr(args, "roadmap_logit_residual_scale", 1.0),
@@ -3153,6 +3157,12 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         ),
         support_only_unseen_strength=loaded_args.get(
             "support_only_unseen_strength", getattr(args, "support_only_unseen_strength", 1.0)
+        ),
+        route_mastery_unseen=loaded_args.get(
+            "route_mastery_unseen", getattr(args, "route_mastery_unseen", False)
+        ),
+        route_mastery_unseen_scale=loaded_args.get(
+            "route_mastery_unseen_scale", getattr(args, "route_mastery_unseen_scale", 1.0)
         ),
         ae_query_residual_scale=loaded_args.get(
             "ae_query_residual_scale", getattr(args, "ae_query_residual_scale", 0.0)

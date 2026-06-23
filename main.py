@@ -352,6 +352,12 @@ def parse_args():
                              "support becomes load-bearing. Default off.")
     parser.add_argument("--support_only_unseen_strength", type=float, default=1.0,
                         help="Substitution weight kappa in [0,1] for support_only_unseen (1.0 = full substitution).")
+    parser.add_argument("--route_mastery_unseen", action=bool_action, default=None,
+                        help="For direct-unseen queries, add a strong route-weighted neighbor-MASTERY term "
+                             "(sum_k route(k)*m_student(k)) to the logit residual, implementing the paper's "
+                             "claimed prior-performance support mechanism. Default off.")
+    parser.add_argument("--route_mastery_unseen_scale", type=float, default=1.0,
+                        help="Scale for the route_mastery_unseen term (try 0.5/1.0/2.0).")
     parser.add_argument("--ae_query_residual_scale", type=float, default=0.0,
                         help="Scale for the A/E-only nonlinear query-state residual before the fixed diagnosis head.")
     parser.add_argument("--ae_logit_residual_scale", type=float, default=0.0,
@@ -434,6 +440,8 @@ def main():
     args.decouple_support = bool(getattr(args, "decouple_support", False))
     args.support_only_unseen = bool(getattr(args, "support_only_unseen", False))
     args.support_only_unseen_strength = float(getattr(args, "support_only_unseen_strength", 1.0))
+    args.route_mastery_unseen = bool(getattr(args, "route_mastery_unseen", False))
+    args.route_mastery_unseen_scale = float(getattr(args, "route_mastery_unseen_scale", 1.0))
 
     # =========================================================
     # -1) main  launcher 
