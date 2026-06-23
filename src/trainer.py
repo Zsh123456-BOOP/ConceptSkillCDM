@@ -54,6 +54,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "personal_mastery_prior_scale",
     "personal_recent_mastery_prior_scale",
     "personal_mastery_count_smoothing",
+    "personal_reliability_pref_scale",
     "personal_query_row_budget",
     "personal_neighbor_row_budget",
     "personal_query_support_hops",
@@ -69,6 +70,9 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "use_concept_graph",
     "graph_identity_residual",
     "graph_propagation_alpha",
+    "graph_evidence_scale",
+    "graph_evidence_reliability_smoothing",
+    "graph_learnable_edges",
     "graph_query_readout_scale",
     "graph_query_readout_2hop_scale",
     "graph_headwise_query_gate",
@@ -2079,7 +2083,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         getattr(args, "prediction_l2_lambda", 5e-5),
     )
     logger.info(
-        "%s Graph controls: entropy_band=[%.2f, %.2f], uniform_margin=%.2f, warmup_epochs=%d, cap_ratio=%.2f, graph_dropout=%.3f, graph_tau_init=%.3f",
+        "%s Graph controls: entropy_band=[%.2f, %.2f], uniform_margin=%.2f, warmup_epochs=%d, cap_ratio=%.2f, "
+        "graph_dropout=%.3f, graph_tau_init=%.3f, graph_evidence_scale=%.3f, graph_evidence_smoothing=%.3f, "
+        "graph_learnable_edges=%s",
         run_tag,
         getattr(args, "graph_entropy_min", 0.15),
         getattr(args, "graph_entropy_max", 0.85),
@@ -2088,13 +2094,16 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         getattr(args, "graph_reg_cap_ratio", 6.0),
         getattr(args, "graph_dropout", -1.0),
         getattr(args, "graph_tau_init", 1.0),
+        float(getattr(args, "graph_evidence_scale", 1.0)),
+        float(getattr(args, "graph_evidence_reliability_smoothing", 8.0)),
+        bool(getattr(args, "graph_learnable_edges", True)),
     )
     logger.info(
         "%s Personal controls: personal_max_alpha=%.3f, personal_delta_scale=%.3f, personal_warmup_epochs=%d, "
         "personal_student_dim=%s, alpha_min_target=%.4f, personal_local_hops=%s, include_neighbor_rows=%s, personal_support_only=%s, "
         "personal_alpha_temperature=%.3f, personal_alpha_budget=%.3f, personal_query_row_budget=%.3f, "
         "personal_neighbor_row_budget=%.3f, personal_query_support_hops=%s, personal_item_support_mass=%.3f, "
-        "personal_mastery_prior_scale=%.3f, personal_recent_mastery_prior_scale=%.3f, "
+        "personal_mastery_prior_scale=%.3f, personal_recent_mastery_prior_scale=%.3f, personal_reliability_pref_scale=%.3f, "
         "personal_query_message_gain=%.3f, "
         "personal_query_correction_scale=%.3f, personal_state_lr_mult=%.3f, personal_id_lr_mult=%.3f, "
         "graph_propagation_alpha=%.3f, graph_query_readout_scale=%.3f, graph_query_readout_2hop_scale=%.3f",
@@ -2115,6 +2124,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         float(getattr(args, "personal_item_support_mass", 0.0)),
         float(getattr(args, "personal_mastery_prior_scale", 0.0)),
         float(getattr(args, "personal_recent_mastery_prior_scale", 0.0)),
+        float(getattr(args, "personal_reliability_pref_scale", 1.0)),
         float(getattr(args, "personal_query_message_gain", 1.0)),
         float(getattr(args, "personal_query_correction_scale", 0.15)),
         float(getattr(args, "personal_state_lr_mult", 1.0)),
@@ -2219,6 +2229,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         graph_propagation_alpha=getattr(args, "graph_propagation_alpha", 0.20),
         graph_evidence_scale=getattr(args, "graph_evidence_scale", 1.0),
         graph_evidence_reliability_smoothing=getattr(args, "graph_evidence_reliability_smoothing", 8.0),
+        graph_learnable_edges=getattr(args, "graph_learnable_edges", True),
         graph_query_readout_scale=getattr(args, "graph_query_readout_scale", 0.35),
         graph_query_readout_2hop_scale=getattr(args, "graph_query_readout_2hop_scale", 0.15),
         personal_rank=getattr(args, "personal_rank", 4),
@@ -2262,6 +2273,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         personal_mastery_prior_scale=getattr(args, "personal_mastery_prior_scale", 0.0),
         personal_recent_mastery_prior_scale=getattr(args, "personal_recent_mastery_prior_scale", 0.0),
         personal_mastery_count_smoothing=getattr(args, "personal_mastery_count_smoothing", 0.0),
+        personal_reliability_pref_scale=getattr(args, "personal_reliability_pref_scale", 1.0),
         personal_query_row_budget=getattr(args, "personal_query_row_budget", 1.0),
         personal_neighbor_row_budget=getattr(args, "personal_neighbor_row_budget", 0.30),
         personal_query_support_hops=getattr(args, "personal_query_support_hops", 0),
@@ -2986,6 +2998,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
             "graph_evidence_reliability_smoothing",
             getattr(args, "graph_evidence_reliability_smoothing", 8.0),
         ),
+        graph_learnable_edges=loaded_args.get(
+            "graph_learnable_edges", getattr(args, "graph_learnable_edges", True)
+        ),
         graph_query_readout_scale=loaded_args.get(
             "graph_query_readout_scale", getattr(args, "graph_query_readout_scale", 0.35)
         ),
@@ -3062,6 +3077,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         personal_mastery_count_smoothing=loaded_args.get(
             "personal_mastery_count_smoothing",
             getattr(args, "personal_mastery_count_smoothing", 0.0),
+        ),
+        personal_reliability_pref_scale=loaded_args.get(
+            "personal_reliability_pref_scale", getattr(args, "personal_reliability_pref_scale", 1.0)
         ),
         personal_query_row_budget=loaded_args.get(
             "personal_query_row_budget", getattr(args, "personal_query_row_budget", 1.0)

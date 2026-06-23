@@ -148,6 +148,7 @@ class PersonalRelationGenerator(nn.Module):
         mastery_prior_scale: float = 0.0,
         recent_mastery_prior_scale: float = 0.0,
         mastery_count_smoothing: float = 0.0,
+        reliability_pref_scale: float = 1.0,
     ):
         super().__init__()
         self.num_concepts = int(num_concepts)
@@ -156,6 +157,7 @@ class PersonalRelationGenerator(nn.Module):
         self.mastery_prior_scale = max(0.0, float(mastery_prior_scale))
         self.recent_mastery_prior_scale = max(0.0, float(recent_mastery_prior_scale))
         self.mastery_count_smoothing = max(0.0, float(mastery_count_smoothing))
+        self.reliability_pref_scale = max(0.0, float(reliability_pref_scale))
         self.max_state_mix = 1.20
         self.max_student_mix = 0.0
         self.state_mix_logit = nn.Parameter(torch.tensor(1.0986123))
@@ -320,8 +322,14 @@ class PersonalRelationGenerator(nn.Module):
             residual = residual + self.recent_mastery_prior_scale * recent_mastery_scores
         reliability_pref_scores = torch.zeros_like(residual)
         reliability_pref = residual.new_tensor(0.0)
-        if student_concept_count is not None and student_concept_count.dim() == 2:
-            reliability_pref = self.reliability_pref.to(dtype=residual.dtype)
+        if (
+            self.reliability_pref_scale > 0.0
+            and student_concept_count is not None
+            and student_concept_count.dim() == 2
+        ):
+            reliability_pref = self.reliability_pref.to(dtype=residual.dtype) * residual.new_tensor(
+                self.reliability_pref_scale
+            )
             reliability_pref_scores = self._build_reliability_pref_scores(
                 count=student_concept_count,
                 knowledge_state=knowledge_state,

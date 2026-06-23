@@ -184,6 +184,12 @@ def parse_args():
         help="Count smoothing for evidence reliability gating: reliability = count / (count + smoothing).",
     )
     parser.add_argument(
+        "--graph_learnable_edges",
+        action=bool_action,
+        default=True,
+        help="Enable the low-rank learnable edge correction on top of train-only CRG priors.",
+    )
+    parser.add_argument(
         "--graph_query_readout_scale",
         type=float,
         default=0.35,
@@ -361,6 +367,8 @@ def parse_args():
                         help="Scale for train-only recent student-concept mastery contrast inside E posterior reweighting.")
     parser.add_argument("--personal_mastery_count_smoothing", type=float, default=0.0,
                         help="Reliability smoothing for train-only student-concept counts used to gate E mastery contrast; 0 disables count gating.")
+    parser.add_argument("--personal_reliability_pref_scale", type=float, default=1.0,
+                        help="Scale for the LCRF reliability-preference route; set 0 for module ablation.")
     parser.add_argument("--shuffle_student_concept_priors", action="store_true",
                         help="Negative-control only: permute train-only student-concept E evidence across students.")
     parser.add_argument("--personal_query_row_budget", type=float, default=1.0,
@@ -670,6 +678,9 @@ def main():
                     "graph_evidence_reliability_smoothing",
                     getattr(args, "graph_evidence_reliability_smoothing", 8.0),
                 ),
+                graph_learnable_edges=loaded_args.get(
+                    "graph_learnable_edges", getattr(args, "graph_learnable_edges", True)
+                ),
                 graph_query_readout_scale=loaded_args.get(
                     "graph_query_readout_scale", getattr(args, "graph_query_readout_scale", 0.35)
                 ),
@@ -778,6 +789,10 @@ def main():
                 personal_mastery_count_smoothing=loaded_args.get(
                     "personal_mastery_count_smoothing",
                     getattr(args, "personal_mastery_count_smoothing", 0.0),
+                ),
+                personal_reliability_pref_scale=loaded_args.get(
+                    "personal_reliability_pref_scale",
+                    getattr(args, "personal_reliability_pref_scale", 1.0),
                 ),
                 personal_query_row_budget=loaded_args.get(
                     "personal_query_row_budget", getattr(args, "personal_query_row_budget", 1.0)

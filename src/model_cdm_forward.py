@@ -44,6 +44,7 @@ def run_cdm_forward(
         student_concept_count=model.ae_student_concept_observed_count[student_ids]
         if graph_evidence_active
         or (model.use_personal_graph and getattr(model, "personal_mastery_count_smoothing", 0.0) > 0.0)
+        or (model.use_personal_graph and getattr(model, "personal_reliability_pref_scale", 0.0) > 0.0)
         else None,
     )
     relation_matrices = s_out["relation_matrices"]

@@ -61,6 +61,7 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_propagation_alpha: float = 0.20,
         graph_evidence_scale: float = 1.0,
         graph_evidence_reliability_smoothing: float = 8.0,
+        graph_learnable_edges: bool = True,
         graph_query_readout_scale: float = 0.35,
         graph_query_readout_2hop_scale: float = 0.15,
         prediction_l2_lambda: float = 5e-5,
@@ -100,6 +101,7 @@ class CognitiveDiagnosisModel(nn.Module):
         personal_mastery_prior_scale: float = 0.0,
         personal_recent_mastery_prior_scale: float = 0.0,
         personal_mastery_count_smoothing: float = 0.0,
+        personal_reliability_pref_scale: float = 1.0,
         personal_value_use_global_basis: bool = True,
         personal_message_alignment_gate: bool = True,
         personal_projection_hidden_factor: int = 2,
@@ -159,6 +161,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_propagation_alpha = max(0.0, min(1.0, float(graph_propagation_alpha)))
         self.graph_evidence_scale = max(0.0, float(graph_evidence_scale))
         self.graph_evidence_reliability_smoothing = max(0.0, float(graph_evidence_reliability_smoothing))
+        self.graph_learnable_edges = bool(graph_learnable_edges)
         self.graph_query_readout_scale = max(0.0, float(graph_query_readout_scale))
         self.graph_query_readout_2hop_scale = max(0.0, float(graph_query_readout_2hop_scale))
         self._current_epoch = 1
@@ -204,6 +207,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.personal_mastery_prior_scale = max(0.0, float(personal_mastery_prior_scale))
         self.personal_recent_mastery_prior_scale = max(0.0, float(personal_recent_mastery_prior_scale))
         self.personal_mastery_count_smoothing = max(0.0, float(personal_mastery_count_smoothing))
+        self.personal_reliability_pref_scale = max(0.0, float(personal_reliability_pref_scale))
         self.personal_value_use_global_basis = bool(personal_value_use_global_basis)
         self.personal_message_alignment_gate = bool(personal_message_alignment_gate)
         self.personal_projection_hidden_factor = max(1, int(personal_projection_hidden_factor))
@@ -284,6 +288,7 @@ class CognitiveDiagnosisModel(nn.Module):
             graph_propagation_alpha=self.graph_propagation_alpha,
             graph_evidence_scale=self.graph_evidence_scale,
             graph_evidence_reliability_smoothing=self.graph_evidence_reliability_smoothing,
+            graph_learnable_edges=self.graph_learnable_edges,
             use_personal_graph=self.use_personal_graph,
             personal_rank=personal_rank,
             personal_max_alpha=self.personal_max_alpha,
@@ -310,6 +315,7 @@ class CognitiveDiagnosisModel(nn.Module):
             personal_mastery_prior_scale=self.personal_mastery_prior_scale,
             personal_recent_mastery_prior_scale=self.personal_recent_mastery_prior_scale,
             personal_mastery_count_smoothing=self.personal_mastery_count_smoothing,
+            personal_reliability_pref_scale=self.personal_reliability_pref_scale,
             enable_personal_support_value_proj=self.enable_personal_support_value_proj,
             graph_edge_bias_rank=self.graph_edge_bias_rank,
             graph_prior_matrix=self.item_prior_matrix,

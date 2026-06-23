@@ -51,6 +51,7 @@ class ConceptStructureModeling(nn.Module):
         graph_propagation_alpha: float,
         graph_evidence_scale: float,
         graph_evidence_reliability_smoothing: float,
+        graph_learnable_edges: bool,
         # personal graph
         use_personal_graph: bool,
         personal_rank: int,
@@ -78,6 +79,7 @@ class ConceptStructureModeling(nn.Module):
         personal_mastery_prior_scale: float,
         personal_recent_mastery_prior_scale: float,
         personal_mastery_count_smoothing: float,
+        personal_reliability_pref_scale: float,
         enable_personal_support_value_proj: bool,
         graph_edge_bias_rank: int,
         graph_prior_matrix: Optional[torch.Tensor] = None,
@@ -96,6 +98,7 @@ class ConceptStructureModeling(nn.Module):
         self.personal_max_alpha = float(personal_max_alpha)
         self.graph_evidence_scale = max(0.0, float(graph_evidence_scale))
         self.graph_evidence_reliability_smoothing = max(0.0, float(graph_evidence_reliability_smoothing))
+        self.graph_learnable_edges = bool(graph_learnable_edges)
         self.personal_delta_scale = max(0.0, float(personal_delta_scale))
         self.personal_warmup_epochs = max(0, int(personal_warmup_epochs))
         self.personal_reg_warmup_epochs = (
@@ -158,6 +161,7 @@ class ConceptStructureModeling(nn.Module):
                 prior_matrix=graph_prior_matrix,
                 sequence_prior_matrix=graph_sequence_prior_matrix,
                 prior_logit_scale=graph_prior_logit_scale,
+                learnable_edges=self.graph_learnable_edges,
             )
         else:
             self.relation_learning = None
@@ -203,6 +207,7 @@ class ConceptStructureModeling(nn.Module):
                 mastery_prior_scale=self.personal_mastery_prior_scale,
                 recent_mastery_prior_scale=self.personal_recent_mastery_prior_scale,
                 mastery_count_smoothing=self.personal_mastery_count_smoothing,
+                reliability_pref_scale=personal_reliability_pref_scale,
             )
         else:
             self.adaptive_gate = None

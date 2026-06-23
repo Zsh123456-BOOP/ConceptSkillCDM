@@ -50,6 +50,7 @@ BOOLEAN_OPTIONAL_KEYS = {
     "share_concept_embeddings",
     "graph_headwise_query_gate",
     "graph_query_adapter_enable",
+    "graph_learnable_edges",
 }
 COMMAND_CONFIG_NAME = "run_config.json"
 OOM_SAFE_E_BATCH_SIZE = {
@@ -85,6 +86,21 @@ class JobSpec:
 
 BASE_ABLATIONS: Tuple[AblationSpec, ...] = (
     AblationSpec(name="full", flags={}, overrides={}),
+    AblationSpec(
+        name="no_crg_evidence",
+        flags={},
+        overrides={
+            "graph_evidence_scale": 0.0,
+            "graph_learnable_edges": False,
+        },
+    ),
+    AblationSpec(
+        name="no_lcrf_reliability",
+        flags={},
+        overrides={
+            "personal_reliability_pref_scale": 0.0,
+        },
+    ),
     AblationSpec(
         name="no_A",
         flags={"ablate_concept_graph": True},
@@ -1181,7 +1197,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rerun_existing", action="store_true")
     parser.add_argument("--analyze_only", action="store_true", help="Skip running and only summarize existing rows.")
     parser.add_argument("--generate_diagnosis", action="store_true", help="Enable post-training diagnosis artifacts.")
-    parser.add_argument("--ablations", type=str, default=None, help="Optional filter: full,no_A,no_E")
+    parser.add_argument(
+        "--ablations",
+        type=str,
+        default=None,
+        help="Optional filter, e.g. full,no_crg_evidence,no_lcrf_reliability,no_A,no_E",
+    )
     parser.add_argument("--delta_threshold", type=float, default=0.003, help="Threshold for useful/neutral/harmful labels.")
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--early_stop_patience", type=int, default=None)
