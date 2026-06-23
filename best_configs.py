@@ -5,6 +5,8 @@
 
 from typing import Any, Dict
 
+from src.config import DATASET_DEFAULTS
+
 BEST_CFG: Dict[str, Dict[str, Any]] = {
     "assist_09": {
         # Train
@@ -469,6 +471,29 @@ for _public_chold_name, _public_chold_base in (
     ("assist_17_chold", "assist_17"),
 ):
     BEST_CFG[_public_chold_name] = dict(BEST_CFG[_public_chold_base])
+
+
+def _public_benchmark_cfg(dataset: str) -> Dict[str, Any]:
+    cfg = dict(DATASET_DEFAULTS[dataset])
+    cfg.update(
+        {
+            "seed": 42,
+            "epochs": 45,
+            "early_stop_patience": 8,
+            "patience": 8,
+            "save_interval": 10,
+            "num_workers": 4,
+            "no_cuda": False,
+            "debug_graph_diag": True,
+            "diag_batches": 1,
+            "model_variant": "gpd_base",
+        }
+    )
+    return cfg
+
+
+for _public_benchmark_name in ("frcsub", "math2", "assist_12", "nips34"):
+    BEST_CFG[_public_benchmark_name] = _public_benchmark_cfg(_public_benchmark_name)
 
 STRUCT_V2_CFG: Dict[str, Dict[str, Any]] = {
     "assist_09_abce_struct_v2": dict(BEST_CFG["assist_09"]),

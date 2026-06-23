@@ -39,7 +39,7 @@ SUMMARY_CSV = Path("results") / "abce_ablation_summary.csv"
 MEAN_SUMMARY_CSV = Path("results") / "abce_ablation_summary_mean.csv"
 NUM_RE = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
 ROW_START_RE = re.compile(
-    r"(?<![\r\n])(?=(assist_09|assist_17|junyi),\d+,(best|ae_dominant),(full|no_A|no_E|no_E_bs64),)"
+    r"(?<![\r\n])(?=([A-Za-z0-9_]+),\d+,(best|ae_dominant),(full|no_A|no_E|no_E_bs64),)"
 )
 BOOLEAN_OPTIONAL_KEYS = {
     "use_personal_graph",

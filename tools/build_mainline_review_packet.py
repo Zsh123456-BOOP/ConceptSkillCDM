@@ -12,7 +12,7 @@ from typing import List, Optional
 import pandas as pd
 
 
-DATASETS = ("assist_09", "junyi", "assist_17")
+DEFAULT_DATASETS = ("assist_09", "junyi", "assist_17")
 
 
 def _read_many(root: Path, pattern: str) -> pd.DataFrame:
@@ -50,11 +50,15 @@ def _best_row(frame: pd.DataFrame, **conds: object) -> Optional[pd.Series]:
     return None if hit.empty else hit.iloc[0]
 
 
-def _section_e2(frame: pd.DataFrame) -> List[str]:
+def _parse_datasets(text: str) -> List[str]:
+    return [part.strip() for part in str(text).split(",") if part.strip()]
+
+
+def _section_e2(frame: pd.DataFrame, datasets: List[str]) -> List[str]:
     lines = ["## E2 Gap Calibration", ""]
     if frame.empty:
         return lines + ["- fail: missing E2 metrics.", ""]
-    for ds in DATASETS:
+    for ds in datasets:
         sub = frame[frame["dataset"].astype(str).eq(ds)]
         zero_full = _best_row(sub, target_history_bucket="0", variant="full")
         zero_no = _best_row(sub, target_history_bucket="0", variant="no_CRG")
@@ -81,11 +85,11 @@ def _section_e2(frame: pd.DataFrame) -> List[str]:
     return lines
 
 
-def _section_e3(frame: pd.DataFrame) -> List[str]:
+def _section_e3(frame: pd.DataFrame, datasets: List[str]) -> List[str]:
     lines = ["## E3 Relation Specificity", ""]
     if frame.empty:
         return lines + ["- fail: missing E3 support corruption gap claims.", ""]
-    for ds in DATASETS:
+    for ds in datasets:
         seen = _best_row(frame, dataset=ds, subgroup="direct_seen")
         unseen = _best_row(frame, dataset=ds, subgroup="direct_unseen")
         unseen_bce = None if unseen is None else unseen.get("evidence_minus_degree_random_bce_increase")
@@ -106,11 +110,11 @@ def _section_e3(frame: pd.DataFrame) -> List[str]:
     return lines
 
 
-def _section_e5(frame: pd.DataFrame) -> List[str]:
+def _section_e5(frame: pd.DataFrame, datasets: List[str]) -> List[str]:
     lines = ["## E5 LCRF Clean Counterfactual", ""]
     if frame.empty:
         return lines + ["- fail: missing E5 LCRF strata metrics.", ""]
-    for ds in DATASETS:
+    for ds in datasets:
         sub = frame[
             frame["dataset"].astype(str).eq(ds)
             & frame["variant"].astype(str).eq("no_filter")
@@ -147,11 +151,11 @@ def _section_e5(frame: pd.DataFrame) -> List[str]:
     return lines
 
 
-def _section_e4(frame: pd.DataFrame) -> List[str]:
+def _section_e4(frame: pd.DataFrame, datasets: List[str]) -> List[str]:
     lines = ["## E4 Decoupled Support", ""]
     if frame.empty:
         return lines + ["- fail: missing E4 decoupled support metrics.", ""]
-    for ds in DATASETS:
+    for ds in datasets:
         row = _best_row(frame, dataset=ds, subgroup="direct_unseen", variant="s_support_degree_matched_random")
         if row is None:
             lines.append(f"- {ds}: fail; missing direct_unseen degree-matched row.")
@@ -174,10 +178,12 @@ def _section_e4(frame: pd.DataFrame) -> List[str]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-root", required=True)
+    parser.add_argument("--datasets", default=",".join(DEFAULT_DATASETS))
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
     root = Path(args.run_root)
+    datasets = _parse_datasets(args.datasets)
     out_path = Path(args.output) if args.output else root / "mainline_review_packet.md"
     e2 = _read_many(root, "gap_calibration_metrics_all.csv")
     e3 = _read_many(root, "support_corruption_gap_claims.csv")
@@ -192,10 +198,10 @@ def main() -> None:
         "This packet only aggregates new result CSVs. Failed gates are left as fail.",
         "",
     ]
-    lines.extend(_section_e2(e2))
-    lines.extend(_section_e3(e3))
-    lines.extend(_section_e5(e5))
-    lines.extend(_section_e4(e4))
+    lines.extend(_section_e2(e2, datasets))
+    lines.extend(_section_e3(e3, datasets))
+    lines.extend(_section_e5(e5, datasets))
+    lines.extend(_section_e4(e4, datasets))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
     print(f"[ok] review packet written to {out_path}")
