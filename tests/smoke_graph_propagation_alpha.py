@@ -65,3 +65,13 @@ def test_graph_propagation_alpha_controls_update_strength() -> None:
         low_delta = (low(student_ids, _relations()) - initial).pow(2).mean().sqrt()
         high_delta = (high(student_ids, _relations()) - initial).pow(2).mean().sqrt()
     assert high_delta > low_delta * 2.0, "larger alpha should produce a stronger graph update"
+
+
+def main() -> None:
+    test_graph_propagation_alpha_zero_preserves_initial_state()
+    test_graph_propagation_alpha_controls_update_strength()
+    print("OK: graph propagation alpha semantics passed.")
+
+
+if __name__ == "__main__":
+    main()

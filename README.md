@@ -1,111 +1,104 @@
-﻿# ConceptSkillCDM
+# ConceptSkillCDM
 
-本仓库当前用于验证一个可解释认知诊断模型。论文叙事采用 **Concept Reachability under Sparse Response Evidence**：学生在测试题上的目标概念不一定直接出现在个人历史中，但可以通过训练集中的概念关系从历史概念“到达”。模型因此被解释为递进式的“全局路线图 + 个性化过滤器”：
+本仓库当前实现一条单一、可审计的 **Graph-IRT** 认知诊断主线。此前的 CRG/LCRF reachability 假设、全训练集标签统计先验和多套预测残差已被移除：现有三元组数据接口无法提供严格的 query-time 历史前缀，继续保留这些分支会把实验性捷径误写成因果机制。
 
-- **CRG：Concept Reachability Graph，概念可达图。**
-- **LCRF：Learner-Conditioned Reachability Filter，学习者条件化可达性过滤器。**
+## 模型主线
 
-旧实验日志、结果表和 checkpoint 已按要求清理，不再作为当前代码说明的一部分保留。
+图的先验支持与初始强度只使用训练集中的无标签元数据证据：
 
-## 1. 核心设计
+- item co-occurrence：同一题目的概念共现；
+- student co-exposure：同一学生在训练集中接触过的概念共现；该证据与 CSV 行顺序无关；
+- self-loop：概念自身状态保留。
 
-### CRG：概念可达图
-
-CRG 解决主问题：从训练集可观测证据中构建全体学生共享的概念可达图，判断当前题目概念能否从学生历史概念通过全局关系到达，并给出可解释的路线节点。
-
-当前 CRG 的边权只来自 train-only evidence：
-
-- item co-occurrence：同一题目中概念共同出现的关系；
-- sequence transition：同一学生训练序列中的概念接续关系；
-- self-retention：概念自身状态保持；
-- receiver/source reliability：概念作为可达路线节点的全局统计可靠性。
-
-CRG 的输出是 row-stochastic concept relation graph。它负责定义全局大地图和候选 support，不再被解释成任意神经网络学出的黑盒图。
-
-### LCRF：学习者条件化可达性过滤器
-
-LCRF 解决副问题：CRG 只说明“有路”，但有路不等于对当前学生可靠。LCRF 在 CRG 给出的局部可达 support 内，根据当前学生的掌握状态、近期表现和历史邻居证据，过滤出更适合该学生的局部辅导方向。
-
-当前 LCRF 的局部打分来自：
-
-- 当前题目概念的学生掌握度；
-- 当前题目概念的近期掌握度；
-- CRG 路线邻居概念的学生掌握度；
-- CRG 路线邻居概念的近期掌握度；
-- 当前概念与路线邻居之间的 readiness gap；
-- train-only 学生-概念观测次数形成的可靠性门控。
-
-LCRF 不生成新边，不读 valid/test，不使用 student-id embedding 作为 shortcut，也不使用 MLP 生成任意个性化图。它只在 CRG 给出的“小地图”里做学生级过滤。当前实现会显式记录并使用 `personal posterior - global CRG route` 的路线偏移：如果 LCRF 把当前学生从 CRG 的平均路线导向更薄弱的支撑概念，预测 logit 会受到有界惩罚；如果导向更稳的支撑概念，则会给出有界加成。
-
-## 2. 当前代码入口
-
-模型主入口：
-
-- `src/model.py`：公开 `CognitiveDiagnosisModel`。
-- `src/model_cdm.py`：顶层 CDM 模型、CRG/LCRF logit 组装。
-- `src/model_cdm_forward.py`：主 forward 路径。
-- `src/model_graph.py`：CRG，概念可达图。
-- `src/model_personal.py`：LCRF，学习者条件化可达性过滤器。
-- `src/model_structure.py` / `src/model_structure_forward.py`：CRG/LCRF 与 knowledge encoder 的装配。
-- `src/prediction_head.py`：固定认知诊断预测头。
-
-重要诊断键：
-
-- CRG：`roadmap_macro_logit_abs_mean`、`roadmap_difficulty_logit_abs_mean`、`roadmap_reliability_logit_abs_mean`。
-- LCRF：`tutor_local_navigation_logit_abs_mean`、`tutor_current_mastery_logit_abs_mean`、`tutor_route_mastery_logit_abs_mean`、`tutor_gap_penalty_logit_abs_mean`。
-- LCRF posterior：`ae_posterior_prior_logit_abs_mean`、`ae_posterior_prior_delta_abs_mean`、`tutor_posterior_mastery_shift_logit_abs_mean`。
-- Support：`support_item_survival_rate`、`support_seq_survival_rate`、`support_self_retention_rate`。
-
-## 3. 消融语义
-
-- `full`：CRG 概念可达图 + LCRF 个性化过滤。
-- `no_CRG`：移除概念可达图，LCRF 失去路线 support。
-- `no_LCRF`：保留 CRG 的全局可达图，移除学生级局部过滤。
-- `CRG_uniform`：保留图形态和参数量控制，但路线不使用 train-only evidence。
-- `LCRF_shuffle_student`：打乱学生个性化证据，检查 LCRF 是否真的依赖学生历史。
-
-后续实验必须优先检查：
+前向路径只有一条：
 
 ```text
-full > no_CRG
-full > CRG_uniform
-full > no_LCRF
-full > LCRF_shuffle_student
+train-only Q/student-exposure metadata
+        -> row-stochastic concept graph
+        -> student + concept state
+        -> graph message passing
+        -> concept ability theta
+        -> Q-mask aggregation
+        -> 2PL-IRT logit
 ```
 
-如果 `LCRF_shuffle_student` 接近或超过 `full`，说明 LCRF 仍然不是有效的个性化过滤器，不能只靠 full AUC 宣称 LCRF 成立。
+关系强度、receiver bias、self-loop 和 temperature 仍通过 BCE 梯度学习；但标签不会被预计算成学生/题目/概念特征或 buffer。代码级不变量是：
 
-## 4. 小实验链路
+```python
+details["logits"] == details["irt_logit"]
+```
 
-四类机制实验按递进关系组织：
+没有 personal posterior、统计 target encoding、query correction、theta calibration 或额外 logit residual。这个模型应被描述为静态图结构认知诊断基线，不应再声称解决 concept reachability 或 evidence-gap transfer。
 
-1. **数据现象表**：统计 direct seen、bridgeable@K、item co-occurrence、sequence density 和学生历史长度，证明数据集中确实存在“目标概念需要从历史概念到达”的问题。
-2. **CRG Held-out Reachability Retrieval**：只用 train-only CRG 检索 valid/test 的后续概念，指标为 Hit@K、NDCG@K、MRR，用于证明 CRG 的关系证据充分。
-3. **CRG Support Corruption**：固定 checkpoint，在 inference 时逐步破坏 CRG support，验证可达边是否必要。
-4. **LCRF Counterfactual + Case**：固定 CRG 和 checkpoint，对比 actual / shuffled / mean / no_LCRF，并筛选同一 query 不同学生的 case，验证个性化过滤是否来自学生状态。
+## 代码入口
 
-## 5. 验证方式
+- `main.py`：训练和推理 CLI。
+- `src/dataset.py`：train-only ID/Q/图先验构建与数据加载。
+- `src/model.py` / `src/model_cdm.py`：公开模型和唯一 Graph-IRT 前向。
+- `src/model_graph.py`：概念关系学习与图消息传递。
+- `src/prediction_head.py`：2PL-IRT 题目参数和能力读出。
+- `src/trainer.py`：训练、验证、测试、checkpoint 和简洁图诊断。
+- `run_graph_ablation.py`：统一的结构消融 runner。
 
-本仓库 smoke 文件是可直接执行脚本，不以 pytest collection 为主。
+## 消融语义
 
-常用验证：
+只保留以下互不混淆的变体：
+
+- `full`：item + student co-exposure 图证据，正常消息传递。
+- `no_message_passing`：令 `graph_propagation_alpha=0`，输出状态严格等于初始 student+concept state。
+- `item_only`：只使用题目概念共现。
+- `exposure_only`：只使用学生概念共接触证据。
+- `degree_random`：保持逐行邻居数量的随机支持图，检验具体关系身份是否有效。
+
+运行 dry-run：
 
 ```bash
-python -m py_compile main.py run_abce_ablation.py src/config.py src/dataset.py src/experiment_utils.py src/model.py src/model_cdm.py src/model_cdm_forward.py src/model_graph.py src/model_ops.py src/model_personal.py src/model_regularization.py src/model_structure.py src/model_structure_forward.py src/module_activity.py src/prediction_head.py src/trainer.py
-python tests/smoke_interpretable_ae.py
-python tests/smoke_ae_reliability_features.py
+python run_graph_ablation.py \
+  --datasets assist_09,assist_17,junyi \
+  --ablations full,no_message_passing,item_only,exposure_only,degree_random \
+  --seeds 42 \
+  --gpus 0 \
+  --dry_run
+```
+
+## 验证
+
+Smoke 文件是可直接执行的脚本：
+
+```bash
+python -m compileall -q main.py experiment_configs.py run_graph_ablation.py src tests tools
+python tests/smoke_prediction_head.py
+python tests/smoke_graph_propagation_alpha.py
+python tests/smoke_graph_priors.py
+python tests/smoke_label_isolation.py
+python tests/smoke_ablation.py
 python tests/smoke_runtime_regressions.py
+python tests/smoke_graph_runner.py
+python tests/smoke_ablation_flags.py
+python tests/smoke_gpu_selector.py
+python tests/smoke_concurrent_results.py
 ```
 
-最小真实训练 smoke：
+最小 CPU 训练闭环：
 
 ```bash
-python main.py --dataset_name assist_09 --model_variant assist_09_abce_best_full --epochs 1 --batch_size 128 --max_train_batches 2 --max_val_batches 1 --max_test_batches 1 --num_workers 0 --no_cuda --save_dir checkpoints/local_crg_lcrf_smoke --log_dir logs/local_crg_lcrf_smoke
+python main.py \
+  --dataset_name assist_09 \
+  --model_variant full \
+  --epochs 1 \
+  --batch_size 128 \
+  --max_train_batches 2 \
+  --max_val_batches 1 \
+  --max_test_batches 1 \
+  --num_workers 0 \
+  --no_cuda \
+  --save_dir checkpoints/local_graph_irt_smoke \
+  --log_dir logs/local_graph_irt_smoke
 ```
 
-该 smoke 只用于确认训练链路、日志和 checkpoint 写入正常，不代表正式指标。
+删除标签统计捷径后，指标下降应被记录为旧成绩依赖 shortcut 的证据，不应通过恢复旧残差来掩盖。
 
-## 6. 远程服务器规范
+## 服务器规范
 
 服务器 `10.154.22.11` 上的代码同步必须走 git：
 
@@ -114,4 +107,4 @@ cd /home/zsh/ConceptSkillCDM
 git pull
 ```
 
-禁止使用 `echo <base64> | base64 -d | bash` 或其他不可审计的编码包装命令。临时命令必须是可读命令，清理 logs/results/checkpoints 前必须确认路径位于 `/home/zsh/ConceptSkillCDM` 内。
+禁止使用 Base64 或其他不可审计的命令包装。清理 `logs/`、`results/`、`checkpoints/` 前必须确认路径和 run id。

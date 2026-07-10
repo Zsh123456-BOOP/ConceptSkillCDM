@@ -1,8 +1,11 @@
-import torch
-from torch.utils.data import Dataset, DataLoader
-import pandas as pd
-import numpy as np
+import math
 from typing import Tuple, Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+import torch
+from scipy.sparse import csr_matrix
+from torch.utils.data import DataLoader, Dataset
 
 
 class CognitiveDiagnosisDataset(Dataset):
@@ -263,22 +266,6 @@ def _observed_offdiag_support(*priors: torch.Tensor) -> torch.Tensor:
     return support
 
 
-def make_support_uniform_prior(*priors: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, float]]:
-    """Uniform row prior on the union of observed train-evidence support edges."""
-    support = _observed_offdiag_support(*priors)
-    prior = support.float()
-    row_sum = prior.sum(dim=-1, keepdim=True)
-    prior = torch.where(row_sum > 0, prior / row_sum.clamp(min=1e-12), torch.zeros_like(prior))
-    C = int(prior.size(0))
-    possible = float(C * max(0, C - 1))
-    edge_count = float(support.float().sum().item())
-    return prior.to(dtype=torch.float32), {
-        "support_uniform_edge_count": edge_count,
-        "support_uniform_density": edge_count / possible if possible > 0 else 0.0,
-        "support_uniform_entropy": _prior_entropy(prior),
-    }
-
-
 def make_degree_random_prior(
         *priors: torch.Tensor,
         seed: int = 20260513,
@@ -296,7 +283,7 @@ def make_degree_random_prior(
             candidates = torch.tensor([idx for idx in range(C) if idx != row_idx], dtype=torch.long)
             perm = torch.randperm(candidates.numel(), generator=gen)[:degree]
             cols = candidates[perm]
-            sampled[row_idx, cols] = 1.0
+            sampled[row_idx, cols] = torch.rand(degree, generator=gen).clamp(min=1e-4)
     row_sum = sampled.sum(dim=-1, keepdim=True)
     prior = torch.where(row_sum > 0, sampled / row_sum.clamp(min=1e-12), torch.zeros_like(sampled))
     possible = float(C * max(0, C - 1))
@@ -344,121 +331,83 @@ def build_item_cooccurrence_prior(q_matrix: torch.Tensor) -> Tuple[torch.Tensor,
     }
 
 
-def build_sequence_transition_prior(
-        train_sources: list,
-        cpt_id_map: Dict[int, int],
-        *,
-        max_hops: int = 3,
-        decay: float = 0.70,
-        shrink: float = 2.0,
-        student_reliability_lambda: float = 5.0,
+def build_student_coexposure_prior(
+    train_sources: list,
+    cpt_id_map: Dict[int, int],
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
-    """
-    Build a train-only empirical concept transition prior from student order.
+    """Build a permutation-invariant train-only student co-exposure prior.
 
-    A row is consumed as incoming support in the graph encoder: A[c, k] means
-    concept c aggregates information from support concept k. For a train
-    sequence k -> c, the transition evidence is therefore written to row c,
-    column k.
+    Each student contributes equal total support mass per observed concept,
+    regardless of history length. This uses only ``stu_id`` and ``cpt_seq``;
+    correctness labels and physical CSV row order are irrelevant.
     """
-    C = len(cpt_id_map)
-    if C <= 0:
+    concept_count = len(cpt_id_map)
+    if concept_count <= 0:
         raise ValueError("cpt_id_map must not be empty")
-    if C == 1:
+    if concept_count == 1:
         prior = torch.ones(1, 1, dtype=torch.float32)
         return prior, {
-            "seq_raw_transition_mass": 0.0,
-            "seq_student_weighted_mass": 0.0,
-            "seq_student_count": 0.0,
-            "seq_reliability_lambda": float(student_reliability_lambda),
-            "sequence_observed_edge_count": 0.0,
-            "sequence_prior_density": 0.0,
-            "sequence_prior_entropy": 0.0,
+            "exposure_student_count": 0.0,
+            "exposure_multi_concept_student_count": 0.0,
+            "exposure_mean_concepts_per_student": 0.0,
+            "exposure_pair_mass": 0.0,
+            "exposure_observed_edge_count": 0.0,
+            "exposure_prior_density": 0.0,
+            "exposure_prior_entropy": 0.0,
         }
 
-    max_hops = max(1, int(max_hops))
-    decay = max(0.0, min(1.0, float(decay)))
-    counts = torch.zeros(C, C, dtype=torch.float32)
-    popularity = torch.zeros(C, dtype=torch.float32)
-    raw_transition_count = 0.0
-    student_weighted_mass = 0.0
-    effective_student_count = 0.0
-    reliability_lambda = max(0.0, float(student_reliability_lambda))
-
-    for df in _iter_source_dfs(train_sources):
-        if "stu_id" not in df.columns or "cpt_seq" not in df.columns:
+    student_concepts: Dict[object, set] = {}
+    for dataframe in _iter_source_dfs(train_sources):
+        if "stu_id" not in dataframe.columns or "cpt_seq" not in dataframe.columns:
             continue
-        ordered_df = df.copy()
-        ordered_df["_source_order"] = np.arange(len(ordered_df))
-        order_cols = [
-            col for col in ("timestamp", "time", "order_id", "original_row_id")
-            if col in ordered_df.columns
-        ]
-        ordered_df = ordered_df.sort_values(
-            ["stu_id", *order_cols, "_source_order"],
-            kind="mergesort",
-        )
-        for _, stu_df in ordered_df.groupby("stu_id", sort=False):
-            concept_sets: List[List[int]] = []
-            for seq in stu_df["cpt_seq"].values:
-                mapped = sorted({cpt_id_map[cid] for cid in _parse_concept_seq(seq) if cid in cpt_id_map})
-                if mapped:
-                    concept_sets.append(mapped)
-                    inc = 1.0 / float(len(mapped))
-                    for cid in mapped:
-                        popularity[cid] += inc
-            if len(concept_sets) < 2:
-                continue
-            student_counts = torch.zeros_like(counts)
-            student_total = 0.0
-            for idx, src_concepts in enumerate(concept_sets):
-                for hop in range(1, max_hops + 1):
-                    j = idx + hop
-                    if j >= len(concept_sets):
-                        break
-                    dst_concepts = concept_sets[j]
-                    weight = (decay ** (hop - 1)) / float(len(src_concepts) * len(dst_concepts))
-                    for src_c in src_concepts:
-                        for dst_c in dst_concepts:
-                            if src_c == dst_c:
-                                continue
-                            student_counts[dst_c, src_c] += weight
-                            student_total += weight
-            if student_total > 0.0:
-                reliability = (
-                    student_total / (student_total + reliability_lambda)
-                    if reliability_lambda > 0.0
-                    else 1.0
+        for student_id, student_rows in dataframe.groupby("stu_id", sort=False):
+            concepts = student_concepts.setdefault(student_id, set())
+            for sequence in student_rows["cpt_seq"].values:
+                concepts.update(
+                    cpt_id_map[concept_id]
+                    for concept_id in _parse_concept_seq(sequence)
+                    if concept_id in cpt_id_map
                 )
-                counts += reliability * (student_counts / float(student_total))
-                raw_transition_count += student_total
-                student_weighted_mass += reliability
-                effective_student_count += 1.0
 
-    eye = torch.eye(C, dtype=torch.float32)
-    offdiag = 1.0 - eye
-    pop = popularity.clamp(min=0.0)
-    if pop.sum().item() <= 0.0:
-        fallback = _uniform_offdiag_prior(C)
-    else:
-        fallback = pop.view(1, C).repeat(C, 1) * offdiag
-        fallback = fallback / fallback.sum(dim=-1, keepdim=True).clamp(min=1e-12)
-        uniform = _uniform_offdiag_prior(C)
-        fallback = torch.where(fallback.sum(dim=-1, keepdim=True) > 0, fallback, uniform)
+    histories = [sorted(concepts) for concepts in student_concepts.values() if concepts]
+    row_indices: List[int] = []
+    concept_indices: List[int] = []
+    weights: List[float] = []
+    for row_index, concepts in enumerate(histories):
+        if len(concepts) < 2:
+            continue
+        weight = 1.0 / math.sqrt(float(len(concepts) - 1))
+        row_indices.extend([row_index] * len(concepts))
+        concept_indices.extend(concepts)
+        weights.extend([weight] * len(concepts))
+    incidence = csr_matrix(
+        (weights, (row_indices, concept_indices)),
+        shape=(len(histories), concept_count),
+        dtype=np.float32,
+    )
+    counts = torch.from_numpy((incidence.transpose() @ incidence).toarray()).float()
 
+    eye = torch.eye(concept_count, dtype=torch.float32)
+    counts *= 1.0 - eye
     observed_mask = (counts > 0).float()
-    prior = _row_normalize_offdiag_counts(counts, fallback_prior=fallback, shrink=shrink)
+    prior = _row_normalize_offdiag_counts(counts, shrink=0.0)
     prior = _keep_observed_support_only(prior, observed_mask)
-    possible = float(C * (C - 1))
+    possible = float(concept_count * (concept_count - 1))
     observed = float((counts > 0).float().sum().item())
+    multi_concept_histories = sum(len(concepts) >= 2 for concepts in histories)
+    mean_concepts = (
+        float(sum(len(concepts) for concepts in histories)) / float(len(histories))
+        if histories
+        else 0.0
+    )
     return prior, {
-        "seq_raw_transition_mass": float(raw_transition_count),
-        "seq_student_weighted_mass": float(student_weighted_mass),
-        "seq_student_count": float(effective_student_count),
-        "seq_reliability_lambda": float(reliability_lambda),
-        "sequence_observed_edge_count": observed,
-        "sequence_prior_density": observed / possible if possible > 0 else 0.0,
-        "sequence_prior_entropy": _prior_entropy(prior),
+        "exposure_student_count": float(len(histories)),
+        "exposure_multi_concept_student_count": float(multi_concept_histories),
+        "exposure_mean_concepts_per_student": mean_concepts,
+        "exposure_pair_mass": float(counts.sum().item()),
+        "exposure_observed_edge_count": observed,
+        "exposure_prior_density": observed / possible if possible > 0 else 0.0,
+        "exposure_prior_entropy": _prior_entropy(prior),
     }
 
 
@@ -471,11 +420,8 @@ def create_dataloaders(
         shuffle_train: bool = True,
         min_stu_interactions: int = 0,
         min_exer_interactions: int = 0,
-        min_poison_count: int = 0,
         logger=None,
-        dataset_name: str = None,   # ★ 新增：数据集名字（assist_09 / junyi / assist_17）
-        disable_sequence_prior: bool = False,
-        disable_item_prior: bool = False,
+        dataset_name: Optional[str] = None,
         graph_prior_mode: str = "evidence",
 ) -> Tuple[DataLoader, DataLoader, DataLoader, dict]:
     """
@@ -490,7 +436,6 @@ def create_dataloaders(
         shuffle_train: 是否打乱训练集
         min_stu_interactions: 学生最小答题数阈值（<该值的学生将被过滤，0 表示不启用）
         min_exer_interactions: 习题最小被作答数阈值（<该值的题目将被过滤，0 表示不启用）
-        min_poison_count: 毒题检测所需的最小作答次数（0 表示不启用）
         logger: 可选的 logger，对清洗过程进行记录
 
     Returns:
@@ -512,6 +457,25 @@ def create_dataloaders(
     val_df = pd.read_csv(val_file)
     test_df = pd.read_csv(test_file)
 
+    required_columns = {"stu_id", "exer_id", "cpt_seq", "label"}
+    for split_name, dataframe in (
+        ("train", train_df),
+        ("valid", val_df),
+        ("test", test_df),
+    ):
+        missing = sorted(required_columns - set(dataframe.columns))
+        if missing:
+            raise ValueError(f"{split_name} split is missing required columns: {missing}")
+        labels = pd.to_numeric(dataframe["label"], errors="coerce")
+        if labels.isna().any() or not labels.between(0.0, 1.0).all():
+            raise ValueError(f"{split_name} labels must be finite values in [0, 1]")
+        dataframe["label"] = labels.astype(float)
+        if dataframe[["stu_id", "exer_id"]].isna().any().any():
+            raise ValueError(f"{split_name} stu_id/exer_id values must not be missing")
+
+    if train_df.empty:
+        raise ValueError("training split is empty")
+
     # ============ 统一的清洗逻辑 ============
 
     # --- 学生冷启动过滤 ---
@@ -531,9 +495,12 @@ def create_dataloaders(
             return df_new, before - len(df_new)
 
         dropped_total = 0
-        train_df, d = _filter_by_students(train_df); dropped_total += d
-        val_df, d = _filter_by_students(val_df); dropped_total += d
-        test_df, d = _filter_by_students(test_df); dropped_total += d
+        train_df, dropped = _filter_by_students(train_df)
+        dropped_total += dropped
+        val_df, dropped = _filter_by_students(val_df)
+        dropped_total += dropped
+        test_df, dropped = _filter_by_students(test_df)
+        dropped_total += dropped
 
         log(f"[数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 {dropped_total} 条记录。")
     else:
@@ -556,52 +523,21 @@ def create_dataloaders(
             return df_new, before - len(df_new)
 
         dropped_total = 0
-        train_df, d = _filter_by_items(train_df); dropped_total += d
-        val_df, d = _filter_by_items(val_df); dropped_total += d
-        test_df, d = _filter_by_items(test_df); dropped_total += d
+        train_df, dropped = _filter_by_items(train_df)
+        dropped_total += dropped
+        val_df, dropped = _filter_by_items(val_df)
+        dropped_total += dropped
+        test_df, dropped = _filter_by_items(test_df)
+        dropped_total += dropped
 
         log(f"[数据清洗] 题目冷门过滤：在 train/valid/test 中共删除 {dropped_total} 条记录。")
     else:
         log("[数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。")
 
-    # --- 毒题清洗（Acc=0 或 1 且作答数 >= min_poison_count） ---
-    if min_poison_count > 0:
-        item_stats = train_df.groupby("exer_id")["label"].agg(
-            count="count", correct_rate="mean"
-        ).reset_index()
-
-        poison_mask = (
-                (item_stats["count"] >= min_poison_count)
-                & ((item_stats["correct_rate"] <= 0.0)
-                   | (item_stats["correct_rate"] >= 1.0))
-        )
-        poison_items = item_stats.loc[poison_mask, :]
-        poison_ids = set(poison_items["exer_id"].tolist())
-
-        if len(poison_ids) > 0:
-            log(
-                f"[数据清洗] 检测到 {len(poison_ids)} 道“毒题”"
-                f"（作答次数 ≥ {min_poison_count} 且正确率为 0 或 1），将从所有数据集中移除。"
-            )
-            keep_non_toxic = set(
-                item_stats[~item_stats["exer_id"].isin(poison_ids)]["exer_id"]
-            )
-
-            def _filter_non_toxic(df):
-                before = len(df)
-                df_new = df[df["exer_id"].isin(keep_non_toxic)].reset_index(drop=True)
-                return df_new, before - len(df_new)
-
-            dropped_total = 0
-            train_df, d = _filter_non_toxic(train_df); dropped_total += d
-            val_df, d = _filter_non_toxic(val_df); dropped_total += d
-            test_df, d = _filter_non_toxic(test_df); dropped_total += d
-
-            log(f"[数据清洗] 毒题清洗：在 train/valid/test 中共删除 {dropped_total} 条记录。")
-        else:
-            log("[数据清洗] 在当前 min_poison_count 设置下未检测到“毒题”。")
-    else:
-        log("[数据清洗] 跳过毒题清洗（min_poison_count <= 0）。")
+    if train_df.empty:
+        raise ValueError("training split is empty after interaction filtering")
+    if train_df["label"].nunique(dropna=True) < 2:
+        raise ValueError("training split must contain both outcome classes")
 
     # 2. 构建ID映射 & Q矩阵（严格基于 train-only）
     train_sources = [train_df]
@@ -619,139 +555,71 @@ def create_dataloaders(
             "item_prior_entropy": 0.0,
         }
 
-    def _zero_sequence_prior(num_concepts: int) -> Tuple[torch.Tensor, Dict[str, float]]:
+    def _zero_exposure_prior(num_concepts: int) -> Tuple[torch.Tensor, Dict[str, float]]:
         return torch.zeros(num_concepts, num_concepts, dtype=torch.float32), {
-            "seq_raw_transition_mass": 0.0,
-            "seq_student_weighted_mass": 0.0,
-            "seq_student_count": 0.0,
-            "seq_reliability_lambda": 0.0,
-            "sequence_observed_edge_count": 0.0,
-            "sequence_prior_density": 0.0,
-            "sequence_prior_entropy": 0.0,
-        }
-
-    def _uniform_prior(num_concepts: int) -> Tuple[torch.Tensor, Dict[str, float]]:
-        if num_concepts == 1:
-            prior = torch.ones(1, 1, dtype=torch.float32)
-        else:
-            prior = _uniform_offdiag_prior(num_concepts)
-        possible = float(num_concepts * max(0, num_concepts - 1))
-        observed = possible
-        return prior, {
-            "item_observed_edge_count": 0.0,
-            "item_prior_density": 1.0 if possible > 0 else 0.0,
-            "item_prior_entropy": _prior_entropy(prior),
-            "uniform_prior_edge_count": observed,
-        }
-
-    def _random_prior(num_concepts: int, seed: int = 20260513) -> Tuple[torch.Tensor, Dict[str, float]]:
-        if num_concepts == 1:
-            prior = torch.ones(1, 1, dtype=torch.float32)
-        else:
-            gen = torch.Generator().manual_seed(int(seed) + int(num_concepts) * 1009)
-            scores = torch.rand(num_concepts, num_concepts, generator=gen, dtype=torch.float32)
-            eye = torch.eye(num_concepts, dtype=torch.float32)
-            scores = scores * (1.0 - eye)
-            prior = scores / scores.sum(dim=-1, keepdim=True).clamp(min=1e-12)
-        possible = float(num_concepts * max(0, num_concepts - 1))
-        observed = possible
-        return prior, {
-            "item_observed_edge_count": 0.0,
-            "item_prior_density": 1.0 if possible > 0 else 0.0,
-            "item_prior_entropy": _prior_entropy(prior),
-            "random_prior_edge_count": observed,
-            "random_prior_seed": float(seed),
+            "exposure_student_count": 0.0,
+            "exposure_multi_concept_student_count": 0.0,
+            "exposure_mean_concepts_per_student": 0.0,
+            "exposure_pair_mass": 0.0,
+            "exposure_observed_edge_count": 0.0,
+            "exposure_prior_density": 0.0,
+            "exposure_prior_entropy": 0.0,
         }
 
     prior_mode = str(graph_prior_mode or "evidence").strip().lower()
     valid_prior_modes = {
         "evidence",
         "item_only",
-        "seq_only",
-        "self_only",
-        "uniform",
-        "random",
-        "support_uniform",
+        "exposure_only",
         "degree_random",
     }
     if prior_mode not in valid_prior_modes:
         raise ValueError(f"graph_prior_mode must be one of {sorted(valid_prior_modes)}, got {graph_prior_mode!r}")
-    if prior_mode == "evidence":
-        if disable_item_prior and disable_sequence_prior:
-            prior_mode = "self_only"
-        elif disable_item_prior:
-            prior_mode = "seq_only"
-        elif disable_sequence_prior:
-            prior_mode = "item_only"
     num_concepts = len(cpt_id_map)
 
     def _build_evidence_priors() -> Tuple[torch.Tensor, Dict[str, float], torch.Tensor, Dict[str, float]]:
         item_prior, item_stats = build_item_cooccurrence_prior(q_matrix)
-        seq_prior, seq_stats = build_sequence_transition_prior(
+        exposure_prior, exposure_stats = build_student_coexposure_prior(
             train_sources=train_sources,
             cpt_id_map=cpt_id_map,
-            max_hops=3,
-            decay=0.70,
-            shrink=2.0,
         )
-        return item_prior, item_stats, seq_prior, seq_stats
+        return item_prior, item_stats, exposure_prior, exposure_stats
 
-    if prior_mode == "uniform":
-        item_prior_matrix, item_prior_stats = _uniform_prior(num_concepts)
-        sequence_prior_matrix, sequence_prior_stats = _zero_sequence_prior(num_concepts)
-        log("[A Prior] mode=uniform: using train-independent uniform off-diagonal control prior.")
-    elif prior_mode == "random":
-        item_prior_matrix, item_prior_stats = _random_prior(num_concepts)
-        sequence_prior_matrix, sequence_prior_stats = _zero_sequence_prior(num_concepts)
-        log("[A Prior] mode=random: using deterministic train-independent random off-diagonal control prior.")
-    elif prior_mode == "support_uniform":
-        evidence_item, item_prior_stats, evidence_seq, sequence_prior_stats = _build_evidence_priors()
-        item_prior_matrix, support_stats = make_support_uniform_prior(evidence_item, evidence_seq)
-        item_prior_stats = {**item_prior_stats, **support_stats}
-        sequence_prior_matrix, _ = _zero_sequence_prior(num_concepts)
-        log("[A Prior] mode=support_uniform: using evidence-union support with uniform row weights.")
-    elif prior_mode == "degree_random":
-        evidence_item, item_prior_stats, evidence_seq, sequence_prior_stats = _build_evidence_priors()
-        item_prior_matrix, random_stats = make_degree_random_prior(evidence_item, evidence_seq)
+    if prior_mode == "degree_random":
+        evidence_item, item_prior_stats, evidence_exposure, exposure_prior_stats = _build_evidence_priors()
+        item_prior_matrix, random_stats = make_degree_random_prior(evidence_item, evidence_exposure)
         item_prior_stats = {**item_prior_stats, **random_stats}
-        sequence_prior_matrix, _ = _zero_sequence_prior(num_concepts)
-        log("[A Prior] mode=degree_random: using row-degree-matched random support control prior.")
-    elif prior_mode == "self_only":
-        item_prior_matrix, item_prior_stats = _zero_item_prior(num_concepts)
-        sequence_prior_matrix, sequence_prior_stats = _zero_sequence_prior(num_concepts)
-        log("[A Prior] mode=self_only: disabling item and sequence evidence; only self-loop support remains.")
+        exposure_prior_matrix, _ = _zero_exposure_prior(num_concepts)
+        log("[Graph Prior] mode=degree_random: using row-degree-matched random support control prior.")
     else:
-        if prior_mode == "seq_only":
+        if prior_mode == "exposure_only":
             item_prior_matrix, item_prior_stats = _zero_item_prior(num_concepts)
-            log("[A Prior] mode=seq_only: item co-occurrence evidence disabled.")
+            log("[Graph Prior] mode=exposure_only: item co-occurrence evidence disabled.")
         else:
             item_prior_matrix, item_prior_stats = build_item_cooccurrence_prior(q_matrix)
 
         if prior_mode == "item_only":
-            sequence_prior_matrix, sequence_prior_stats = _zero_sequence_prior(num_concepts)
-            log("[A Prior] mode=item_only: sequence transition evidence disabled.")
+            exposure_prior_matrix, exposure_prior_stats = _zero_exposure_prior(num_concepts)
+            log("[Graph Prior] mode=item_only: student co-exposure evidence disabled.")
         else:
-            sequence_prior_matrix, sequence_prior_stats = build_sequence_transition_prior(
+            exposure_prior_matrix, exposure_prior_stats = build_student_coexposure_prior(
                 train_sources=train_sources,
                 cpt_id_map=cpt_id_map,
-                max_hops=3,
-                decay=0.70,
-                shrink=2.0,
             )
-    graph_prior_stats = {**item_prior_stats, **sequence_prior_stats}
+    graph_prior_stats = {**item_prior_stats, **exposure_prior_stats}
     graph_prior_stats["graph_prior_mode"] = prior_mode
     log(
-        "[A Prior] train-only evidence: "
+        "[Graph Prior] train-only evidence: "
         f"mode={prior_mode}, "
         f"item_edges={graph_prior_stats['item_observed_edge_count']:.0f}, "
         f"item_density={graph_prior_stats['item_prior_density']:.4f}, "
         f"item_entropy={graph_prior_stats['item_prior_entropy']:.4f}, "
-        f"seq_raw_mass={graph_prior_stats['seq_raw_transition_mass']:.1f}, "
-        f"seq_weighted_mass={graph_prior_stats['seq_student_weighted_mass']:.1f}, "
-        f"seq_students={graph_prior_stats['seq_student_count']:.0f}, "
-        f"seq_edges={graph_prior_stats['sequence_observed_edge_count']:.0f}, "
-        f"seq_density={graph_prior_stats['sequence_prior_density']:.4f}, "
-        f"seq_entropy={graph_prior_stats['sequence_prior_entropy']:.4f}"
+        f"exposure_students={graph_prior_stats['exposure_student_count']:.0f}, "
+        f"exposure_mean_concepts={graph_prior_stats['exposure_mean_concepts_per_student']:.2f}, "
+        f"exposure_pair_mass={graph_prior_stats['exposure_pair_mass']:.1f}, "
+        f"exposure_edges={graph_prior_stats['exposure_observed_edge_count']:.0f}, "
+        f"exposure_density={graph_prior_stats['exposure_prior_density']:.4f}, "
+        f"exposure_entropy={graph_prior_stats['exposure_prior_entropy']:.4f}"
     )
 
     def _filter_seen_support(df: pd.DataFrame, split_name: str):
@@ -776,6 +644,14 @@ def create_dataloaders(
 
     val_df, val_total_rows_raw, val_seen_rows, val_seen_coverage = _filter_seen_support(val_df, "Valid")
     test_df, test_total_rows_raw, test_seen_rows, test_seen_coverage = _filter_seen_support(test_df, "Test")
+    if val_df.empty:
+        raise ValueError("validation split has no train-seen student-item rows")
+    if test_df.empty:
+        raise ValueError("test split has no train-seen student-item rows")
+    if val_df["label"].nunique(dropna=True) < 2:
+        raise ValueError("validation split must contain both outcome classes after train-seen filtering")
+    if test_df["label"].nunique(dropna=True) < 2:
+        raise ValueError("test split must contain both outcome classes after train-seen filtering")
 
     # ========= 统计每题的概念数量（全局 + 各数据集） =========
     # 每道题对应的概念数：按 Q 矩阵行求和
@@ -883,12 +759,12 @@ def create_dataloaders(
         'cpt_id_reverse_map': {v: k for k, v in cpt_id_map.items()},
         'q_matrix': q_matrix,
         'item_prior_matrix': item_prior_matrix,
-        'sequence_prior_matrix': sequence_prior_matrix,
+        'exposure_prior_matrix': exposure_prior_matrix,
         'graph_prior_stats': graph_prior_stats,
-        'sequence_prior_disabled': bool(disable_sequence_prior or prior_mode in {"item_only", "self_only", "uniform", "random"}),
-        'item_prior_disabled': bool(disable_item_prior or prior_mode in {"seq_only", "self_only", "random"}),
+        'exposure_prior_disabled': bool(prior_mode in {"item_only", "degree_random"}),
+        'item_prior_disabled': bool(prior_mode == "exposure_only"),
         'graph_prior_mode': prior_mode,
-        # 新增：每道题的“概念数量”，与 exer_id 内部索引对齐
+        # 每道题的概念数量，与 exer_id 内部索引对齐。
         'concepts_per_exercise': concepts_per_exercise,
         'train_only_split_hygiene': True,
         'val_total_rows_raw': int(val_total_rows_raw),
@@ -900,27 +776,3 @@ def create_dataloaders(
     }
 
     return train_loader, val_loader, test_loader, info_dict
-
-
-# 使用示例
-if __name__ == "__main__":
-    # 创建数据加载器
-    train_loader, val_loader, test_loader, info = create_dataloaders(
-        train_file='./data/assist-09/process_data/train.csv',
-        val_file='./data/assist-09/process_data/valid.csv',
-        test_file='./data/assist-09/process_data/test.csv',
-        batch_size=64,
-        num_workers=4
-    )
-
-    # 测试数据加载
-    print("\n" + "=" * 50)
-    print("测试数据加载:")
-    for batch_idx, (stu_ids, exer_ids, labels) in enumerate(train_loader):
-        print(f"\n批次 {batch_idx + 1}:")
-        print(f"学生ID形状: {stu_ids.shape}")
-        print(f"习题ID形状: {exer_ids.shape}")
-        print(f"标签形状: {labels.shape}")
-
-        # 只显示第一个批次
-        break

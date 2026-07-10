@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -44,14 +44,9 @@ class CognitiveDiagnosisHead(nn.Module):
         concept_mask: torch.Tensor,
         b: torch.Tensor,
         a: torch.Tensor,
-        theta_override: Optional[torch.Tensor] = None,
         return_details: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
-        theta_c = (
-            theta_override.to(dtype=knowledge_state.dtype, device=knowledge_state.device)
-            if theta_override is not None
-            else self.theta_proj(knowledge_state).squeeze(-1)
-        )
+        theta_c = self.theta_proj(knowledge_state).squeeze(-1)
 
         mask = concept_mask.float()
         denom = mask.sum(dim=1).clamp(min=1.0)

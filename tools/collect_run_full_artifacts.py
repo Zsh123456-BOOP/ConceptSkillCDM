@@ -73,8 +73,10 @@ def _select_result_rows(run_id: str, datasets: list[str]) -> pd.DataFrame:
     return selected
 
 
-def collect(run_id: str, datasets: list[str], output_dir: Path) -> None:
+def collect(run_id: str, datasets: list[str], output_dir: Path, *, overwrite: bool = False) -> None:
     if output_dir.exists():
+        if not overwrite:
+            raise FileExistsError(f"output directory already exists: {output_dir}; pass --overwrite to replace it")
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "logs").mkdir()
@@ -149,6 +151,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--datasets", required=True, help="Comma-separated dataset names.")
     parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
 
@@ -156,7 +159,7 @@ def main() -> None:
     args = parse_args()
     datasets = [part.strip() for part in args.datasets.split(",") if part.strip()]
     output_dir = args.output_dir or Path("results") / f"{args.run_id}_full_artifacts"
-    collect(args.run_id, datasets, output_dir)
+    collect(args.run_id, datasets, output_dir, overwrite=args.overwrite)
 
 
 if __name__ == "__main__":

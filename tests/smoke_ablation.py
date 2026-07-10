@@ -1,11 +1,10 @@
+"""Smoke checks for the clean Graph-IRT ablation semantics."""
+
 import os
 import sys
-from typing import Optional
 
-try:
-    import torch
-except ModuleNotFoundError as exc:
-    raise SystemExit("torch is not installed. Install requirements to run this smoke test.") from exc
+import torch
+
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -14,79 +13,65 @@ if ROOT not in sys.path:
 from src.model import CognitiveDiagnosisModel
 
 
-def _make_q_matrix(num_exercises: int, num_concepts: int) -> torch.Tensor:
-    q = torch.zeros(num_exercises, num_concepts)
-    for e in range(num_exercises):
-        q[e, e % num_concepts] = 1.0
-    extra = (torch.rand(num_exercises, num_concepts) < 0.2).float()
-    q = torch.clamp(q + extra, 0.0, 1.0)
-    return q
-
-
-def _print_shape(name: str, tensor: Optional[torch.Tensor]) -> None:
-    if tensor is None:
-        print(f"  {name}: None")
-    else:
-        print(f"  {name}: {tuple(tensor.shape)}")
-
-
-def run_case(name: str, **model_kwargs) -> None:
-    torch.manual_seed(123)
-
-    num_students = 10
-    num_exercises = 12
-    num_concepts = 6
-    q_matrix = _make_q_matrix(num_exercises, num_concepts)
-
-    model = CognitiveDiagnosisModel(
-        num_students=num_students,
-        num_exercises=num_exercises,
-        num_concepts=num_concepts,
+def _build_model(*, propagation_alpha: float) -> CognitiveDiagnosisModel:
+    q_matrix = torch.tensor(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0, 1.0],
+            [1.0, 0.0, 0.0, 1.0],
+        ]
+    )
+    item_prior = torch.tensor(
+        [
+            [0.0, 1.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ]
+    )
+    return CognitiveDiagnosisModel(
+        num_students=5,
+        num_exercises=4,
+        num_concepts=4,
         q_matrix=q_matrix,
-        knowledge_dim=16,
+        item_prior_matrix=item_prior,
+        exposure_prior_matrix=torch.zeros_like(item_prior),
+        knowledge_dim=8,
         num_relation_heads=2,
-        num_gnn_layers=1,
+        num_gnn_layers=2,
         dropout=0.0,
-        **model_kwargs,
+        graph_propagation_alpha=propagation_alpha,
     )
-    model.eval()
-
-    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-    concept_vector = q_matrix[exercise_ids]
-
-    logits, details = model(
-        student_ids,
-        exercise_ids,
-        concept_vector=concept_vector,
-        return_details=True,
-        return_logits=True,
-    )
-
-    print(f"\n[{name}]")
-    _print_shape("logits", logits)
-    _print_shape("relation_matrices", details.get("relation_matrices"))
-    _print_shape("knowledge_state", details.get("knowledge_state"))
-    _print_shape("student_repr", details.get("student_repr"))
-    _print_shape("q_vector", details.get("q_vector"))
-    _print_shape("irt_logit", details.get("irt_logit"))
-    _print_shape("theta_c", details.get("theta_c"))
-    _print_shape("alpha", details.get("alpha"))
-
-    for removed_key in ("mf_logit", "residual_logit", "gate", "student_latent", "exercise_latent"):
-        if removed_key in details:
-            raise AssertionError(f"{removed_key} should not exist after deleting module B.")
 
 
 def main() -> None:
-    cases = [
-        ("full", dict(use_concept_graph=True, use_personal_graph=True)),
-        ("no_A", dict(use_concept_graph=False, use_personal_graph=True)),
-        ("no_E", dict(use_concept_graph=True, use_personal_graph=False)),
-    ]
+    torch.manual_seed(17)
+    full = _build_model(propagation_alpha=0.35).eval()
+    torch.manual_seed(17)
+    no_message = _build_model(propagation_alpha=0.0).eval()
 
-    for name, kwargs in cases:
-        run_case(name, **kwargs)
+    student_ids = torch.tensor([0, 1, 2], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 1, 2], dtype=torch.long)
+    _, full_details = full(
+        student_ids, exercise_ids, return_details=True, return_logits=True
+    )
+    _, no_message_details = no_message(
+        student_ids, exercise_ids, return_details=True, return_logits=True
+    )
+
+    assert torch.equal(
+        no_message_details["knowledge_state"], no_message_details["initial_state"]
+    ), "graph_propagation_alpha=0 must be an exact no-message-passing ablation"
+    assert full_details["knowledge_state_graph_delta"].item() > 0.0
+
+    relation = full_details["relation_matrices"]
+    assert torch.isfinite(relation).all()
+    assert (relation >= 0.0).all()
+    assert torch.allclose(
+        relation.sum(dim=-1), torch.ones_like(relation.sum(dim=-1)), atol=1e-6
+    )
+    print("OK: clean Graph-IRT ablation semantics passed.")
 
 
 if __name__ == "__main__":

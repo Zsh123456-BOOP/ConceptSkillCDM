@@ -1,640 +1,93 @@
+"""Runtime invariants for the single-path Graph-IRT model."""
+
 import os
 import sys
 
 import torch
+import torch.nn.functional as F
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-
-def _assert(condition: bool, message: str) -> None:
-    if not condition:
-        raise AssertionError(message)
+from src.model import CognitiveDiagnosisModel
 
 
-def _assert_all_finite(name: str, value) -> None:
-    if value is None:
-        return
-    if isinstance(value, torch.Tensor):
-        _assert(torch.isfinite(value).all().item(), f"{name} contains non-finite values.")
-        return
-    if isinstance(value, dict):
-        for key, child in value.items():
-            _assert_all_finite(f"{name}.{key}", child)
-        return
-    if isinstance(value, (list, tuple)):
-        for idx, child in enumerate(value):
-            _assert_all_finite(f"{name}[{idx}]", child)
+BANNED_TOKENS = (
+    "personal",
+    "posterior",
+    "roadmap",
+    "tutor",
+    "calibration",
+    "residual_logit",
+    "ae_",
+)
 
 
-def _assert_sparse_rows_normalized(name: str, spec: dict) -> None:
-    posterior = spec["posterior_prob"]
-    support_valid = spec["support_valid_mask"].bool()
-    active_rows = spec["active_row_valid_mask"].bool().unsqueeze(1).expand(-1, support_valid.size(1), -1)
-    row_has_support = support_valid.any(dim=-1)
-    valid_rows = active_rows & row_has_support
-    _assert(valid_rows.any().item(), f"{name} should contain active supported rows.")
-    row_sums = posterior.sum(dim=-1)
-    max_err = (row_sums[valid_rows] - 1.0).abs().max().item()
-    _assert(max_err < 1e-5, f"{name} posterior rows should sum to 1, max_err={max_err:.3e}.")
-    _assert((posterior >= -1e-7).all().item(), f"{name} posterior should be non-negative.")
-
-
-def _build_model(
-    *,
-    ablate_module1: bool = False,
-    use_concept_graph: bool = True,
-    use_personal_graph: bool = True,
-    relation_theta_scale: float = 0.0,
-    **overrides,
-):
-    from src.model import CognitiveDiagnosisModel
-
+def _build_model() -> CognitiveDiagnosisModel:
     q_matrix = torch.tensor(
-        [
-            [1.0, 0.0, 1.0],
-            [0.0, 1.0, 0.0],
-            [1.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
-        dtype=torch.float32,
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 1.0], [1.0, 0.0, 1.0]]
     )
-    params = dict(
-        num_students=5,
-        num_exercises=4,
+    prior = torch.tensor(
+        [[0.0, 0.7, 0.3], [0.5, 0.0, 0.5], [0.6, 0.4, 0.0]]
+    )
+    return CognitiveDiagnosisModel(
+        num_students=4,
+        num_exercises=3,
         num_concepts=3,
         q_matrix=q_matrix,
+        item_prior_matrix=prior,
+        exposure_prior_matrix=torch.zeros_like(prior),
         knowledge_dim=8,
         num_relation_heads=2,
         num_gnn_layers=1,
         dropout=0.0,
-        use_concept_graph=use_concept_graph,
-        use_personal_graph=use_personal_graph,
-        personal_rank=2,
-        ablate_module1=ablate_module1,
-        graph_tau_init=0.6,
-        graph_topk=2,
-        allow_self_loop=True,
-        relation_theta_scale=relation_theta_scale,
+        graph_propagation_alpha=0.25,
     )
-    params.update(overrides)
-    model = CognitiveDiagnosisModel(**params)
-    model.eval()
-    return model
-
-
-def _check_module1_ae_numerics_and_signals() -> None:
-    torch.manual_seed(7)
-    model = _build_model(ablate_module1=False, use_concept_graph=True, use_personal_graph=True)
-    model.set_epoch(3)
-    if getattr(model.structure_module, "personal_alpha_bias", None) is not None:
-        with torch.no_grad():
-            model.structure_module.personal_alpha_bias.weight.fill_(5.0)
-    model.structure_module.personal_delta_scale = 10.0
-
-    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-    labels = torch.tensor([1.0, 0.0, 1.0, 0.0], dtype=torch.float32)
-
-    logits, details = model(
-        student_ids=student_ids,
-        exercise_ids=exercise_ids,
-        return_details=True,
-        return_logits=True,
-    )
-    probs = model(
-        student_ids=student_ids,
-        exercise_ids=exercise_ids,
-        return_details=False,
-        return_logits=False,
-    )
-
-    _assert_all_finite("logits", logits)
-    _assert_all_finite("probs", probs)
-    _assert(logits.abs().max().item() < 100.0, "Logits should stay in a numerically usable range.")
-    _assert(((probs >= 0.0) & (probs <= 1.0)).all().item(), "Probabilities should stay in [0, 1].")
-
-    relation = details["relation_matrices"]
-    _assert_all_finite("relation_matrices", relation)
-    _assert(tuple(relation.shape) == (2, 3, 3), f"Unexpected relation_matrices shape: {tuple(relation.shape)}.")
-    _assert((relation >= -1e-7).all().item(), "Global concept graph should be non-negative.")
-    graph_row_err = (relation.sum(dim=-1) - 1.0).abs().max().item()
-    _assert(graph_row_err < 1e-5, f"Global concept graph rows should sum to 1, max_err={graph_row_err:.3e}.")
-    _assert(details["relation_identity_delta"].item() > 1e-5, "Module 1(A) should learn a non-identity graph signal.")
-    _assert(details["knowledge_state_graph_delta"].item() > 1e-5, "Module 1(A) should affect knowledge_state.")
-    _assert(details["a_diag_semantic_ok"].item() == 1.0, "Module 1(A) semantic diagnostic should be OK.")
-
-    personal_spec = details["personal_relation_spec"]
-    _assert(isinstance(personal_spec, dict), "Module 1(E) should expose a sparse personal relation spec.")
-    _assert_all_finite("personal_relation_spec", personal_spec)
-    _assert_sparse_rows_normalized("personal_relation_spec", personal_spec)
-
-    personal_delta = (personal_spec["posterior_prob"] - personal_spec["global_support_prob"]).abs().max().item()
-    _assert(personal_delta > 1e-5, "Module 1(E) posterior should differ from the global support.")
-    _assert(details["query_row_posterior_delta_abs"].item() > 1e-5, "Module 1(E) should produce query-row posterior signal.")
-    _assert(details["personal_matrix_delta"].mean().item() > 1e-5, "Module 1(E) matrix delta should be non-trivial.")
-    _assert(details["personal_logits_support_absmax"].item() < 30.0, "Personal support logits should not explode.")
-
-    for count_key in (
-        "personal_delta_nonfinite_count",
-        "personal_logits_nonfinite_count",
-        "personal_matrix_nonfinite_count",
-        "state_embedding_nonfinite_count",
-        "context_repr_nonfinite_count",
-        "state_logit_nonfinite_count",
-        "id_logit_nonfinite_count",
-        "alpha_base_nonfinite_count",
-        "alpha_preclamp_nonfinite_count",
-        "personal_bad_row_count_active",
-        "personal_fallback_row_count_active",
-    ):
-        _assert(count_key in details, f"Expected numeric diagnostic key: {count_key}.")
-        _assert(int(details[count_key].item()) == 0, f"{count_key} should be 0.")
-
-    alpha = details["alpha"]
-    _assert_all_finite("alpha", alpha)
-    _assert((alpha >= 0.0).all().item(), "Personal alpha should be non-negative.")
-    _assert((alpha <= model.personal_max_alpha + 1e-7).all().item(), "Personal alpha should respect max_alpha.")
-
-    base_loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
-    reg_terms = model.get_regularization_components(
-        relation_matrices=relation,
-        details=details,
-        base_loss=base_loss,
-    )
-    _assert_all_finite("regularization_terms", reg_terms)
-    _assert(reg_terms["total"].abs().item() < 10.0, "Regularization total should not numerically dominate smoke loss.")
-
-
-def _check_graph_query_adapter_is_initially_residual() -> None:
-    torch.manual_seed(1)
-    model = _build_model(ablate_module1=False, use_concept_graph=True, use_personal_graph=True)
-    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-
-    with torch.no_grad():
-        _, details = model(
-            student_ids=student_ids,
-            exercise_ids=exercise_ids,
-            return_details=True,
-            return_logits=True,
-        )
-
-    pre_gate_delta = details["query_row_global_readout_pre_gate_delta"].item()
-    post_gate_delta = details["query_row_global_readout_delta"].item()
-    adapter_gain = details["graph_query_adapter_gain"].item()
-    _assert(pre_gate_delta > 1e-5, "Smoke case should exercise non-zero graph query readout.")
-    _assert(
-        adapter_gain <= 1.05,
-        (
-            "Graph query adapter should be a near-residual no-op at initialization; "
-            f"got gain={adapter_gain:.4f}, pre={pre_gate_delta:.4f}, post={post_gate_delta:.4f}."
-        ),
-    )
-
-
-def _check_per_head_personal_graph() -> None:
-    model = _build_model(ablate_module1=False, use_personal_graph=True)
-    if getattr(model.structure_module, "personal_alpha_bias", None) is not None:
-        with torch.no_grad():
-            model.structure_module.personal_alpha_bias.weight.fill_(5.0)
-    model.structure_module.personal_delta_scale = 10.0
-    student_ids = torch.tensor([0, 1], dtype=torch.long)
-    exercise_ids = torch.tensor([0, 2], dtype=torch.long)
-
-    with torch.no_grad():
-        _, details = model(
-            student_ids=student_ids,
-            exercise_ids=exercise_ids,
-            return_details=True,
-            return_logits=True,
-        )
-
-    alpha = details.get("alpha")
-    personal_spec = details.get("personal_relation_spec")
-    _assert(alpha is not None, "Expected per-head alpha details.")
-    _assert(personal_spec is not None, "Expected sparse per-head personal relation spec.")
-    _assert(tuple(alpha.shape) == (2, 2, 1, 1), f"Expected alpha shape (2,2,1,1), got {tuple(alpha.shape)}.")
-    _assert(
-        tuple(personal_spec["posterior_prob"].shape) == (2, 2, 2, 2),
-        f"Expected sparse posterior_prob shape (2,2,2,2), got {tuple(personal_spec['posterior_prob'].shape)}.",
-    )
-    _assert_all_finite("personal_relation_spec", personal_spec)
-    _assert_sparse_rows_normalized("personal_relation_spec", personal_spec)
-    relation_used = details.get("relation_used")
-    _assert(relation_used is not None, "Expected relation_used details when personal graph is enabled.")
-    _assert(
-        isinstance(relation_used, dict),
-        f"Expected sparse relation_used spec dict, got {type(relation_used)}.",
-    )
-    _assert(
-        tuple(relation_used["posterior_prob"].shape) == (2, 2, 2, 2),
-        f"Expected relation_used sparse posterior_prob shape (2,2,2,2), got {tuple(relation_used['posterior_prob'].shape)}.",
-    )
-    _assert_all_finite("relation_used", relation_used)
-    _assert_sparse_rows_normalized("relation_used", relation_used)
-    personal_delta = (personal_spec["posterior_prob"] - personal_spec["global_support_prob"]).abs().max().item()
-    used_delta = (relation_used["posterior_prob"] - relation_used["global_support_prob"]).abs().max().item()
-    _assert(personal_delta > 1e-5, "Sparse posterior should differ from global support in this smoke case.")
-    _assert(abs(used_delta - personal_delta) < 1e-6, "relation_used 应复用同一份 personalized sparse posterior 规格。")
-    for key in ("personal_delta_pre_softmax_norm", "personal_delta_student_std", "alpha_head_std"):
-        _assert(key in details, f"Expected detail key: {key}.")
-
-
-def _check_no_a_removes_personal_support_space() -> None:
-    model = _build_model(ablate_module1=False, use_concept_graph=False, use_personal_graph=True)
-    _assert(not model.use_concept_graph, "Smoke setup should disable the global concept graph.")
-    _assert(
-        not model.use_personal_graph,
-        "E must be disabled when A is disabled; personalized support is defined inside A support.",
-    )
-    _assert(
-        not model.structure_module.use_personal_graph,
-        "Structure module must not keep E alive under no_A.",
-    )
-    _assert(model.structure_module.adaptive_gate is None, "no_A should not instantiate the E gate.")
-    _assert(model.structure_module.personal_generator is None, "no_A should not instantiate the E generator.")
-
-    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-    with torch.no_grad():
-        _, details = model(
-            student_ids=student_ids,
-            exercise_ids=exercise_ids,
-            return_details=True,
-            return_logits=True,
-        )
-
-    _assert(details.get("personal_relation_spec") is None, "no_A should not expose an E posterior.")
-    _assert(
-        not isinstance(details.get("relation_used"), dict),
-        "no_A should not expose sparse personalized relation_used.",
-    )
-    _assert(
-        int(details.get("used_no_a_support_fallback_mode", torch.tensor(0)).item()) == 0,
-        "no_A must not build a fallback support space for E.",
-    )
-    _assert(
-        details.get("query_row_posterior_delta_abs", torch.tensor(0.0)).item() == 0.0,
-        "no_A should have zero E posterior delta.",
-    )
-
-
-def _check_e_uses_interpretable_diagnosis_evidence() -> None:
-    model = _build_model(
-        ablate_module1=False,
-        use_concept_graph=True,
-        use_personal_graph=True,
-        ae_logit_residual_scale=1.0,
-        ae_posterior_prior_scale=2.0,
-        personal_mastery_prior_scale=1.0,
-        personal_recent_mastery_prior_scale=0.5,
-        personal_mastery_count_smoothing=1.0,
-        personal_delta_scale=3.0,
-        personal_query_correction_scale=0.15,
-        personal_query_message_gain=1.0,
-        personal_warmup_epochs=0,
-        personal_reg_warmup_epochs=0,
-    )
-    model.eval()
-    with torch.no_grad():
-        model.ae_student_concept_prior_logit.copy_(
-            torch.tensor(
-                [
-                    [1.5, -1.0, 0.4],
-                    [-0.8, 1.2, -0.2],
-                    [0.6, -0.4, 1.0],
-                    [1.0, 0.2, -1.2],
-                    [-1.0, 0.8, 0.3],
-                ],
-                dtype=model.ae_student_concept_prior_logit.dtype,
-            )
-        )
-        model.ae_student_concept_recent_logit.copy_(0.5 * model.ae_student_concept_prior_logit)
-        model.ae_student_concept_observed_count.fill_(12.0)
-        model.ae_concept_prior_logit.copy_(torch.tensor([0.6, -0.2, 0.3]))
-        model.ae_concept_count_feature.copy_(torch.tensor([1.0, 0.5, 0.8]))
-
-    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-    with torch.no_grad():
-        _, details = model(
-            student_ids=student_ids,
-            exercise_ids=exercise_ids,
-            return_details=True,
-            return_logits=True,
-        )
-
-    _assert(
-        details["query_row_personal_message_delta"].item() > 0.0,
-        "E should still write a bounded query-state correction.",
-    )
-    _assert(
-        details["tutor_local_navigation_logit_abs_mean"].item() > 0.0,
-        "E should contribute explicit local tutoring evidence to the diagnosis equation.",
-    )
-    _assert(
-        details["ae_logit_residual_abs_mean"].item() > 0.0,
-        "The interpretable A/E diagnosis evidence should be active when ae_logit_residual_scale > 0.",
-    )
-
-
-def _check_diagnosis_head_accepts_theta_override() -> None:
-    from src.prediction_head import CognitiveDiagnosisHead
-
-    head = CognitiveDiagnosisHead(knowledge_dim=4)
-    knowledge_state = torch.zeros((2, 3, 4), dtype=torch.float32)
-    concept_mask = torch.tensor([[1.0, 0.0, 1.0], [0.0, 1.0, 1.0]], dtype=torch.float32)
-    theta_override = torch.tensor([[0.2, 9.0, 0.8], [7.0, -0.4, 0.6]], dtype=torch.float32)
-    b = torch.tensor([0.1, -0.2], dtype=torch.float32)
-    a = torch.tensor([2.0, 1.5], dtype=torch.float32)
-
-    logits, details = head(
-        knowledge_state=knowledge_state,
-        concept_mask=concept_mask,
-        b=b,
-        a=a,
-        theta_override=theta_override,
-        return_details=True,
-    )
-
-    expected_theta_e = torch.tensor([0.5, 0.1], dtype=torch.float32)
-    expected_logits = a * (expected_theta_e - b)
-    _assert(torch.allclose(logits, expected_logits, atol=1e-6), "Diagnosis head should use theta_override.")
-    _assert(torch.allclose(details["theta_c"], theta_override, atol=1e-6), "Details should expose override theta.")
-
-
-def _check_ae_calibration_enters_main_theta_path() -> None:
-    torch.manual_seed(17)
-    full = _build_model(
-        use_concept_graph=True,
-        use_personal_graph=True,
-        ae_logit_residual_scale=0.0,
-        relation_theta_scale=0.0,
-        graph_query_readout_scale=0.0,
-        graph_query_readout_2hop_scale=0.0,
-        roadmap_theta_calibration_scale=0.60,
-        tutor_theta_calibration_scale=0.55,
-        theta_calibration_clip=2.0,
-        personal_mastery_prior_scale=1.0,
-        personal_recent_mastery_prior_scale=0.5,
-        personal_mastery_count_smoothing=1.0,
-        personal_delta_scale=3.0,
-        personal_warmup_epochs=0,
-        personal_reg_warmup_epochs=0,
-    )
-    no_e = _build_model(
-        use_concept_graph=True,
-        use_personal_graph=False,
-        ae_logit_residual_scale=0.0,
-        relation_theta_scale=0.0,
-        graph_query_readout_scale=0.0,
-        graph_query_readout_2hop_scale=0.0,
-        roadmap_theta_calibration_scale=0.60,
-        tutor_theta_calibration_scale=0.55,
-        theta_calibration_clip=2.0,
-    )
-    no_a = _build_model(
-        use_concept_graph=False,
-        use_personal_graph=True,
-        ae_logit_residual_scale=0.0,
-        relation_theta_scale=0.0,
-        graph_query_readout_scale=0.0,
-        graph_query_readout_2hop_scale=0.0,
-        roadmap_theta_calibration_scale=0.60,
-        tutor_theta_calibration_scale=0.55,
-        theta_calibration_clip=2.0,
-    )
-
-    with torch.no_grad():
-        full.ae_student_concept_prior_logit.copy_(
-            torch.tensor(
-                [
-                    [1.5, -1.0, 0.4],
-                    [-0.8, 1.2, -0.2],
-                    [0.6, -0.4, 1.0],
-                    [1.0, 0.2, -1.2],
-                    [-1.0, 0.8, 0.3],
-                ],
-                dtype=full.ae_student_concept_prior_logit.dtype,
-            )
-        )
-        full.ae_student_concept_recent_logit.copy_(0.5 * full.ae_student_concept_prior_logit)
-        full.ae_student_concept_observed_count.fill_(12.0)
-
-    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-
-    with torch.no_grad():
-        _, full_details = full(student_ids, exercise_ids, return_details=True, return_logits=True)
-        _, no_e_details = no_e(student_ids, exercise_ids, return_details=True, return_logits=True)
-        _, no_a_details = no_a(student_ids, exercise_ids, return_details=True, return_logits=True)
-
-    _assert(full_details["ae_logit_residual_abs_mean"].item() == 0.0, "A/E must not use a direct logit bypass.")
-    _assert(full_details["roadmap_theta_delta_abs_mean"].item() > 0.0, "A should calibrate concept theta.")
-    _assert(full_details["tutor_theta_delta_abs_mean"].item() > 0.0, "E should calibrate concept theta.")
-    _assert(
-        full_details["tutor_theta_current_mastery_abs_mean"].item() > 0.0,
-        "E should use train-only student-concept mastery as local tutoring evidence.",
-    )
-    _assert(full_details["theta_calibration_delta_abs_mean"].item() > 0.0, "Calibrated theta should enter diagnosis.")
-    _assert(
-        (full_details["theta_c"] - full_details["theta_c_raw"]).abs().mean().item() > 0.0,
-        "Diagnosis details should show calibrated theta differs from raw theta.",
-    )
-    _assert(no_e_details["roadmap_theta_delta_abs_mean"].item() > 0.0, "no_E should keep A theta calibration.")
-    _assert(
-        no_e_details["theta_calibration_delta_abs_mean"].item() > 0.0,
-        "no_E should route A theta calibration into the diagnosis head.",
-    )
-    _assert(no_e_details["tutor_theta_delta_abs_mean"].item() == 0.0, "no_E should remove E theta calibration.")
-    _assert(
-        no_e_details["tutor_theta_current_mastery_abs_mean"].item() == 0.0,
-        "no_E should remove local mastery evidence.",
-    )
-    _assert(no_a_details["roadmap_theta_delta_abs_mean"].item() == 0.0, "no_A should remove A theta calibration.")
-    _assert(no_a_details["tutor_theta_delta_abs_mean"].item() == 0.0, "no_A should remove E theta calibration.")
-
-
-def _check_ae_calibration_is_query_local_theta_e_adjustment() -> None:
-    torch.manual_seed(23)
-    model = _build_model(
-        use_concept_graph=True,
-        use_personal_graph=True,
-        ae_logit_residual_scale=0.0,
-        relation_theta_scale=0.0,
-        graph_query_readout_scale=0.0,
-        graph_query_readout_2hop_scale=0.0,
-        roadmap_theta_calibration_scale=0.40,
-        tutor_theta_calibration_scale=0.35,
-        theta_calibration_clip=0.75,
-        personal_mastery_prior_scale=1.0,
-        personal_recent_mastery_prior_scale=0.5,
-        personal_mastery_count_smoothing=1.0,
-        personal_delta_scale=3.0,
-        personal_warmup_epochs=0,
-        personal_reg_warmup_epochs=0,
-    )
-    with torch.no_grad():
-        model.ae_student_concept_prior_logit.copy_(
-            torch.tensor(
-                [
-                    [1.5, -1.0, 0.4],
-                    [-0.8, 1.2, -0.2],
-                    [0.6, -0.4, 1.0],
-                    [1.0, 0.2, -1.2],
-                    [-1.0, 0.8, 0.3],
-                ],
-                dtype=model.ae_student_concept_prior_logit.dtype,
-            )
-        )
-        model.ae_student_concept_recent_logit.copy_(0.5 * model.ae_student_concept_prior_logit)
-        model.ae_student_concept_observed_count.fill_(12.0)
-
-    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-    with torch.no_grad():
-        _, details = model(student_ids, exercise_ids, return_details=True, return_logits=True)
-
-    q = details["q_vector"].bool()
-    theta_shift = details["theta_c_calibrated"] - details["theta_c_raw"]
-    _assert(theta_shift[q].abs().mean().item() > 0.0, "A/E should adjust queried concept theta.")
-    _assert(
-        theta_shift[~q].abs().max().item() == 0.0,
-        "A/E theta calibration must stay query-local and avoid smoothing non-query concepts.",
-    )
-    expected = details["roadmap_theta_e_adjustment"] + details["tutor_theta_e_adjustment"]
-    _assert(
-        torch.allclose(details["theta_e_calibration_delta"], expected, atol=1e-6),
-        "Theta-e calibration should be the sum of A and E adjustments.",
-    )
-    _assert(
-        0.0 <= details["roadmap_theta_e_reliability"].min().item()
-        and details["roadmap_theta_e_reliability"].max().item() <= 1.0,
-        "A reliability gate should stay in [0, 1].",
-    )
-    _assert(
-        0.0 <= details["tutor_theta_e_reliability"].min().item()
-        and details["tutor_theta_e_reliability"].max().item() <= 1.0,
-        "E reliability gate should stay in [0, 1].",
-    )
-
-
-def _check_removed_residual_artifacts() -> None:
-    model = _build_model(ablate_module1=False, use_personal_graph=True)
-    student_ids = torch.tensor([0, 1], dtype=torch.long)
-    exercise_ids = torch.tensor([0, 1], dtype=torch.long)
-
-    with torch.no_grad():
-        _, details = model(
-            student_ids=student_ids,
-            exercise_ids=exercise_ids,
-            return_details=True,
-            return_logits=True,
-        )
-
-    for removed_key in ("mf_logit", "residual_logit", "gate", "gate_raw", "delta_logit"):
-        _assert(removed_key not in details, f"Removed B detail should not appear: {removed_key}")
-    _assert("irt_logit" in details, "Fixed prediction head should still expose irt_logit.")
-
-
-def _check_relation_theta_readout_is_interpretable_and_ablatable() -> None:
-    torch.manual_seed(11)
-    full = _build_model(use_concept_graph=True, use_personal_graph=True, relation_theta_scale=0.5)
-    contrast = _build_model(use_concept_graph=True, use_personal_graph=True, relation_theta_scale=-0.5)
-    no_a = _build_model(use_concept_graph=False, use_personal_graph=True, relation_theta_scale=0.5)
-    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-    exercise_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
-
-    with torch.no_grad():
-        full_logits, full_details = full(
-            student_ids=student_ids,
-            exercise_ids=exercise_ids,
-            return_details=True,
-            return_logits=True,
-        )
-        off_logits, off_details = no_a(
-            student_ids=student_ids,
-            exercise_ids=exercise_ids,
-            return_details=True,
-            return_logits=True,
-        )
-        contrast_logits, contrast_details = contrast(
-            student_ids=student_ids,
-            exercise_ids=exercise_ids,
-            return_details=True,
-            return_logits=True,
-        )
-
-    _assert_all_finite("relation_theta_full_logits", full_logits)
-    _assert(full_details["relation_theta_scale"].item() == 0.5, "Relation-theta scale should be exposed.")
-    _assert(
-        full_details["relation_theta_neighbor_mass"].item() > 0.0,
-        "Relation-theta readout should use explicit A/E support outside query self when A is enabled.",
-    )
-    _assert(
-        full_details["relation_theta_logit_abs_mean"].item() >= 0.0,
-        "Relation-theta readout should expose a bounded logit diagnostic.",
-    )
-    _assert(
-        off_details["relation_theta_logit_abs_mean"].item() == 0.0,
-        "no_A should remove relation-theta support readout completely.",
-    )
-    _assert_all_finite("relation_theta_contrast_logits", contrast_logits)
-    _assert(contrast_details["relation_theta_scale"].item() == -0.5, "Relation-theta scale should preserve sign.")
-
-
-def _check_get_student_diagnosis() -> None:
-    for ablate_module1 in (False, True):
-        model = _build_model(ablate_module1=ablate_module1, use_personal_graph=True)
-        out = model.get_student_diagnosis(0)
-        mastery = out.get("knowledge_mastery")
-        student_repr = out.get("student_repr")
-        _assert(mastery is not None, "knowledge_mastery should exist.")
-        _assert(student_repr is not None, "student_repr should exist.")
-        _assert(tuple(mastery.shape) == (3,), f"Unexpected mastery shape: {tuple(mastery.shape)}.")
-        _assert(tuple(student_repr.shape) == (8,), f"Unexpected student_repr shape: {tuple(student_repr.shape)}.")
-        _assert("skill_latent" not in out, "skill_latent should be removed with module B.")
-
-
-def _check_grad_guard_keeps_nan_from_poisoning_group() -> None:
-    from src.trainer import _clip_stability_sensitive_grads
-
-    model = _build_model(ablate_module1=False, use_concept_graph=True, use_personal_graph=True)
-    model.train()
-    for param in model.parameters():
-        if param.requires_grad:
-            param.grad = torch.full_like(param, 0.01)
-
-    bad_param = model.exercise_encoder.b.weight
-    good_param = model.structure_module.knowledge_encoder.concept_emb.weight
-    bad_param.grad.view(-1)[0] = float("nan")
-    good_before = good_param.grad.detach().clone()
-
-    stats = _clip_stability_sensitive_grads(model)
-
-    _assert(int(stats["nonfinite_grad_count"]) == 1, "Grad guard should report the injected NaN gradient.")
-    _assert(torch.isfinite(good_param.grad).all().item(), "A finite knowledge-state grad must not be poisoned by another NaN grad.")
-    _assert(torch.isfinite(bad_param.grad).all().item(), "Non-finite grad entries should be sanitized before optimizer.step.")
-    _assert(good_param.grad.abs().max().item() <= good_before.abs().max().item() + 1e-8, "Grad clipping should remain bounded.")
 
 
 def main() -> None:
-    _check_module1_ae_numerics_and_signals()
-    _check_graph_query_adapter_is_initially_residual()
-    _check_per_head_personal_graph()
-    _check_no_a_removes_personal_support_space()
-    _check_e_uses_interpretable_diagnosis_evidence()
-    _check_diagnosis_head_accepts_theta_override()
-    _check_ae_calibration_enters_main_theta_path()
-    _check_ae_calibration_is_query_local_theta_e_adjustment()
-    _check_removed_residual_artifacts()
-    _check_relation_theta_readout_is_interpretable_and_ablatable()
-    _check_get_student_diagnosis()
-    _check_grad_guard_keeps_nan_from_poisoning_group()
-    print("OK: runtime regression smoke checks passed.")
+    torch.manual_seed(9)
+    model = _build_model()
+    student_ids = torch.tensor([0, 1, 2, 3], dtype=torch.long)
+    exercise_ids = torch.tensor([0, 1, 2, 0], dtype=torch.long)
+    labels = torch.tensor([0.0, 1.0, 1.0, 0.0])
+
+    logits, details = model(
+        student_ids, exercise_ids, return_details=True, return_logits=True
+    )
+    probabilities = model(student_ids, exercise_ids, return_logits=False)
+
+    assert torch.equal(logits, details["irt_logit"])
+    assert torch.equal(details["logits"], details["irt_logit"])
+    assert torch.allclose(probabilities, torch.sigmoid(logits), atol=0.0, rtol=0.0)
+    assert torch.isfinite(logits).all()
+    for key in details:
+        assert not any(token in key.lower() for token in BANNED_TOKENS), key
+
+    state_keys = tuple(model.state_dict())
+    for key in state_keys:
+        assert not any(token in key.lower() for token in BANNED_TOKENS), key
+    assert not hasattr(model, "initialize_ae_logit_priors")
+
+    loss = F.binary_cross_entropy_with_logits(logits, labels)
+    loss.backward()
+    active_gradients = [
+        parameter.grad
+        for parameter in model.parameters()
+        if parameter.requires_grad and parameter.grad is not None
+    ]
+    assert active_gradients
+    assert all(torch.isfinite(gradient).all() for gradient in active_gradients)
+
+    clone = _build_model().eval()
+    clone.load_state_dict(model.state_dict(), strict=True)
+    model.eval()
+    expected = model(student_ids, exercise_ids, return_logits=True)
+    actual = clone(student_ids, exercise_ids, return_logits=True)
+    assert torch.equal(expected, actual)
+    print("OK: single-path Graph-IRT runtime invariants passed.")
 
 
 if __name__ == "__main__":
