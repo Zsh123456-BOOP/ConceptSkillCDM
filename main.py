@@ -84,6 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
     parser.add_argument("--weight_decay", type=float, default=1e-5)
+    parser.add_argument("--optimizer", choices=("adam", "adamw"), default="adam")
     parser.add_argument("--lambda_graph_entropy", type=float, default=0.01)
     parser.add_argument("--graph_reg_warmup_epochs", type=int, default=1)
     parser.add_argument("--graph_reg_cap_ratio", type=float, default=6.0)
@@ -95,6 +96,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prediction_l2_lambda", type=float, default=5e-5)
     parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--early_stop_patience", type=int, default=5)
+    parser.add_argument("--min_epochs", type=int, default=0)
+    parser.add_argument("--early_stop_min_delta", type=float, default=1e-5)
 
     # Runtime and outputs
     parser.add_argument("--num_workers", type=int, default=4)
@@ -178,6 +181,12 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit(f"error: --num_workers must be non-negative, got {args.num_workers}")
     if int(args.patience) < 0:
         raise SystemExit(f"error: --patience must be non-negative, got {args.patience}")
+    if int(args.min_epochs) < 0:
+        raise SystemExit(f"error: --min_epochs must be non-negative, got {args.min_epochs}")
+    if int(args.min_epochs) > int(args.epochs):
+        raise SystemExit(
+            f"error: --min_epochs cannot exceed --epochs, got {args.min_epochs}>{args.epochs}"
+        )
     for name in (
         "weight_decay",
         "lambda_graph_entropy",
@@ -185,6 +194,7 @@ def _validate_args(args: argparse.Namespace) -> None:
         "lambda_graph_uniform",
         "graph_uniform_margin",
         "prediction_l2_lambda",
+        "early_stop_min_delta",
     ):
         value = float(getattr(args, name))
         if value < 0.0:

@@ -77,6 +77,7 @@ python tests/smoke_graph_runner.py
 python tests/smoke_ablation_flags.py
 python tests/smoke_gpu_selector.py
 python tests/smoke_concurrent_results.py
+python tests/smoke_training_protocol.py
 ```
 
 最小 CPU 训练闭环：

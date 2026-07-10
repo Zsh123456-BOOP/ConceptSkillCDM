@@ -213,6 +213,11 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "epochs",
         "learning_rate",
         "weight_decay",
+        "optimizer",
+        "patience",
+        "early_stop_patience",
+        "min_epochs",
+        "early_stop_min_delta",
         "dropout",
         "knowledge_dim",
         "num_relation_heads",
@@ -301,10 +306,24 @@ def _clip_stability_sensitive_grads(model: nn.Module) -> Dict[str, Any]:
 
 def _build_optimizer(model: nn.Module, args: Any) -> optim.Optimizer:
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
-    return optim.Adam(
+    optimizer_name = str(_source_get(args, "optimizer", "adam")).strip().lower()
+    optimizer_class = {"adam": optim.Adam, "adamw": optim.AdamW}.get(optimizer_name)
+    if optimizer_class is None:
+        raise ValueError(f"optimizer must be 'adam' or 'adamw', got {optimizer_name!r}")
+    return optimizer_class(
         [{"params": params, "lr": float(args.learning_rate), "group_name": "graph_irt"}],
         weight_decay=float(args.weight_decay),
     )
+
+
+def _is_validation_improvement(current: float, best: float, min_delta: float) -> bool:
+    return float(current) > float(best) + max(0.0, float(min_delta))
+
+
+def _should_early_stop(epoch: int, patience_counter: int, args: Any) -> bool:
+    min_epochs = max(0, int(_source_get(args, "min_epochs", 0)))
+    patience = max(1, int(_source_get(args, "early_stop_patience", 1)))
+    return int(epoch) >= min_epochs and int(patience_counter) >= patience
 
 
 def _tensor_summary(value: Any) -> Dict[str, Any]:
@@ -739,6 +758,24 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         float(getattr(args, "lambda_graph_uniform", 0.04)),
         float(getattr(args, "prediction_l2_lambda", 5e-5)),
     )
+    logger.info(
+        "%s Training protocol: optimizer=%s plateau_patience=%d early_stop_patience=%d "
+        "min_epochs=%d min_delta=%.2g",
+        run_tag,
+        str(getattr(args, "optimizer", "adam")),
+        int(args.patience),
+        int(args.early_stop_patience),
+        int(getattr(args, "min_epochs", 0)),
+        float(getattr(args, "early_stop_min_delta", 0.0)),
+    )
+    if int(args.early_stop_patience) <= int(args.patience) + 1:
+        logger.warning(
+            "%s Early stopping may pre-empt ReduceLROnPlateau: early_stop_patience=%d, "
+            "plateau_patience=%d. Use a larger early-stop window for tuning.",
+            run_tag,
+            int(args.early_stop_patience),
+            int(args.patience),
+        )
 
     best_val_auc = float("-inf")
     best_epoch = 0
@@ -838,7 +875,11 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             if graph_low_grad_streak >= 2 and float(args.graph_propagation_alpha) > 0.0:
                 logger.warning("%s Graph gradients have remained near zero for %d epochs.", run_tag, graph_low_grad_streak)
 
-        if val_metrics["auc"] > best_val_auc:
+        if _is_validation_improvement(
+            val_metrics["auc"],
+            best_val_auc,
+            getattr(args, "early_stop_min_delta", 0.0),
+        ):
             best_val_auc = float(val_metrics["auc"])
             best_epoch = epoch
             patience_counter = 0
@@ -882,7 +923,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             except Exception as exc:
                 logger.warning("%s Module activity failed: %s", run_tag, exc)
 
-        if patience_counter >= int(args.early_stop_patience):
+        if _should_early_stop(epoch, patience_counter, args):
             logger.info("%s Early stopping at epoch %d (best AUC=%.4f @ %d)", run_tag, epoch, best_val_auc, best_epoch)
             break
 
