@@ -287,7 +287,7 @@ def make_degree_random_prior(
     row_sum = sampled.sum(dim=-1, keepdim=True)
     prior = torch.where(row_sum > 0, sampled / row_sum.clamp(min=1e-12), torch.zeros_like(sampled))
     possible = float(C * max(0, C - 1))
-    edge_count = float(sampled.sum().item())
+    edge_count = float((sampled > 0.0).sum().item())
     return prior.to(dtype=torch.float32), {
         "degree_random_edge_count": edge_count,
         "degree_random_density": edge_count / possible if possible > 0 else 0.0,
