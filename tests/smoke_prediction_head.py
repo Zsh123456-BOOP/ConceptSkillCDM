@@ -34,8 +34,7 @@ def _check_prediction_head_module() -> None:
     _assert(tuple(a.shape) == (3,), f"unexpected discrimination shape: {tuple(a.shape)}")
     _assert(float(a.min()) > 0.0, "discrimination should stay positive after softplus")
 
-    exercise_ids = torch.tensor([0, 1, 2], dtype=torch.long)
-    head = CognitiveDiagnosisHead(knowledge_dim=8, num_exercises=3)
+    head = CognitiveDiagnosisHead(knowledge_dim=8, num_concepts=3)
     _assert(
         not any("parametrizations" in name for name, _ in head.named_parameters()),
         "prediction head should use a plain interpretable linear theta projection.",
@@ -43,7 +42,6 @@ def _check_prediction_head_module() -> None:
     logits, details = head(
         knowledge_state=knowledge_state,
         concept_mask=concept_mask,
-        exercise_ids=exercise_ids,
         b=b,
         a=a,
         return_details=True,
@@ -66,13 +64,13 @@ def _check_prediction_head_module() -> None:
         _assert(param.grad is not None, f"missing grad for {name}")
         _assert(torch.isfinite(param.grad).all().item(), f"non-finite grad in {name}")
     _assert(
-        head.item_matching_direction.weight.grad.abs().sum().item() > 0.0,
-        "item directions must leave zero initialization on the first step",
+        head.concept_matching_direction.weight.grad.abs().sum().item() > 0.0,
+        "Q-concept directions must leave zero initialization on the first step",
     )
 
     mean_head = CognitiveDiagnosisHead(
         knowledge_dim=2,
-        num_exercises=2,
+        num_concepts=3,
         enable_item_matching=False,
     )
     with torch.no_grad():
@@ -96,7 +94,6 @@ def _check_prediction_head_module() -> None:
     mean_logits, mean_details = mean_head(
         knowledge_state=known_state,
         concept_mask=known_mask,
-        exercise_ids=torch.tensor([0, 1]),
         b=torch.zeros(2),
         a=torch.ones(2),
         return_details=True,
@@ -105,27 +102,29 @@ def _check_prediction_head_module() -> None:
     _assert(torch.allclose(mean_logits[1], torch.tensor(1.0), atol=1e-6), "multi-concept item should use the Q-mask mean theta.")
     _assert("theta_gap" not in mean_details, "prediction head should not keep the removed multi-concept gap path.")
 
-    matching_head = CognitiveDiagnosisHead(knowledge_dim=2, num_exercises=2)
+    matching_head = CognitiveDiagnosisHead(knowledge_dim=2, num_concepts=3)
     with torch.no_grad():
         matching_head.theta_proj.weight.zero_()
         matching_head.theta_proj.bias.zero_()
         matching_head.item_matching_projection.weight.copy_(torch.eye(2))
-        matching_head.item_matching_direction.weight.copy_(
-            torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+        matching_head.concept_matching_direction.weight.copy_(
+            torch.tensor([[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]])
         )
     repeated_state = known_state[:1].expand(2, -1, -1).clone()
-    repeated_mask = known_mask[:1].expand(2, -1).clone()
+    different_masks = torch.tensor(
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        dtype=torch.float32,
+    )
     _, matching_details = matching_head(
         knowledge_state=repeated_state,
-        concept_mask=repeated_mask,
-        exercise_ids=torch.tensor([0, 1]),
+        concept_mask=different_masks,
         b=torch.zeros(2),
         a=torch.ones(2),
         return_details=True,
     )
     _assert(
         not torch.equal(matching_details["theta_e"][0], matching_details["theta_e"][1]),
-        "different item directions must read the same Q-pooled state differently",
+        "different Q-concept directions must read the same student state differently",
     )
 
 

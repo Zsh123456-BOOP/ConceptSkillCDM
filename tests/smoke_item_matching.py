@@ -109,14 +109,14 @@ def main() -> None:
         initial_ablated = ablated(students, exercises, return_logits=True)
     assert torch.equal(initial_full, initial_ablated)
 
-    # The zero item factor must receive a first-step gradient and become active.
+    # The zero Q-concept factor must receive a first-step gradient and become active.
     full.train()
     optimizer = torch.optim.SGD(full.parameters(), lr=0.1)
     first_logits = full(students, exercises, return_logits=True)
     loss = F.binary_cross_entropy_with_logits(first_logits, labels)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
-    direction = full.diagnosis_head.item_matching_direction.weight
+    direction = full.diagnosis_head.concept_matching_direction.weight
     assert direction.grad is not None
     assert torch.isfinite(direction.grad).all()
     assert direction.grad.abs().sum().item() > 0.0
@@ -212,15 +212,18 @@ def main() -> None:
     assert torch.equal(expected_no_item, actual_no_item)
     assert not rebuilt_no_item.diagnosis_head.enable_item_matching
 
-    try:
-        _require_graph_irt_checkpoint(
-            {"architecture": "graph_irt_v2"},
-            "legacy.pth",
-        )
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("v3 runtime must reject a v2 checkpoint")
+    for legacy_architecture in ("graph_irt_v2", "graph_irt_v3"):
+        try:
+            _require_graph_irt_checkpoint(
+                {"architecture": legacy_architecture},
+                "legacy.pth",
+            )
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(
+                f"v4 runtime must reject a {legacy_architecture} checkpoint"
+            )
     print("OK: Q-aware item-matching contracts passed.")
 
 

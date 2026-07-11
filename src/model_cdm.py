@@ -24,7 +24,7 @@ from src.model_regularization import get_regularization_components as _get_regul
 from src.prediction_head import CognitiveDiagnosisHead, ExerciseDifficultyEncoder
 
 
-GRAPH_IRT_ARCHITECTURE = "graph_irt_v3"
+GRAPH_IRT_ARCHITECTURE = "graph_irt_v4"
 
 
 class CognitiveDiagnosisModel(nn.Module):
@@ -142,7 +142,7 @@ class CognitiveDiagnosisModel(nn.Module):
         )
         self.diagnosis_head = CognitiveDiagnosisHead(
             knowledge_dim=self.knowledge_dim,
-            num_exercises=self.num_exercises,
+            num_concepts=self.num_concepts,
             enable_item_matching=enable_item_matching,
             item_matching_rank=item_matching_rank,
         )
@@ -229,7 +229,6 @@ class CognitiveDiagnosisModel(nn.Module):
             irt_logit, head_details = self.diagnosis_head(
                 knowledge_state=knowledge_state,
                 concept_mask=q_vector,
-                exercise_ids=exercise_ids,
                 b=difficulty,
                 a=discrimination,
                 return_details=True,
@@ -238,7 +237,6 @@ class CognitiveDiagnosisModel(nn.Module):
             irt_logit = self.diagnosis_head(
                 knowledge_state=knowledge_state,
                 concept_mask=q_vector,
-                exercise_ids=exercise_ids,
                 b=difficulty,
                 a=discrimination,
                 return_details=False,

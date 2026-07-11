@@ -32,22 +32,23 @@ class CognitiveDiagnosisHead(nn.Module):
     Q-aware low-rank MIRT readout followed by a 2PL item response function.
 
     The shared projection keeps a stable one-dimensional ability backbone.  A
-    low-rank item direction then selects a second view of the Q-pooled student
-    state, allowing two exercises with similar Q rows to rank students
-    differently without adding a second prediction/logit branch.
+    low-rank direction shared by each Q concept then selects a second view of
+    the Q-pooled student state.  Items share statistical strength through their
+    concepts instead of owning a free per-item vector, and no second
+    prediction/logit branch is introduced.
     """
 
     def __init__(
         self,
         knowledge_dim: int,
-        num_exercises: int,
+        num_concepts: int,
         *,
         enable_item_matching: bool = True,
         item_matching_rank: int = ITEM_MATCHING_RANK,
     ):
         super().__init__()
         self.knowledge_dim = int(knowledge_dim)
-        self.num_exercises = int(num_exercises)
+        self.num_concepts = int(num_concepts)
         self.enable_item_matching = bool(enable_item_matching)
         self.item_matching_rank = min(
             self.knowledge_dim,
@@ -66,24 +67,23 @@ class CognitiveDiagnosisHead(nn.Module):
             self.item_matching_rank,
             bias=False,
         )
-        self.item_matching_direction = nn.Embedding(
-            self.num_exercises,
+        self.concept_matching_direction = nn.Embedding(
+            self.num_concepts,
             self.item_matching_rank,
         )
         nn.init.xavier_normal_(self.item_matching_projection.weight)
-        # A zero item factor makes the new architecture start from the shared
-        # 2PL solution while still giving the factor a non-zero first-step
-        # gradient through the seeded projection.
-        nn.init.zeros_(self.item_matching_direction.weight)
+        # A zero concept factor makes the new architecture start from the
+        # shared 2PL solution while still giving the factor a non-zero
+        # first-step gradient through the seeded projection.
+        nn.init.zeros_(self.concept_matching_direction.weight)
         if not self.enable_item_matching:
             self.item_matching_projection.requires_grad_(False)
-            self.item_matching_direction.requires_grad_(False)
+            self.concept_matching_direction.requires_grad_(False)
 
     def forward(
         self,
         knowledge_state: torch.Tensor,
         concept_mask: torch.Tensor,
-        exercise_ids: torch.Tensor,
         b: torch.Tensor,
         a: torch.Tensor,
         return_details: bool = False,
@@ -101,7 +101,7 @@ class CognitiveDiagnosisHead(nn.Module):
                 normalized_shape=(self.knowledge_dim,),
             )
             student_factor = self.item_matching_projection(normalized_state)
-            item_factor = self.item_matching_direction(exercise_ids)
+            item_factor = mask.matmul(self.concept_matching_direction.weight) / denom
             item_matching = (student_factor * item_factor).sum(dim=-1) / math.sqrt(
                 float(self.item_matching_rank)
             )
@@ -130,5 +130,5 @@ class CognitiveDiagnosisHead(nn.Module):
             return self.theta_proj.weight.new_tensor(0.0)
         return (
             self.item_matching_projection.weight.pow(2).mean()
-            + self.item_matching_direction.weight.pow(2).mean()
+            + self.concept_matching_direction.weight.pow(2).mean()
         )
