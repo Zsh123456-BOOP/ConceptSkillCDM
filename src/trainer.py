@@ -46,6 +46,8 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "graph_prior_strength_init",
     "student_concept_interaction",
     "student_concept_interaction_scale",
+    "student_concept_interaction_rank",
+    "student_concept_interaction_init_std",
     "num_gnn_layers",
 )
 
@@ -128,6 +130,12 @@ def _collect_structural_switches(source: Any) -> Dict[str, Any]:
     switches["student_concept_interaction_scale"] = float(
         _source_get(source, "student_concept_interaction_scale", 1.0)
     )
+    switches["student_concept_interaction_rank"] = int(
+        _source_get(source, "student_concept_interaction_rank", 8)
+    )
+    switches["student_concept_interaction_init_std"] = float(
+        _source_get(source, "student_concept_interaction_init_std", 0.1)
+    )
     switches["architecture"] = ARCHITECTURE_NAME
     return switches
 
@@ -181,6 +189,12 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "student_concept_interaction_scale": float(
             _source_get(source, "student_concept_interaction_scale", 1.0)
         ),
+        "student_concept_interaction_rank": int(
+            _source_get(source, "student_concept_interaction_rank", 8)
+        ),
+        "student_concept_interaction_init_std": float(
+            _source_get(source, "student_concept_interaction_init_std", 0.1)
+        ),
     }
 
 
@@ -201,6 +215,12 @@ def _runtime_facts(model: nn.Module) -> Dict[str, Any]:
         "student_concept_interaction_scale": float(
             getattr(knowledge_encoder, "student_concept_interaction_scale", 0.0)
         ),
+        "student_concept_interaction_rank": int(
+            getattr(knowledge_encoder, "student_concept_interaction_rank", 8)
+        ),
+        "student_concept_interaction_init_std": float(
+            getattr(knowledge_encoder, "student_concept_interaction_init_std", 0.1)
+        ),
         "num_parameters": int(sum(parameter.numel() for parameter in base_model.parameters())),
         "num_trainable_parameters": int(
             sum(parameter.numel() for parameter in base_model.parameters() if parameter.requires_grad)
@@ -213,12 +233,15 @@ def _log_runtime_facts(model: nn.Module, logger, context: str) -> Dict[str, Any]
     if not facts["graph_enabled"]:
         raise RuntimeError("Graph-IRT requires relation_learning to be present.")
     logger.info(
-        "%s Architecture=%s | graph_enabled=%s | interaction=%s@%.3g | params=%s trainable=%s",
+        "%s Architecture=%s | graph_enabled=%s | interaction=%s@%.3g rank=%d init_std=%.3g "
+        "| params=%s trainable=%s",
         context,
         facts["architecture"],
         facts["graph_enabled"],
         facts["student_concept_interaction"],
         facts["student_concept_interaction_scale"],
+        facts["student_concept_interaction_rank"],
+        facts["student_concept_interaction_init_std"],
         f"{facts['num_parameters']:,}",
         f"{facts['num_trainable_parameters']:,}",
     )
@@ -265,6 +288,8 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "graph_prior_strength_init",
         "student_concept_interaction",
         "student_concept_interaction_scale",
+        "student_concept_interaction_rank",
+        "student_concept_interaction_init_std",
         "graph_prior_mode",
         "min_stu_interactions",
         "min_exer_interactions",

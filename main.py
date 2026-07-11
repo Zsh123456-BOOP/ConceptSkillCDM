@@ -28,7 +28,7 @@ GRAPH_PRIOR_MODES = (
     "degree_random",
 )
 
-STUDENT_CONCEPT_INTERACTIONS = ("none", "hadamard")
+STUDENT_CONCEPT_INTERACTIONS = ("none", "hadamard", "low_rank")
 
 
 def _parse_bool(value: object) -> bool:
@@ -81,6 +81,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional explicit student-by-concept factorization inside the knowledge state.",
     )
     parser.add_argument("--student_concept_interaction_scale", type=float, default=1.0)
+    parser.add_argument("--student_concept_interaction_rank", type=int, default=8)
+    parser.add_argument(
+        "--student_concept_interaction_init_std",
+        type=float,
+        default=0.1,
+        help="Low-rank factor initialization std; must be positive when low_rank is active.",
+    )
     parser.add_argument("--graph_tau_init", type=float, default=1.0)
     parser.add_argument(
         "--graph_dropout",
@@ -181,6 +188,7 @@ def _validate_args(args: argparse.Namespace) -> None:
         "graph_prior_strength_init": args.graph_prior_strength_init,
         "graph_tau_init": args.graph_tau_init,
         "early_stop_patience": args.early_stop_patience,
+        "student_concept_interaction_rank": args.student_concept_interaction_rank,
     }
     for name, value in positive.items():
         if float(value) <= 0:
@@ -227,6 +235,17 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit(
             "error: --student_concept_interaction_scale must be finite and in [0, 4], "
             f"got {args.student_concept_interaction_scale}"
+        )
+    interaction_init_std = float(args.student_concept_interaction_init_std)
+    if not math.isfinite(interaction_init_std) or not 0.0 <= interaction_init_std <= 1.0:
+        raise SystemExit(
+            "error: --student_concept_interaction_init_std must be finite and in [0, 1], "
+            f"got {args.student_concept_interaction_init_std}"
+        )
+    if args.student_concept_interaction == "low_rank" and interaction_init_std == 0.0:
+        raise SystemExit(
+            "error: --student_concept_interaction_init_std must be positive for low_rank "
+            "to avoid zero-gradient factors"
         )
 
 

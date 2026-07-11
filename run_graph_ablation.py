@@ -87,7 +87,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--generate_diagnosis", action="store_true")
     parser.add_argument(
         "--student_concept_interaction",
-        choices=("none", "hadamard"),
+        choices=("none", "hadamard", "low_rank"),
         default=None,
         help="Override the interaction mode for every full/ablation job.",
     )
@@ -96,6 +96,21 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         type=float,
         default=None,
         help="Override the interaction scale for every full/ablation job.",
+    )
+    parser.add_argument(
+        "--student_concept_interaction_rank",
+        type=int,
+        default=None,
+        help="Override the low-rank interaction width for every full/ablation job.",
+    )
+    parser.add_argument(
+        "--student_concept_interaction_init_std",
+        type=float,
+        default=None,
+        help=(
+            "Override the low-rank factor initialization std for every full/ablation job; "
+            "must be positive when low_rank is active."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -125,6 +140,20 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
                 "student_concept_interaction_scale must be finite and in [0, 4], "
                 f"got {args.student_concept_interaction_scale!r}"
             )
+    interaction_rank = args.student_concept_interaction_rank
+    if interaction_rank is not None and int(interaction_rank) <= 0:
+        raise ValueError(
+            "student_concept_interaction_rank must be positive, "
+            f"got {args.student_concept_interaction_rank!r}"
+        )
+    interaction_init_std = args.student_concept_interaction_init_std
+    if interaction_init_std is not None:
+        interaction_init_std = float(interaction_init_std)
+        if not math.isfinite(interaction_init_std) or not 0.0 <= interaction_init_std <= 1.0:
+            raise ValueError(
+                "student_concept_interaction_init_std must be finite and in [0, 1], "
+                f"got {args.student_concept_interaction_init_std!r}"
+            )
     jobs: List[JobSpec] = []
 
     for dataset in datasets:
@@ -138,6 +167,18 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
                     params["student_concept_interaction"] = args.student_concept_interaction
                 if args.student_concept_interaction_scale is not None:
                     params["student_concept_interaction_scale"] = interaction_scale
+                if args.student_concept_interaction_rank is not None:
+                    params["student_concept_interaction_rank"] = int(interaction_rank)
+                if args.student_concept_interaction_init_std is not None:
+                    params["student_concept_interaction_init_std"] = interaction_init_std
+                if (
+                    params.get("student_concept_interaction", "none") == "low_rank"
+                    and float(params.get("student_concept_interaction_init_std", 0.1)) == 0.0
+                ):
+                    raise ValueError(
+                        "student_concept_interaction_init_std must be positive for low_rank "
+                        "to avoid zero-gradient factors"
+                    )
                 params.pop("num_gpus", None)
                 params.pop("seed", None)
                 params["model_variant"] = ablation.name

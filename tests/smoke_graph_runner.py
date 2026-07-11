@@ -21,9 +21,13 @@ def main() -> None:
             "--ablations",
             "full,no_message_passing,item_only,exposure_only,degree_random",
             "--student_concept_interaction",
-            "hadamard",
+            "low_rank",
             "--student_concept_interaction_scale",
-            "1.0",
+            "0.75",
+            "--student_concept_interaction_rank",
+            "4",
+            "--student_concept_interaction_init_std",
+            "0.05",
             "--dry_run",
         ]
     )
@@ -37,10 +41,36 @@ def main() -> None:
 
     banned = ("no_A", "no_E", "personal", "ae_", "roadmap", "tutor")
     for job in jobs:
-        assert job.params["student_concept_interaction"] == "hadamard"
-        assert job.params["student_concept_interaction_scale"] == 1.0
+        assert job.params["student_concept_interaction"] == "low_rank"
+        assert job.params["student_concept_interaction_scale"] == 0.75
+        assert job.params["student_concept_interaction_rank"] == 4
+        assert job.params["student_concept_interaction_init_std"] == 0.05
         command = " ".join(job.cmd)
+        assert "--student_concept_interaction low_rank" in command
+        assert "--student_concept_interaction_rank 4" in command
+        assert "--student_concept_interaction_init_std 0.05" in command
         assert not any(token in command for token in banned), command
+
+    zero_init_args = runner.parse_args(
+        [
+            "--datasets",
+            "assist_09",
+            "--seeds",
+            "42",
+            "--ablations",
+            "full",
+            "--student_concept_interaction",
+            "low_rank",
+            "--student_concept_interaction_init_std",
+            "0",
+        ]
+    )
+    try:
+        runner.make_jobs(zero_init_args, run_id="invalid")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("low_rank runner must reject zero init_std")
     print("OK: Graph-IRT ablation runner contract passed.")
 
 

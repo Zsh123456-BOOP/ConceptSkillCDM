@@ -362,6 +362,8 @@ class StudentKnowledgeEncoder(nn.Module):
         propagation_alpha: float = 0.20,
         student_concept_interaction: str = "none",
         student_concept_interaction_scale: float = 1.0,
+        student_concept_interaction_rank: int = 8,
+        student_concept_interaction_init_std: float = 0.1,
     ):
         super().__init__()
         self.num_students = int(num_students)
@@ -370,9 +372,9 @@ class StudentKnowledgeEncoder(nn.Module):
         self.gnn_residual_weight = float(gnn_residual_weight)
         self.propagation_alpha = max(0.0, min(1.0, float(propagation_alpha)))
         interaction = str(student_concept_interaction).strip().lower()
-        if interaction not in {"none", "hadamard"}:
+        if interaction not in {"none", "hadamard", "low_rank"}:
             raise ValueError(
-                "student_concept_interaction must be 'none' or 'hadamard', "
+                "student_concept_interaction must be 'none', 'hadamard', or 'low_rank', "
                 f"got {student_concept_interaction!r}"
             )
         self.student_concept_interaction = interaction
@@ -383,8 +385,41 @@ class StudentKnowledgeEncoder(nn.Module):
                 f"got {student_concept_interaction_scale!r}"
             )
         self.student_concept_interaction_scale = interaction_scale
+        interaction_rank = int(student_concept_interaction_rank)
+        if interaction_rank <= 0:
+            raise ValueError(
+                "student_concept_interaction_rank must be positive, "
+                f"got {student_concept_interaction_rank!r}"
+            )
+        self.student_concept_interaction_rank = interaction_rank
+        interaction_init_std = float(student_concept_interaction_init_std)
+        if not math.isfinite(interaction_init_std) or not 0.0 <= interaction_init_std <= 1.0:
+            raise ValueError(
+                "student_concept_interaction_init_std must be finite and in [0, 1], "
+                f"got {student_concept_interaction_init_std!r}"
+            )
+        if self.student_concept_interaction == "low_rank" and interaction_init_std == 0.0:
+            raise ValueError(
+                "student_concept_interaction_init_std must be positive for low_rank "
+                "to avoid zero-gradient factors"
+            )
+        self.student_concept_interaction_init_std = interaction_init_std
         self.student_global = nn.Embedding(self.num_students, self.knowledge_dim)
         self.concept_emb = nn.Embedding(self.num_concepts, self.knowledge_dim)
+        if self.student_concept_interaction == "low_rank":
+            self.student_interaction_factor = nn.Embedding(
+                self.num_students,
+                self.student_concept_interaction_rank,
+            )
+            self.concept_interaction_factor = nn.Embedding(
+                self.num_concepts,
+                self.student_concept_interaction_rank,
+            )
+            self.interaction_projection = nn.Linear(
+                self.student_concept_interaction_rank,
+                self.knowledge_dim,
+                bias=False,
+            )
         self.gnn_layers = nn.ModuleList(
             ConceptGraphConv(
                 self.knowledge_dim,
@@ -401,15 +436,40 @@ class StudentKnowledgeEncoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
         nn.init.xavier_normal_(self.student_global.weight)
         nn.init.xavier_normal_(self.concept_emb.weight)
+        if self.student_concept_interaction == "low_rank":
+            nn.init.normal_(
+                self.student_interaction_factor.weight,
+                mean=0.0,
+                std=self.student_concept_interaction_init_std,
+            )
+            nn.init.normal_(
+                self.concept_interaction_factor.weight,
+                mean=0.0,
+                std=self.student_concept_interaction_init_std,
+            )
+            nn.init.xavier_normal_(self.interaction_projection.weight)
+
+    def _compose_interaction(
+        self,
+        student_ids: torch.Tensor,
+        concepts: torch.Tensor,
+        student_state: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.student_concept_interaction == "hadamard":
+            return math.sqrt(float(self.knowledge_dim)) * concepts * student_state
+        if self.student_concept_interaction == "low_rank":
+            student_factor = self.student_interaction_factor(student_ids).unsqueeze(1)
+            concept_factor = self.concept_interaction_factor.weight.unsqueeze(0)
+            return self.interaction_projection(student_factor * concept_factor)
+        return torch.zeros_like(concepts + student_state)
 
     def compose_initial_state(self, student_ids: torch.Tensor) -> torch.Tensor:
         students = self.student_global(student_ids)
         concepts = self.concept_emb.weight.unsqueeze(0).expand(student_ids.size(0), -1, -1)
         student_state = students.unsqueeze(1)
         initial = concepts + student_state
-        if self.student_concept_interaction == "hadamard":
-            interaction = concepts * student_state
-            interaction = interaction * math.sqrt(float(self.knowledge_dim))
+        if self.student_concept_interaction != "none":
+            interaction = self._compose_interaction(student_ids, concepts, student_state)
             initial = initial + self.student_concept_interaction_scale * interaction
         return self.dropout(initial)
 
@@ -417,12 +477,11 @@ class StudentKnowledgeEncoder(nn.Module):
         students = self.student_global(student_ids).unsqueeze(1)
         concepts = self.concept_emb.weight.unsqueeze(0).expand(student_ids.size(0), -1, -1)
         additive = concepts + students
-        if self.student_concept_interaction == "hadamard":
-            interaction = (
-                self.student_concept_interaction_scale
-                * math.sqrt(float(self.knowledge_dim))
-                * concepts
-                * students
+        if self.student_concept_interaction != "none":
+            interaction = self.student_concept_interaction_scale * self._compose_interaction(
+                student_ids,
+                concepts,
+                students,
             )
         else:
             interaction = torch.zeros_like(additive)

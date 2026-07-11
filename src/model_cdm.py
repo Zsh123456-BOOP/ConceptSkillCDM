@@ -52,6 +52,8 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_prior_strength_init: float = 1.0,
         student_concept_interaction: str = "none",
         student_concept_interaction_scale: float = 1.0,
+        student_concept_interaction_rank: int = 8,
+        student_concept_interaction_init_std: float = 0.1,
         gnn_residual_weight: float = 0.5,
         lambda_graph_entropy: float = 0.01,
         graph_entropy_min: float = 0.15,
@@ -140,6 +142,8 @@ class CognitiveDiagnosisModel(nn.Module):
             propagation_alpha=graph_propagation_alpha,
             student_concept_interaction=student_concept_interaction,
             student_concept_interaction_scale=student_concept_interaction_scale,
+            student_concept_interaction_rank=student_concept_interaction_rank,
+            student_concept_interaction_init_std=student_concept_interaction_init_std,
         )
         self.diagnosis_head = CognitiveDiagnosisHead(knowledge_dim=self.knowledge_dim)
         self.exercise_encoder = ExerciseDifficultyEncoder(num_exercises=self.num_exercises)

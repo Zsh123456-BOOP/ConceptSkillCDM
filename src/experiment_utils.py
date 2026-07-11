@@ -139,6 +139,8 @@ CONFIG_HASH_KEYS = (
     "graph_prior_strength_init",
     "student_concept_interaction",
     "student_concept_interaction_scale",
+    "student_concept_interaction_rank",
+    "student_concept_interaction_init_std",
     "graph_prior_mode",
     "graph_tau_init",
     "graph_dropout",

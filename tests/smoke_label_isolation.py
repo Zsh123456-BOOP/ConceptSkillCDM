@@ -60,16 +60,18 @@ def main() -> None:
         num_gnn_layers=1,
         dropout=0.0,
     )
-    torch.manual_seed(123)
-    model_a = CognitiveDiagnosisModel(**kwargs).eval()
-    torch.manual_seed(123)
-    model_b = CognitiveDiagnosisModel(**kwargs).eval()
     student_ids = torch.tensor([0, 1], dtype=torch.long)
     exercise_ids = torch.tensor([0, 2], dtype=torch.long)
-    assert torch.equal(
-        model_a(student_ids, exercise_ids, return_logits=True),
-        model_b(student_ids, exercise_ids, return_logits=True),
-    )
+    for interaction in ("none", "low_rank"):
+        interaction_kwargs = dict(kwargs, student_concept_interaction=interaction)
+        torch.manual_seed(123)
+        model_a = CognitiveDiagnosisModel(**interaction_kwargs).eval()
+        torch.manual_seed(123)
+        model_b = CognitiveDiagnosisModel(**interaction_kwargs).eval()
+        assert torch.equal(
+            model_a(student_ids, exercise_ids, return_logits=True),
+            model_b(student_ids, exercise_ids, return_logits=True),
+        )
     print("OK: labels are isolated from graph construction and pre-training logits.")
 
 
