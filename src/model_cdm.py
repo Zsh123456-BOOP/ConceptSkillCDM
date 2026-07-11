@@ -5,7 +5,7 @@ The production prediction path is deliberately small:
     train-only label-free concept-graph priors
         -> globally learned relation calibration
         -> student/concept graph encoder
-        -> concept mastery theta
+        -> Q-aware item-conditioned mastery theta
         -> Q-masked 2PL-IRT logit
 
 Correctness labels are consumed only by the trainer's loss (and therefore its
@@ -18,12 +18,13 @@ from typing import Dict, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
+from src.config import ITEM_MATCHING_RANK
 from src.model_graph import MultiHeadRelationLearning, StudentKnowledgeEncoder
 from src.model_regularization import get_regularization_components as _get_regularization_components
 from src.prediction_head import CognitiveDiagnosisHead, ExerciseDifficultyEncoder
 
 
-GRAPH_IRT_ARCHITECTURE = "graph_irt_v2"
+GRAPH_IRT_ARCHITECTURE = "graph_irt_v3"
 
 
 class CognitiveDiagnosisModel(nn.Module):
@@ -50,11 +51,8 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_tau_init: float = 1.0,
         graph_propagation_alpha: float = 0.20,
         graph_prior_strength_init: float = 1.0,
-        student_concept_interaction: str = "none",
-        student_concept_interaction_scale: float = 1.0,
-        student_concept_interaction_rank: int = 8,
-        student_concept_interaction_init_std: float = 0.1,
-        student_concept_interaction_ratio_cap: float = 0.0,
+        enable_item_matching: bool = True,
+        item_matching_rank: int = ITEM_MATCHING_RANK,
         gnn_residual_weight: float = 0.5,
         lambda_graph_entropy: float = 0.01,
         graph_entropy_min: float = 0.15,
@@ -141,13 +139,13 @@ class CognitiveDiagnosisModel(nn.Module):
             dropout=dropout,
             gnn_residual_weight=gnn_residual_weight,
             propagation_alpha=graph_propagation_alpha,
-            student_concept_interaction=student_concept_interaction,
-            student_concept_interaction_scale=student_concept_interaction_scale,
-            student_concept_interaction_rank=student_concept_interaction_rank,
-            student_concept_interaction_init_std=student_concept_interaction_init_std,
-            student_concept_interaction_ratio_cap=student_concept_interaction_ratio_cap,
         )
-        self.diagnosis_head = CognitiveDiagnosisHead(knowledge_dim=self.knowledge_dim)
+        self.diagnosis_head = CognitiveDiagnosisHead(
+            knowledge_dim=self.knowledge_dim,
+            num_exercises=self.num_exercises,
+            enable_item_matching=enable_item_matching,
+            item_matching_rank=item_matching_rank,
+        )
         self.exercise_encoder = ExerciseDifficultyEncoder(num_exercises=self.num_exercises)
 
     @staticmethod
@@ -231,6 +229,7 @@ class CognitiveDiagnosisModel(nn.Module):
             irt_logit, head_details = self.diagnosis_head(
                 knowledge_state=knowledge_state,
                 concept_mask=q_vector,
+                exercise_ids=exercise_ids,
                 b=difficulty,
                 a=discrimination,
                 return_details=True,
@@ -239,6 +238,7 @@ class CognitiveDiagnosisModel(nn.Module):
             irt_logit = self.diagnosis_head(
                 knowledge_state=knowledge_state,
                 concept_mask=q_vector,
+                exercise_ids=exercise_ids,
                 b=difficulty,
                 a=discrimination,
                 return_details=False,

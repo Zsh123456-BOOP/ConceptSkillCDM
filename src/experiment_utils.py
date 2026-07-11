@@ -18,6 +18,7 @@ import torch
 from sklearn.metrics import accuracy_score, mean_squared_error, roc_auc_score
 
 from gpu_utils import get_best_gpu, parse_gpu_ids
+from src.model import GRAPH_IRT_ARCHITECTURE
 
 
 def setup_logging(log_dir: str, name: Optional[str] = None) -> logging.Logger:
@@ -137,11 +138,8 @@ CONFIG_HASH_KEYS = (
     "graph_identity_residual",
     "graph_propagation_alpha",
     "graph_prior_strength_init",
-    "student_concept_interaction",
-    "student_concept_interaction_scale",
-    "student_concept_interaction_rank",
-    "student_concept_interaction_init_std",
-    "student_concept_interaction_ratio_cap",
+    "enable_item_matching",
+    "item_matching_rank",
     "graph_prior_mode",
     "graph_tau_init",
     "graph_dropout",
@@ -231,7 +229,7 @@ def append_summary_csv(
 
     row: Dict[str, Any] = {
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "architecture": "graph_irt_v2",
+        "architecture": GRAPH_IRT_ARCHITECTURE,
         "dataset": getattr(args, "dataset_name", "unknown"),
         "model_variant": getattr(args, "model_variant", "full"),
         "seed": int(getattr(args, "seed", 0)),

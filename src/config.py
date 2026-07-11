@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Set
 
 
+ITEM_MATCHING_RANK = 8
+
+
 _BASE_DEFAULTS: Dict[str, Any] = {
     "batch_size": 512,
     "epochs": 100,
@@ -29,11 +32,6 @@ _BASE_DEFAULTS: Dict[str, Any] = {
     "graph_identity_residual": 0.05,
     "graph_propagation_alpha": 0.20,
     "graph_prior_strength_init": 0.35,
-    "student_concept_interaction": "none",
-    "student_concept_interaction_scale": 1.0,
-    "student_concept_interaction_rank": 8,
-    "student_concept_interaction_init_std": 0.1,
-    "student_concept_interaction_ratio_cap": 0.0,
     "graph_tau_init": 0.55,
     "graph_dropout": 0.0,
     "lambda_graph_entropy": 0.30,
@@ -69,7 +67,12 @@ DATASET_DEFAULTS: Dict[str, Dict[str, Any]] = {
         num_relation_heads=2,
         dropout=0.20,
         learning_rate=3e-4,
-        early_stop_patience=3,
+        weight_decay=3e-6,
+        optimizer="adamw",
+        epochs=120,
+        patience=4,
+        early_stop_patience=15,
+        min_epochs=20,
         lambda_graph_entropy=0.20,
         graph_reg_warmup_epochs=4,
         graph_entropy_min=0.25,

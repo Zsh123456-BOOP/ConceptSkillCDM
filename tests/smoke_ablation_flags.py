@@ -28,6 +28,11 @@ REMOVED_FLAGS = (
     "--relation_theta_scale",
     "--graph_prior_logit_scale",
     "--lambda_sparse",
+    "--student_concept_interaction",
+    "--student_concept_interaction_scale",
+    "--student_concept_interaction_ratio_cap",
+    "--student_concept_interaction_rank",
+    "--student_concept_interaction_init_std",
 )
 
 

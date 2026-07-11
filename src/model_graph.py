@@ -360,11 +360,6 @@ class StudentKnowledgeEncoder(nn.Module):
         dropout: float = 0.1,
         gnn_residual_weight: float = 0.5,
         propagation_alpha: float = 0.20,
-        student_concept_interaction: str = "none",
-        student_concept_interaction_scale: float = 1.0,
-        student_concept_interaction_rank: int = 8,
-        student_concept_interaction_init_std: float = 0.1,
-        student_concept_interaction_ratio_cap: float = 0.0,
     ):
         super().__init__()
         self.num_students = int(num_students)
@@ -372,71 +367,8 @@ class StudentKnowledgeEncoder(nn.Module):
         self.knowledge_dim = int(knowledge_dim)
         self.gnn_residual_weight = float(gnn_residual_weight)
         self.propagation_alpha = max(0.0, min(1.0, float(propagation_alpha)))
-        interaction = str(student_concept_interaction).strip().lower()
-        if interaction not in {"none", "hadamard", "low_rank"}:
-            raise ValueError(
-                "student_concept_interaction must be 'none', 'hadamard', or 'low_rank', "
-                f"got {student_concept_interaction!r}"
-            )
-        self.student_concept_interaction = interaction
-        interaction_scale = float(student_concept_interaction_scale)
-        if not math.isfinite(interaction_scale) or not 0.0 <= interaction_scale <= 4.0:
-            raise ValueError(
-                "student_concept_interaction_scale must be finite and in [0, 4], "
-                f"got {student_concept_interaction_scale!r}"
-            )
-        if self.student_concept_interaction == "low_rank" and interaction_scale == 0.0:
-            raise ValueError(
-                "student_concept_interaction_scale must be positive for low_rank "
-                "to avoid a disabled interaction"
-            )
-        self.student_concept_interaction_scale = interaction_scale
-        interaction_rank = int(student_concept_interaction_rank)
-        if interaction_rank <= 0:
-            raise ValueError(
-                "student_concept_interaction_rank must be positive, "
-                f"got {student_concept_interaction_rank!r}"
-            )
-        self.student_concept_interaction_rank = interaction_rank
-        interaction_init_std = float(student_concept_interaction_init_std)
-        if not math.isfinite(interaction_init_std) or not 0.0 <= interaction_init_std <= 1.0:
-            raise ValueError(
-                "student_concept_interaction_init_std must be finite and in [0, 1], "
-                f"got {student_concept_interaction_init_std!r}"
-            )
-        if self.student_concept_interaction == "low_rank" and interaction_init_std == 0.0:
-            raise ValueError(
-                "student_concept_interaction_init_std must be positive for low_rank "
-                "to avoid zero-gradient factors"
-            )
-        self.student_concept_interaction_init_std = interaction_init_std
-        interaction_ratio_cap = float(student_concept_interaction_ratio_cap)
-        if not math.isfinite(interaction_ratio_cap) or not 0.0 <= interaction_ratio_cap <= 4.0:
-            raise ValueError(
-                "student_concept_interaction_ratio_cap must be finite and in [0, 4], "
-                f"got {student_concept_interaction_ratio_cap!r}"
-            )
-        self.student_concept_interaction_ratio_cap = interaction_ratio_cap
         self.student_global = nn.Embedding(self.num_students, self.knowledge_dim)
         self.concept_emb = nn.Embedding(self.num_concepts, self.knowledge_dim)
-        if self.student_concept_interaction == "low_rank":
-            # Keep optional-module construction from shifting the CPU RNG stream
-            # used by every common parameter below. This makes a seeded low_rank
-            # model a true structural extension of the corresponding none model.
-            with torch.random.fork_rng(devices=[]):
-                self.student_interaction_factor = nn.Embedding(
-                    self.num_students,
-                    self.student_concept_interaction_rank,
-                )
-                self.concept_interaction_factor = nn.Embedding(
-                    self.num_concepts,
-                    self.student_concept_interaction_rank,
-                )
-                self.interaction_projection = nn.Linear(
-                    self.student_concept_interaction_rank,
-                    self.knowledge_dim,
-                    bias=False,
-                )
         self.gnn_layers = nn.ModuleList(
             ConceptGraphConv(
                 self.knowledge_dim,
@@ -453,105 +385,11 @@ class StudentKnowledgeEncoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
         nn.init.xavier_normal_(self.student_global.weight)
         nn.init.xavier_normal_(self.concept_emb.weight)
-        if self.student_concept_interaction == "low_rank":
-            # The dedicated factors remain seed-dependent while their draws do
-            # not perturb the caller's CPU RNG state or later common modules.
-            with torch.random.fork_rng(devices=[]):
-                nn.init.normal_(
-                    self.student_interaction_factor.weight,
-                    mean=0.0,
-                    std=self.student_concept_interaction_init_std,
-                )
-                nn.init.normal_(
-                    self.concept_interaction_factor.weight,
-                    mean=0.0,
-                    std=self.student_concept_interaction_init_std,
-                )
-                nn.init.xavier_normal_(self.interaction_projection.weight)
-
-    def _compose_interaction(
-        self,
-        student_ids: torch.Tensor,
-        concepts: torch.Tensor,
-        student_state: torch.Tensor,
-    ) -> torch.Tensor:
-        if self.student_concept_interaction == "hadamard":
-            return math.sqrt(float(self.knowledge_dim)) * concepts * student_state
-        if self.student_concept_interaction == "low_rank":
-            student_factor = self.student_interaction_factor(student_ids).unsqueeze(1)
-            concept_factor = self.concept_interaction_factor.weight.unsqueeze(0)
-            return self.interaction_projection(student_factor * concept_factor)
-        return torch.zeros_like(concepts + student_state)
-
-    def _apply_interaction_ratio_cap(
-        self,
-        additive: torch.Tensor,
-        interaction: torch.Tensor,
-    ) -> torch.Tensor:
-        if self.student_concept_interaction_ratio_cap == 0.0:
-            return interaction
-        # Reduce concept and hidden dimensions only. Keeping the student axis
-        # makes one prediction invariant to the other students in its batch.
-        additive_rms = additive.float().pow(2).mean(dim=(-2, -1), keepdim=True).sqrt()
-        interaction_rms = interaction.float().pow(2).mean(dim=(-2, -1), keepdim=True).sqrt()
-        factor = (
-            self.student_concept_interaction_ratio_cap
-            * additive_rms.detach()
-            / (interaction_rms.detach() + 1e-12)
-        )
-        factor = torch.minimum(torch.ones_like(factor), factor)
-        return interaction * factor.to(dtype=interaction.dtype)
-
-    def _compose_scaled_interaction(
-        self,
-        student_ids: torch.Tensor,
-        concepts: torch.Tensor,
-        student_state: torch.Tensor,
-        additive: torch.Tensor,
-    ) -> torch.Tensor:
-        interaction = self.student_concept_interaction_scale * self._compose_interaction(
-            student_ids,
-            concepts,
-            student_state,
-        )
-        return self._apply_interaction_ratio_cap(additive, interaction)
 
     def compose_initial_state(self, student_ids: torch.Tensor) -> torch.Tensor:
         students = self.student_global(student_ids)
         concepts = self.concept_emb.weight.unsqueeze(0).expand(student_ids.size(0), -1, -1)
-        student_state = students.unsqueeze(1)
-        additive = concepts + student_state
-        initial = additive
-        if self.student_concept_interaction != "none":
-            interaction = self._compose_scaled_interaction(
-                student_ids,
-                concepts,
-                student_state,
-                additive,
-            )
-            initial = additive + interaction
-        return self.dropout(initial)
-
-    def get_interaction_diagnostics(self, student_ids: torch.Tensor) -> Dict[str, torch.Tensor]:
-        students = self.student_global(student_ids).unsqueeze(1)
-        concepts = self.concept_emb.weight.unsqueeze(0).expand(student_ids.size(0), -1, -1)
-        additive = concepts + students
-        if self.student_concept_interaction != "none":
-            interaction = self._compose_scaled_interaction(
-                student_ids,
-                concepts,
-                students,
-                additive,
-            )
-        else:
-            interaction = torch.zeros_like(additive)
-        additive_rms = additive.float().pow(2).mean().sqrt()
-        interaction_rms = interaction.float().pow(2).mean().sqrt()
-        return {
-            "student_concept_additive_rms": additive_rms,
-            "student_concept_interaction_rms": interaction_rms,
-            "student_concept_interaction_ratio": interaction_rms / additive_rms.clamp(min=1e-12),
-        }
+        return self.dropout(concepts + students.unsqueeze(1))
 
     def forward(
         self,

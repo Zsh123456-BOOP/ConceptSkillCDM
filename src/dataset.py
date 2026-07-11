@@ -423,6 +423,7 @@ def create_dataloaders(
         logger=None,
         dataset_name: Optional[str] = None,
         graph_prior_mode: str = "evidence",
+        seed: int = 42,
 ) -> Tuple[DataLoader, DataLoader, DataLoader, dict]:
     """
     创建训练、验证和测试的数据加载器，并执行统一的数据清洗
@@ -437,6 +438,7 @@ def create_dataloaders(
         min_stu_interactions: 学生最小答题数阈值（<该值的学生将被过滤，0 表示不启用）
         min_exer_interactions: 习题最小被作答数阈值（<该值的题目将被过滤，0 表示不启用）
         logger: 可选的 logger，对清洗过程进行记录
+        seed: 训练 DataLoader 的独立随机种子
 
     Returns:
         (train_loader, val_loader, test_loader, info_dict) 元组
@@ -722,10 +724,13 @@ def create_dataloaders(
     if num_workers > 0:
         loader_kwargs["persistent_workers"] = True
 
+    train_generator = torch.Generator()
+    train_generator.manual_seed(int(seed))
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=shuffle_train,
+        generator=train_generator,
         **loader_kwargs,
     )
 

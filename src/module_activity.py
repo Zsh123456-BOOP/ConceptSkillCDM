@@ -1,8 +1,8 @@
 """Graph-IRT runtime activity diagnostics.
 
 The activity report intentionally covers only the production path: the global
-concept graph and the IRT prediction head.  It is lightweight enough to run at
-checkpoint intervals and contains no experimental prediction-side diagnostics.
+concept graph and the Q-aware IRT prediction head.  It is lightweight enough
+to run at checkpoint intervals and contains no experimental side heads.
 """
 
 from typing import Any, Dict, List, Optional
@@ -63,6 +63,7 @@ def compute_module_activity(
     theta_values: List[float] = []
     discrimination_values: List[float] = []
     difficulty_values: List[float] = []
+    item_matching_values: List[float] = []
     graph_state_deltas: List[float] = []
     relation_identity_deltas: List[float] = []
 
@@ -84,6 +85,7 @@ def compute_module_activity(
             theta_values.extend(_as_values(details.get("theta_c")))
             discrimination_values.extend(_as_values(details.get("irt_a")))
             difficulty_values.extend(_as_values(details.get("irt_b")))
+            item_matching_values.extend(_as_values(details.get("item_matching")))
             graph_state_deltas.extend(_as_values(details.get("knowledge_state_graph_delta")))
             relation_identity_deltas.extend(_as_values(details.get("relation_identity_delta")))
             sample_count += take
@@ -97,6 +99,9 @@ def compute_module_activity(
         "message_passing_alpha": propagation_alpha,
         "message_passing_enabled": propagation_alpha > 0.0,
         "irt_enabled": True,
+        "item_matching_enabled": bool(base_model.diagnosis_head.enable_item_matching),
+        "item_matching_rank": int(base_model.diagnosis_head.item_matching_rank),
+        "item_matching_abs_mean": _mean([abs(value) for value in item_matching_values]),
         "irt_logit_abs_mean": _mean([abs(value) for value in irt_logits]),
         "irt_theta_abs_mean": _mean([abs(value) for value in theta_values]),
         "irt_discrimination_mean": _mean(discrimination_values),
@@ -171,6 +176,11 @@ def compute_module_activity(
         and np.isfinite(results["irt_discrimination_mean"])
         and results["irt_discrimination_mean"] > 0.0
     )
+    results["item_matching_active"] = bool(
+        results["item_matching_enabled"]
+        and np.isfinite(results["item_matching_abs_mean"])
+        and results["item_matching_abs_mean"] > 1e-8
+    )
 
     if was_training:
         model.train()
@@ -181,7 +191,8 @@ def format_activity_brief(activity: Dict[str, Any]) -> str:
     """Format a compact checkpoint-time activity summary."""
     graph_mode = str(activity.get("graph_mode", "DISABLED"))
     irt_mode = "LIVE" if activity.get("irt_active") else "INACTIVE"
-    return f"Graph[{graph_mode}] IRT[{irt_mode}]"
+    matching_mode = "LIVE" if activity.get("item_matching_active") else "INACTIVE"
+    return f"Graph[{graph_mode}] IRT[{irt_mode}] Match[{matching_mode}]"
 
 
 def format_activity_report(
@@ -220,6 +231,8 @@ def format_activity_report(
             f"   - Status: {'LIVE' if activity.get('irt_active') else 'INACTIVE'}",
             f"   - Logit |mean|: {activity.get('irt_logit_abs_mean', 0.0):.4f}",
             f"   - Theta |mean|: {activity.get('irt_theta_abs_mean', 0.0):.4f}",
+            f"   - Item matching: {'LIVE' if activity.get('item_matching_active') else 'INACTIVE'} "
+            f"(rank={activity.get('item_matching_rank', 0)}, |mean|={activity.get('item_matching_abs_mean', 0.0):.4f})",
             f"   - Discrimination mean: {activity.get('irt_discrimination_mean', 0.0):.4f}",
             f"   - Difficulty mean: {activity.get('irt_difficulty_mean', 0.0):.4f}",
             "=" * 60,

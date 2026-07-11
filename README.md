@@ -2,6 +2,8 @@
 
 本仓库当前实现一条单一、可审计的 **Graph-IRT** 认知诊断主线。此前的 CRG/LCRF reachability 假设、全训练集标签统计先验和多套预测残差已被移除：现有三元组数据接口无法提供严格的 query-time 历史前缀，继续保留这些分支会把实验性捷径误写成因果机制。
 
+当前 v3 读出针对一个明确瓶颈：共享的一维 `theta` 方向无法充分表达学生与题目的匹配。模型在 Q 聚合后增加一个零初始化的低秩 item direction，与共享能力方向共同形成唯一的 `theta(student,item)`；它仍然进入同一个 2PL 公式，不是第二条预测残差。
+
 ## 模型主线
 
 图的先验支持与初始强度只使用训练集中的无标签元数据证据：
@@ -17,8 +19,8 @@ train-only Q/student-exposure metadata
         -> row-stochastic concept graph
         -> student + concept state
         -> graph message passing
-        -> concept ability theta
-        -> Q-mask aggregation
+        -> Q-mask state aggregation
+        -> shared theta + low-rank item direction
         -> 2PL-IRT logit
 ```
 
@@ -28,11 +30,7 @@ train-only Q/student-exposure metadata
 details["logits"] == details["irt_logit"]
 ```
 
-没有 personal posterior、统计 target encoding、query correction、theta calibration 或额外 logit residual。这个模型应被描述为静态图结构认知诊断基线，不应再声称解决 concept reachability 或 evidence-gap transfer。
-
-结构调优可显式启用 `--student_concept_interaction hadamard`，在知识状态内部加入
-`scale * sqrt(d) * (student ⊙ concept)`；默认值仍为 `none`，旧 checkpoint 行为不变。
-该交互仍只由 BCE 梯度学习，不读取标签统计，也不增加第二条预测或 logit 残差路径。
+没有 personal posterior、统计 target encoding、query correction、theta calibration 或额外 logit residual。已经验证无效的 Hadamard、student-concept low-rank 和 ratio-cap 分支也已删除。这个模型应被描述为静态图结构、题目条件化的认知诊断模型，不应再声称解决 concept reachability 或 evidence-gap transfer。
 
 ## 代码入口
 
@@ -49,6 +47,7 @@ details["logits"] == details["irt_logit"]
 只保留以下互不混淆的变体：
 
 - `full`：item + student co-exposure 图证据，正常消息传递。
+- `no_item_matching`：保留共享 2PL 能力方向，精确旁路并冻结低秩题目方向。
 - `no_message_passing`：令 `graph_propagation_alpha=0`，输出状态严格等于初始 student+concept state。
 - `item_only`：只使用题目概念共现。
 - `exposure_only`：只使用学生概念共接触证据。
@@ -59,7 +58,7 @@ details["logits"] == details["irt_logit"]
 ```bash
 python run_graph_ablation.py \
   --datasets assist_09,assist_17,junyi \
-  --ablations full,no_message_passing,item_only,exposure_only,degree_random \
+  --ablations full,no_item_matching,no_message_passing,item_only,exposure_only,degree_random \
   --seeds 42 \
   --gpus 0 \
   --dry_run
@@ -82,7 +81,7 @@ python tests/smoke_ablation_flags.py
 python tests/smoke_gpu_selector.py
 python tests/smoke_concurrent_results.py
 python tests/smoke_training_protocol.py
-python tests/smoke_student_concept_interaction.py
+python tests/smoke_item_matching.py
 ```
 
 最小 CPU 训练闭环：

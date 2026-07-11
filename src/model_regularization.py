@@ -1,4 +1,4 @@
-"""Graph-only regularization for the single-path Graph-IRT model."""
+"""Regularization for the single-path Graph-IRT model."""
 
 import math
 from typing import Dict, Optional
@@ -13,7 +13,7 @@ def get_regularization_components(
     details: Optional[Dict[str, torch.Tensor]] = None,
     base_loss: Optional[torch.Tensor] = None,
 ) -> Dict[str, torch.Tensor]:
-    """Return graph structure penalties and exercise-IRT L2.
+    """Return graph structure penalties and prediction-head L2.
 
     No personal-support, posterior, target-prior, or theta-calibration terms
     exist in the production objective.
@@ -103,6 +103,7 @@ def get_regularization_components(
         exercise_l2 = (
             model.exercise_encoder.b.weight.pow(2).mean()
             + model.exercise_encoder.a_raw.weight.pow(2).mean()
+            + model.diagnosis_head.item_matching_l2()
         )
         terms["prediction_l2"] = model.prediction_l2_lambda * exercise_l2
 

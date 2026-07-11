@@ -62,12 +62,12 @@ def main() -> None:
     )
     student_ids = torch.tensor([0, 1], dtype=torch.long)
     exercise_ids = torch.tensor([0, 2], dtype=torch.long)
-    for interaction in ("none", "low_rank"):
-        interaction_kwargs = dict(kwargs, student_concept_interaction=interaction)
+    for enable_item_matching in (False, True):
+        model_kwargs = dict(kwargs, enable_item_matching=enable_item_matching)
         torch.manual_seed(123)
-        model_a = CognitiveDiagnosisModel(**interaction_kwargs).eval()
+        model_a = CognitiveDiagnosisModel(**model_kwargs).eval()
         torch.manual_seed(123)
-        model_b = CognitiveDiagnosisModel(**interaction_kwargs).eval()
+        model_b = CognitiveDiagnosisModel(**model_kwargs).eval()
         assert torch.equal(
             model_a(student_ids, exercise_ids, return_logits=True),
             model_b(student_ids, exercise_ids, return_logits=True),

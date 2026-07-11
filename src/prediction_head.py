@@ -1,8 +1,11 @@
+import math
 from typing import Dict, Tuple, Union
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from src.config import ITEM_MATCHING_RANK
 
 
 class ExerciseDifficultyEncoder(nn.Module):
@@ -26,22 +29,61 @@ class ExerciseDifficultyEncoder(nn.Module):
 
 class CognitiveDiagnosisHead(nn.Module):
     """
-    固定预测头 D：2PL-IRT
-    - theta_c：对每个概念的能力
-    - theta_e：按 Q-mask 聚合后的题目能力
-    - irt_logit = a * (theta_e - b)
+    Q-aware low-rank MIRT readout followed by a 2PL item response function.
+
+    The shared projection keeps a stable one-dimensional ability backbone.  A
+    low-rank item direction then selects a second view of the Q-pooled student
+    state, allowing two exercises with similar Q rows to rank students
+    differently without adding a second prediction/logit branch.
     """
 
-    def __init__(self, knowledge_dim: int):
+    def __init__(
+        self,
+        knowledge_dim: int,
+        num_exercises: int,
+        *,
+        enable_item_matching: bool = True,
+        item_matching_rank: int = ITEM_MATCHING_RANK,
+    ):
         super().__init__()
-        self.theta_proj = nn.Linear(knowledge_dim, 1, bias=True)
+        self.knowledge_dim = int(knowledge_dim)
+        self.num_exercises = int(num_exercises)
+        self.enable_item_matching = bool(enable_item_matching)
+        self.item_matching_rank = min(
+            self.knowledge_dim,
+            max(1, int(item_matching_rank)),
+        )
+
+        self.theta_proj = nn.Linear(self.knowledge_dim, 1, bias=True)
         nn.init.normal_(self.theta_proj.weight, mean=0.0, std=0.02)
         nn.init.zeros_(self.theta_proj.bias)
+
+        # Keep these parameters in both full and no-item-matching checkpoints.
+        # That makes common initialization/state keys identical across the
+        # ablation; disabling the path also freezes the unused parameters.
+        self.item_matching_projection = nn.Linear(
+            self.knowledge_dim,
+            self.item_matching_rank,
+            bias=False,
+        )
+        self.item_matching_direction = nn.Embedding(
+            self.num_exercises,
+            self.item_matching_rank,
+        )
+        nn.init.xavier_normal_(self.item_matching_projection.weight)
+        # A zero item factor makes the new architecture start from the shared
+        # 2PL solution while still giving the factor a non-zero first-step
+        # gradient through the seeded projection.
+        nn.init.zeros_(self.item_matching_direction.weight)
+        if not self.enable_item_matching:
+            self.item_matching_projection.requires_grad_(False)
+            self.item_matching_direction.requires_grad_(False)
 
     def forward(
         self,
         knowledge_state: torch.Tensor,
         concept_mask: torch.Tensor,
+        exercise_ids: torch.Tensor,
         b: torch.Tensor,
         a: torch.Tensor,
         return_details: bool = False,
@@ -49,8 +91,24 @@ class CognitiveDiagnosisHead(nn.Module):
         theta_c = self.theta_proj(knowledge_state).squeeze(-1)
 
         mask = concept_mask.float()
-        denom = mask.sum(dim=1).clamp(min=1.0)
-        theta_e = (theta_c * mask).sum(dim=1) / denom
+        denom = mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+        pooled_state = (knowledge_state * mask.unsqueeze(-1)).sum(dim=1) / denom
+        theta_base = self.theta_proj(pooled_state).squeeze(-1)
+
+        if self.enable_item_matching:
+            normalized_state = F.layer_norm(
+                pooled_state,
+                normalized_shape=(self.knowledge_dim,),
+            )
+            student_factor = self.item_matching_projection(normalized_state)
+            item_factor = self.item_matching_direction(exercise_ids)
+            item_matching = (student_factor * item_factor).sum(dim=-1) / math.sqrt(
+                float(self.item_matching_rank)
+            )
+        else:
+            item_matching = theta_base.new_zeros(theta_base.shape)
+
+        theta_e = theta_base + item_matching
 
         irt_logit = a * (theta_e - b)
 
@@ -59,7 +117,18 @@ class CognitiveDiagnosisHead(nn.Module):
 
         details = {
             "theta_c": theta_c.detach(),
+            "theta_e_base": theta_base.detach(),
+            "item_matching": item_matching.detach(),
             "theta_e": theta_e.detach(),
             "irt_logit": irt_logit.detach(),
         }
         return irt_logit, details
+
+    def item_matching_l2(self) -> torch.Tensor:
+        """Return the small prediction-side L2 term used by the main loss."""
+        if not self.enable_item_matching:
+            return self.theta_proj.weight.new_tensor(0.0)
+        return (
+            self.item_matching_projection.weight.pow(2).mean()
+            + self.item_matching_direction.weight.pow(2).mean()
+        )
