@@ -47,7 +47,14 @@ def _check_prediction_head_module() -> None:
         return_details=True,
     )
     _assert(tuple(logits.shape) == (3,), f"unexpected logit shape: {tuple(logits.shape)}")
-    for key in ("theta_c", "theta_e_base", "item_matching", "theta_e", "irt_logit"):
+    for key in (
+        "theta_c",
+        "theta_e_base",
+        "item_matching_raw",
+        "item_matching",
+        "theta_e",
+        "irt_logit",
+    ):
         _assert(key in details, f"missing prediction-head detail: {key}")
     _assert(
         torch.equal(details["item_matching"], torch.zeros_like(details["item_matching"])),
@@ -125,6 +132,11 @@ def _check_prediction_head_module() -> None:
     _assert(
         not torch.equal(matching_details["theta_e"][0], matching_details["theta_e"][1]),
         "different Q-concept directions must read the same student state differently",
+    )
+    _assert(
+        matching_details["item_matching"].abs().max().item()
+        <= (1.0 / matching_head.item_matching_rank) + 1e-7,
+        "Q-conditioned matching must remain bounded by 1/rank",
     )
 
 

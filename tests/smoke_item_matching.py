@@ -212,7 +212,11 @@ def main() -> None:
     assert torch.equal(expected_no_item, actual_no_item)
     assert not rebuilt_no_item.diagnosis_head.enable_item_matching
 
-    for legacy_architecture in ("graph_irt_v2", "graph_irt_v3"):
+    for legacy_architecture in (
+        "graph_irt_v2",
+        "graph_irt_v3",
+        "graph_irt_v4",
+    ):
         try:
             _require_graph_irt_checkpoint(
                 {"architecture": legacy_architecture},
@@ -222,7 +226,7 @@ def main() -> None:
             pass
         else:
             raise AssertionError(
-                f"v4 runtime must reject a {legacy_architecture} checkpoint"
+                f"v5 runtime must reject a {legacy_architecture} checkpoint"
             )
     print("OK: Q-aware item-matching contracts passed.")
 

@@ -102,11 +102,18 @@ class CognitiveDiagnosisHead(nn.Module):
             )
             student_factor = self.item_matching_projection(normalized_state)
             item_factor = mask.matmul(self.concept_matching_direction.weight) / denom
-            item_matching = (student_factor * item_factor).sum(dim=-1) / math.sqrt(
+            raw_item_matching = (student_factor * item_factor).sum(dim=-1) / math.sqrt(
                 float(self.item_matching_rank)
             )
+            # The Q-conditioned direction is a bounded correction to the
+            # shared ability, never a competing predictor.  The 1/rank bound
+            # tightens naturally as the factorization gains dimensions.
+            item_matching = torch.tanh(raw_item_matching) / float(
+                self.item_matching_rank
+            )
         else:
-            item_matching = theta_base.new_zeros(theta_base.shape)
+            raw_item_matching = theta_base.new_zeros(theta_base.shape)
+            item_matching = raw_item_matching
 
         theta_e = theta_base + item_matching
 
@@ -118,6 +125,7 @@ class CognitiveDiagnosisHead(nn.Module):
         details = {
             "theta_c": theta_c.detach(),
             "theta_e_base": theta_base.detach(),
+            "item_matching_raw": raw_item_matching.detach(),
             "item_matching": item_matching.detach(),
             "theta_e": theta_e.detach(),
             "irt_logit": irt_logit.detach(),

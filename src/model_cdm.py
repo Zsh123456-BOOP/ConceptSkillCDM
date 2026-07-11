@@ -24,7 +24,7 @@ from src.model_regularization import get_regularization_components as _get_regul
 from src.prediction_head import CognitiveDiagnosisHead, ExerciseDifficultyEncoder
 
 
-GRAPH_IRT_ARCHITECTURE = "graph_irt_v4"
+GRAPH_IRT_ARCHITECTURE = "graph_irt_v5"
 
 
 class CognitiveDiagnosisModel(nn.Module):

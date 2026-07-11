@@ -606,6 +606,7 @@ def _collect_debug_forward_stats(
         "knowledge_state_graph_delta": [],
         "irt_logit_abs_mean": [],
         "theta_abs_mean": [],
+        "item_matching_raw_abs_mean": [],
         "item_matching_abs_mean": [],
         "irt_discrimination_mean": [],
         "irt_difficulty_mean": [],
@@ -626,6 +627,9 @@ def _collect_debug_forward_stats(
             )
             accumulators["irt_logit_abs_mean"].append(_mean_detail(details, "irt_logit", absolute=True))
             accumulators["theta_abs_mean"].append(_mean_detail(details, "theta_c", absolute=True))
+            accumulators["item_matching_raw_abs_mean"].append(
+                _mean_detail(details, "item_matching_raw", absolute=True)
+            )
             accumulators["item_matching_abs_mean"].append(
                 _mean_detail(details, "item_matching", absolute=True)
             )
@@ -896,7 +900,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             last_diag["grad_norms"] = grad_norms
             logger.info(
                 "%s [Graph-IRT Diag] entropy_ratio=%.4f diag_mass=%.4f relation_delta=%.6f "
-                "state_delta=%.6f item_matching=%.4f "
+                "state_delta=%.6f item_matching=%.4f(raw=%.4f) "
                 "irt_logit=%.4f theta=%.4f a=%.4f b=%.4f",
                 run_tag,
                 last_diag["graph_entropy_ratio"],
@@ -904,6 +908,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 last_diag["relation_identity_delta"],
                 last_diag["knowledge_state_graph_delta"],
                 last_diag["item_matching_abs_mean"],
+                last_diag["item_matching_raw_abs_mean"],
                 last_diag["irt_logit_abs_mean"],
                 last_diag["theta_abs_mean"],
                 last_diag["irt_discrimination_mean"],

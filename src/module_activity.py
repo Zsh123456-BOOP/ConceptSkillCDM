@@ -63,6 +63,7 @@ def compute_module_activity(
     theta_values: List[float] = []
     discrimination_values: List[float] = []
     difficulty_values: List[float] = []
+    item_matching_raw_values: List[float] = []
     item_matching_values: List[float] = []
     graph_state_deltas: List[float] = []
     relation_identity_deltas: List[float] = []
@@ -85,6 +86,7 @@ def compute_module_activity(
             theta_values.extend(_as_values(details.get("theta_c")))
             discrimination_values.extend(_as_values(details.get("irt_a")))
             difficulty_values.extend(_as_values(details.get("irt_b")))
+            item_matching_raw_values.extend(_as_values(details.get("item_matching_raw")))
             item_matching_values.extend(_as_values(details.get("item_matching")))
             graph_state_deltas.extend(_as_values(details.get("knowledge_state_graph_delta")))
             relation_identity_deltas.extend(_as_values(details.get("relation_identity_delta")))
@@ -101,6 +103,9 @@ def compute_module_activity(
         "irt_enabled": True,
         "item_matching_enabled": bool(base_model.diagnosis_head.enable_item_matching),
         "item_matching_rank": int(base_model.diagnosis_head.item_matching_rank),
+        "item_matching_raw_abs_mean": _mean(
+            [abs(value) for value in item_matching_raw_values]
+        ),
         "item_matching_abs_mean": _mean([abs(value) for value in item_matching_values]),
         "irt_logit_abs_mean": _mean([abs(value) for value in irt_logits]),
         "irt_theta_abs_mean": _mean([abs(value) for value in theta_values]),
@@ -232,7 +237,8 @@ def format_activity_report(
             f"   - Logit |mean|: {activity.get('irt_logit_abs_mean', 0.0):.4f}",
             f"   - Theta |mean|: {activity.get('irt_theta_abs_mean', 0.0):.4f}",
             f"   - Item matching: {'LIVE' if activity.get('item_matching_active') else 'INACTIVE'} "
-            f"(rank={activity.get('item_matching_rank', 0)}, |mean|={activity.get('item_matching_abs_mean', 0.0):.4f})",
+            f"(rank={activity.get('item_matching_rank', 0)}, |mean|={activity.get('item_matching_abs_mean', 0.0):.4f}, "
+            f"raw={activity.get('item_matching_raw_abs_mean', 0.0):.4f})",
             f"   - Discrimination mean: {activity.get('irt_discrimination_mean', 0.0):.4f}",
             f"   - Difficulty mean: {activity.get('irt_difficulty_mean', 0.0):.4f}",
             "=" * 60,
