@@ -15,6 +15,7 @@ from src.dataset import (
     build_id_mappings,
     build_item_cooccurrence_prior,
     build_q_matrix,
+    build_student_item_interaction_graph,
     build_student_coexposure_prior,
 )
 from src.model import CognitiveDiagnosisModel
@@ -25,7 +26,10 @@ def _structure(dataframe: pd.DataFrame):
     q_matrix = build_q_matrix([dataframe], exercises, concepts)
     item_prior, _ = build_item_cooccurrence_prior(q_matrix)
     exposure_prior, _ = build_student_coexposure_prior([dataframe], concepts)
-    return students, exercises, concepts, q_matrix, item_prior, exposure_prior
+    response_graph, _ = build_student_item_interaction_graph(
+        [dataframe], students, exercises
+    )
+    return students, exercises, concepts, q_matrix, item_prior, exposure_prior, response_graph
 
 
 def main() -> None:
@@ -44,15 +48,18 @@ def main() -> None:
     first = _structure(frame)
     second = _structure(flipped)
     assert first[:3] == second[:3]
-    for left, right in zip(first[3:], second[3:]):
+    for left, right in zip(first[3:6], second[3:6]):
         assert torch.allclose(left, right, atol=1e-7)
+    assert torch.equal(first[6].indices(), second[6].indices())
+    assert torch.equal(first[6].values(), second[6].values())
 
-    students, exercises, concepts, q_matrix, item_prior, exposure_prior = first
+    students, exercises, concepts, q_matrix, item_prior, exposure_prior, response_graph = first
     kwargs = dict(
         num_students=len(students),
         num_exercises=len(exercises),
         num_concepts=len(concepts),
         q_matrix=q_matrix,
+        response_graph_matrix=response_graph,
         item_prior_matrix=item_prior,
         exposure_prior_matrix=exposure_prior,
         knowledge_dim=8,
@@ -62,8 +69,8 @@ def main() -> None:
     )
     student_ids = torch.tensor([0, 1], dtype=torch.long)
     exercise_ids = torch.tensor([0, 2], dtype=torch.long)
-    for enable_item_matching in (False, True):
-        model_kwargs = dict(kwargs, enable_item_matching=enable_item_matching)
+    for enable_response_graph in (False, True):
+        model_kwargs = dict(kwargs, enable_response_graph=enable_response_graph)
         torch.manual_seed(123)
         model_a = CognitiveDiagnosisModel(**model_kwargs).eval()
         torch.manual_seed(123)

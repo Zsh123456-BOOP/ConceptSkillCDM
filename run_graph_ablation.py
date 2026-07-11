@@ -45,8 +45,8 @@ class JobSpec:
 
 ABLATIONS: Dict[str, AblationSpec] = {
     "full": AblationSpec("full", {}),
-    "no_item_matching": AblationSpec(
-        "no_item_matching", {"enable_item_matching": False}
+    "no_response_graph": AblationSpec(
+        "no_response_graph", {"enable_response_graph": False}
     ),
     "no_message_passing": AblationSpec(
         "no_message_passing", {"graph_propagation_alpha": 0.0}
@@ -85,6 +85,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max_per_gpu", type=int, default=1)
     parser.add_argument("--poll_interval", type=int, default=10)
     parser.add_argument("--run_id", default=None)
+    parser.add_argument(
+        "--run_mode",
+        choices=("train", "test"),
+        default="train",
+        help=(
+            "Explicit experiment phase. train is validation-only model selection; "
+            "test evaluates checkpoints from an existing --run_id and never trains them."
+        ),
+    )
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--generate_diagnosis", action="store_true")
     return parser.parse_args(argv)
@@ -106,7 +115,12 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
     datasets = _csv_tokens(args.datasets)
     seeds = list(DEFAULT_SEEDS) if args.seeds is None else parse_int_csv(args.seeds)
     ablations = _selected_ablations(args.ablations)
-    session = run_id or args.run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+    requested_run_id = run_id or args.run_id
+    if args.run_mode == "test" and not requested_run_id:
+        raise ValueError(
+            "--run_mode test requires --run_id for an existing validation-selected run."
+        )
+    session = requested_run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
     jobs: List[JobSpec] = []
 
     for dataset in datasets:
@@ -134,6 +148,8 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
                     str(save_dir),
                     "--log_dir",
                     str(log_dir),
+                    "--run_mode",
+                    str(args.run_mode),
                 ]
                 for key, value in params.items():
                     _append_cli_arg(cmd, key, value)
@@ -156,6 +172,22 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
     return jobs
 
 
+def _require_existing_test_checkpoints(jobs: Sequence[JobSpec]) -> None:
+    """Fail before launching if a test phase has no sealed training checkpoint."""
+    missing = [
+        str(job.save_dir / "best_model.pth")
+        for job in jobs
+        if not (job.save_dir / "best_model.pth").is_file()
+    ]
+    if missing:
+        preview = "\n  ".join(missing[:10])
+        suffix = f"\n  ... and {len(missing) - 10} more" if len(missing) > 10 else ""
+        raise FileNotFoundError(
+            "Test phase only evaluates existing checkpoints; missing:\n  "
+            f"{preview}{suffix}"
+        )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
     jobs = make_jobs(args)
@@ -167,13 +199,17 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     )
 
     print(
-        f"Graph-IRT jobs={len(jobs)}, ablations={_csv_tokens(args.ablations)}, "
+        f"Graph-IRT phase={args.run_mode}, jobs={len(jobs)}, "
+        f"ablations={_csv_tokens(args.ablations)}, "
         f"seeds={args.seeds or DEFAULT_SEEDS}, dry_run={args.dry_run}"
     )
     if args.dry_run:
         for job in jobs:
             print(" ".join(job.cmd))
         return
+
+    if args.run_mode == "test":
+        _require_existing_test_checkpoints(jobs)
 
     running: List[tuple[subprocess.Popen, int, JobSpec]] = []
     gpu_load = {gpu: 0 for gpu in gpus}
@@ -208,7 +244,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 if gpu is None:
                     break
                 job = jobs[next_job]
-                job.save_dir.mkdir(parents=True, exist_ok=True)
+                if args.run_mode == "train":
+                    job.save_dir.mkdir(parents=True, exist_ok=True)
                 job.log_dir.mkdir(parents=True, exist_ok=True)
                 env = os.environ.copy()
                 env["CUDA_VISIBLE_DEVICES"] = str(gpu)

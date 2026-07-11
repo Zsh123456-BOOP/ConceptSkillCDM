@@ -33,6 +33,8 @@ REMOVED_FLAGS = (
     "--student_concept_interaction_ratio_cap",
     "--student_concept_interaction_rank",
     "--student_concept_interaction_init_std",
+    "--enable_item_matching",
+    "--item_matching_rank",
 )
 
 

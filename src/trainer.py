@@ -1,9 +1,11 @@
 """Training and inference for the production Graph-IRT model."""
 
+import hashlib
 import json
 import math
 import os
 import warnings
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -13,9 +15,9 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
-from src.config import ITEM_MATCHING_RANK
 from src.dataset import CognitiveDiagnosisDataset, create_dataloaders
 from src.experiment_utils import (
+    _config_hash,
     append_summary_csv,
     compute_metrics,
     save_epoch_history_csv,
@@ -45,8 +47,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "graph_identity_residual",
     "graph_propagation_alpha",
     "graph_prior_strength_init",
-    "enable_item_matching",
-    "item_matching_rank",
+    "enable_response_graph",
     "num_gnn_layers",
 )
 
@@ -100,6 +101,25 @@ def _source_get(source: Any, key: str, default: Any = None) -> Any:
     return getattr(source, key, default)
 
 
+def _sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _build_data_identity(args: Any, train_file: str, val_file: str) -> Dict[str, Any]:
+    """Bind a checkpoint to its train/validation corpus without opening test."""
+    return {
+        "schema": "graph_irt_data_v1",
+        "dataset_name": str(getattr(args, "dataset_name", "unknown")),
+        "data_dir": os.path.realpath(str(args.data_dir)),
+        "train_sha256": _sha256_file(train_file),
+        "valid_sha256": _sha256_file(val_file),
+    }
+
+
 def _resolve_optional_graph_dropout(value: Any) -> Optional[float]:
     if value is None:
         return None
@@ -123,15 +143,12 @@ def _default_monitor_config() -> Dict[str, str]:
 
 def _collect_structural_switches(source: Any) -> Dict[str, Any]:
     switches = {key: _source_get(source, key) for key in STRUCTURAL_SWITCH_KEYS}
-    switches["enable_item_matching"] = bool(
+    switches["enable_response_graph"] = bool(
         _source_get(
             source,
-            "enable_item_matching",
-            _source_get(source, "model_variant", "full") != "no_item_matching",
+            "enable_response_graph",
+            _source_get(source, "model_variant", "full") != "no_response_graph",
         )
-    )
-    switches["item_matching_rank"] = int(
-        _source_get(source, "item_matching_rank", ITEM_MATCHING_RANK)
     )
     switches["architecture"] = ARCHITECTURE_NAME
     return switches
@@ -157,6 +174,7 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "num_exercises": int(info_dict["num_exercises"]),
         "num_concepts": int(info_dict["num_concepts"]),
         "q_matrix": info_dict["q_matrix"],
+        "response_graph_matrix": info_dict["response_graph_matrix"],
         "item_prior_matrix": info_dict.get("item_prior_matrix"),
         "exposure_prior_matrix": info_dict.get("exposure_prior_matrix"),
         "knowledge_dim": int(_source_get(source, "knowledge_dim", 32)),
@@ -180,15 +198,12 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "prediction_l2_lambda": float(_source_get(source, "prediction_l2_lambda", 5e-5)),
         "gnn_residual_weight": float(_source_get(source, "gnn_residual_weight", 0.5)),
         "graph_prior_strength_init": float(_source_get(source, "graph_prior_strength_init", 1.0)),
-        "enable_item_matching": bool(
+        "enable_response_graph": bool(
             _source_get(
                 source,
-                "enable_item_matching",
-                _source_get(source, "model_variant", "full") != "no_item_matching",
+                "enable_response_graph",
+                _source_get(source, "model_variant", "full") != "no_response_graph",
             )
-        ),
-        "item_matching_rank": int(
-            _source_get(source, "item_matching_rank", ITEM_MATCHING_RANK)
         ),
     }
 
@@ -200,15 +215,12 @@ def _build_model(source: Any, info_dict: Dict[str, Any], device: torch.device) -
 def _runtime_facts(model: nn.Module) -> Dict[str, Any]:
     base_model = _get_base_model(model)
     relation_learning = getattr(base_model, "relation_learning", None)
-    diagnosis_head = getattr(base_model, "diagnosis_head", None)
     return {
         "architecture": ARCHITECTURE_NAME,
         "graph_enabled": bool(relation_learning is not None),
-        "item_matching_enabled": bool(
-            getattr(diagnosis_head, "enable_item_matching", False)
-        ),
-        "item_matching_rank": int(
-            getattr(diagnosis_head, "item_matching_rank", 0)
+        "response_graph_enabled": bool(getattr(base_model, "enable_response_graph", False)),
+        "response_graph_edges": int(
+            getattr(getattr(base_model, "response_graph_encoder", None), "num_edges", 0)
         ),
         "num_parameters": int(sum(parameter.numel() for parameter in base_model.parameters())),
         "num_trainable_parameters": int(
@@ -222,13 +234,13 @@ def _log_runtime_facts(model: nn.Module, logger, context: str) -> Dict[str, Any]
     if not facts["graph_enabled"]:
         raise RuntimeError("Graph-IRT requires relation_learning to be present.")
     logger.info(
-        "%s Architecture=%s | graph_enabled=%s | item_matching=%s rank=%d "
+        "%s Architecture=%s | concept_graph=%s | response_graph=%s edges=%d "
         "| params=%s trainable=%s",
         context,
         facts["architecture"],
         facts["graph_enabled"],
-        facts["item_matching_enabled"],
-        facts["item_matching_rank"],
+        facts["response_graph_enabled"],
+        facts["response_graph_edges"],
         f"{facts['num_parameters']:,}",
         f"{facts['num_trainable_parameters']:,}",
     )
@@ -240,6 +252,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
     checkpoint_keys = (
         "dataset",
         "dataset_name",
+        "data_dir",
         "model_variant",
         "seed",
         "batch_size",
@@ -273,8 +286,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "prediction_l2_lambda",
         "gnn_residual_weight",
         "graph_prior_strength_init",
-        "enable_item_matching",
-        "item_matching_rank",
+        "enable_response_graph",
         "graph_prior_mode",
         "min_stu_interactions",
         "min_exer_interactions",
@@ -284,6 +296,8 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         for key in checkpoint_keys
         if hasattr(args, key)
     }
+    if "data_dir" in clean:
+        clean["data_dir"] = os.path.realpath(str(clean["data_dir"]))
     clean["architecture"] = ARCHITECTURE_NAME
     clean["allow_self_loop"] = _resolve_allow_self_loop(args)
     return clean
@@ -604,10 +618,11 @@ def _collect_debug_forward_stats(
     accumulators: Dict[str, List[float]] = {
         "relation_identity_delta": [],
         "knowledge_state_graph_delta": [],
+        "response_student_delta": [],
+        "response_item_delta": [],
         "irt_logit_abs_mean": [],
         "theta_abs_mean": [],
-        "item_matching_raw_abs_mean": [],
-        "item_matching_abs_mean": [],
+        "item_difficulty_delta_abs_mean": [],
         "irt_discrimination_mean": [],
         "irt_difficulty_mean": [],
     }
@@ -625,13 +640,16 @@ def _collect_debug_forward_stats(
             accumulators["knowledge_state_graph_delta"].append(
                 _mean_detail(details, "knowledge_state_graph_delta")
             )
+            accumulators["response_student_delta"].append(
+                _mean_detail(details, "response_student_delta")
+            )
+            accumulators["response_item_delta"].append(
+                _mean_detail(details, "response_item_delta")
+            )
             accumulators["irt_logit_abs_mean"].append(_mean_detail(details, "irt_logit", absolute=True))
             accumulators["theta_abs_mean"].append(_mean_detail(details, "theta_c", absolute=True))
-            accumulators["item_matching_raw_abs_mean"].append(
-                _mean_detail(details, "item_matching_raw", absolute=True)
-            )
-            accumulators["item_matching_abs_mean"].append(
-                _mean_detail(details, "item_matching", absolute=True)
+            accumulators["item_difficulty_delta_abs_mean"].append(
+                _mean_detail(details, "item_difficulty_delta", absolute=True)
             )
             accumulators["irt_discrimination_mean"].append(_mean_detail(details, "irt_a"))
             accumulators["irt_difficulty_mean"].append(_mean_detail(details, "irt_b"))
@@ -710,10 +728,12 @@ def _collect_debug_grad_norms(model: nn.Module) -> Dict[str, float]:
 
 def _create_loaders(args: Any, logger, *, shuffle_train: bool = True):
     data_dir = args.data_dir
-    return create_dataloaders(
-        train_file=os.path.join(data_dir, "train.csv"),
-        val_file=os.path.join(data_dir, "valid.csv"),
-        test_file=os.path.join(data_dir, "test.csv"),
+    train_file = os.path.join(data_dir, "train.csv")
+    val_file = os.path.join(data_dir, "valid.csv")
+    train_loader, val_loader, test_loader, info_dict = create_dataloaders(
+        train_file=train_file,
+        val_file=val_file,
+        test_file=None,
         batch_size=int(args.batch_size),
         num_workers=int(args.num_workers),
         shuffle_train=shuffle_train,
@@ -723,7 +743,12 @@ def _create_loaders(args: Any, logger, *, shuffle_train: bool = True):
         dataset_name=getattr(args, "dataset_name", getattr(args, "dataset", None)),
         graph_prior_mode=str(getattr(args, "graph_prior_mode", "evidence")),
         seed=int(getattr(args, "seed", 42)),
+        load_test=False,
     )
+    if test_loader is not None:
+        raise RuntimeError("training loader unexpectedly opened the sealed test split")
+    info_dict["data_identity"] = _build_data_identity(args, train_file, val_file)
+    return train_loader, val_loader, None, info_dict
 
 
 def _save_checkpoint(
@@ -766,6 +791,17 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         f"|lr={args.learning_rate:g}|drop={args.dropout:.2f}]"
     )
     os.makedirs(args.save_dir, exist_ok=True)
+    sealed_results_path = os.path.join(args.save_dir, "test_results.json")
+    test_seal_path = os.path.join(args.save_dir, "test_seal.json")
+    sealed_path = next(
+        (path for path in (sealed_results_path, test_seal_path) if os.path.exists(path)),
+        None,
+    )
+    if sealed_path is not None:
+        raise RuntimeError(
+            "Refusing to train in a test-sealed run directory; choose a new --save_dir: "
+            f"{sealed_path}"
+        )
     logger.info("%s Loading datasets...", run_tag)
     train_loader, val_loader, _, info_dict = _create_loaders(args, logger, shuffle_train=True)
     logger.info(
@@ -900,15 +936,17 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             last_diag["grad_norms"] = grad_norms
             logger.info(
                 "%s [Graph-IRT Diag] entropy_ratio=%.4f diag_mass=%.4f relation_delta=%.6f "
-                "state_delta=%.6f item_matching=%.4f(raw=%.4f) "
+                "concept_state_delta=%.6f response_student=%.6f response_item=%.6f "
+                "item_diff_delta=%.4f "
                 "irt_logit=%.4f theta=%.4f a=%.4f b=%.4f",
                 run_tag,
                 last_diag["graph_entropy_ratio"],
                 last_diag["graph_diag_mass"],
                 last_diag["relation_identity_delta"],
                 last_diag["knowledge_state_graph_delta"],
-                last_diag["item_matching_abs_mean"],
-                last_diag["item_matching_raw_abs_mean"],
+                last_diag["response_student_delta"],
+                last_diag["response_item_delta"],
+                last_diag["item_difficulty_delta_abs_mean"],
                 last_diag["irt_logit_abs_mean"],
                 last_diag["theta_abs_mean"],
                 last_diag["irt_discrimination_mean"],
@@ -981,13 +1019,26 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     with open(os.path.join(args.save_dir, "training_history.json"), "w", encoding="utf-8") as handle:
         json.dump(history, handle, indent=4)
 
+    best_model_path = os.path.join(args.save_dir, "best_model.pth")
+    if best_epoch <= 0 or not os.path.exists(best_model_path):
+        raise RuntimeError("training finished without a validation-selected best checkpoint")
+    best_checkpoint = torch.load(best_model_path, map_location="cpu", weights_only=False)
+    _require_graph_irt_checkpoint(best_checkpoint, best_model_path)
+    _get_base_model(model).load_state_dict(
+        _strip_module_prefix(best_checkpoint["model_state_dict"]),
+        strict=STRICT_CHECKPOINT_LOADING,
+    )
+    if hasattr(_get_base_model(model), "set_epoch"):
+        _get_base_model(model).set_epoch(best_epoch)
+    logger.info("%s Reloaded best checkpoint for final diagnostics (epoch=%d).", run_tag, best_epoch)
+
     try:
         activity = compute_module_activity(model, val_loader, device, num_samples=500)
         report = format_activity_report(
             activity,
             dataset_name=getattr(args, "dataset_name", "unknown"),
             seed=int(getattr(args, "seed", 42)),
-            epoch=last_epoch,
+            epoch=best_epoch,
         )
         logger.info("\n%s", report)
         with open(os.path.join(args.save_dir, "module_activity.json"), "w", encoding="utf-8") as handle:
@@ -1020,23 +1071,169 @@ def _require_graph_irt_checkpoint(checkpoint: Dict[str, Any], model_path: str) -
         )
 
 
+def _write_json_atomic(path: str, payload: Dict[str, Any]) -> None:
+    temp_path = f"{path}.tmp.{os.getpid()}"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=4, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+def _claim_test_seal(path: str, payload: Dict[str, Any]) -> None:
+    """Atomically claim the one allowed test read for a checkpoint directory."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except FileExistsError as exc:
+        raise RuntimeError(
+            f"Refusing concurrent or repeated test evaluation; seal already exists: {path}"
+        ) from exc
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=4, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except Exception:
+        # Keep the exclusive claim in place even after an interrupted write:
+        # once a process reaches this point, another process must not open test.
+        raise
+
+
+def _validate_checkpoint_data_identity(
+    args: Any,
+    loaded_args: Dict[str, Any],
+    info_dict: Dict[str, Any],
+) -> Tuple[str, Dict[str, Any]]:
+    identity = info_dict.get("data_identity")
+    if not isinstance(identity, dict) or identity.get("schema") != "graph_irt_data_v1":
+        raise RuntimeError("Graph-IRT checkpoint is missing a valid train/validation data identity.")
+
+    checkpoint_dataset = str(loaded_args.get("dataset_name", ""))
+    if not checkpoint_dataset or checkpoint_dataset != str(identity.get("dataset_name", "")):
+        raise RuntimeError("Checkpoint args and data identity disagree on dataset_name.")
+
+    loaded_data_dir = loaded_args.get("data_dir")
+    identified_data_dir = identity.get("data_dir")
+    if not loaded_data_dir or not identified_data_dir:
+        raise RuntimeError("Checkpoint data identity is missing data_dir.")
+    checkpoint_data_dir = os.path.realpath(str(loaded_data_dir))
+    identity_data_dir = os.path.realpath(str(identified_data_dir))
+    if checkpoint_data_dir != identity_data_dir:
+        raise RuntimeError("Checkpoint args and data identity disagree on data_dir.")
+
+    explicit = set(getattr(args, "explicit_arg_dests", []) or [])
+    if "dataset_name" in explicit and str(args.dataset_name) != checkpoint_dataset:
+        raise RuntimeError(
+            f"Explicit --dataset_name={args.dataset_name!r} conflicts with checkpoint "
+            f"dataset={checkpoint_dataset!r}."
+        )
+    if "data_dir" in explicit and os.path.realpath(str(args.data_dir)) != checkpoint_data_dir:
+        raise RuntimeError(
+            f"Explicit --data_dir={args.data_dir!r} conflicts with checkpoint data_dir."
+        )
+
+    for split_name, filename, hash_key in (
+        ("train", "train.csv", "train_sha256"),
+        ("valid", "valid.csv", "valid_sha256"),
+    ):
+        path = os.path.join(checkpoint_data_dir, filename)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Checkpoint-bound {split_name} split is missing: {path}")
+        expected_hash = str(identity.get(hash_key, ""))
+        actual_hash = _sha256_file(path)
+        if not expected_hash or actual_hash != expected_hash:
+            raise RuntimeError(
+                f"Checkpoint-bound {split_name} split fingerprint mismatch; refusing test evaluation."
+            )
+    return checkpoint_data_dir, identity
+
+
 def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
-    device = select_device(args, logger)
     model_path = os.path.join(args.save_dir, "best_model.pth")
+    test_results_path = os.path.join(args.save_dir, "test_results.json")
+    test_seal_path = os.path.join(args.save_dir, "test_seal.json")
+    if os.path.exists(test_results_path) or os.path.exists(test_seal_path):
+        sealed_path = test_results_path if os.path.exists(test_results_path) else test_seal_path
+        checkpoint_note = ""
+        if os.path.exists(model_path):
+            try:
+                with open(sealed_path, "r", encoding="utf-8") as handle:
+                    sealed_payload = json.load(handle)
+                sealed_hash = sealed_payload.get("checkpoint_sha256")
+                current_hash = _sha256_file(model_path)
+                if sealed_hash and sealed_hash != current_hash:
+                    checkpoint_note = " The sealed result belongs to a different checkpoint file."
+            except (OSError, ValueError, TypeError):
+                checkpoint_note = " The existing seal is unreadable."
+        raise RuntimeError(
+            "Refusing to evaluate test twice for the same sealed checkpoint: "
+            f"{sealed_path}.{checkpoint_note}"
+        )
     logger.info("Loading model from %s...", model_path)
     if not os.path.exists(model_path):
         logger.error("Model file not found: %s", model_path)
         return {}, {}
 
-    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+    device = select_device(args, logger)
+    # Keep the unused optimizer state and train-only graph metadata on CPU;
+    # model construction moves only the buffers and weights needed for inference.
+    checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
     _require_graph_irt_checkpoint(checkpoint, model_path)
     loaded_args: Dict[str, Any] = checkpoint.get("args", {})
     info_dict = checkpoint.get("info_dict")
     if info_dict is None:
         raise RuntimeError("Graph-IRT checkpoint is missing info_dict.")
 
-    test_file = os.path.join(args.data_dir, "test.csv")
+    checkpoint_data_dir, data_identity = _validate_checkpoint_data_identity(
+        args,
+        loaded_args,
+        info_dict,
+    )
+    checkpoint_sha256 = _sha256_file(model_path)
+    test_file = os.path.join(checkpoint_data_dir, "test.csv")
+    if not os.path.isfile(test_file):
+        raise FileNotFoundError(f"Checkpoint-bound test split is missing: {test_file}")
+
+    # Validate the complete checkpoint/model contract before unsealing test.
+    model = _build_model(loaded_args, info_dict, device)
+    state_dict = _strip_module_prefix(checkpoint["model_state_dict"])
+    incompatible = model.load_state_dict(state_dict, strict=STRICT_CHECKPOINT_LOADING)
+    if not STRICT_CHECKPOINT_LOADING:
+        missing = list(getattr(incompatible, "missing_keys", []))
+        unexpected = list(getattr(incompatible, "unexpected_keys", []))
+        if missing or unexpected:
+            raise RuntimeError(f"Graph-IRT checkpoint mismatch: missing={missing}, unexpected={unexpected}")
+    if hasattr(model, "set_epoch"):
+        model.set_epoch(int(checkpoint.get("epoch", 1)))
+    runtime_facts = _log_runtime_facts(model, logger, "[Inference]")
+
+    _claim_test_seal(
+        test_seal_path,
+        {
+            "status": "started",
+            "architecture": ARCHITECTURE_NAME,
+            "checkpoint_sha256": checkpoint_sha256,
+            "dataset_name": loaded_args.get("dataset_name"),
+            "model_variant": loaded_args.get("model_variant"),
+            "seed": loaded_args.get("seed"),
+        },
+    )
+
+    test_sha256 = _sha256_file(test_file)
     raw_test = pd.read_csv(test_file)
+    required_columns = {"stu_id", "exer_id", "cpt_seq", "label"}
+    missing_columns = sorted(required_columns - set(raw_test.columns))
+    if missing_columns:
+        raise ValueError(f"test split is missing required columns: {missing_columns}")
+    raw_labels = pd.to_numeric(raw_test["label"], errors="coerce")
+    if raw_labels.isna().any() or not raw_labels.between(0.0, 1.0).all():
+        raise ValueError("test labels must be finite values in [0, 1]")
+    raw_test["label"] = raw_labels.astype(float)
     student_map = info_dict["stu_id_map"]
     exercise_map = info_dict["exer_id_map"]
     concept_map = info_dict["cpt_id_map"]
@@ -1077,28 +1274,12 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         **loader_kwargs,
     )
 
-    model = _build_model(loaded_args, info_dict, device)
-    state_dict = _strip_module_prefix(checkpoint["model_state_dict"])
-    incompatible = model.load_state_dict(state_dict, strict=STRICT_CHECKPOINT_LOADING)
-    if not STRICT_CHECKPOINT_LOADING:
-        missing = list(getattr(incompatible, "missing_keys", []))
-        unexpected = list(getattr(incompatible, "unexpected_keys", []))
-        if missing or unexpected:
-            raise RuntimeError(f"Graph-IRT checkpoint mismatch: missing={missing}, unexpected={unexpected}")
-    if hasattr(model, "set_epoch"):
-        model.set_epoch(int(checkpoint.get("epoch", 1)))
-    runtime_facts = _log_runtime_facts(model, logger, "[Inference]")
-
     model.eval()
     all_labels: List[float] = []
     all_preds: List[float] = []
     all_probs: List[float] = []
-    max_batches = getattr(args, "max_test_batches", None)
-    max_batches = None if max_batches is None else max(1, int(max_batches))
     with torch.no_grad():
-        for batch_idx, (student_ids, exercise_ids, labels) in enumerate(test_loader):
-            if max_batches is not None and batch_idx >= max_batches:
-                break
+        for student_ids, exercise_ids, labels in test_loader:
             labels = _ensure_1d(labels.to(device).float())
             logits = model(
                 student_ids.to(device),
@@ -1118,6 +1299,13 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
     logger.info("Test Results: AUC=%.4f ACC=%.4f RMSE=%.4f", metrics["auc"], metrics["acc"], metrics["rmse"])
     results = {
         "architecture": ARCHITECTURE_NAME,
+        "dataset_name": loaded_args.get("dataset_name"),
+        "model_variant": loaded_args.get("model_variant"),
+        "seed": int(loaded_args.get("seed", 0)),
+        "config_hash": _config_hash(SimpleNamespace(**loaded_args)),
+        "checkpoint_sha256": checkpoint_sha256,
+        "test_file_sha256": test_sha256,
+        "data_identity": data_identity,
         "metrics": metrics,
         "num_samples": len(all_labels),
         "model_epoch": int(checkpoint["epoch"]),
@@ -1127,17 +1315,36 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         "test_seen_coverage": float(coverage),
         "effective_batch_size": int(getattr(args, "batch_size", 0)),
         "train_only_split_hygiene": bool(info_dict.get("train_only_split_hygiene", False)),
+        "test_sealed_during_training": bool(
+            info_dict.get("test_sealed_during_training", False)
+        ),
         "runtime_facts": runtime_facts,
         "monitor": checkpoint.get("monitor", _default_monitor_config()),
         "config_switches": _collect_structural_switches(loaded_args),
         "graph_irt_diagnostics": checkpoint.get("graph_irt_diagnostics", {}),
         "failure_reason": None,
     }
-    with open(os.path.join(args.save_dir, "test_results.json"), "w", encoding="utf-8") as handle:
-        json.dump(results, handle, indent=4)
+    _write_json_atomic(test_results_path, results)
+    _write_json_atomic(
+        test_seal_path,
+        {
+            "status": "complete",
+            "architecture": ARCHITECTURE_NAME,
+            "checkpoint_sha256": checkpoint_sha256,
+            "test_file_sha256": test_sha256,
+            "test_results_sha256": _sha256_file(test_results_path),
+            "dataset_name": loaded_args.get("dataset_name"),
+            "model_variant": loaded_args.get("model_variant"),
+            "seed": loaded_args.get("seed"),
+        },
+    )
 
+    result_args = SimpleNamespace(**loaded_args)
+    result_args.save_dir = args.save_dir
+    result_args.log_dir = getattr(args, "log_dir", "")
+    result_args.run_mode = "test"
     append_summary_csv(
-        args,
+        result_args,
         metrics=metrics,
         best_val_auc=results["best_val_auc"],
         model_epoch=results["model_epoch"],
@@ -1224,6 +1431,9 @@ def save_component_analysis_data(
                 ("theta_c", "theta_samples"),
                 ("irt_a", "irt_discrimination_samples"),
                 ("irt_b", "irt_difficulty_samples"),
+                ("item_difficulty_delta", "item_difficulty_delta_samples"),
+                ("response_student_delta", "response_student_delta_samples"),
+                ("response_item_delta", "response_item_delta_samples"),
                 ("knowledge_state_graph_delta", "knowledge_state_graph_delta_samples"),
                 ("relation_identity_delta", "relation_identity_delta_samples"),
             ):

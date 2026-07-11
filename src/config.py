@@ -5,9 +5,6 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Set
 
 
-ITEM_MATCHING_RANK = 8
-
-
 _BASE_DEFAULTS: Dict[str, Any] = {
     "batch_size": 512,
     "epochs": 100,

@@ -22,6 +22,7 @@ BANNED_TOKENS = (
     "calibration",
     "residual_logit",
     "ae_",
+    "item_matching",
 )
 
 
@@ -32,11 +33,17 @@ def _build_model() -> CognitiveDiagnosisModel:
     prior = torch.tensor(
         [[0.0, 0.7, 0.3], [0.5, 0.0, 0.5], [0.6, 0.4, 0.0]]
     )
+    response_graph = torch.sparse_coo_tensor(
+        torch.tensor([[0, 0, 1, 2, 3], [0, 1, 1, 2, 0]]),
+        torch.ones(5),
+        size=(4, 3),
+    ).coalesce()
     return CognitiveDiagnosisModel(
         num_students=4,
         num_exercises=3,
         num_concepts=3,
         q_matrix=q_matrix,
+        response_graph_matrix=response_graph,
         item_prior_matrix=prior,
         exposure_prior_matrix=torch.zeros_like(prior),
         knowledge_dim=8,

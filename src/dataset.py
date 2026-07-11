@@ -411,10 +411,82 @@ def build_student_coexposure_prior(
     }
 
 
+def build_student_item_interaction_graph(
+    train_sources: list,
+    stu_id_map: Dict[int, int],
+    exer_id_map: Dict[int, int],
+) -> Tuple[torch.Tensor, Dict[str, float]]:
+    """Build a sparse, label-free student-item support graph from training only.
+
+    Repeated observations of the same pair collapse to one binary edge.  The
+    response-graph encoder performs per-query degree normalization. Correctness
+    labels, concepts, row order, validation rows, and test rows do not affect
+    this graph.
+    """
+    num_students = len(stu_id_map)
+    num_exercises = len(exer_id_map)
+    if num_students <= 0 or num_exercises <= 0:
+        raise ValueError("student and exercise mappings must not be empty")
+
+    student_indices: List[int] = []
+    exercise_indices: List[int] = []
+    for dataframe in _iter_source_dfs(train_sources):
+        if "stu_id" not in dataframe.columns or "exer_id" not in dataframe.columns:
+            continue
+        for raw_student, raw_exercise in dataframe[["stu_id", "exer_id"]].itertuples(
+            index=False,
+            name=None,
+        ):
+            if raw_student not in stu_id_map or raw_exercise not in exer_id_map:
+                continue
+            student_indices.append(stu_id_map[raw_student])
+            exercise_indices.append(exer_id_map[raw_exercise])
+
+    if not student_indices:
+        raise ValueError("training data contains no mapped student-item interactions")
+
+    edge_index = torch.tensor(
+        [student_indices, exercise_indices],
+        dtype=torch.long,
+    )
+    edge_weight = torch.ones(edge_index.size(1), dtype=torch.float32)
+    adjacency = torch.sparse_coo_tensor(
+        edge_index,
+        edge_weight,
+        size=(num_students, num_exercises),
+        dtype=torch.float32,
+    ).coalesce()
+    # Only support matters; duplicate interaction counts and any future edge
+    # values must not act as hidden outcome/confidence features.
+    adjacency = torch.sparse_coo_tensor(
+        adjacency.indices(),
+        torch.ones(adjacency._nnz(), dtype=torch.float32),
+        size=adjacency.shape,
+        dtype=torch.float32,
+    ).coalesce()
+
+    unique_pairs = int(adjacency._nnz())
+    student_degree = torch.zeros(num_students, dtype=torch.float32)
+    exercise_degree = torch.zeros(num_exercises, dtype=torch.float32)
+    student_degree.scatter_add_(0, adjacency.indices()[0], adjacency.values())
+    exercise_degree.scatter_add_(0, adjacency.indices()[1], adjacency.values())
+    possible_pairs = float(num_students * num_exercises)
+    stats = {
+        "response_interaction_count": float(len(student_indices)),
+        "response_unique_pair_count": float(unique_pairs),
+        "response_graph_density": (
+            float(unique_pairs) / possible_pairs if possible_pairs > 0 else 0.0
+        ),
+        "response_isolated_student_count": float((student_degree == 0).sum().item()),
+        "response_isolated_exercise_count": float((exercise_degree == 0).sum().item()),
+    }
+    return adjacency, stats
+
+
 def create_dataloaders(
         train_file: str,
         val_file: str,
-        test_file: str,
+        test_file: Optional[str],
         batch_size: int = 32,
         num_workers: int = 4,
         shuffle_train: bool = True,
@@ -424,14 +496,15 @@ def create_dataloaders(
         dataset_name: Optional[str] = None,
         graph_prior_mode: str = "evidence",
         seed: int = 42,
-) -> Tuple[DataLoader, DataLoader, DataLoader, dict]:
+        load_test: bool = True,
+) -> Tuple[DataLoader, DataLoader, Optional[DataLoader], dict]:
     """
     创建训练、验证和测试的数据加载器，并执行统一的数据清洗
 
     Args:
         train_file: 训练集CSV文件路径
         val_file: 验证集CSV文件路径
-        test_file: 测试集CSV文件路径
+        test_file: 测试集CSV文件路径；纯训练阶段可传 None
         batch_size: 批次大小
         num_workers: 数据加载的工作进程数
         shuffle_train: 是否打乱训练集
@@ -439,6 +512,7 @@ def create_dataloaders(
         min_exer_interactions: 习题最小被作答数阈值（<该值的题目将被过滤，0 表示不启用）
         logger: 可选的 logger，对清洗过程进行记录
         seed: 训练 DataLoader 的独立随机种子
+        load_test: 是否读取测试集；训练/选模时必须为 False
 
     Returns:
         (train_loader, val_loader, test_loader, info_dict) 元组
@@ -457,14 +531,15 @@ def create_dataloaders(
     # 1. 读取原始 CSV
     train_df = pd.read_csv(train_file)
     val_df = pd.read_csv(val_file)
-    test_df = pd.read_csv(test_file)
+    if load_test and not test_file:
+        raise ValueError("test_file is required when load_test=True")
+    test_df = pd.read_csv(test_file) if load_test else None
 
     required_columns = {"stu_id", "exer_id", "cpt_seq", "label"}
-    for split_name, dataframe in (
-        ("train", train_df),
-        ("valid", val_df),
-        ("test", test_df),
-    ):
+    split_frames = [("train", train_df), ("valid", val_df)]
+    if test_df is not None:
+        split_frames.append(("test", test_df))
+    for split_name, dataframe in split_frames:
         missing = sorted(required_columns - set(dataframe.columns))
         if missing:
             raise ValueError(f"{split_name} split is missing required columns: {missing}")
@@ -501,10 +576,12 @@ def create_dataloaders(
         dropped_total += dropped
         val_df, dropped = _filter_by_students(val_df)
         dropped_total += dropped
-        test_df, dropped = _filter_by_students(test_df)
-        dropped_total += dropped
+        if test_df is not None:
+            test_df, dropped = _filter_by_students(test_df)
+            dropped_total += dropped
 
-        log(f"[数据清洗] 学生冷启动过滤：在 train/valid/test 中共删除 {dropped_total} 条记录。")
+        split_scope = "train/valid/test" if test_df is not None else "train/valid"
+        log(f"[数据清洗] 学生冷启动过滤：在 {split_scope} 中共删除 {dropped_total} 条记录。")
     else:
         log("[数据清洗] 跳过学生冷启动过滤（min_stu_interactions <= 0）。")
 
@@ -529,10 +606,12 @@ def create_dataloaders(
         dropped_total += dropped
         val_df, dropped = _filter_by_items(val_df)
         dropped_total += dropped
-        test_df, dropped = _filter_by_items(test_df)
-        dropped_total += dropped
+        if test_df is not None:
+            test_df, dropped = _filter_by_items(test_df)
+            dropped_total += dropped
 
-        log(f"[数据清洗] 题目冷门过滤：在 train/valid/test 中共删除 {dropped_total} 条记录。")
+        split_scope = "train/valid/test" if test_df is not None else "train/valid"
+        log(f"[数据清洗] 题目冷门过滤：在 {split_scope} 中共删除 {dropped_total} 条记录。")
     else:
         log("[数据清洗] 跳过题目冷门过滤（min_exer_interactions <= 0）。")
 
@@ -549,6 +628,21 @@ def create_dataloaders(
 
     log("正在构建Q矩阵...")
     q_matrix = build_q_matrix(train_sources=train_sources, exer_id_map=exer_id_map, cpt_id_map=cpt_id_map)
+
+    log("正在构建 train-only 学生-题目协同图...")
+    response_graph_matrix, response_graph_stats = build_student_item_interaction_graph(
+        train_sources=train_sources,
+        stu_id_map=stu_id_map,
+        exer_id_map=exer_id_map,
+    )
+    log(
+        "[Response Graph] label-free train-only topology: "
+        f"interactions={response_graph_stats['response_interaction_count']:.0f}, "
+        f"unique_pairs={response_graph_stats['response_unique_pair_count']:.0f}, "
+        f"density={response_graph_stats['response_graph_density']:.6f}, "
+        f"isolated_students={response_graph_stats['response_isolated_student_count']:.0f}, "
+        f"isolated_exercises={response_graph_stats['response_isolated_exercise_count']:.0f}"
+    )
 
     def _zero_item_prior(num_concepts: int) -> Tuple[torch.Tensor, Dict[str, float]]:
         return torch.zeros(num_concepts, num_concepts, dtype=torch.float32), {
@@ -645,15 +739,19 @@ def create_dataloaders(
         return df_new, before, after, coverage
 
     val_df, val_total_rows_raw, val_seen_rows, val_seen_coverage = _filter_seen_support(val_df, "Valid")
-    test_df, test_total_rows_raw, test_seen_rows, test_seen_coverage = _filter_seen_support(test_df, "Test")
     if val_df.empty:
         raise ValueError("validation split has no train-seen student-item rows")
-    if test_df.empty:
-        raise ValueError("test split has no train-seen student-item rows")
     if val_df["label"].nunique(dropna=True) < 2:
         raise ValueError("validation split must contain both outcome classes after train-seen filtering")
-    if test_df["label"].nunique(dropna=True) < 2:
-        raise ValueError("test split must contain both outcome classes after train-seen filtering")
+    if test_df is not None:
+        test_df, test_total_rows_raw, test_seen_rows, test_seen_coverage = _filter_seen_support(
+            test_df,
+            "Test",
+        )
+        if test_df.empty:
+            raise ValueError("test split has no train-seen student-item rows")
+        if test_df["label"].nunique(dropna=True) < 2:
+            raise ValueError("test split must contain both outcome classes after train-seen filtering")
 
     # ========= 统计每题的概念数量（全局 + 各数据集） =========
     # 每道题对应的概念数：按 Q 矩阵行求和
@@ -707,14 +805,19 @@ def create_dataloaders(
     log("[统计] 开始统计清洗后每道题的概念数量分布...")
     _log_concept_stats("Train", train_df)
     _log_concept_stats("Valid", val_df)
-    _log_concept_stats("Test", test_df)
+    if test_df is not None:
+        _log_concept_stats("Test", test_df)
     log("[统计] 概念数量统计完成。")
 
     # 3. 创建数据集（直接传 DataFrame，避免重复读盘）
     log("正在加载数据集...")
     train_dataset = CognitiveDiagnosisDataset(train_df, stu_id_map, exer_id_map, cpt_id_map)
     val_dataset = CognitiveDiagnosisDataset(val_df, stu_id_map, exer_id_map, cpt_id_map)
-    test_dataset = CognitiveDiagnosisDataset(test_df, stu_id_map, exer_id_map, cpt_id_map)
+    test_dataset = (
+        CognitiveDiagnosisDataset(test_df, stu_id_map, exer_id_map, cpt_id_map)
+        if test_df is not None
+        else None
+    )
 
     # 4. 创建 DataLoader
     loader_kwargs = {
@@ -741,12 +844,14 @@ def create_dataloaders(
         **loader_kwargs,
     )
 
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        **loader_kwargs,
-    )
+    test_loader = None
+    if test_dataset is not None:
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            **loader_kwargs,
+        )
 
     # 5. 收集信息
     info_dict = {
@@ -755,7 +860,6 @@ def create_dataloaders(
         'num_concepts': len(cpt_id_map),
         'train_size': len(train_dataset),
         'val_size': len(val_dataset),
-        'test_size': len(test_dataset),
         'stu_id_map': stu_id_map,
         'exer_id_map': exer_id_map,
         'cpt_id_map': cpt_id_map,
@@ -763,6 +867,8 @@ def create_dataloaders(
         'exer_id_reverse_map': {v: k for k, v in exer_id_map.items()},
         'cpt_id_reverse_map': {v: k for k, v in cpt_id_map.items()},
         'q_matrix': q_matrix,
+        'response_graph_matrix': response_graph_matrix,
+        'response_graph_stats': response_graph_stats,
         'item_prior_matrix': item_prior_matrix,
         'exposure_prior_matrix': exposure_prior_matrix,
         'graph_prior_stats': graph_prior_stats,
@@ -772,12 +878,19 @@ def create_dataloaders(
         # 每道题的概念数量，与 exer_id 内部索引对齐。
         'concepts_per_exercise': concepts_per_exercise,
         'train_only_split_hygiene': True,
+        'test_sealed_during_training': not load_test,
         'val_total_rows_raw': int(val_total_rows_raw),
         'val_seen_rows': int(val_seen_rows),
         'val_seen_coverage': float(val_seen_coverage),
-        'test_total_rows_raw': int(test_total_rows_raw),
-        'test_seen_rows': int(test_seen_rows),
-        'test_seen_coverage': float(test_seen_coverage),
     }
+    if test_dataset is not None:
+        info_dict.update(
+            {
+                'test_size': len(test_dataset),
+                'test_total_rows_raw': int(test_total_rows_raw),
+                'test_seen_rows': int(test_seen_rows),
+                'test_seen_coverage': float(test_seen_coverage),
+            }
+        )
 
     return train_loader, val_loader, test_loader, info_dict

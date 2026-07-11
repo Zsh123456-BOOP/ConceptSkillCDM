@@ -2,6 +2,9 @@
 
 import os
 import sys
+import tempfile
+from dataclasses import replace
+from pathlib import Path
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,22 +23,23 @@ def main() -> None:
             "--seeds",
             "42",
             "--ablations",
-            "full,no_item_matching,no_message_passing,item_only,exposure_only,degree_random",
+            "full,no_response_graph,no_message_passing,item_only,exposure_only,degree_random",
             "--dry_run",
         ]
     )
+    assert args.run_mode == "train"
     jobs = runner.make_jobs(args, run_id="smoke")
     assert len(jobs) == 6
     by_name = {job.ablation.name: job for job in jobs}
-    assert by_name["no_item_matching"].params["enable_item_matching"] is False
-    no_item_command = by_name["no_item_matching"].cmd
-    assert "--model_variant" in no_item_command
-    assert no_item_command[no_item_command.index("--model_variant") + 1] == "no_item_matching"
+    assert by_name["no_response_graph"].params["enable_response_graph"] is False
+    no_response_command = by_name["no_response_graph"].cmd
+    assert "--model_variant" in no_response_command
+    assert no_response_command[no_response_command.index("--model_variant") + 1] == "no_response_graph"
     parsed = main_module.parse_args(
-        no_item_command[no_item_command.index("--dataset_name") :]
+        no_response_command[no_response_command.index("--dataset_name") :]
     )
     main_module._apply_model_variant(parsed)
-    assert parsed.enable_item_matching is False
+    assert parsed.enable_response_graph is False
     assert by_name["no_message_passing"].params["graph_propagation_alpha"] == 0.0
     assert by_name["item_only"].params["graph_prior_mode"] == "item_only"
     assert by_name["exposure_only"].params["graph_prior_mode"] == "exposure_only"
@@ -45,6 +49,56 @@ def main() -> None:
     for job in jobs:
         command = " ".join(job.cmd)
         assert not any(token in command for token in banned), command
+        run_mode_index = job.cmd.index("--run_mode")
+        assert job.cmd[run_mode_index + 1] == "train"
+
+    test_args = runner.parse_args(
+        [
+            "--datasets",
+            "assist_09",
+            "--seeds",
+            "42",
+            "--ablations",
+            "full,no_response_graph",
+            "--run_mode",
+            "test",
+            "--run_id",
+            "smoke",
+            "--dry_run",
+        ]
+    )
+    test_jobs = runner.make_jobs(test_args)
+    assert len(test_jobs) == 2
+    for job in test_jobs:
+        run_mode_index = job.cmd.index("--run_mode")
+        assert job.cmd[run_mode_index + 1] == "test"
+        parsed_test = main_module.parse_args(
+            job.cmd[job.cmd.index("--dataset_name") :]
+        )
+        assert parsed_test.run_mode == "test"
+
+    missing_run_id = runner.parse_args(
+        ["--datasets", "assist_09", "--run_mode", "test", "--dry_run"]
+    )
+    try:
+        runner.make_jobs(missing_run_id)
+    except ValueError as exc:
+        assert "requires --run_id" in str(exc)
+    else:
+        raise AssertionError("test phase must name an existing training run id")
+
+    with tempfile.TemporaryDirectory() as directory:
+        checkpoint_dir = Path(directory) / "checkpoint"
+        checkpoint_job = replace(test_jobs[0], save_dir=checkpoint_dir)
+        try:
+            runner._require_existing_test_checkpoints([checkpoint_job])
+        except FileNotFoundError as exc:
+            assert "best_model.pth" in str(exc)
+        else:
+            raise AssertionError("test phase must reject a missing checkpoint")
+        checkpoint_dir.mkdir(parents=True)
+        (checkpoint_dir / "best_model.pth").write_bytes(b"smoke")
+        runner._require_existing_test_checkpoints([checkpoint_job])
     print("OK: Graph-IRT ablation runner contract passed.")
 
 

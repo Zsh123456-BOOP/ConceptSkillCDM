@@ -1,7 +1,7 @@
 """Graph-IRT runtime activity diagnostics.
 
-The activity report intentionally covers only the production path: the global
-concept graph and the Q-aware IRT prediction head.  It is lightweight enough
+The activity report intentionally covers only the production path: the
+student-item response graph, global concept graph, and Q-aware IRT head. It is lightweight enough
 to run at checkpoint intervals and contains no experimental side heads.
 """
 
@@ -63,8 +63,9 @@ def compute_module_activity(
     theta_values: List[float] = []
     discrimination_values: List[float] = []
     difficulty_values: List[float] = []
-    item_matching_raw_values: List[float] = []
-    item_matching_values: List[float] = []
+    difficulty_delta_values: List[float] = []
+    response_student_deltas: List[float] = []
+    response_item_deltas: List[float] = []
     graph_state_deltas: List[float] = []
     relation_identity_deltas: List[float] = []
 
@@ -85,9 +86,10 @@ def compute_module_activity(
             irt_logits.extend(_as_values(details.get("irt_logit")))
             theta_values.extend(_as_values(details.get("theta_c")))
             discrimination_values.extend(_as_values(details.get("irt_a")))
-            difficulty_values.extend(_as_values(details.get("irt_b")))
-            item_matching_raw_values.extend(_as_values(details.get("item_matching_raw")))
-            item_matching_values.extend(_as_values(details.get("item_matching")))
+            difficulty_values.extend(_as_values(details.get("difficulty_e")))
+            difficulty_delta_values.extend(_as_values(details.get("item_difficulty_delta")))
+            response_student_deltas.extend(_as_values(details.get("response_student_delta")))
+            response_item_deltas.extend(_as_values(details.get("response_item_delta")))
             graph_state_deltas.extend(_as_values(details.get("knowledge_state_graph_delta")))
             relation_identity_deltas.extend(_as_values(details.get("relation_identity_delta")))
             sample_count += take
@@ -101,12 +103,13 @@ def compute_module_activity(
         "message_passing_alpha": propagation_alpha,
         "message_passing_enabled": propagation_alpha > 0.0,
         "irt_enabled": True,
-        "item_matching_enabled": bool(base_model.diagnosis_head.enable_item_matching),
-        "item_matching_rank": int(base_model.diagnosis_head.item_matching_rank),
-        "item_matching_raw_abs_mean": _mean(
-            [abs(value) for value in item_matching_raw_values]
+        "response_graph_enabled": bool(base_model.enable_response_graph),
+        "response_graph_edges": int(base_model.response_graph_encoder.num_edges),
+        "response_student_delta": _mean(response_student_deltas),
+        "response_item_delta": _mean(response_item_deltas),
+        "item_difficulty_delta_abs_mean": _mean(
+            [abs(value) for value in difficulty_delta_values]
         ),
-        "item_matching_abs_mean": _mean([abs(value) for value in item_matching_values]),
         "irt_logit_abs_mean": _mean([abs(value) for value in irt_logits]),
         "irt_theta_abs_mean": _mean([abs(value) for value in theta_values]),
         "irt_discrimination_mean": _mean(discrimination_values),
@@ -181,10 +184,12 @@ def compute_module_activity(
         and np.isfinite(results["irt_discrimination_mean"])
         and results["irt_discrimination_mean"] > 0.0
     )
-    results["item_matching_active"] = bool(
-        results["item_matching_enabled"]
-        and np.isfinite(results["item_matching_abs_mean"])
-        and results["item_matching_abs_mean"] > 1e-8
+    results["response_graph_active"] = bool(
+        results["response_graph_enabled"]
+        and (
+            results["response_student_delta"] > 1e-8
+            or results["response_item_delta"] > 1e-8
+        )
     )
 
     if was_training:
@@ -196,8 +201,8 @@ def format_activity_brief(activity: Dict[str, Any]) -> str:
     """Format a compact checkpoint-time activity summary."""
     graph_mode = str(activity.get("graph_mode", "DISABLED"))
     irt_mode = "LIVE" if activity.get("irt_active") else "INACTIVE"
-    matching_mode = "LIVE" if activity.get("item_matching_active") else "INACTIVE"
-    return f"Graph[{graph_mode}] IRT[{irt_mode}] Match[{matching_mode}]"
+    response_mode = "LIVE" if activity.get("response_graph_active") else "INACTIVE"
+    return f"Response[{response_mode}] ConceptGraph[{graph_mode}] IRT[{irt_mode}]"
 
 
 def format_activity_report(
@@ -213,7 +218,13 @@ def format_activity_report(
         "=" * 60,
         f"Dataset: {dataset_name} | Seed: {seed} | Epoch: {epoch}",
         "",
-        "1. Concept graph:",
+        "1. Response graph:",
+        f"   - Status: {'LIVE' if activity.get('response_graph_active') else 'INACTIVE'}",
+        f"   - Edges: {activity.get('response_graph_edges', 0)}",
+        f"   - Student context delta: {activity.get('response_student_delta', 0.0):.6f}",
+        f"   - Item context delta: {activity.get('response_item_delta', 0.0):.6f}",
+        "",
+        "2. Concept graph:",
     ]
     if activity.get("graph_enabled"):
         lines.extend(
@@ -232,13 +243,12 @@ def format_activity_report(
     lines.extend(
         [
             "",
-            "2. IRT head:",
+            "3. IRT head:",
             f"   - Status: {'LIVE' if activity.get('irt_active') else 'INACTIVE'}",
             f"   - Logit |mean|: {activity.get('irt_logit_abs_mean', 0.0):.4f}",
             f"   - Theta |mean|: {activity.get('irt_theta_abs_mean', 0.0):.4f}",
-            f"   - Item matching: {'LIVE' if activity.get('item_matching_active') else 'INACTIVE'} "
-            f"(rank={activity.get('item_matching_rank', 0)}, |mean|={activity.get('item_matching_abs_mean', 0.0):.4f}, "
-            f"raw={activity.get('item_matching_raw_abs_mean', 0.0):.4f})",
+            f"   - Item-concept difficulty delta |mean|: "
+            f"{activity.get('item_difficulty_delta_abs_mean', 0.0):.4f}",
             f"   - Discrimination mean: {activity.get('irt_discrimination_mean', 0.0):.4f}",
             f"   - Difficulty mean: {activity.get('irt_difficulty_mean', 0.0):.4f}",
             "=" * 60,

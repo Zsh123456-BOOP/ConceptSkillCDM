@@ -13,7 +13,7 @@ if ROOT not in sys.path:
 from src.model import CognitiveDiagnosisModel
 
 
-def _build_model(*, propagation_alpha: float) -> CognitiveDiagnosisModel:
+def _build_model(*, propagation_alpha: float, enable_response_graph: bool = True) -> CognitiveDiagnosisModel:
     q_matrix = torch.tensor(
         [
             [1.0, 0.0, 0.0, 0.0],
@@ -30,11 +30,17 @@ def _build_model(*, propagation_alpha: float) -> CognitiveDiagnosisModel:
             [0.0, 0.0, 1.0, 0.0],
         ]
     )
+    response_graph = torch.sparse_coo_tensor(
+        torch.tensor([[0, 0, 1, 2, 3, 4], [0, 1, 1, 2, 3, 0]]),
+        torch.ones(6),
+        size=(5, 4),
+    ).coalesce()
     return CognitiveDiagnosisModel(
         num_students=5,
         num_exercises=4,
         num_concepts=4,
         q_matrix=q_matrix,
+        response_graph_matrix=response_graph,
         item_prior_matrix=item_prior,
         exposure_prior_matrix=torch.zeros_like(item_prior),
         knowledge_dim=8,
@@ -42,6 +48,7 @@ def _build_model(*, propagation_alpha: float) -> CognitiveDiagnosisModel:
         num_gnn_layers=2,
         dropout=0.0,
         graph_propagation_alpha=propagation_alpha,
+        enable_response_graph=enable_response_graph,
     )
 
 
@@ -50,6 +57,11 @@ def main() -> None:
     full = _build_model(propagation_alpha=0.35).eval()
     torch.manual_seed(17)
     no_message = _build_model(propagation_alpha=0.0).eval()
+    torch.manual_seed(17)
+    no_response = _build_model(
+        propagation_alpha=0.35,
+        enable_response_graph=False,
+    ).eval()
 
     student_ids = torch.tensor([0, 1, 2], dtype=torch.long)
     exercise_ids = torch.tensor([0, 1, 2], dtype=torch.long)
@@ -59,11 +71,18 @@ def main() -> None:
     _, no_message_details = no_message(
         student_ids, exercise_ids, return_details=True, return_logits=True
     )
+    _, no_response_details = no_response(
+        student_ids, exercise_ids, return_details=True, return_logits=True
+    )
 
     assert torch.equal(
         no_message_details["knowledge_state"], no_message_details["initial_state"]
     ), "graph_propagation_alpha=0 must be an exact no-message-passing ablation"
     assert full_details["knowledge_state_graph_delta"].item() > 0.0
+    assert full_details["response_student_delta"].item() > 0.0
+    assert full_details["response_item_delta"].item() > 0.0
+    assert no_response_details["response_student_delta"].item() == 0.0
+    assert no_response_details["response_item_delta"].item() == 0.0
 
     relation = full_details["relation_matrices"]
     assert torch.isfinite(relation).all()

@@ -11,7 +11,6 @@ import traceback
 from gpu_utils import configure_main_process_gpus, parse_gpu_ids
 from src.config import (
     DATASET_DEFAULTS,
-    ITEM_MATCHING_RANK,
     apply_dataset_defaults,
     collect_explicit_arg_dests,
 )
@@ -19,7 +18,7 @@ from src.config import (
 
 MODEL_VARIANTS = (
     "full",
-    "no_item_matching",
+    "no_response_graph",
     "no_message_passing",
     "item_only",
     "exposure_only",
@@ -109,7 +108,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--max_train_batches", type=int, default=None)
     parser.add_argument("--max_val_batches", type=int, default=None)
-    parser.add_argument("--max_test_batches", type=int, default=None)
     parser.add_argument("--no_cuda", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--generate_diagnosis", type=_parse_bool, nargs="?", const=True, default=True)
@@ -118,6 +116,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--save_interval", type=int, default=10)
     parser.add_argument("--debug_graph_diag", action="store_true")
     parser.add_argument("--diag_batches", type=int, default=2)
+    parser.add_argument(
+        "--run_mode",
+        choices=("train", "test", "train_test"),
+        default="train",
+        help="Use train for validation-only model selection and test only after the checkpoint is sealed.",
+    )
 
     # GPU selection. --gpus refers to physical ids; --gpu_ids contains the
     # relative ids visible to DataParallel after CUDA_VISIBLE_DEVICES is set.
@@ -135,8 +139,7 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 def _apply_model_variant(args: argparse.Namespace) -> None:
     """Map named, interpretable controls to the underlying graph settings."""
-    args.enable_item_matching = args.model_variant != "no_item_matching"
-    args.item_matching_rank = ITEM_MATCHING_RANK
+    args.enable_response_graph = args.model_variant != "no_response_graph"
     if args.model_variant == "no_message_passing":
         args.graph_propagation_alpha = 0.0
     elif args.model_variant == "item_only":
@@ -240,6 +243,10 @@ def main() -> None:
     args = parser.parse_args(raw_argv)
     explicit_dests = collect_explicit_arg_dests(raw_argv, parser)
     args = apply_dataset_defaults(args, parser, explicit_dests=explicit_dests)
+    # In test mode the checkpoint owns dataset/model identity.  Keep track of
+    # explicit CLI choices so inference can reject a genuine conflict without
+    # mistaking parser defaults for user intent.
+    args.explicit_arg_dests = sorted(explicit_dests)
 
     _apply_model_variant(args)
     _validate_args(args)
@@ -253,7 +260,20 @@ def main() -> None:
     os.makedirs(args.log_dir, exist_ok=True)
     logger = setup_logging(args.log_dir)
 
-    with open(os.path.join(args.save_dir, "args.json"), "w", encoding="utf-8") as file:
+    if args.run_mode in {"train", "train_test"}:
+        sealed_artifacts = (
+            os.path.join(args.save_dir, "test_results.json"),
+            os.path.join(args.save_dir, "test_seal.json"),
+        )
+        sealed_path = next((path for path in sealed_artifacts if os.path.exists(path)), None)
+        if sealed_path is not None:
+            raise SystemExit(
+                "Refusing to overwrite a test-sealed run; choose a new --save_dir: "
+                f"{sealed_path}"
+            )
+
+    args_name = "test_args.json" if args.run_mode == "test" else "args.json"
+    with open(os.path.join(args.save_dir, args_name), "w", encoding="utf-8") as file:
         json.dump(vars(args), file, indent=4, ensure_ascii=False)
 
     logger.info("Arguments:")
@@ -262,9 +282,17 @@ def main() -> None:
 
     failure_path = os.path.join(args.save_dir, "failure_reason.json")
 
+    best_val_auc = None
+    best_epoch = None
+    metrics = {}
     try:
-        best_val_auc, best_epoch = train_one_experiment(args, logger)
-        metrics, _ = run_inference(args, logger)
+        if args.run_mode in {"train", "train_test"}:
+            best_val_auc, best_epoch = train_one_experiment(args, logger)
+        if args.run_mode in {"test", "train_test"}:
+            metrics, test_results = run_inference(args, logger)
+            if best_val_auc is None:
+                best_val_auc = float(test_results.get("best_val_auc", 0.0))
+                best_epoch = int(test_results.get("model_epoch", 0))
     except Exception as exc:
         extra = exc.to_failure_dict() if hasattr(exc, "to_failure_dict") else {}
         extra["traceback"] = traceback.format_exc()
@@ -279,6 +307,30 @@ def main() -> None:
         logger.error("Run failed with exception: %s", exc)
         logger.error("%s", extra["traceback"])
         raise SystemExit(1) from exc
+
+    if args.run_mode == "train":
+        validation_result = {
+            "dataset": args.dataset_name,
+            "model_variant": args.model_variant,
+            "seed": int(args.seed),
+            "best_val_auc": float(best_val_auc),
+            "best_epoch": int(best_epoch),
+            "test_evaluated": False,
+        }
+        with open(
+            os.path.join(args.save_dir, "validation_result.json"),
+            "w",
+            encoding="utf-8",
+        ) as file:
+            json.dump(validation_result, file, indent=4, ensure_ascii=False)
+        if os.path.exists(failure_path):
+            os.remove(failure_path)
+        logger.info(
+            "Validation-only training completed. Best validation AUC: %.4f at epoch %d; test remains sealed.",
+            float(best_val_auc),
+            int(best_epoch),
+        )
+        return
 
     if not metrics:
         with open(failure_path, "w", encoding="utf-8") as file:
