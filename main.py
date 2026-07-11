@@ -80,7 +80,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="none",
         help="Optional explicit student-by-concept factorization inside the knowledge state.",
     )
-    parser.add_argument("--student_concept_interaction_scale", type=float, default=1.0)
+    parser.add_argument(
+        "--student_concept_interaction_scale",
+        type=float,
+        default=1.0,
+        help="Interaction scale; must be positive when low_rank is active.",
+    )
     parser.add_argument("--student_concept_interaction_rank", type=int, default=8)
     parser.add_argument(
         "--student_concept_interaction_init_std",
@@ -235,6 +240,11 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit(
             "error: --student_concept_interaction_scale must be finite and in [0, 4], "
             f"got {args.student_concept_interaction_scale}"
+        )
+    if args.student_concept_interaction == "low_rank" and interaction_scale == 0.0:
+        raise SystemExit(
+            "error: --student_concept_interaction_scale must be positive for low_rank "
+            "to avoid a disabled interaction"
         )
     interaction_init_std = float(args.student_concept_interaction_init_std)
     if not math.isfinite(interaction_init_std) or not 0.0 <= interaction_init_std <= 1.0:

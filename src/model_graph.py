@@ -384,6 +384,11 @@ class StudentKnowledgeEncoder(nn.Module):
                 "student_concept_interaction_scale must be finite and in [0, 4], "
                 f"got {student_concept_interaction_scale!r}"
             )
+        if self.student_concept_interaction == "low_rank" and interaction_scale == 0.0:
+            raise ValueError(
+                "student_concept_interaction_scale must be positive for low_rank "
+                "to avoid a disabled interaction"
+            )
         self.student_concept_interaction_scale = interaction_scale
         interaction_rank = int(student_concept_interaction_rank)
         if interaction_rank <= 0:
@@ -407,19 +412,23 @@ class StudentKnowledgeEncoder(nn.Module):
         self.student_global = nn.Embedding(self.num_students, self.knowledge_dim)
         self.concept_emb = nn.Embedding(self.num_concepts, self.knowledge_dim)
         if self.student_concept_interaction == "low_rank":
-            self.student_interaction_factor = nn.Embedding(
-                self.num_students,
-                self.student_concept_interaction_rank,
-            )
-            self.concept_interaction_factor = nn.Embedding(
-                self.num_concepts,
-                self.student_concept_interaction_rank,
-            )
-            self.interaction_projection = nn.Linear(
-                self.student_concept_interaction_rank,
-                self.knowledge_dim,
-                bias=False,
-            )
+            # Keep optional-module construction from shifting the CPU RNG stream
+            # used by every common parameter below. This makes a seeded low_rank
+            # model a true structural extension of the corresponding none model.
+            with torch.random.fork_rng(devices=[]):
+                self.student_interaction_factor = nn.Embedding(
+                    self.num_students,
+                    self.student_concept_interaction_rank,
+                )
+                self.concept_interaction_factor = nn.Embedding(
+                    self.num_concepts,
+                    self.student_concept_interaction_rank,
+                )
+                self.interaction_projection = nn.Linear(
+                    self.student_concept_interaction_rank,
+                    self.knowledge_dim,
+                    bias=False,
+                )
         self.gnn_layers = nn.ModuleList(
             ConceptGraphConv(
                 self.knowledge_dim,
@@ -437,17 +446,20 @@ class StudentKnowledgeEncoder(nn.Module):
         nn.init.xavier_normal_(self.student_global.weight)
         nn.init.xavier_normal_(self.concept_emb.weight)
         if self.student_concept_interaction == "low_rank":
-            nn.init.normal_(
-                self.student_interaction_factor.weight,
-                mean=0.0,
-                std=self.student_concept_interaction_init_std,
-            )
-            nn.init.normal_(
-                self.concept_interaction_factor.weight,
-                mean=0.0,
-                std=self.student_concept_interaction_init_std,
-            )
-            nn.init.xavier_normal_(self.interaction_projection.weight)
+            # The dedicated factors remain seed-dependent while their draws do
+            # not perturb the caller's CPU RNG state or later common modules.
+            with torch.random.fork_rng(devices=[]):
+                nn.init.normal_(
+                    self.student_interaction_factor.weight,
+                    mean=0.0,
+                    std=self.student_concept_interaction_init_std,
+                )
+                nn.init.normal_(
+                    self.concept_interaction_factor.weight,
+                    mean=0.0,
+                    std=self.student_concept_interaction_init_std,
+                )
+                nn.init.xavier_normal_(self.interaction_projection.weight)
 
     def _compose_interaction(
         self,

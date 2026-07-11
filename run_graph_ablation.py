@@ -95,7 +95,10 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--student_concept_interaction_scale",
         type=float,
         default=None,
-        help="Override the interaction scale for every full/ablation job.",
+        help=(
+            "Override the interaction scale for every full/ablation job; "
+            "must be positive when low_rank is active."
+        ),
     )
     parser.add_argument(
         "--student_concept_interaction_rank",
@@ -171,6 +174,14 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
                     params["student_concept_interaction_rank"] = int(interaction_rank)
                 if args.student_concept_interaction_init_std is not None:
                     params["student_concept_interaction_init_std"] = interaction_init_std
+                if (
+                    params.get("student_concept_interaction", "none") == "low_rank"
+                    and float(params.get("student_concept_interaction_scale", 1.0)) == 0.0
+                ):
+                    raise ValueError(
+                        "student_concept_interaction_scale must be positive for low_rank "
+                        "to avoid a disabled interaction"
+                    )
                 if (
                     params.get("student_concept_interaction", "none") == "low_rank"
                     and float(params.get("student_concept_interaction_init_std", 0.1)) == 0.0

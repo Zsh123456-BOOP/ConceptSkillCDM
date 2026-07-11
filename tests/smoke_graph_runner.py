@@ -51,26 +51,50 @@ def main() -> None:
         assert "--student_concept_interaction_init_std 0.05" in command
         assert not any(token in command for token in banned), command
 
-    zero_init_args = runner.parse_args(
-        [
-            "--datasets",
-            "assist_09",
-            "--seeds",
-            "42",
-            "--ablations",
-            "full",
-            "--student_concept_interaction",
-            "low_rank",
-            "--student_concept_interaction_init_std",
-            "0",
-        ]
-    )
-    try:
-        runner.make_jobs(zero_init_args, run_id="invalid")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("low_rank runner must reject zero init_std")
+    for parameter in (
+        "student_concept_interaction_scale",
+        "student_concept_interaction_init_std",
+    ):
+        zero_args = runner.parse_args(
+            [
+                "--datasets",
+                "assist_09",
+                "--seeds",
+                "42",
+                "--ablations",
+                "full",
+                "--student_concept_interaction",
+                "low_rank",
+                f"--{parameter}",
+                "0",
+            ]
+        )
+        try:
+            runner.make_jobs(zero_args, run_id="invalid")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"low_rank runner must reject zero {parameter}")
+    for inactive_mode in ("none", "hadamard"):
+        inactive_zero_args = runner.parse_args(
+            [
+                "--datasets",
+                "assist_09",
+                "--seeds",
+                "42",
+                "--ablations",
+                "full",
+                "--student_concept_interaction",
+                inactive_mode,
+                "--student_concept_interaction_scale",
+                "0",
+                "--student_concept_interaction_init_std",
+                "0",
+            ]
+        )
+        inactive_jobs = runner.make_jobs(inactive_zero_args, run_id="inactive_zero")
+        assert inactive_jobs[0].params["student_concept_interaction_scale"] == 0.0
+        assert inactive_jobs[0].params["student_concept_interaction_init_std"] == 0.0
     print("OK: Graph-IRT ablation runner contract passed.")
 
 

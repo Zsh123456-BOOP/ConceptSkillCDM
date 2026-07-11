@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 import sys
+import tempfile
 
 import torch
 
@@ -53,6 +54,22 @@ def _encoder(
     return encoder.eval()
 
 
+def _seeded_encoder(mode: str, seed: int) -> StudentKnowledgeEncoder:
+    torch.manual_seed(seed)
+    return StudentKnowledgeEncoder(
+        num_students=3,
+        num_concepts=4,
+        knowledge_dim=6,
+        num_gnn_layers=1,
+        num_relation_heads=2,
+        dropout=0.0,
+        student_concept_interaction=mode,
+        student_concept_interaction_scale=1.0,
+        student_concept_interaction_rank=3,
+        student_concept_interaction_init_std=0.1,
+    ).eval()
+
+
 def main() -> None:
     valid_args = main_module.parse_args(
         [
@@ -72,6 +89,12 @@ def main() -> None:
         [
             "--student_concept_interaction",
             "low_rank",
+            "--student_concept_interaction_scale",
+            "0",
+        ],
+        [
+            "--student_concept_interaction",
+            "low_rank",
             "--student_concept_interaction_init_std",
             "0",
         ],
@@ -82,16 +105,56 @@ def main() -> None:
             pass
         else:
             raise AssertionError(f"expected validation failure for {invalid_args}")
-    inactive_zero_args = main_module.parse_args(
-        ["--student_concept_interaction", "none", "--student_concept_interaction_init_std", "0"]
-    )
-    main_module._validate_args(inactive_zero_args)
+    for inactive_mode in ("none", "hadamard"):
+        inactive_zero_args = main_module.parse_args(
+            [
+                "--student_concept_interaction",
+                inactive_mode,
+                "--student_concept_interaction_scale",
+                "0",
+                "--student_concept_interaction_init_std",
+                "0",
+            ]
+        )
+        main_module._validate_args(inactive_zero_args)
+        _encoder(inactive_mode, scale=0.0, init_std=0.0)
+    try:
+        _encoder("low_rank", scale=0.0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("low_rank encoder must reject zero interaction scale")
     try:
         _encoder("low_rank", init_std=0.0)
     except ValueError:
         pass
     else:
         raise AssertionError("low_rank encoder must reject zero init_std")
+
+    none_seeded = _seeded_encoder("none", seed=20260711)
+    low_rank_seeded = _seeded_encoder("low_rank", seed=20260711)
+    none_seeded_state = none_seeded.state_dict()
+    low_rank_seeded_state = low_rank_seeded.state_dict()
+    for key, value in none_seeded_state.items():
+        assert key in low_rank_seeded_state
+        assert torch.equal(value, low_rank_seeded_state[key]), key
+    _seeded_encoder("none", seed=20260711)
+    after_none = torch.rand(4)
+    _seeded_encoder("low_rank", seed=20260711)
+    after_low_rank = torch.rand(4)
+    assert torch.equal(after_none, after_low_rank)
+
+    other_seed_low_rank = _seeded_encoder("low_rank", seed=20260712)
+    dedicated_keys = {
+        "student_interaction_factor.weight",
+        "concept_interaction_factor.weight",
+        "interaction_projection.weight",
+    }
+    assert dedicated_keys <= set(low_rank_seeded_state)
+    assert all(
+        not torch.equal(low_rank_seeded_state[key], other_seed_low_rank.state_dict()[key])
+        for key in dedicated_keys
+    )
 
     student_ids = torch.tensor([0, 1])
     additive = _encoder("none").compose_initial_state(student_ids)
@@ -218,6 +281,14 @@ def main() -> None:
         student_concept_interaction_init_std=0.05,
     )
     low_rank_model = CognitiveDiagnosisModel(**low_rank_kwargs)
+    torch.manual_seed(20260711)
+    seeded_none_model = CognitiveDiagnosisModel(**old_kwargs)
+    torch.manual_seed(20260711)
+    seeded_low_rank_model = CognitiveDiagnosisModel(**low_rank_kwargs)
+    seeded_low_rank_state = seeded_low_rank_model.state_dict()
+    for key, value in seeded_none_model.state_dict().items():
+        assert key in seeded_low_rank_state
+        assert torch.equal(value, seeded_low_rank_state[key]), key
     facts = _runtime_facts(low_rank_model)
     assert facts["student_concept_interaction"] == "low_rank"
     assert facts["student_concept_interaction_scale"] == 0.5
@@ -229,6 +300,36 @@ def main() -> None:
     assert checkpoint_args["student_concept_interaction"] == "low_rank"
     assert checkpoint_args["student_concept_interaction_rank"] == 2
     assert checkpoint_args["student_concept_interaction_init_std"] == 0.05
+    low_rank_model.eval()
+    roundtrip_students = torch.tensor([0, 1], dtype=torch.long)
+    roundtrip_exercises = torch.tensor([0, 1], dtype=torch.long)
+    with torch.no_grad():
+        expected_logits = low_rank_model(
+            roundtrip_students,
+            roundtrip_exercises,
+            return_logits=True,
+        )
+    with tempfile.TemporaryDirectory() as temp_dir:
+        checkpoint_path = os.path.join(temp_dir, "low_rank_roundtrip.pth")
+        torch.save(
+            {
+                "args": checkpoint_args,
+                "model_state_dict": low_rank_model.state_dict(),
+            },
+            checkpoint_path,
+        )
+        loaded = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        rebuilt_model = CognitiveDiagnosisModel(
+            **_model_kwargs(loaded["args"], info)
+        ).eval()
+        rebuilt_model.load_state_dict(loaded["model_state_dict"], strict=True)
+        with torch.no_grad():
+            rebuilt_logits = rebuilt_model(
+                roundtrip_students,
+                roundtrip_exercises,
+                return_logits=True,
+            )
+        assert torch.equal(expected_logits, rebuilt_logits)
     print("OK: student-concept interaction checks passed.")
 
 
