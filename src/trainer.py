@@ -44,6 +44,8 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "graph_identity_residual",
     "graph_propagation_alpha",
     "graph_prior_strength_init",
+    "student_concept_interaction",
+    "student_concept_interaction_scale",
     "num_gnn_layers",
 )
 
@@ -120,6 +122,12 @@ def _default_monitor_config() -> Dict[str, str]:
 
 def _collect_structural_switches(source: Any) -> Dict[str, Any]:
     switches = {key: _source_get(source, key) for key in STRUCTURAL_SWITCH_KEYS}
+    switches["student_concept_interaction"] = str(
+        _source_get(source, "student_concept_interaction", "none")
+    )
+    switches["student_concept_interaction_scale"] = float(
+        _source_get(source, "student_concept_interaction_scale", 1.0)
+    )
     switches["architecture"] = ARCHITECTURE_NAME
     return switches
 
@@ -167,6 +175,12 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "prediction_l2_lambda": float(_source_get(source, "prediction_l2_lambda", 5e-5)),
         "gnn_residual_weight": float(_source_get(source, "gnn_residual_weight", 0.5)),
         "graph_prior_strength_init": float(_source_get(source, "graph_prior_strength_init", 1.0)),
+        "student_concept_interaction": str(
+            _source_get(source, "student_concept_interaction", "none")
+        ),
+        "student_concept_interaction_scale": float(
+            _source_get(source, "student_concept_interaction_scale", 1.0)
+        ),
     }
 
 
@@ -177,9 +191,16 @@ def _build_model(source: Any, info_dict: Dict[str, Any], device: torch.device) -
 def _runtime_facts(model: nn.Module) -> Dict[str, Any]:
     base_model = _get_base_model(model)
     relation_learning = getattr(base_model, "relation_learning", None)
+    knowledge_encoder = getattr(base_model, "knowledge_encoder", None)
     return {
         "architecture": ARCHITECTURE_NAME,
         "graph_enabled": bool(relation_learning is not None),
+        "student_concept_interaction": str(
+            getattr(knowledge_encoder, "student_concept_interaction", "none")
+        ),
+        "student_concept_interaction_scale": float(
+            getattr(knowledge_encoder, "student_concept_interaction_scale", 0.0)
+        ),
         "num_parameters": int(sum(parameter.numel() for parameter in base_model.parameters())),
         "num_trainable_parameters": int(
             sum(parameter.numel() for parameter in base_model.parameters() if parameter.requires_grad)
@@ -192,10 +213,12 @@ def _log_runtime_facts(model: nn.Module, logger, context: str) -> Dict[str, Any]
     if not facts["graph_enabled"]:
         raise RuntimeError("Graph-IRT requires relation_learning to be present.")
     logger.info(
-        "%s Architecture=%s | graph_enabled=%s | params=%s trainable=%s",
+        "%s Architecture=%s | graph_enabled=%s | interaction=%s@%.3g | params=%s trainable=%s",
         context,
         facts["architecture"],
         facts["graph_enabled"],
+        facts["student_concept_interaction"],
+        facts["student_concept_interaction_scale"],
         f"{facts['num_parameters']:,}",
         f"{facts['num_trainable_parameters']:,}",
     )
@@ -240,6 +263,8 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "prediction_l2_lambda",
         "gnn_residual_weight",
         "graph_prior_strength_init",
+        "student_concept_interaction",
+        "student_concept_interaction_scale",
         "graph_prior_mode",
         "min_stu_interactions",
         "min_exer_interactions",
@@ -573,6 +598,9 @@ def _collect_debug_forward_stats(
         "theta_abs_mean": [],
         "irt_discrimination_mean": [],
         "irt_difficulty_mean": [],
+        "student_concept_additive_rms": [],
+        "student_concept_interaction_rms": [],
+        "student_concept_interaction_ratio": [],
     }
     with torch.no_grad():
         for batch_idx, (student_ids, exercise_ids, _) in enumerate(data_loader):
@@ -592,6 +620,17 @@ def _collect_debug_forward_stats(
             accumulators["theta_abs_mean"].append(_mean_detail(details, "theta_c", absolute=True))
             accumulators["irt_discrimination_mean"].append(_mean_detail(details, "irt_a"))
             accumulators["irt_difficulty_mean"].append(_mean_detail(details, "irt_b"))
+            base_model = _get_base_model(model)
+            knowledge_encoder = getattr(base_model, "knowledge_encoder", None)
+            if knowledge_encoder is not None and hasattr(
+                knowledge_encoder,
+                "get_interaction_diagnostics",
+            ):
+                interaction_diag = knowledge_encoder.get_interaction_diagnostics(
+                    student_ids.to(device)
+                )
+                for key, value in interaction_diag.items():
+                    accumulators[key].append(float(value.detach().item()))
 
     relation = _relation_learning(model)
     graph_diag = {
@@ -856,12 +895,16 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             last_diag["grad_norms"] = grad_norms
             logger.info(
                 "%s [Graph-IRT Diag] entropy_ratio=%.4f diag_mass=%.4f relation_delta=%.6f "
-                "state_delta=%.6f irt_logit=%.4f theta=%.4f a=%.4f b=%.4f",
+                "state_delta=%.6f interaction_rms=%.4f/%.4f ratio=%.4f "
+                "irt_logit=%.4f theta=%.4f a=%.4f b=%.4f",
                 run_tag,
                 last_diag["graph_entropy_ratio"],
                 last_diag["graph_diag_mass"],
                 last_diag["relation_identity_delta"],
                 last_diag["knowledge_state_graph_delta"],
+                last_diag["student_concept_interaction_rms"],
+                last_diag["student_concept_additive_rms"],
+                last_diag["student_concept_interaction_ratio"],
                 last_diag["irt_logit_abs_mean"],
                 last_diag["theta_abs_mean"],
                 last_diag["irt_discrimination_mean"],

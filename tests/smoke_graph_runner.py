@@ -20,6 +20,10 @@ def main() -> None:
             "42",
             "--ablations",
             "full,no_message_passing,item_only,exposure_only,degree_random",
+            "--student_concept_interaction",
+            "hadamard",
+            "--student_concept_interaction_scale",
+            "1.0",
             "--dry_run",
         ]
     )
@@ -33,6 +37,8 @@ def main() -> None:
 
     banned = ("no_A", "no_E", "personal", "ae_", "roadmap", "tutor")
     for job in jobs:
+        assert job.params["student_concept_interaction"] == "hadamard"
+        assert job.params["student_concept_interaction_scale"] == 1.0
         command = " ".join(job.cmd)
         assert not any(token in command for token in banned), command
     print("OK: Graph-IRT ablation runner contract passed.")

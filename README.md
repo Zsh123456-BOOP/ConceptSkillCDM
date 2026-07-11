@@ -30,6 +30,10 @@ details["logits"] == details["irt_logit"]
 
 没有 personal posterior、统计 target encoding、query correction、theta calibration 或额外 logit residual。这个模型应被描述为静态图结构认知诊断基线，不应再声称解决 concept reachability 或 evidence-gap transfer。
 
+结构调优可显式启用 `--student_concept_interaction hadamard`，在知识状态内部加入
+`scale * sqrt(d) * (student ⊙ concept)`；默认值仍为 `none`，旧 checkpoint 行为不变。
+该交互仍只由 BCE 梯度学习，不读取标签统计，也不增加第二条预测或 logit 残差路径。
+
 ## 代码入口
 
 - `main.py`：训练和推理 CLI。
@@ -78,6 +82,7 @@ python tests/smoke_ablation_flags.py
 python tests/smoke_gpu_selector.py
 python tests/smoke_concurrent_results.py
 python tests/smoke_training_protocol.py
+python tests/smoke_student_concept_interaction.py
 ```
 
 最小 CPU 训练闭环：

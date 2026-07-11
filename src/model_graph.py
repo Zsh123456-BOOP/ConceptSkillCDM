@@ -360,6 +360,8 @@ class StudentKnowledgeEncoder(nn.Module):
         dropout: float = 0.1,
         gnn_residual_weight: float = 0.5,
         propagation_alpha: float = 0.20,
+        student_concept_interaction: str = "none",
+        student_concept_interaction_scale: float = 1.0,
     ):
         super().__init__()
         self.num_students = int(num_students)
@@ -367,6 +369,20 @@ class StudentKnowledgeEncoder(nn.Module):
         self.knowledge_dim = int(knowledge_dim)
         self.gnn_residual_weight = float(gnn_residual_weight)
         self.propagation_alpha = max(0.0, min(1.0, float(propagation_alpha)))
+        interaction = str(student_concept_interaction).strip().lower()
+        if interaction not in {"none", "hadamard"}:
+            raise ValueError(
+                "student_concept_interaction must be 'none' or 'hadamard', "
+                f"got {student_concept_interaction!r}"
+            )
+        self.student_concept_interaction = interaction
+        interaction_scale = float(student_concept_interaction_scale)
+        if not math.isfinite(interaction_scale) or not 0.0 <= interaction_scale <= 4.0:
+            raise ValueError(
+                "student_concept_interaction_scale must be finite and in [0, 4], "
+                f"got {student_concept_interaction_scale!r}"
+            )
+        self.student_concept_interaction_scale = interaction_scale
         self.student_global = nn.Embedding(self.num_students, self.knowledge_dim)
         self.concept_emb = nn.Embedding(self.num_concepts, self.knowledge_dim)
         self.gnn_layers = nn.ModuleList(
@@ -389,7 +405,34 @@ class StudentKnowledgeEncoder(nn.Module):
     def compose_initial_state(self, student_ids: torch.Tensor) -> torch.Tensor:
         students = self.student_global(student_ids)
         concepts = self.concept_emb.weight.unsqueeze(0).expand(student_ids.size(0), -1, -1)
-        return self.dropout(concepts + students.unsqueeze(1))
+        student_state = students.unsqueeze(1)
+        initial = concepts + student_state
+        if self.student_concept_interaction == "hadamard":
+            interaction = concepts * student_state
+            interaction = interaction * math.sqrt(float(self.knowledge_dim))
+            initial = initial + self.student_concept_interaction_scale * interaction
+        return self.dropout(initial)
+
+    def get_interaction_diagnostics(self, student_ids: torch.Tensor) -> Dict[str, torch.Tensor]:
+        students = self.student_global(student_ids).unsqueeze(1)
+        concepts = self.concept_emb.weight.unsqueeze(0).expand(student_ids.size(0), -1, -1)
+        additive = concepts + students
+        if self.student_concept_interaction == "hadamard":
+            interaction = (
+                self.student_concept_interaction_scale
+                * math.sqrt(float(self.knowledge_dim))
+                * concepts
+                * students
+            )
+        else:
+            interaction = torch.zeros_like(additive)
+        additive_rms = additive.float().pow(2).mean().sqrt()
+        interaction_rms = interaction.float().pow(2).mean().sqrt()
+        return {
+            "student_concept_additive_rms": additive_rms,
+            "student_concept_interaction_rms": interaction_rms,
+            "student_concept_interaction_ratio": interaction_rms / additive_rms.clamp(min=1e-12),
+        }
 
     def forward(
         self,

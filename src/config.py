@@ -29,6 +29,8 @@ _BASE_DEFAULTS: Dict[str, Any] = {
     "graph_identity_residual": 0.05,
     "graph_propagation_alpha": 0.20,
     "graph_prior_strength_init": 0.35,
+    "student_concept_interaction": "none",
+    "student_concept_interaction_scale": 1.0,
     "graph_tau_init": 0.55,
     "graph_dropout": 0.0,
     "lambda_graph_entropy": 0.30,

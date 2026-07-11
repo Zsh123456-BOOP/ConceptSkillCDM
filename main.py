@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import traceback
@@ -26,6 +27,8 @@ GRAPH_PRIOR_MODES = (
     "exposure_only",
     "degree_random",
 )
+
+STUDENT_CONCEPT_INTERACTIONS = ("none", "hadamard")
 
 
 def _parse_bool(value: object) -> bool:
@@ -71,6 +74,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--graph_identity_residual", type=float, default=0.0)
     parser.add_argument("--graph_propagation_alpha", type=float, default=0.20)
     parser.add_argument("--graph_prior_strength_init", type=float, default=1.0)
+    parser.add_argument(
+        "--student_concept_interaction",
+        choices=STUDENT_CONCEPT_INTERACTIONS,
+        default="none",
+        help="Optional explicit student-by-concept factorization inside the knowledge state.",
+    )
+    parser.add_argument("--student_concept_interaction_scale", type=float, default=1.0)
     parser.add_argument("--graph_tau_init", type=float, default=1.0)
     parser.add_argument(
         "--graph_dropout",
@@ -195,6 +205,7 @@ def _validate_args(args: argparse.Namespace) -> None:
         "graph_uniform_margin",
         "prediction_l2_lambda",
         "early_stop_min_delta",
+        "student_concept_interaction_scale",
     ):
         value = float(getattr(args, name))
         if value < 0.0:
@@ -211,6 +222,12 @@ def _validate_args(args: argparse.Namespace) -> None:
             raise SystemExit(f"error: --{name} must be in [0, 1], got {value}")
     if float(args.graph_entropy_min) > float(args.graph_entropy_max):
         raise SystemExit("error: --graph_entropy_min cannot exceed --graph_entropy_max")
+    interaction_scale = float(args.student_concept_interaction_scale)
+    if not math.isfinite(interaction_scale) or not 0.0 <= interaction_scale <= 4.0:
+        raise SystemExit(
+            "error: --student_concept_interaction_scale must be finite and in [0, 4], "
+            f"got {args.student_concept_interaction_scale}"
+        )
 
 
 def _seed_everything(seed: int) -> None:

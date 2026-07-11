@@ -8,6 +8,7 @@ meaning.  Historical ``no_A``/``no_E`` aliases are not accepted.
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import subprocess
 import sys
@@ -84,6 +85,18 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--run_id", default=None)
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--generate_diagnosis", action="store_true")
+    parser.add_argument(
+        "--student_concept_interaction",
+        choices=("none", "hadamard"),
+        default=None,
+        help="Override the interaction mode for every full/ablation job.",
+    )
+    parser.add_argument(
+        "--student_concept_interaction_scale",
+        type=float,
+        default=None,
+        help="Override the interaction scale for every full/ablation job.",
+    )
     return parser.parse_args(argv)
 
 
@@ -104,6 +117,14 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
     seeds = list(DEFAULT_SEEDS) if args.seeds is None else parse_int_csv(args.seeds)
     ablations = _selected_ablations(args.ablations)
     session = run_id or args.run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+    interaction_scale = args.student_concept_interaction_scale
+    if interaction_scale is not None:
+        interaction_scale = float(interaction_scale)
+        if not math.isfinite(interaction_scale) or not 0.0 <= interaction_scale <= 4.0:
+            raise ValueError(
+                "student_concept_interaction_scale must be finite and in [0, 4], "
+                f"got {args.student_concept_interaction_scale!r}"
+            )
     jobs: List[JobSpec] = []
 
     for dataset in datasets:
@@ -113,6 +134,10 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
             for seed in seeds:
                 params = dict(EXPERIMENT_CONFIGS[dataset])
                 params.update(ablation.overrides)
+                if args.student_concept_interaction is not None:
+                    params["student_concept_interaction"] = args.student_concept_interaction
+                if args.student_concept_interaction_scale is not None:
+                    params["student_concept_interaction_scale"] = interaction_scale
                 params.pop("num_gpus", None)
                 params.pop("seed", None)
                 params["model_variant"] = ablation.name
