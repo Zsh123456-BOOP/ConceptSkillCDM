@@ -33,6 +33,7 @@ _BASE_DEFAULTS: Dict[str, Any] = {
     "student_concept_interaction_scale": 1.0,
     "student_concept_interaction_rank": 8,
     "student_concept_interaction_init_std": 0.1,
+    "student_concept_interaction_ratio_cap": 0.0,
     "graph_tau_init": 0.55,
     "graph_dropout": 0.0,
     "lambda_graph_entropy": 0.30,

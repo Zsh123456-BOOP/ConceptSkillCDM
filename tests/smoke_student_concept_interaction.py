@@ -31,6 +31,7 @@ def _encoder(
     scale: float = 1.0,
     rank: int = 8,
     init_std: float = 0.1,
+    ratio_cap: float = 0.0,
 ) -> StudentKnowledgeEncoder:
     encoder = StudentKnowledgeEncoder(
         num_students=2,
@@ -43,6 +44,7 @@ def _encoder(
         student_concept_interaction_scale=scale,
         student_concept_interaction_rank=rank,
         student_concept_interaction_init_std=init_std,
+        student_concept_interaction_ratio_cap=ratio_cap,
     )
     with torch.no_grad():
         encoder.student_global.weight.copy_(
@@ -79,6 +81,8 @@ def main() -> None:
             "4",
             "--student_concept_interaction_init_std",
             "0.05",
+            "--student_concept_interaction_ratio_cap",
+            "0.3",
         ]
     )
     main_module._validate_args(valid_args)
@@ -86,6 +90,9 @@ def main() -> None:
         ["--student_concept_interaction_rank", "0"],
         ["--student_concept_interaction_init_std", "nan"],
         ["--student_concept_interaction_init_std", "1.1"],
+        ["--student_concept_interaction_ratio_cap", "nan"],
+        ["--student_concept_interaction_ratio_cap", "-0.1"],
+        ["--student_concept_interaction_ratio_cap", "4.1"],
         [
             "--student_concept_interaction",
             "low_rank",
@@ -130,6 +137,12 @@ def main() -> None:
         pass
     else:
         raise AssertionError("low_rank encoder must reject zero init_std")
+    try:
+        _encoder("hadamard", ratio_cap=4.1)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("encoder must reject an out-of-range interaction ratio cap")
 
     none_seeded = _seeded_encoder("none", seed=20260711)
     low_rank_seeded = _seeded_encoder("low_rank", seed=20260711)
@@ -162,6 +175,10 @@ def main() -> None:
     students = torch.tensor([[1.0, 2.0], [3.0, 5.0]])
     expected_additive = concepts.unsqueeze(0) + students.unsqueeze(1)
     assert torch.allclose(additive, expected_additive)
+    assert torch.equal(
+        _encoder("none", ratio_cap=0.1).compose_initial_state(student_ids),
+        additive,
+    )
 
     scale = 0.5
     factorized = _encoder("hadamard", scale).compose_initial_state(student_ids)
@@ -181,6 +198,38 @@ def main() -> None:
     diagnostics = _encoder("hadamard", scale).get_interaction_diagnostics(student_ids)
     assert diagnostics["student_concept_interaction_rms"].item() > 0.0
     assert diagnostics["student_concept_interaction_ratio"].item() > 0.0
+
+    ratio_cap = 0.25
+    uncapped_encoder = _encoder("hadamard", scale=1.0)
+    uncapped_diagnostics = uncapped_encoder.get_interaction_diagnostics(student_ids)
+    assert uncapped_diagnostics["student_concept_interaction_ratio"].item() > ratio_cap
+    capped_encoder = _encoder("hadamard", scale=1.0, ratio_cap=ratio_cap)
+    capped_state = capped_encoder.compose_initial_state(student_ids)
+    capped_interaction = capped_state - expected_additive
+    per_student_additive_rms = expected_additive.pow(2).mean(dim=(-2, -1)).sqrt()
+    per_student_interaction_rms = capped_interaction.pow(2).mean(dim=(-2, -1)).sqrt()
+    per_student_ratio = per_student_interaction_rms / per_student_additive_rms.clamp(min=1e-12)
+    assert torch.all(per_student_ratio <= ratio_cap + 1e-6)
+    capped_diagnostics = capped_encoder.get_interaction_diagnostics(student_ids)
+    assert capped_diagnostics["student_concept_interaction_ratio"].item() <= ratio_cap + 1e-6
+
+    weak_uncapped = _encoder("hadamard", scale=1e-6, ratio_cap=0.0)
+    weak_capped = _encoder("hadamard", scale=1e-6, ratio_cap=ratio_cap)
+    assert torch.equal(
+        weak_uncapped.compose_initial_state(student_ids),
+        weak_capped.compose_initial_state(student_ids),
+    )
+
+    for mode in ("hadamard", "low_rank"):
+        batch_invariant = _encoder(mode, scale=1.0, rank=2, ratio_cap=ratio_cap)
+        if mode == "low_rank":
+            with torch.no_grad():
+                batch_invariant.student_interaction_factor.weight.fill_(2.0)
+                batch_invariant.concept_interaction_factor.weight.fill_(3.0)
+                batch_invariant.interaction_projection.weight.copy_(torch.eye(2))
+        single_state = batch_invariant.compose_initial_state(torch.tensor([0]))[0]
+        mixed_state = batch_invariant.compose_initial_state(torch.tensor([1, 0]))[1]
+        assert torch.allclose(single_state, mixed_state, atol=1e-7, rtol=0.0)
 
     none_encoder = _encoder("none")
     hadamard_encoder = _encoder("hadamard")
@@ -224,18 +273,50 @@ def main() -> None:
     assert low_rank_diagnostics["student_concept_interaction_rms"].item() > 0.0
     assert low_rank_diagnostics["student_concept_interaction_ratio"].item() > 0.0
 
+    capped_low_rank = _encoder(
+        "low_rank",
+        scale=1.0,
+        rank=2,
+        init_std=0.1,
+        ratio_cap=ratio_cap,
+    )
+    with torch.no_grad():
+        capped_low_rank.student_interaction_factor.weight.copy_(
+            torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+        )
+        capped_low_rank.concept_interaction_factor.weight.copy_(
+            torch.tensor([[5.0, 6.0], [7.0, 8.0]])
+        )
+        capped_low_rank.interaction_projection.weight.copy_(torch.eye(2))
+    capped_low_rank_state = capped_low_rank.compose_initial_state(student_ids)
+    capped_low_rank_diag = capped_low_rank.get_interaction_diagnostics(student_ids)
+    assert capped_low_rank_diag["student_concept_interaction_ratio"].item() <= ratio_cap + 1e-6
+    capped_low_rank_state.sum().backward()
+    for parameter in (
+        capped_low_rank.student_interaction_factor.weight,
+        capped_low_rank.concept_interaction_factor.weight,
+        capped_low_rank.interaction_projection.weight,
+    ):
+        assert parameter.grad is not None
+        assert parameter.grad.abs().sum().item() > 0.0
+
     old_switches = _collect_structural_switches({})
     assert old_switches["student_concept_interaction"] == "none"
     assert old_switches["student_concept_interaction_scale"] == 1.0
     assert old_switches["student_concept_interaction_rank"] == 8
     assert old_switches["student_concept_interaction_init_std"] == 0.1
+    assert old_switches["student_concept_interaction_ratio_cap"] == 0.0
 
     hash_args = type("Args", (), {})()
     hash_args.student_concept_interaction = "none"
     hash_args.student_concept_interaction_scale = 1.0
     hash_args.student_concept_interaction_rank = 8
     hash_args.student_concept_interaction_init_std = 0.1
+    hash_args.student_concept_interaction_ratio_cap = 0.0
     baseline_hash = _config_hash(hash_args)
+    hash_args.student_concept_interaction_ratio_cap = 0.3
+    assert _config_hash(hash_args) != baseline_hash
+    hash_args.student_concept_interaction_ratio_cap = 0.0
     hash_args.student_concept_interaction = "low_rank"
     assert _config_hash(hash_args) != baseline_hash
     hash_args.student_concept_interaction = "none"
@@ -266,6 +347,7 @@ def main() -> None:
     assert old_kwargs["student_concept_interaction"] == "none"
     assert old_kwargs["student_concept_interaction_rank"] == 8
     assert old_kwargs["student_concept_interaction_init_std"] == 0.1
+    assert old_kwargs["student_concept_interaction_ratio_cap"] == 0.0
     old_model = CognitiveDiagnosisModel(**old_kwargs)
     hadamard_kwargs = dict(old_kwargs)
     hadamard_kwargs["student_concept_interaction"] = "hadamard"
@@ -279,6 +361,7 @@ def main() -> None:
         student_concept_interaction_scale=0.5,
         student_concept_interaction_rank=2,
         student_concept_interaction_init_std=0.05,
+        student_concept_interaction_ratio_cap=0.2,
     )
     low_rank_model = CognitiveDiagnosisModel(**low_rank_kwargs)
     torch.manual_seed(20260711)
@@ -294,12 +377,14 @@ def main() -> None:
     assert facts["student_concept_interaction_scale"] == 0.5
     assert facts["student_concept_interaction_rank"] == 2
     assert facts["student_concept_interaction_init_std"] == 0.05
+    assert facts["student_concept_interaction_ratio_cap"] == 0.2
     assert facts["num_parameters"] > _runtime_facts(old_model)["num_parameters"]
 
     checkpoint_args = _checkpoint_args(type("Args", (), low_rank_kwargs)())
     assert checkpoint_args["student_concept_interaction"] == "low_rank"
     assert checkpoint_args["student_concept_interaction_rank"] == 2
     assert checkpoint_args["student_concept_interaction_init_std"] == 0.05
+    assert checkpoint_args["student_concept_interaction_ratio_cap"] == 0.2
     low_rank_model.eval()
     roundtrip_students = torch.tensor([0, 1], dtype=torch.long)
     roundtrip_exercises = torch.tensor([0, 1], dtype=torch.long)

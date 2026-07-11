@@ -101,6 +101,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--student_concept_interaction_ratio_cap",
+        type=float,
+        default=None,
+        help="Override the per-student interaction RMS ratio cap; 0 disables it.",
+    )
+    parser.add_argument(
         "--student_concept_interaction_rank",
         type=int,
         default=None,
@@ -149,6 +155,14 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
             "student_concept_interaction_rank must be positive, "
             f"got {args.student_concept_interaction_rank!r}"
         )
+    interaction_ratio_cap = args.student_concept_interaction_ratio_cap
+    if interaction_ratio_cap is not None:
+        interaction_ratio_cap = float(interaction_ratio_cap)
+        if not math.isfinite(interaction_ratio_cap) or not 0.0 <= interaction_ratio_cap <= 4.0:
+            raise ValueError(
+                "student_concept_interaction_ratio_cap must be finite and in [0, 4], "
+                f"got {args.student_concept_interaction_ratio_cap!r}"
+            )
     interaction_init_std = args.student_concept_interaction_init_std
     if interaction_init_std is not None:
         interaction_init_std = float(interaction_init_std)
@@ -170,6 +184,8 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
                     params["student_concept_interaction"] = args.student_concept_interaction
                 if args.student_concept_interaction_scale is not None:
                     params["student_concept_interaction_scale"] = interaction_scale
+                if args.student_concept_interaction_ratio_cap is not None:
+                    params["student_concept_interaction_ratio_cap"] = interaction_ratio_cap
                 if args.student_concept_interaction_rank is not None:
                     params["student_concept_interaction_rank"] = int(interaction_rank)
                 if args.student_concept_interaction_init_std is not None:

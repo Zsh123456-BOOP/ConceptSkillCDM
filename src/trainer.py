@@ -48,6 +48,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "student_concept_interaction_scale",
     "student_concept_interaction_rank",
     "student_concept_interaction_init_std",
+    "student_concept_interaction_ratio_cap",
     "num_gnn_layers",
 )
 
@@ -136,6 +137,9 @@ def _collect_structural_switches(source: Any) -> Dict[str, Any]:
     switches["student_concept_interaction_init_std"] = float(
         _source_get(source, "student_concept_interaction_init_std", 0.1)
     )
+    switches["student_concept_interaction_ratio_cap"] = float(
+        _source_get(source, "student_concept_interaction_ratio_cap", 0.0)
+    )
     switches["architecture"] = ARCHITECTURE_NAME
     return switches
 
@@ -195,6 +199,9 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "student_concept_interaction_init_std": float(
             _source_get(source, "student_concept_interaction_init_std", 0.1)
         ),
+        "student_concept_interaction_ratio_cap": float(
+            _source_get(source, "student_concept_interaction_ratio_cap", 0.0)
+        ),
     }
 
 
@@ -221,6 +228,9 @@ def _runtime_facts(model: nn.Module) -> Dict[str, Any]:
         "student_concept_interaction_init_std": float(
             getattr(knowledge_encoder, "student_concept_interaction_init_std", 0.1)
         ),
+        "student_concept_interaction_ratio_cap": float(
+            getattr(knowledge_encoder, "student_concept_interaction_ratio_cap", 0.0)
+        ),
         "num_parameters": int(sum(parameter.numel() for parameter in base_model.parameters())),
         "num_trainable_parameters": int(
             sum(parameter.numel() for parameter in base_model.parameters() if parameter.requires_grad)
@@ -233,13 +243,15 @@ def _log_runtime_facts(model: nn.Module, logger, context: str) -> Dict[str, Any]
     if not facts["graph_enabled"]:
         raise RuntimeError("Graph-IRT requires relation_learning to be present.")
     logger.info(
-        "%s Architecture=%s | graph_enabled=%s | interaction=%s@%.3g rank=%d init_std=%.3g "
+        "%s Architecture=%s | graph_enabled=%s | interaction=%s@%.3g cap=%.3g "
+        "rank=%d init_std=%.3g "
         "| params=%s trainable=%s",
         context,
         facts["architecture"],
         facts["graph_enabled"],
         facts["student_concept_interaction"],
         facts["student_concept_interaction_scale"],
+        facts["student_concept_interaction_ratio_cap"],
         facts["student_concept_interaction_rank"],
         facts["student_concept_interaction_init_std"],
         f"{facts['num_parameters']:,}",
@@ -290,6 +302,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "student_concept_interaction_scale",
         "student_concept_interaction_rank",
         "student_concept_interaction_init_std",
+        "student_concept_interaction_ratio_cap",
         "graph_prior_mode",
         "min_stu_interactions",
         "min_exer_interactions",

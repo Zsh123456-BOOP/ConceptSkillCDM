@@ -24,6 +24,8 @@ def main() -> None:
             "low_rank",
             "--student_concept_interaction_scale",
             "0.75",
+            "--student_concept_interaction_ratio_cap",
+            "0.3",
             "--student_concept_interaction_rank",
             "4",
             "--student_concept_interaction_init_std",
@@ -43,10 +45,12 @@ def main() -> None:
     for job in jobs:
         assert job.params["student_concept_interaction"] == "low_rank"
         assert job.params["student_concept_interaction_scale"] == 0.75
+        assert job.params["student_concept_interaction_ratio_cap"] == 0.3
         assert job.params["student_concept_interaction_rank"] == 4
         assert job.params["student_concept_interaction_init_std"] == 0.05
         command = " ".join(job.cmd)
         assert "--student_concept_interaction low_rank" in command
+        assert "--student_concept_interaction_ratio_cap 0.3" in command
         assert "--student_concept_interaction_rank 4" in command
         assert "--student_concept_interaction_init_std 0.05" in command
         assert not any(token in command for token in banned), command
@@ -75,6 +79,25 @@ def main() -> None:
             pass
         else:
             raise AssertionError(f"low_rank runner must reject zero {parameter}")
+    for invalid_cap in ("nan", "-0.1", "4.1"):
+        invalid_cap_args = runner.parse_args(
+            [
+                "--datasets",
+                "assist_09",
+                "--seeds",
+                "42",
+                "--ablations",
+                "full",
+                "--student_concept_interaction_ratio_cap",
+                invalid_cap,
+            ]
+        )
+        try:
+            runner.make_jobs(invalid_cap_args, run_id="invalid_cap")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"runner must reject ratio cap {invalid_cap}")
     for inactive_mode in ("none", "hadamard"):
         inactive_zero_args = runner.parse_args(
             [

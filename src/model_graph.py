@@ -364,6 +364,7 @@ class StudentKnowledgeEncoder(nn.Module):
         student_concept_interaction_scale: float = 1.0,
         student_concept_interaction_rank: int = 8,
         student_concept_interaction_init_std: float = 0.1,
+        student_concept_interaction_ratio_cap: float = 0.0,
     ):
         super().__init__()
         self.num_students = int(num_students)
@@ -409,6 +410,13 @@ class StudentKnowledgeEncoder(nn.Module):
                 "to avoid zero-gradient factors"
             )
         self.student_concept_interaction_init_std = interaction_init_std
+        interaction_ratio_cap = float(student_concept_interaction_ratio_cap)
+        if not math.isfinite(interaction_ratio_cap) or not 0.0 <= interaction_ratio_cap <= 4.0:
+            raise ValueError(
+                "student_concept_interaction_ratio_cap must be finite and in [0, 4], "
+                f"got {student_concept_interaction_ratio_cap!r}"
+            )
+        self.student_concept_interaction_ratio_cap = interaction_ratio_cap
         self.student_global = nn.Embedding(self.num_students, self.knowledge_dim)
         self.concept_emb = nn.Embedding(self.num_concepts, self.knowledge_dim)
         if self.student_concept_interaction == "low_rank":
@@ -475,14 +483,53 @@ class StudentKnowledgeEncoder(nn.Module):
             return self.interaction_projection(student_factor * concept_factor)
         return torch.zeros_like(concepts + student_state)
 
+    def _apply_interaction_ratio_cap(
+        self,
+        additive: torch.Tensor,
+        interaction: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.student_concept_interaction_ratio_cap == 0.0:
+            return interaction
+        # Reduce concept and hidden dimensions only. Keeping the student axis
+        # makes one prediction invariant to the other students in its batch.
+        additive_rms = additive.float().pow(2).mean(dim=(-2, -1), keepdim=True).sqrt()
+        interaction_rms = interaction.float().pow(2).mean(dim=(-2, -1), keepdim=True).sqrt()
+        factor = (
+            self.student_concept_interaction_ratio_cap
+            * additive_rms.detach()
+            / (interaction_rms.detach() + 1e-12)
+        )
+        factor = torch.minimum(torch.ones_like(factor), factor)
+        return interaction * factor.to(dtype=interaction.dtype)
+
+    def _compose_scaled_interaction(
+        self,
+        student_ids: torch.Tensor,
+        concepts: torch.Tensor,
+        student_state: torch.Tensor,
+        additive: torch.Tensor,
+    ) -> torch.Tensor:
+        interaction = self.student_concept_interaction_scale * self._compose_interaction(
+            student_ids,
+            concepts,
+            student_state,
+        )
+        return self._apply_interaction_ratio_cap(additive, interaction)
+
     def compose_initial_state(self, student_ids: torch.Tensor) -> torch.Tensor:
         students = self.student_global(student_ids)
         concepts = self.concept_emb.weight.unsqueeze(0).expand(student_ids.size(0), -1, -1)
         student_state = students.unsqueeze(1)
-        initial = concepts + student_state
+        additive = concepts + student_state
+        initial = additive
         if self.student_concept_interaction != "none":
-            interaction = self._compose_interaction(student_ids, concepts, student_state)
-            initial = initial + self.student_concept_interaction_scale * interaction
+            interaction = self._compose_scaled_interaction(
+                student_ids,
+                concepts,
+                student_state,
+                additive,
+            )
+            initial = additive + interaction
         return self.dropout(initial)
 
     def get_interaction_diagnostics(self, student_ids: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -490,10 +537,11 @@ class StudentKnowledgeEncoder(nn.Module):
         concepts = self.concept_emb.weight.unsqueeze(0).expand(student_ids.size(0), -1, -1)
         additive = concepts + students
         if self.student_concept_interaction != "none":
-            interaction = self.student_concept_interaction_scale * self._compose_interaction(
+            interaction = self._compose_scaled_interaction(
                 student_ids,
                 concepts,
                 students,
+                additive,
             )
         else:
             interaction = torch.zeros_like(additive)
