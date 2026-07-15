@@ -55,10 +55,11 @@ class CognitiveDiagnosisHead(nn.Module):
         nn.init.normal_(self.theta_proj.weight, mean=0.0, std=0.02)
         nn.init.zeros_(self.theta_proj.bias)
         if self.evidence_anchor_channels > 0:
-            # softplus(0.5413) == 1.0: every evidence channel starts at unit
-            # weight and stays non-negative while remaining learnable.
+            # softplus(-1.35) ~= 0.23: evidence channels start small so the
+            # model opts *into* the statistic shortcut only where it survives
+            # validation, instead of having to unlearn a unit-weight anchor.
             self.evidence_anchor_raw = nn.Parameter(
-                torch.full((self.evidence_anchor_channels,), 0.5413)
+                torch.full((self.evidence_anchor_channels,), -1.35)
             )
 
     def evidence_anchor_weights(self) -> torch.Tensor:

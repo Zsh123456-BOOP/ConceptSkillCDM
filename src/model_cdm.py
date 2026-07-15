@@ -482,8 +482,10 @@ class CognitiveDiagnosisModel(nn.Module):
             and self.training
             and EVIDENCE_ANCHOR_DROPOUT > 0.0
         ):
-            # Row-level evidence dropout: the state path must stay predictive
-            # on its own, so it cannot co-adapt with the statistic shortcut.
+            # Inverted row-level evidence dropout: the state path must stay
+            # predictive without the statistic shortcut, while the 1/(1-p)
+            # rescale keeps the training-time expected anchor equal to the
+            # full anchor used at evaluation (no train/eval calibration shift).
             keep = (
                 torch.rand(
                     evidence_anchor.size(0),
@@ -493,7 +495,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 )
                 >= EVIDENCE_ANCHOR_DROPOUT
             ).to(dtype=evidence_anchor.dtype)
-            evidence_anchor = evidence_anchor * keep
+            evidence_anchor = evidence_anchor * keep / (1.0 - EVIDENCE_ANCHOR_DROPOUT)
         if return_details:
             irt_logit, head_details = self.diagnosis_head(
                 knowledge_state=knowledge_state,
