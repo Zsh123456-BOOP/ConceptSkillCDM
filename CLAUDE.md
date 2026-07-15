@@ -43,7 +43,7 @@ Model selection and testing are deliberately separated to prevent test-set leaka
 - **`--run_mode test`** runs against an existing sealed checkpoint (matched by `--run_id`/`--save_dir`) and never trains. The first test read atomically writes `test_seal.json` (`_claim_test_seal`, `O_EXCL`). After that the directory refuses a second test *and* refuses re-training that would overwrite the checkpoint (`main.py` and `train_one_experiment` both check for `test_seal.json`/`test_results.json`).
 - Practical consequence: if you change the model/config, you must retrain into a **new `--save_dir`**; you cannot re-test a sealed directory. If a metric drops after removing a shortcut, record it as evidence — do not restore the shortcut to recover the number.
 
-## Architecture: single-path Response-Evidence Graph-IRT (`graph_irt_v9`)
+## Architecture: single-path Response-Evidence Graph-IRT (`graph_irt_v10`)
 
 The repo intentionally implements exactly **one** prediction path. Legacy branches (personal posterior, roadmap/tutor residuals, student–item collaborative graph, per-concept item difficulty, extra logit residuals, Hadamard/low-rank interaction) are **physically deleted**, not toggled off. Preserve this: do not reintroduce a second prediction branch or a label-derived lookup consumed at prediction time.
 
@@ -54,11 +54,14 @@ train-only label-free concept-graph priors  (item co-occurrence + student co-exp
   + two-channel leave-one-out train response evidence
       -> MultiHeadRelationLearning         (row-stochastic concept graphs)      src/model_graph.py
       -> StudentKnowledgeEncoder           (evidence-init state + GNN hops)     src/model_graph.py
-      -> CognitiveDiagnosisHead            (Q-masked scalar ability θ_e)        src/prediction_head.py
+      -> CognitiveDiagnosisHead            (Q-masked scalar ability θ_e,        src/prediction_head.py
+                                            θ_c anchored on direct + graph-
+                                            propagated LOO evidence, non-
+                                            negative channel weights)
       -> a * (θ_e - b)                     (single scalar-difficulty 2PL logit)
 ```
 
-Architectural invariant, asserted in diagnostics: `details["logits"] == details["irt_logit"]`. There is no residual or calibration term added to the IRT logit.
+Architectural invariant, asserted in diagnostics: `details["logits"] == details["irt_logit"]`. There is no residual or calibration term added to the IRT logit; the evidence anchor shifts θ_c *before* the single 2PL readout.
 
 ### Leave-one-out response evidence (the anti-leakage core)
 
@@ -70,8 +73,10 @@ At training time `_build_response_evidence` (in `model_cdm.py`) subtracts the *c
 
 `--model_variant` (in `main.py::MODEL_VARIANTS`) is not a free hyperparameter knob; each variant deterministically sets the underlying switches via `_apply_model_variant`:
 
-- `full` — concept graph + fixed BCE + pairwise-AUC objective.
+- `full` — concept graph + evidence anchor (direct + residual + graph-propagated) + fixed BCE + pairwise-AUC objective.
 - `no_response_evidence` — removes the train response buffers/projection entirely.
+- `no_evidence_anchor` — evidence feeds only the initial state; θ has no anchor channels (v9 behaviour).
+- `no_evidence_propagation` — anchor keeps direct rate + residual channels but drops the graph-propagated channel.
 - `no_pairwise_loss` — identical model, objective reverts to pure BCE.
 - `ema_bce` — pure BCE with a fixed 0.9 per-epoch weight EMA for validation/checkpoint selection (inference stays single-model).
 - `no_message_passing` — sets `graph_propagation_alpha=0`; output state equals the initial state.

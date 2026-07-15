@@ -24,7 +24,14 @@ from src.model_regularization import get_regularization_components as _get_regul
 from src.prediction_head import CognitiveDiagnosisHead, ExerciseDifficultyEncoder
 
 
-GRAPH_IRT_ARCHITECTURE = "graph_irt_v9"
+GRAPH_IRT_ARCHITECTURE = "graph_irt_v10"
+
+# How response evidence anchors theta before the single 2PL readout.
+#   full        -> direct rate + difficulty residual + graph-propagated rate
+#   direct_only -> direct rate + difficulty residual (no graph transport)
+#   off         -> evidence feeds only the initial state (v9 behaviour)
+EVIDENCE_ANCHOR_MODES = ("full", "direct_only", "off")
+_ANCHOR_CHANNELS = {"full": 3, "direct_only": 2, "off": 0}
 
 
 class CognitiveDiagnosisModel(nn.Module):
@@ -42,6 +49,7 @@ class CognitiveDiagnosisModel(nn.Module):
         exposure_prior_matrix: Optional[torch.Tensor] = None,
         response_evidence_stats: Optional[Dict[str, torch.Tensor]] = None,
         use_response_evidence: bool = False,
+        evidence_anchor_mode: str = "full",
         knowledge_dim: int = 32,
         num_relation_heads: int = 4,
         num_gnn_layers: int = 2,
@@ -71,6 +79,12 @@ class CognitiveDiagnosisModel(nn.Module):
         self.knowledge_dim = int(knowledge_dim)
         self.num_relation_heads = int(num_relation_heads)
         self.use_response_evidence = bool(use_response_evidence)
+        anchor_mode = str(evidence_anchor_mode).strip().lower()
+        if anchor_mode not in EVIDENCE_ANCHOR_MODES:
+            raise ValueError(
+                f"evidence_anchor_mode must be one of {EVIDENCE_ANCHOR_MODES}, got {evidence_anchor_mode!r}"
+            )
+        self.evidence_anchor_mode = anchor_mode if self.use_response_evidence else "off"
         self.lambda_graph_entropy = max(0.0, float(lambda_graph_entropy))
         self.graph_entropy_min = float(graph_entropy_min)
         self.graph_entropy_max = float(graph_entropy_max)
@@ -146,7 +160,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.diagnosis_head = CognitiveDiagnosisHead(
             knowledge_dim=self.knowledge_dim,
             num_concepts=self.num_concepts,
-            evidence_anchor_channels=3 if self.use_response_evidence else 0,
+            evidence_anchor_channels=_ANCHOR_CHANNELS[self.evidence_anchor_mode],
         )
         self.exercise_encoder = ExerciseDifficultyEncoder(num_exercises=self.num_exercises)
 
@@ -360,10 +374,12 @@ class CognitiveDiagnosisModel(nn.Module):
         neighbours.  All inputs are train-only statistics; the map is linear,
         so the leave-one-out contract is preserved exactly.
         """
-        if response_evidence is None:
+        if response_evidence is None or self.evidence_anchor_mode == "off":
             return None
         rate_evidence = response_evidence[..., 0]
         residual_evidence = response_evidence[..., 1]
+        if self.evidence_anchor_mode == "direct_only":
+            return torch.stack((rate_evidence, residual_evidence), dim=-1)
         receiver_weights = relation_matrices.mean(dim=0).transpose(0, 1)
         propagated_evidence = torch.matmul(
             rate_evidence.to(dtype=receiver_weights.dtype),

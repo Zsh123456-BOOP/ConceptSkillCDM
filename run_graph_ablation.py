@@ -46,6 +46,8 @@ class JobSpec:
 ABLATIONS: Dict[str, AblationSpec] = {
     "full": AblationSpec("full", {}),
     "no_response_evidence": AblationSpec("no_response_evidence", {}),
+    "no_evidence_anchor": AblationSpec("no_evidence_anchor", {}),
+    "no_evidence_propagation": AblationSpec("no_evidence_propagation", {}),
     "no_pairwise_loss": AblationSpec("no_pairwise_loss", {}),
     "no_message_passing": AblationSpec(
         "no_message_passing", {"graph_propagation_alpha": 0.0}

@@ -21,6 +21,8 @@ from src.config import (
 MODEL_VARIANTS = (
     "full",
     "no_response_evidence",
+    "no_evidence_anchor",
+    "no_evidence_propagation",
     "no_pairwise_loss",
     "ema_bce",
     "no_message_passing",
@@ -144,6 +146,11 @@ def parse_args(argv=None) -> argparse.Namespace:
 def _apply_model_variant(args: argparse.Namespace) -> None:
     """Map named, interpretable controls to the underlying graph settings."""
     args.use_response_evidence = args.model_variant != "no_response_evidence"
+    args.evidence_anchor_mode = {
+        "no_response_evidence": "off",
+        "no_evidence_anchor": "off",
+        "no_evidence_propagation": "direct_only",
+    }.get(args.model_variant, "full")
     args.pairwise_auc_weight = (
         0.0
         if args.model_variant in {"no_pairwise_loss", "ema_bce"}
