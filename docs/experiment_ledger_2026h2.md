@@ -47,6 +47,36 @@
 2. **训练协议修复**：assist_17/junyi/ednet/nips34 的 plateau patience < early stop，LR 衰减从未触发过 → 已修。
 3. **ednet epochs 120→250**：v9 best@120 说明被上限掐断。
 
+## 消融矩阵首批收割（abl_0715，seed42，val AUC；矩阵在 17/54 时按 B 计划中止）
+
+assist_17（@dim8 冻结配置）——**所有模块移除都 ≥ full(0.7818)，其中 no_message_passing = 0.7879 已越 ORCDF 0.7875**：
+degree_random 0.7813 / no_pairwise 0.7812 / full 0.7818 / no_evidence_anchor 0.7822 / exposure_only 0.7823 /
+no_evidence_propagation 0.7824 / item_only 0.7827 / no_response_evidence 0.7832 / **no_message_passing 0.7879**。
+→ 结论：assist_17 上状态消息传递是负贡献，α 应趋近 0（per-dataset 超参，assist_09 先例 0.02）。
+
+junyi——全部变体挤在 0.8214~0.8234（±0.001 平），唯 no_message_passing 0.8214 最低：junyi 是唯一图传播明确正贡献的数据集（与"纯冷概念靠图搬运"的故事一致）。
+
+## Phase 1 定向探针（p1_0716，收官）——5/6 数据集破线
+
+| 数据集 | 胜者配置（已冻结入 config, bb167b1） | val | 目标 | 状态 |
+|---|---|---:|---:|---|
+| assist_17 | dim8/h2/**α0.01**（α曲线 0.20:0.7818→0.01:0.7876，消融极限 α0=0.7879） | **0.7876** | 0.7875 | ✅ |
+| moocradar | **α0.10**（α0.02 继承死角修复；α0.30=0.9331 略低） | **0.9337** | 0.9332 | ✅ |
+| nips34 | **dim32**（α上调 0.10 反伤 −0.003） | **0.7895** | 0.7893 | ✅ |
+| junyi | **adamw+lr1e-3**（d0.30/wd1e-4 不叠加；k48/dim32/hadamard 全平） | 0.8246 | 0.8320 | ❌ −0.0074 |
+| ednet | v10d 既有 | 0.7548 | 0.7480 | ✅ |
+| xes3g5m | v10d 既有（历史 test 0.7973） | 0.7901 | 0.7944 | ✅(test) |
+
+Phase 2（junyi 专家先修图）侦察结论：**不可行**——服务器 junyi_original 为 2020 Kaggle 版
+（仅 level1-4 主题层级、无 prerequisites 列），哈希 ucid 与处理后整数 id 无对齐通道。
+junyi 最后一发：layers 2→3（唯一 MP 正贡献数据集的层深试探，在跑）；无论成败即收口。
+junyi 预期落位：test ≈0.826-0.828，胜 ORCDF 0.8246/≈SVGCD 0.8250，负 RCD 0.8320（RCD 用专家关系图，可在论文中说明）。
+
+## 终局矩阵（abl2_0716，冻结配置版）
+
+5 数据集 × 9 变体 × seed42 = 45 任务已发车；junyi 9 个待其 layers3 探针裁决后补入。
+后续：full×seed{43,44}×6 → 一次性 test 解封 → 终表。
+
 ## 运行记录
 
 - `v9b2_0715`：6 数据集 full 基线（v9 代码，0930eae），GPU 1/2/3。全部完成：
