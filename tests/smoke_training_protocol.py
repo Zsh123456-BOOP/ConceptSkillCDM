@@ -18,7 +18,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 import main as main_module
-from src.config import PAIRWISE_AUC_WEIGHT
+from src.config import EMA_DECAY, PAIRWISE_AUC_WEIGHT
 from src.experiment_utils import _config_hash
 from src.dataset import create_dataloaders
 from src.model import GRAPH_IRT_ARCHITECTURE
@@ -26,10 +26,14 @@ from src.trainer import (
     _build_data_identity,
     _build_optimizer,
     _checkpoint_args,
+    _clone_model_state,
     _claim_test_seal,
     _is_validation_improvement,
     _prediction_loss,
+    _resolve_ema_decay,
     _resolve_pairwise_auc_weight,
+    _temporary_model_state,
+    _update_ema_state,
     _validate_checkpoint_data_identity,
     run_inference,
     _should_early_stop,
@@ -59,8 +63,10 @@ def main() -> None:
     assert main_module.parse_args(["--run_mode", "test"]).run_mode == "test"
     assert GRAPH_IRT_ARCHITECTURE == "graph_irt_v8"
     assert PAIRWISE_AUC_WEIGHT == 0.5
+    assert EMA_DECAY == 0.9
     parser_dests = {action.dest for action in main_module.build_parser()._actions}
     assert "pairwise_auc_weight" not in parser_dests
+    assert "ema_decay" not in parser_dests
     assert "max_test_batches" not in {
         action.dest for action in main_module.build_parser()._actions
     }
@@ -75,6 +81,7 @@ def main() -> None:
         variant_args = main_module.parse_args(["--model_variant", variant])
         main_module._apply_model_variant(variant_args)
         assert variant_args.pairwise_auc_weight == PAIRWISE_AUC_WEIGHT
+        assert variant_args.ema_decay == 0.0
         assert variant_args.use_response_evidence
     no_evidence_args = main_module.parse_args(
         ["--model_variant", "no_response_evidence"]
@@ -87,6 +94,13 @@ def main() -> None:
     )
     main_module._apply_model_variant(no_pairwise_args)
     assert no_pairwise_args.pairwise_auc_weight == 0.0
+    assert no_pairwise_args.ema_decay == 0.0
+    ema_args = main_module.parse_args(["--model_variant", "ema_bce"])
+    main_module._apply_model_variant(ema_args)
+    assert ema_args.pairwise_auc_weight == 0.0
+    assert ema_args.ema_decay == EMA_DECAY
+    assert ema_args.use_response_evidence
+    assert _resolve_ema_decay(ema_args) == EMA_DECAY
     assert "no_response_graph" not in main_module.MODEL_VARIANTS
 
     logits = torch.tensor([2.0, -0.5, 1.0, -1.0], requires_grad=True)
@@ -148,6 +162,26 @@ def main() -> None:
     )
     assert checkpoint_pairwise["pairwise_auc_weight"] == PAIRWISE_AUC_WEIGHT
 
+    class _TinyModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.tensor([1.0]))
+            self.register_buffer("counter", torch.tensor(1, dtype=torch.long))
+
+    ema_model = _TinyModel()
+    ema_state = _clone_model_state(ema_model)
+    with torch.no_grad():
+        ema_model.weight.fill_(3.0)
+        ema_model.counter.fill_(2)
+    _update_ema_state(ema_state, ema_model, EMA_DECAY)
+    assert torch.allclose(ema_state["weight"], torch.tensor([1.2]))
+    assert ema_state["counter"].item() == 2
+    with _temporary_model_state(ema_model, ema_state):
+        assert torch.allclose(ema_model.weight, torch.tensor([1.2]))
+        assert ema_model.counter.item() == 2
+    assert torch.allclose(ema_model.weight, torch.tensor([3.0]))
+    assert ema_model.counter.item() == 2
+
     model = torch.nn.Linear(3, 1)
     optimizer = _build_optimizer(model, args)
     assert isinstance(optimizer, torch.optim.AdamW)
@@ -166,6 +200,7 @@ def main() -> None:
         min_stu_interactions=15,
         min_exer_interactions=0,
         pairwise_auc_weight=PAIRWISE_AUC_WEIGHT,
+        ema_decay=0.0,
     )
     baseline_hash = _config_hash(hash_args)
     hash_args.epochs = 100
@@ -175,6 +210,9 @@ def main() -> None:
     assert _config_hash(hash_args) != baseline_hash
     hash_args.min_stu_interactions = 15
     hash_args.pairwise_auc_weight = 0.0
+    assert _config_hash(hash_args) != baseline_hash
+    hash_args.pairwise_auc_weight = PAIRWISE_AUC_WEIGHT
+    hash_args.ema_decay = EMA_DECAY
     assert _config_hash(hash_args) != baseline_hash
 
     trainer_source = (Path(ROOT) / "src" / "trainer.py").read_text(encoding="utf-8")

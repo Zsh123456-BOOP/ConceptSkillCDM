@@ -5,8 +5,9 @@ import json
 import math
 import os
 import warnings
+from contextlib import contextmanager
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -16,7 +17,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
-from src.config import PAIRWISE_AUC_WEIGHT
+from src.config import EMA_DECAY, PAIRWISE_AUC_WEIGHT
 from src.dataset import CognitiveDiagnosisDataset, create_dataloaders
 from src.experiment_utils import (
     _config_hash,
@@ -51,6 +52,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "graph_propagation_alpha",
     "graph_prior_strength_init",
     "pairwise_auc_weight",
+    "ema_decay",
     "num_gnn_layers",
 )
 
@@ -147,7 +149,11 @@ def _default_monitor_config() -> Dict[str, str]:
 def _resolve_pairwise_auc_weight(source: Any) -> float:
     """Return the fixed objective weight implied by the named ablation."""
     variant = str(_source_get(source, "model_variant", "full"))
-    expected = 0.0 if variant == "no_pairwise_loss" else PAIRWISE_AUC_WEIGHT
+    expected = (
+        0.0
+        if variant in {"no_pairwise_loss", "ema_bce"}
+        else PAIRWISE_AUC_WEIGHT
+    )
     supplied = float(_source_get(source, "pairwise_auc_weight", expected))
     if supplied != expected:
         raise ValueError(
@@ -157,11 +163,70 @@ def _resolve_pairwise_auc_weight(source: Any) -> float:
     return expected
 
 
+def _resolve_ema_decay(source: Any) -> float:
+    """Return the fixed EMA decay implied by the named training variant."""
+    variant = str(_source_get(source, "model_variant", "full"))
+    expected = EMA_DECAY if variant == "ema_bce" else 0.0
+    supplied = float(_source_get(source, "ema_decay", expected))
+    if supplied != expected:
+        raise ValueError(
+            "ema_decay is fixed by model_variant: "
+            f"variant={variant!r} requires {expected}, got {supplied}"
+        )
+    return expected
+
+
 def _collect_structural_switches(source: Any) -> Dict[str, Any]:
     switches = {key: _source_get(source, key) for key in STRUCTURAL_SWITCH_KEYS}
     switches["pairwise_auc_weight"] = _resolve_pairwise_auc_weight(source)
+    switches["ema_decay"] = _resolve_ema_decay(source)
     switches["architecture"] = ARCHITECTURE_NAME
     return switches
+
+
+def _clone_model_state(model: nn.Module) -> Dict[str, torch.Tensor]:
+    """Clone the base-model state without sharing storage with live weights."""
+    return {
+        key: value.detach().clone()
+        for key, value in _get_base_model(model).state_dict().items()
+    }
+
+
+@torch.no_grad()
+def _update_ema_state(
+    ema_state: Dict[str, torch.Tensor],
+    model: nn.Module,
+    decay: float,
+) -> None:
+    """Update an epoch-level EMA exactly as the referenced KnoField trainer."""
+    current_state = _get_base_model(model).state_dict()
+    if set(ema_state) != set(current_state):
+        raise ValueError("EMA state keys do not match the current model")
+    for key, current in current_state.items():
+        shadow = ema_state[key]
+        current = current.detach()
+        if shadow.dtype.is_floating_point:
+            shadow.mul_(decay).add_(current, alpha=1.0 - decay)
+        else:
+            shadow.copy_(current)
+
+
+@contextmanager
+def _temporary_model_state(
+    model: nn.Module,
+    state_dict: Optional[Dict[str, torch.Tensor]],
+) -> Iterator[None]:
+    """Evaluate a shadow state while restoring optimizer-owned weights after use."""
+    if state_dict is None:
+        yield
+        return
+    base_model = _get_base_model(model)
+    live_state = _clone_model_state(model)
+    base_model.load_state_dict(state_dict, strict=STRICT_CHECKPOINT_LOADING)
+    try:
+        yield
+    finally:
+        base_model.load_state_dict(live_state, strict=STRICT_CHECKPOINT_LOADING)
 
 
 def _strip_module_prefix(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -291,6 +356,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "gnn_residual_weight",
         "graph_prior_strength_init",
         "pairwise_auc_weight",
+        "ema_decay",
         "graph_prior_mode",
         "min_stu_interactions",
         "min_exer_interactions",
@@ -305,6 +371,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
     clean["architecture"] = ARCHITECTURE_NAME
     clean["allow_self_loop"] = _resolve_allow_self_loop(args)
     clean["pairwise_auc_weight"] = _resolve_pairwise_auc_weight(args)
+    clean["ema_decay"] = _resolve_ema_decay(args)
     return clean
 
 
@@ -838,11 +905,16 @@ def _save_checkpoint(
     train_metrics: Optional[Dict[str, float]] = None,
     diagnostics: Optional[Dict[str, Any]] = None,
     best_val_auc: Optional[float] = None,
+    model_state_dict: Optional[Dict[str, torch.Tensor]] = None,
 ) -> None:
     payload: Dict[str, Any] = {
         "architecture": ARCHITECTURE_NAME,
         "epoch": int(epoch),
-        "model_state_dict": _get_base_model(model).state_dict(),
+        "model_state_dict": (
+            model_state_dict
+            if model_state_dict is not None
+            else _get_base_model(model).state_dict()
+        ),
         "optimizer_state_dict": optimizer.state_dict(),
         "val_metrics": val_metrics,
         "monitor": monitor,
@@ -897,6 +969,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     _log_runtime_facts(model, logger, run_tag)
 
     pairwise_auc_weight = _resolve_pairwise_auc_weight(args)
+    ema_decay = _resolve_ema_decay(args)
+    ema_state = _clone_model_state(model) if ema_decay > 0.0 else None
     optimizer = _build_optimizer(model, args)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
@@ -915,7 +989,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     )
     logger.info(
         "%s Training protocol: optimizer=%s plateau_patience=%d early_stop_patience=%d "
-        "min_epochs=%d min_delta=%.2g pairwise_auc_weight=%.1f",
+        "min_epochs=%d min_delta=%.2g pairwise_auc_weight=%.1f ema_decay=%.1f",
         run_tag,
         str(getattr(args, "optimizer", "adam")),
         int(args.patience),
@@ -923,6 +997,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         int(getattr(args, "min_epochs", 0)),
         float(getattr(args, "early_stop_min_delta", 0.0)),
         pairwise_auc_weight,
+        ema_decay,
     )
     if int(args.early_stop_patience) <= int(args.patience) + 1:
         logger.warning(
@@ -938,6 +1013,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     patience_counter = 0
     history: Dict[str, Any] = {
         "architecture": ARCHITECTURE_NAME,
+        "ema_decay": ema_decay,
         "train": [],
         "val": [],
         "best_epoch": 0,
@@ -966,15 +1042,18 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             max_batches=getattr(args, "max_train_batches", None),
             pairwise_auc_weight=pairwise_auc_weight,
         )
+        if ema_state is not None:
+            _update_ema_state(ema_state, model, ema_decay)
         grad_norms = _collect_debug_grad_norms(model) if debug_enabled else {}
-        val_metrics = validate(
-            model,
-            val_loader,
-            device,
-            logger,
-            epoch,
-            max_batches=getattr(args, "max_val_batches", None),
-        )
+        with _temporary_model_state(model, ema_state):
+            val_metrics = validate(
+                model,
+                val_loader,
+                device,
+                logger,
+                epoch,
+                max_batches=getattr(args, "max_val_batches", None),
+            )
         scheduler.step(val_metrics["auc"])
         history["train"].append(train_metrics)
         history["val"].append(val_metrics)
@@ -1012,7 +1091,13 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         )
 
         if debug_enabled:
-            last_diag = _collect_debug_forward_stats(model, val_loader, device, max_batches=diag_batches)
+            with _temporary_model_state(model, ema_state):
+                last_diag = _collect_debug_forward_stats(
+                    model,
+                    val_loader,
+                    device,
+                    max_batches=diag_batches,
+                )
             last_diag["grad_norms"] = grad_norms
             logger.info(
                 "%s [Graph-IRT Diag] entropy_ratio=%.4f diag_mass=%.4f relation_delta=%.6f "
@@ -1055,6 +1140,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 train_metrics=train_metrics,
                 diagnostics=last_diag,
                 best_val_auc=best_val_auc,
+                model_state_dict=ema_state,
             )
             with open(os.path.join(args.save_dir, "diag_best.json"), "w", encoding="utf-8") as handle:
                 json.dump(last_diag, handle, indent=2)
@@ -1075,10 +1161,17 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 val_metrics=val_metrics,
                 train_metrics=train_metrics,
                 diagnostics=last_diag,
+                model_state_dict=ema_state,
             )
             logger.info("%s Checkpoint saved: %s", run_tag, checkpoint_path)
             try:
-                activity = compute_module_activity(model, val_loader, device, num_samples=300)
+                with _temporary_model_state(model, ema_state):
+                    activity = compute_module_activity(
+                        model,
+                        val_loader,
+                        device,
+                        num_samples=300,
+                    )
                 logger.info("%s [Module Activity] %s", run_tag, format_activity_brief(activity))
             except Exception as exc:
                 logger.warning("%s Module activity failed: %s", run_tag, exc)

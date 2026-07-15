@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, Set
 
 
 PAIRWISE_AUC_WEIGHT: float = 0.5
+EMA_DECAY: float = 0.9
 
 
 _BASE_DEFAULTS: Dict[str, Any] = {

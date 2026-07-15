@@ -11,6 +11,7 @@ import traceback
 from gpu_utils import configure_main_process_gpus, parse_gpu_ids
 from src.config import (
     DATASET_DEFAULTS,
+    EMA_DECAY,
     PAIRWISE_AUC_WEIGHT,
     apply_dataset_defaults,
     collect_explicit_arg_dests,
@@ -21,6 +22,7 @@ MODEL_VARIANTS = (
     "full",
     "no_response_evidence",
     "no_pairwise_loss",
+    "ema_bce",
     "no_message_passing",
     "item_only",
     "exposure_only",
@@ -143,8 +145,11 @@ def _apply_model_variant(args: argparse.Namespace) -> None:
     """Map named, interpretable controls to the underlying graph settings."""
     args.use_response_evidence = args.model_variant != "no_response_evidence"
     args.pairwise_auc_weight = (
-        0.0 if args.model_variant == "no_pairwise_loss" else PAIRWISE_AUC_WEIGHT
+        0.0
+        if args.model_variant in {"no_pairwise_loss", "ema_bce"}
+        else PAIRWISE_AUC_WEIGHT
     )
+    args.ema_decay = EMA_DECAY if args.model_variant == "ema_bce" else 0.0
     if args.model_variant == "no_message_passing":
         args.graph_propagation_alpha = 0.0
     elif args.model_variant == "item_only":
