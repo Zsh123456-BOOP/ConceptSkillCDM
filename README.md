@@ -2,13 +2,12 @@
 
 本仓库当前实现一条单一、可审计的 **Graph-IRT** 认知诊断主线。此前的 CRG/LCRF reachability 假设、全训练集标签统计先验和多套预测残差已被移除：现有三元组数据接口无法提供严格的 query-time 历史前缀，继续保留这些分支会把实验性捷径误写成因果机制。
 
-当前 v6 针对的是实体协同信息缺口。模型从过滤后的训练集构建一张无标签学生—题目二部图，对每个 query 精确移除自身边，再聚合其余邻居；因此训练样本不能通过当前边看到目标题身份，验证/测试也不会读取其交互。协同学生状态进入概念图，协同题目状态生成逐概念难度，最终仍只有一条 2PL 路径。v5 中已经饱和并过拟合的 Q-item matching 已完整删除。
+当前 v7 是一次基于真实输出的结构减法。v6 的学生—题目协同图使 assist09 前两轮 validation AUC 从无协同对照的 0.7616/0.7673 降到 0.6932/0.7056；逐概念题目难度偏移又从 0.2375 膨胀到 0.5302，同时 validation 下降。两者均已完整删除，不以关闭开关留在生产主线。现有模型回到单一 Q-masked 2PL，并用固定的 BCE + pairwise-AUC 目标直接缓解训练目标与最终 AUC 的错位。
 
 ## 模型主线
 
 图的先验支持与初始强度只使用训练集中的无标签元数据证据：
 
-- student-item support：训练集中学生和题目是否发生过交互，不使用答对/答错；
 - item co-occurrence：同一题目的概念共现；
 - student co-exposure：同一学生在训练集中接触过的概念共现；该证据与 CSV 行顺序无关；
 - self-loop：概念自身状态保留。
@@ -16,30 +15,27 @@
 前向路径只有一条：
 
 ```text
-train-only student-item support + Q/student-exposure metadata
-        -> query-edge-excluded collaborative student/item context
+train-only Q/student-exposure metadata
         -> row-stochastic concept graph
-        -> collaborative student + concept state
+        -> student + concept state
         -> graph message passing
-        -> per-concept theta and collaborative item difficulty
-        -> Q-mask concept-logit aggregation
+        -> Q-masked scalar ability + scalar item difficulty/discrimination
         -> 2PL-IRT logit
 ```
 
-关系强度、receiver bias、self-loop 和 temperature 仍通过 BCE 梯度学习；但标签不会被预计算成学生/题目/概念特征或 buffer。代码级不变量是：
+关系强度、receiver bias、self-loop 和 temperature 通过联合训练目标的梯度学习；但标签不会被预计算成学生/题目/概念特征或 buffer。代码级不变量是：
 
 ```python
 details["logits"] == details["irt_logit"]
 ```
 
-没有 personal posterior、统计 target encoding、query correction、theta calibration 或额外 logit residual。已经验证无效的 Hadamard、student-concept low-rank 和 ratio-cap 分支也已删除。这个模型应被描述为静态图结构、题目条件化的认知诊断模型，不应再声称解决 concept reachability 或 evidence-gap transfer。
+训练 batch 同时计算 BCE 与全体正负样本 logit 差的 pairwise logistic surrogate，固定等权组合；单类 batch 自动退回 BCE。标签只进入 loss，不进入模型输入、图、buffer 或 checkpoint 特征。没有 personal posterior、统计 target encoding、query correction、theta calibration、学生—题目协同图、逐概念题目难度或额外 logit residual。已经验证无效的 Hadamard、student-concept low-rank、ratio-cap 和 Q-item matching 也已删除。这个模型应被描述为静态概念图认知诊断模型，不应再声称解决 concept reachability 或 evidence-gap transfer。
 
 ## 代码入口
 
 - `main.py`：训练和推理 CLI。
 - `src/dataset.py`：train-only ID/Q/图先验构建与数据加载。
 - `src/model.py` / `src/model_cdm.py`：公开模型和唯一 Graph-IRT 前向。
-- `src/response_graph.py`：query-safe 学生—题目协同聚合。
 - `src/model_graph.py`：概念关系学习与图消息传递。
 - `src/prediction_head.py`：2PL-IRT 题目参数和能力读出。
 - `src/trainer.py`：训练、验证、测试、checkpoint 和简洁图诊断。
@@ -49,8 +45,8 @@ details["logits"] == details["irt_logit"]
 
 只保留以下互不混淆的变体：
 
-- `full`：学生—题目协同图与概念图均启用。
-- `no_response_graph`：精确旁路学生—题目协同聚合，保留相同参数和逐概念 2PL 头。
+- `full`：概念图与固定 BCE + pairwise-AUC 训练目标均启用。
+- `no_pairwise_loss`：模型完全相同，只把训练目标恢复为纯 BCE。
 - `no_message_passing`：令 `graph_propagation_alpha=0`，输出状态严格等于初始 student+concept state。
 - `item_only`：只使用题目概念共现。
 - `exposure_only`：只使用学生概念共接触证据。
@@ -61,7 +57,7 @@ details["logits"] == details["irt_logit"]
 ```bash
 python run_graph_ablation.py \
   --datasets assist_09,assist_17,junyi \
-  --ablations full,no_response_graph,no_message_passing,item_only,exposure_only,degree_random \
+  --ablations full,no_pairwise_loss,no_message_passing,item_only,exposure_only,degree_random \
   --seeds 42 \
   --run_mode train \
   --gpus 0 \
@@ -85,7 +81,6 @@ python tests/smoke_ablation_flags.py
 python tests/smoke_gpu_selector.py
 python tests/smoke_concurrent_results.py
 python tests/smoke_training_protocol.py
-python tests/smoke_response_graph.py
 ```
 
 最小 CPU 训练闭环：

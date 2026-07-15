@@ -5,6 +5,9 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Set
 
 
+PAIRWISE_AUC_WEIGHT: float = 0.5
+
+
 _BASE_DEFAULTS: Dict[str, Any] = {
     "batch_size": 512,
     "epochs": 100,

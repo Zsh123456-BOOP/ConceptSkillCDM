@@ -23,7 +23,7 @@ def main() -> None:
             "--seeds",
             "42",
             "--ablations",
-            "full,no_response_graph,no_message_passing,item_only,exposure_only,degree_random",
+            "full,no_pairwise_loss,no_message_passing,item_only,exposure_only,degree_random",
             "--dry_run",
         ]
     )
@@ -31,15 +31,14 @@ def main() -> None:
     jobs = runner.make_jobs(args, run_id="smoke")
     assert len(jobs) == 6
     by_name = {job.ablation.name: job for job in jobs}
-    assert by_name["no_response_graph"].params["enable_response_graph"] is False
-    no_response_command = by_name["no_response_graph"].cmd
-    assert "--model_variant" in no_response_command
-    assert no_response_command[no_response_command.index("--model_variant") + 1] == "no_response_graph"
+    no_pairwise_command = by_name["no_pairwise_loss"].cmd
+    assert "--model_variant" in no_pairwise_command
+    assert no_pairwise_command[no_pairwise_command.index("--model_variant") + 1] == "no_pairwise_loss"
     parsed = main_module.parse_args(
-        no_response_command[no_response_command.index("--dataset_name") :]
+        no_pairwise_command[no_pairwise_command.index("--dataset_name") :]
     )
     main_module._apply_model_variant(parsed)
-    assert parsed.enable_response_graph is False
+    assert parsed.pairwise_auc_weight == 0.0
     assert by_name["no_message_passing"].params["graph_propagation_alpha"] == 0.0
     assert by_name["item_only"].params["graph_prior_mode"] == "item_only"
     assert by_name["exposure_only"].params["graph_prior_mode"] == "exposure_only"
@@ -59,7 +58,7 @@ def main() -> None:
             "--seeds",
             "42",
             "--ablations",
-            "full,no_response_graph",
+            "full,no_pairwise_loss",
             "--run_mode",
             "test",
             "--run_id",

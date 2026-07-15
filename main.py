@@ -11,6 +11,7 @@ import traceback
 from gpu_utils import configure_main_process_gpus, parse_gpu_ids
 from src.config import (
     DATASET_DEFAULTS,
+    PAIRWISE_AUC_WEIGHT,
     apply_dataset_defaults,
     collect_explicit_arg_dests,
 )
@@ -18,7 +19,7 @@ from src.config import (
 
 MODEL_VARIANTS = (
     "full",
-    "no_response_graph",
+    "no_pairwise_loss",
     "no_message_passing",
     "item_only",
     "exposure_only",
@@ -139,7 +140,9 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 def _apply_model_variant(args: argparse.Namespace) -> None:
     """Map named, interpretable controls to the underlying graph settings."""
-    args.enable_response_graph = args.model_variant != "no_response_graph"
+    args.pairwise_auc_weight = (
+        0.0 if args.model_variant == "no_pairwise_loss" else PAIRWISE_AUC_WEIGHT
+    )
     if args.model_variant == "no_message_passing":
         args.graph_propagation_alpha = 0.0
     elif args.model_variant == "item_only":

@@ -138,7 +138,7 @@ CONFIG_HASH_KEYS = (
     "graph_identity_residual",
     "graph_propagation_alpha",
     "graph_prior_strength_init",
-    "enable_response_graph",
+    "pairwise_auc_weight",
     "graph_prior_mode",
     "graph_tau_init",
     "graph_dropout",

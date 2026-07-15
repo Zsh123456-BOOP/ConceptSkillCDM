@@ -107,17 +107,11 @@ def _check_relation_sources_are_active_and_ablatable() -> None:
     exposure_prior = torch.tensor(
         [[0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0], [1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]
     )
-    response_graph = torch.sparse_coo_tensor(
-        torch.tensor([[0, 1, 2, 2], [0, 1, 2, 3]]),
-        torch.ones(4),
-        size=(3, 4),
-    ).coalesce()
     model = CognitiveDiagnosisModel(
         num_students=3,
         num_exercises=4,
         num_concepts=4,
         q_matrix=q_matrix,
-        response_graph_matrix=response_graph,
         item_prior_matrix=item_prior,
         exposure_prior_matrix=exposure_prior,
         knowledge_dim=8,

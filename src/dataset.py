@@ -411,78 +411,6 @@ def build_student_coexposure_prior(
     }
 
 
-def build_student_item_interaction_graph(
-    train_sources: list,
-    stu_id_map: Dict[int, int],
-    exer_id_map: Dict[int, int],
-) -> Tuple[torch.Tensor, Dict[str, float]]:
-    """Build a sparse, label-free student-item support graph from training only.
-
-    Repeated observations of the same pair collapse to one binary edge.  The
-    response-graph encoder performs per-query degree normalization. Correctness
-    labels, concepts, row order, validation rows, and test rows do not affect
-    this graph.
-    """
-    num_students = len(stu_id_map)
-    num_exercises = len(exer_id_map)
-    if num_students <= 0 or num_exercises <= 0:
-        raise ValueError("student and exercise mappings must not be empty")
-
-    student_indices: List[int] = []
-    exercise_indices: List[int] = []
-    for dataframe in _iter_source_dfs(train_sources):
-        if "stu_id" not in dataframe.columns or "exer_id" not in dataframe.columns:
-            continue
-        for raw_student, raw_exercise in dataframe[["stu_id", "exer_id"]].itertuples(
-            index=False,
-            name=None,
-        ):
-            if raw_student not in stu_id_map or raw_exercise not in exer_id_map:
-                continue
-            student_indices.append(stu_id_map[raw_student])
-            exercise_indices.append(exer_id_map[raw_exercise])
-
-    if not student_indices:
-        raise ValueError("training data contains no mapped student-item interactions")
-
-    edge_index = torch.tensor(
-        [student_indices, exercise_indices],
-        dtype=torch.long,
-    )
-    edge_weight = torch.ones(edge_index.size(1), dtype=torch.float32)
-    adjacency = torch.sparse_coo_tensor(
-        edge_index,
-        edge_weight,
-        size=(num_students, num_exercises),
-        dtype=torch.float32,
-    ).coalesce()
-    # Only support matters; duplicate interaction counts and any future edge
-    # values must not act as hidden outcome/confidence features.
-    adjacency = torch.sparse_coo_tensor(
-        adjacency.indices(),
-        torch.ones(adjacency._nnz(), dtype=torch.float32),
-        size=adjacency.shape,
-        dtype=torch.float32,
-    ).coalesce()
-
-    unique_pairs = int(adjacency._nnz())
-    student_degree = torch.zeros(num_students, dtype=torch.float32)
-    exercise_degree = torch.zeros(num_exercises, dtype=torch.float32)
-    student_degree.scatter_add_(0, adjacency.indices()[0], adjacency.values())
-    exercise_degree.scatter_add_(0, adjacency.indices()[1], adjacency.values())
-    possible_pairs = float(num_students * num_exercises)
-    stats = {
-        "response_interaction_count": float(len(student_indices)),
-        "response_unique_pair_count": float(unique_pairs),
-        "response_graph_density": (
-            float(unique_pairs) / possible_pairs if possible_pairs > 0 else 0.0
-        ),
-        "response_isolated_student_count": float((student_degree == 0).sum().item()),
-        "response_isolated_exercise_count": float((exercise_degree == 0).sum().item()),
-    }
-    return adjacency, stats
-
-
 def create_dataloaders(
         train_file: str,
         val_file: str,
@@ -628,21 +556,6 @@ def create_dataloaders(
 
     log("正在构建Q矩阵...")
     q_matrix = build_q_matrix(train_sources=train_sources, exer_id_map=exer_id_map, cpt_id_map=cpt_id_map)
-
-    log("正在构建 train-only 学生-题目协同图...")
-    response_graph_matrix, response_graph_stats = build_student_item_interaction_graph(
-        train_sources=train_sources,
-        stu_id_map=stu_id_map,
-        exer_id_map=exer_id_map,
-    )
-    log(
-        "[Response Graph] label-free train-only topology: "
-        f"interactions={response_graph_stats['response_interaction_count']:.0f}, "
-        f"unique_pairs={response_graph_stats['response_unique_pair_count']:.0f}, "
-        f"density={response_graph_stats['response_graph_density']:.6f}, "
-        f"isolated_students={response_graph_stats['response_isolated_student_count']:.0f}, "
-        f"isolated_exercises={response_graph_stats['response_isolated_exercise_count']:.0f}"
-    )
 
     def _zero_item_prior(num_concepts: int) -> Tuple[torch.Tensor, Dict[str, float]]:
         return torch.zeros(num_concepts, num_concepts, dtype=torch.float32), {
@@ -867,8 +780,6 @@ def create_dataloaders(
         'exer_id_reverse_map': {v: k for k, v in exer_id_map.items()},
         'cpt_id_reverse_map': {v: k for k, v in cpt_id_map.items()},
         'q_matrix': q_matrix,
-        'response_graph_matrix': response_graph_matrix,
-        'response_graph_stats': response_graph_stats,
         'item_prior_matrix': item_prior_matrix,
         'exposure_prior_matrix': exposure_prior_matrix,
         'graph_prior_stats': graph_prior_stats,

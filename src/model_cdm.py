@@ -2,11 +2,10 @@
 
 The production prediction path is deliberately small:
 
-    train-only label-free student-item topology + concept-graph priors
-        -> collaborative student/item propagation
+    train-only label-free concept-graph priors
         -> student/concept graph encoder
-        -> per-concept item difficulty
-        -> Q-masked 2PL-IRT logit
+        -> Q-masked scalar ability
+        -> scalar-difficulty 2PL-IRT logit
 
 Correctness labels are consumed only by the trainer's loss (and therefore its
 gradients). This module does not register label-derived student, item, concept,
@@ -21,10 +20,9 @@ import torch.nn as nn
 from src.model_graph import MultiHeadRelationLearning, StudentKnowledgeEncoder
 from src.model_regularization import get_regularization_components as _get_regularization_components
 from src.prediction_head import CognitiveDiagnosisHead, ExerciseDifficultyEncoder
-from src.response_graph import ResponseGraphEncoder
 
 
-GRAPH_IRT_ARCHITECTURE = "graph_irt_v6"
+GRAPH_IRT_ARCHITECTURE = "graph_irt_v7"
 
 
 class CognitiveDiagnosisModel(nn.Module):
@@ -38,7 +36,6 @@ class CognitiveDiagnosisModel(nn.Module):
         num_exercises: int,
         num_concepts: int,
         q_matrix: torch.Tensor,
-        response_graph_matrix: torch.Tensor,
         item_prior_matrix: Optional[torch.Tensor] = None,
         exposure_prior_matrix: Optional[torch.Tensor] = None,
         knowledge_dim: int = 32,
@@ -52,7 +49,6 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_tau_init: float = 1.0,
         graph_propagation_alpha: float = 0.20,
         graph_prior_strength_init: float = 1.0,
-        enable_response_graph: bool = True,
         gnn_residual_weight: float = 0.5,
         lambda_graph_entropy: float = 0.01,
         graph_entropy_min: float = 0.15,
@@ -84,7 +80,6 @@ class CognitiveDiagnosisModel(nn.Module):
         self.graph_reg_warmup_epochs = max(0, int(graph_reg_warmup_epochs))
         self.graph_reg_cap_ratio = max(0.0, float(graph_reg_cap_ratio))
         self.prediction_l2_lambda = max(0.0, float(prediction_l2_lambda))
-        self.enable_response_graph = bool(enable_response_graph)
         self._current_epoch = 1
 
         q = q_matrix.detach().float()
@@ -92,16 +87,6 @@ class CognitiveDiagnosisModel(nn.Module):
         if tuple(q.shape) != expected_q_shape:
             raise ValueError(f"q_matrix must have shape {expected_q_shape}, got {tuple(q.shape)}")
         self.register_buffer("q_matrix", q)
-
-        if not isinstance(response_graph_matrix, torch.Tensor):
-            raise TypeError("response_graph_matrix must be a sparse torch.Tensor")
-        expected_response_shape = (self.num_students, self.num_exercises)
-        if tuple(response_graph_matrix.shape) != expected_response_shape:
-            raise ValueError(
-                "response_graph_matrix must have shape "
-                f"{expected_response_shape}, got {tuple(response_graph_matrix.shape)}"
-            )
-        self.response_graph_encoder = ResponseGraphEncoder(response_graph_matrix)
 
         item_prior = (
             self._build_item_prior_from_q(q, self.num_concepts)
@@ -151,8 +136,6 @@ class CognitiveDiagnosisModel(nn.Module):
             gnn_residual_weight=gnn_residual_weight,
             propagation_alpha=graph_propagation_alpha,
         )
-        self.response_item_embedding = nn.Embedding(self.num_exercises, self.knowledge_dim)
-        nn.init.xavier_normal_(self.response_item_embedding.weight)
         self.diagnosis_head = CognitiveDiagnosisHead(
             knowledge_dim=self.knowledge_dim,
             num_concepts=self.num_concepts,
@@ -228,24 +211,10 @@ class CognitiveDiagnosisModel(nn.Module):
                 f"concept_vector must have shape (batch, {self.num_concepts}), got {tuple(q_vector.shape)}"
             )
 
-        student_base = self.knowledge_encoder.student_global.weight
-        item_base = self.response_item_embedding.weight
-        if self.enable_response_graph:
-            student_context, item_context = self.response_graph_encoder(
-                student_base,
-                item_base,
-                student_ids,
-                exercise_ids,
-            )
-        else:
-            student_context = student_base[student_ids]
-            item_context = item_base[exercise_ids]
-
         relation_matrices = self.relation_learning()
         knowledge_state, initial_state = self.knowledge_encoder(
             student_ids,
             relation_matrices,
-            student_context=student_context,
             return_initial=True,
         )
 
@@ -253,8 +222,6 @@ class CognitiveDiagnosisModel(nn.Module):
         if return_details:
             irt_logit, head_details = self.diagnosis_head(
                 knowledge_state=knowledge_state,
-                item_state=item_context,
-                concept_basis=self.knowledge_encoder.concept_emb.weight,
                 concept_mask=q_vector,
                 b=difficulty,
                 a=discrimination,
@@ -263,8 +230,6 @@ class CognitiveDiagnosisModel(nn.Module):
         else:
             irt_logit = self.diagnosis_head(
                 knowledge_state=knowledge_state,
-                item_state=item_context,
-                concept_basis=self.knowledge_encoder.concept_emb.weight,
                 concept_mask=q_vector,
                 b=difficulty,
                 a=discrimination,
@@ -286,19 +251,11 @@ class CognitiveDiagnosisModel(nn.Module):
             (relation_matrices - identity).pow(2).sum(dim=-1).clamp(min=1e-12).sqrt().mean()
         )
         graph_state_delta = (knowledge_state - initial_state).pow(2).mean().sqrt()
-        response_student_delta = (
-            student_context - self.knowledge_encoder.student_global(student_ids)
-        ).pow(2).mean().sqrt()
-        response_item_delta = (
-            item_context - self.response_item_embedding(exercise_ids)
-        ).pow(2).mean().sqrt()
         details: Dict[str, torch.Tensor] = {
             "relation_matrices": relation_matrices,
             "initial_state": initial_state.detach(),
             "knowledge_state": knowledge_state.detach(),
             "knowledge_state_graph_delta": graph_state_delta.detach(),
-            "response_student_delta": response_student_delta.detach(),
-            "response_item_delta": response_item_delta.detach(),
             "relation_identity_delta": relation_identity_delta.detach(),
             "q_vector": q_vector.detach(),
             "irt_b": difficulty.detach(),
@@ -335,21 +292,10 @@ class CognitiveDiagnosisModel(nn.Module):
             with torch.no_grad():
                 device = next(self.parameters()).device
                 student_ids = torch.tensor([student_id], device=device, dtype=torch.long)
-                student_base = self.knowledge_encoder.student_global.weight
-                item_base = self.response_item_embedding.weight
-                if self.enable_response_graph:
-                    student_context = self.response_graph_encoder.encode_students(
-                        student_base,
-                        item_base,
-                        student_ids,
-                    )
-                else:
-                    student_context = self.knowledge_encoder.student_global(student_ids)
                 relation_matrices = self.relation_learning()
                 knowledge_state = self.knowledge_encoder(
                     student_ids,
                     relation_matrices,
-                    student_context=student_context,
                 )
                 concept_state = knowledge_state.squeeze(0)
                 concept_theta = self.diagnosis_head.theta_proj(concept_state).squeeze(-1)

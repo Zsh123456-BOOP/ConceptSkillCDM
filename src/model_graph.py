@@ -389,14 +389,8 @@ class StudentKnowledgeEncoder(nn.Module):
     def compose_initial_state(
         self,
         student_ids: torch.Tensor,
-        student_context: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        students = self.student_global(student_ids) if student_context is None else student_context
-        expected_shape = (student_ids.size(0), self.knowledge_dim)
-        if tuple(students.shape) != expected_shape:
-            raise ValueError(
-                f"student_context must have shape {expected_shape}, got {tuple(students.shape)}"
-            )
+        students = self.student_global(student_ids)
         concepts = self.concept_emb.weight.unsqueeze(0).expand(student_ids.size(0), -1, -1)
         return self.dropout(concepts + students.unsqueeze(1))
 
@@ -405,10 +399,9 @@ class StudentKnowledgeEncoder(nn.Module):
         student_ids: torch.Tensor,
         relation_matrices: torch.Tensor,
         *,
-        student_context: Optional[torch.Tensor] = None,
         return_initial: bool = False,
     ):
-        initial = self.compose_initial_state(student_ids, student_context=student_context)
+        initial = self.compose_initial_state(student_ids)
         if self.propagation_alpha == 0.0 or not self.gnn_layers:
             return (initial, initial) if return_initial else initial
         state = initial

@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
 import torch
+import torch.nn.functional as F
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -16,13 +18,18 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 import main as main_module
+from src.config import PAIRWISE_AUC_WEIGHT
 from src.experiment_utils import _config_hash
 from src.dataset import create_dataloaders
+from src.model import GRAPH_IRT_ARCHITECTURE
 from src.trainer import (
     _build_data_identity,
     _build_optimizer,
+    _checkpoint_args,
     _claim_test_seal,
     _is_validation_improvement,
+    _prediction_loss,
+    _resolve_pairwise_auc_weight,
     _validate_checkpoint_data_identity,
     run_inference,
     _should_early_stop,
@@ -50,9 +57,89 @@ def main() -> None:
     assert args.run_mode == "train"
     assert main_module.parse_args(["--run_mode", "train"]).run_mode == "train"
     assert main_module.parse_args(["--run_mode", "test"]).run_mode == "test"
+    assert GRAPH_IRT_ARCHITECTURE == "graph_irt_v7"
+    assert PAIRWISE_AUC_WEIGHT == 0.5
+    parser_dests = {action.dest for action in main_module.build_parser()._actions}
+    assert "pairwise_auc_weight" not in parser_dests
     assert "max_test_batches" not in {
         action.dest for action in main_module.build_parser()._actions
     }
+
+    for variant in (
+        "full",
+        "no_message_passing",
+        "item_only",
+        "exposure_only",
+        "degree_random",
+    ):
+        variant_args = main_module.parse_args(["--model_variant", variant])
+        main_module._apply_model_variant(variant_args)
+        assert variant_args.pairwise_auc_weight == PAIRWISE_AUC_WEIGHT
+    no_pairwise_args = main_module.parse_args(
+        ["--model_variant", "no_pairwise_loss"]
+    )
+    main_module._apply_model_variant(no_pairwise_args)
+    assert no_pairwise_args.pairwise_auc_weight == 0.0
+    assert "no_response_graph" not in main_module.MODEL_VARIANTS
+
+    logits = torch.tensor([2.0, -0.5, 1.0, -1.0], requires_grad=True)
+    labels = torch.tensor([1.0, 0.0, 1.0, 0.0])
+    prediction, bce, pairwise, has_pairs = _prediction_loss(
+        logits,
+        labels,
+        PAIRWISE_AUC_WEIGHT,
+    )
+    expected_bce = F.binary_cross_entropy_with_logits(logits, labels)
+    positive = logits[labels > 0.5]
+    negative = logits[labels <= 0.5]
+    expected_pairwise = F.softplus(
+        -(positive.unsqueeze(1) - negative.unsqueeze(0))
+    ).mean()
+    expected_prediction = (
+        (1.0 - PAIRWISE_AUC_WEIGHT) * expected_bce
+        + PAIRWISE_AUC_WEIGHT * expected_pairwise
+    )
+    assert has_pairs
+    assert torch.allclose(bce, expected_bce)
+    assert torch.allclose(pairwise, expected_pairwise)
+    assert torch.allclose(prediction, expected_prediction)
+    prediction.backward()
+    assert logits.grad is not None and torch.isfinite(logits.grad).all()
+
+    single_logits = torch.tensor([0.3, -0.2, 1.1])
+    single_labels = torch.ones(3)
+    single_prediction, single_bce, single_pairwise, has_pairs = _prediction_loss(
+        single_logits,
+        single_labels,
+        PAIRWISE_AUC_WEIGHT,
+    )
+    assert not has_pairs
+    assert torch.equal(single_pairwise, single_bce)
+    assert torch.allclose(single_prediction, single_bce)
+
+    no_pair_prediction, no_pair_bce, _, _ = _prediction_loss(
+        logits.detach(),
+        labels,
+        0.0,
+    )
+    assert torch.equal(no_pair_prediction, no_pair_bce)
+    try:
+        _resolve_pairwise_auc_weight(
+            SimpleNamespace(model_variant="full", pairwise_auc_weight=0.25)
+        )
+    except ValueError as exc:
+        assert "fixed by model_variant" in str(exc)
+    else:
+        raise AssertionError("pairwise weight must not become a free hyperparameter")
+
+    checkpoint_pairwise = _checkpoint_args(
+        SimpleNamespace(
+            model_variant="full",
+            pairwise_auc_weight=PAIRWISE_AUC_WEIGHT,
+            disable_self_loop=False,
+        )
+    )
+    assert checkpoint_pairwise["pairwise_auc_weight"] == PAIRWISE_AUC_WEIGHT
 
     model = torch.nn.Linear(3, 1)
     optimizer = _build_optimizer(model, args)
@@ -71,7 +158,7 @@ def main() -> None:
         epochs=120,
         min_stu_interactions=15,
         min_exer_interactions=0,
-        enable_response_graph=True,
+        pairwise_auc_weight=PAIRWISE_AUC_WEIGHT,
     )
     baseline_hash = _config_hash(hash_args)
     hash_args.epochs = 100
@@ -80,8 +167,16 @@ def main() -> None:
     hash_args.min_stu_interactions = 0
     assert _config_hash(hash_args) != baseline_hash
     hash_args.min_stu_interactions = 15
-    hash_args.enable_response_graph = False
+    hash_args.pairwise_auc_weight = 0.0
     assert _config_hash(hash_args) != baseline_hash
+
+    trainer_source = (Path(ROOT) / "src" / "trainer.py").read_text(encoding="utf-8")
+    for removed_token in (
+        "response_graph",
+        "enable_response",
+        "item_difficulty_delta",
+    ):
+        assert removed_token not in trainer_source, removed_token
 
     class _Logger:
         def info(self, *args, **kwargs):

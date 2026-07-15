@@ -103,8 +103,6 @@ def get_regularization_components(
         exercise_l2 = (
             model.exercise_encoder.b.weight.pow(2).mean()
             + model.exercise_encoder.a_raw.weight.pow(2).mean()
-            + model.response_item_embedding.weight.pow(2).mean()
-            + model.diagnosis_head.item_difficulty_l2()
         )
         terms["prediction_l2"] = model.prediction_l2_lambda * exercise_l2
 

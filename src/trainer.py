@@ -12,9 +12,11 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
+from src.config import PAIRWISE_AUC_WEIGHT
 from src.dataset import CognitiveDiagnosisDataset, create_dataloaders
 from src.experiment_utils import (
     _config_hash,
@@ -47,7 +49,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "graph_identity_residual",
     "graph_propagation_alpha",
     "graph_prior_strength_init",
-    "enable_response_graph",
+    "pairwise_auc_weight",
     "num_gnn_layers",
 )
 
@@ -141,15 +143,22 @@ def _default_monitor_config() -> Dict[str, str]:
     }
 
 
+def _resolve_pairwise_auc_weight(source: Any) -> float:
+    """Return the fixed objective weight implied by the named ablation."""
+    variant = str(_source_get(source, "model_variant", "full"))
+    expected = 0.0 if variant == "no_pairwise_loss" else PAIRWISE_AUC_WEIGHT
+    supplied = float(_source_get(source, "pairwise_auc_weight", expected))
+    if supplied != expected:
+        raise ValueError(
+            "pairwise_auc_weight is fixed by model_variant: "
+            f"variant={variant!r} requires {expected}, got {supplied}"
+        )
+    return expected
+
+
 def _collect_structural_switches(source: Any) -> Dict[str, Any]:
     switches = {key: _source_get(source, key) for key in STRUCTURAL_SWITCH_KEYS}
-    switches["enable_response_graph"] = bool(
-        _source_get(
-            source,
-            "enable_response_graph",
-            _source_get(source, "model_variant", "full") != "no_response_graph",
-        )
-    )
+    switches["pairwise_auc_weight"] = _resolve_pairwise_auc_weight(source)
     switches["architecture"] = ARCHITECTURE_NAME
     return switches
 
@@ -174,7 +183,6 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "num_exercises": int(info_dict["num_exercises"]),
         "num_concepts": int(info_dict["num_concepts"]),
         "q_matrix": info_dict["q_matrix"],
-        "response_graph_matrix": info_dict["response_graph_matrix"],
         "item_prior_matrix": info_dict.get("item_prior_matrix"),
         "exposure_prior_matrix": info_dict.get("exposure_prior_matrix"),
         "knowledge_dim": int(_source_get(source, "knowledge_dim", 32)),
@@ -198,13 +206,6 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "prediction_l2_lambda": float(_source_get(source, "prediction_l2_lambda", 5e-5)),
         "gnn_residual_weight": float(_source_get(source, "gnn_residual_weight", 0.5)),
         "graph_prior_strength_init": float(_source_get(source, "graph_prior_strength_init", 1.0)),
-        "enable_response_graph": bool(
-            _source_get(
-                source,
-                "enable_response_graph",
-                _source_get(source, "model_variant", "full") != "no_response_graph",
-            )
-        ),
     }
 
 
@@ -218,10 +219,6 @@ def _runtime_facts(model: nn.Module) -> Dict[str, Any]:
     return {
         "architecture": ARCHITECTURE_NAME,
         "graph_enabled": bool(relation_learning is not None),
-        "response_graph_enabled": bool(getattr(base_model, "enable_response_graph", False)),
-        "response_graph_edges": int(
-            getattr(getattr(base_model, "response_graph_encoder", None), "num_edges", 0)
-        ),
         "num_parameters": int(sum(parameter.numel() for parameter in base_model.parameters())),
         "num_trainable_parameters": int(
             sum(parameter.numel() for parameter in base_model.parameters() if parameter.requires_grad)
@@ -234,13 +231,10 @@ def _log_runtime_facts(model: nn.Module, logger, context: str) -> Dict[str, Any]
     if not facts["graph_enabled"]:
         raise RuntimeError("Graph-IRT requires relation_learning to be present.")
     logger.info(
-        "%s Architecture=%s | concept_graph=%s | response_graph=%s edges=%d "
-        "| params=%s trainable=%s",
+        "%s Architecture=%s | concept_graph=%s | params=%s trainable=%s",
         context,
         facts["architecture"],
         facts["graph_enabled"],
-        facts["response_graph_enabled"],
-        facts["response_graph_edges"],
         f"{facts['num_parameters']:,}",
         f"{facts['num_trainable_parameters']:,}",
     )
@@ -286,7 +280,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "prediction_l2_lambda",
         "gnn_residual_weight",
         "graph_prior_strength_init",
-        "enable_response_graph",
+        "pairwise_auc_weight",
         "graph_prior_mode",
         "min_stu_interactions",
         "min_exer_interactions",
@@ -300,6 +294,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         clean["data_dir"] = os.path.realpath(str(clean["data_dir"]))
     clean["architecture"] = ARCHITECTURE_NAME
     clean["allow_self_loop"] = _resolve_allow_self_loop(args)
+    clean["pairwise_auc_weight"] = _resolve_pairwise_auc_weight(args)
     return clean
 
 
@@ -375,6 +370,43 @@ def _should_early_stop(epoch: int, patience_counter: int, args: Any) -> bool:
     return int(epoch) >= min_epochs and int(patience_counter) >= patience
 
 
+def _prediction_loss(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    pairwise_auc_weight: float,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]:
+    """Return the fixed BCE/pairwise objective and its auditable components."""
+    logits = _ensure_1d(logits)
+    labels = _ensure_1d(labels).to(dtype=logits.dtype)
+    if tuple(logits.shape) != tuple(labels.shape):
+        raise ValueError(
+            f"logits and labels must have the same shape, got {tuple(logits.shape)} "
+            f"and {tuple(labels.shape)}"
+        )
+    weight = float(pairwise_auc_weight)
+    if weight not in (0.0, PAIRWISE_AUC_WEIGHT):
+        raise ValueError(
+            "pairwise_auc_weight is fixed and must be either "
+            f"0.0 or {PAIRWISE_AUC_WEIGHT}, got {weight}"
+        )
+
+    bce_loss = F.binary_cross_entropy_with_logits(logits, labels)
+    positive_logits = logits[labels > 0.5]
+    negative_logits = logits[labels <= 0.5]
+    has_both_classes = bool(
+        positive_logits.numel() > 0 and negative_logits.numel() > 0
+    )
+    if weight > 0.0 and has_both_classes:
+        logit_gaps = positive_logits.unsqueeze(1) - negative_logits.unsqueeze(0)
+        pairwise_auc_loss = F.softplus(-logit_gaps).mean()
+    else:
+        # Exact fallback also makes the no-pairwise ablation skip O(B^2) work.
+        pairwise_auc_loss = bce_loss
+
+    prediction_loss = (1.0 - weight) * bce_loss + weight * pairwise_auc_loss
+    return prediction_loss, bce_loss, pairwise_auc_loss, has_both_classes
+
+
 def _tensor_summary(value: Any) -> Dict[str, Any]:
     if not isinstance(value, torch.Tensor):
         return {"present": False}
@@ -396,13 +428,17 @@ def _raise_if_nonfinite(
     batch_idx: int,
     details: Dict[str, Any],
     logits: torch.Tensor,
+    prediction_loss: torch.Tensor,
     bce_loss: torch.Tensor,
+    pairwise_auc_loss: torch.Tensor,
     reg_terms: Dict[str, torch.Tensor],
     loss: torch.Tensor,
 ) -> None:
     tensors = {
         "logits": logits,
+        "prediction_loss": prediction_loss,
         "bce_loss": bce_loss,
+        "pairwise_auc_loss": pairwise_auc_loss,
         "reg_loss": reg_terms.get("total"),
         "loss": loss,
         "relation_matrices": details.get("relation_matrices"),
@@ -440,6 +476,8 @@ def _regularization_terms(
     terms = base_model.get_regularization_components(
         relation_matrices=details["relation_matrices"],
         details=details,
+        # Keep the regularization cap on the original BCE scale so the
+        # pairwise-loss ablation changes only the prediction objective.
         base_loss=bce_loss,
     )
     zero = bce_loss.new_tensor(0.0)
@@ -461,15 +499,24 @@ def _run_epoch(
     optimizer: Optional[optim.Optimizer] = None,
     logger=None,
     max_batches: Optional[int] = None,
+    pairwise_auc_weight: float = 0.0,
 ) -> Dict[str, float]:
     is_train = optimizer is not None
+    effective_pairwise_weight = float(pairwise_auc_weight) if is_train else 0.0
+    if effective_pairwise_weight not in (0.0, PAIRWISE_AUC_WEIGHT):
+        raise ValueError(
+            "training pairwise_auc_weight must be fixed at either "
+            f"0.0 or {PAIRWISE_AUC_WEIGHT}"
+        )
     model.train(is_train)
-    bce_fn = nn.BCEWithLogitsLoss()
     max_batches = None if max_batches is None else max(1, int(max_batches))
 
     total_loss = 0.0
+    total_prediction = 0.0
     total_bce = 0.0
+    total_pairwise = 0.0
     total_reg = 0.0
+    pairwise_active_batches = 0
     reg_sums = {key: 0.0 for key in _REG_COMPONENT_KEYS}
     all_labels: List[float] = []
     all_preds: List[float] = []
@@ -492,17 +539,32 @@ def _run_epoch(
                 return_logits=True,
             )
             logits = _ensure_1d(logits)
-            bce_loss = bce_fn(logits, labels)
-            reg_terms = _regularization_terms(model, details, bce_loss)
-            reg_loss = reg_terms["total"]
-            loss = bce_loss + reg_loss
+            prediction_loss, bce_loss, pairwise_auc_loss, has_both_classes = (
+                _prediction_loss(
+                    logits,
+                    labels,
+                    effective_pairwise_weight,
+                )
+            )
+            if is_train:
+                reg_terms = _regularization_terms(model, details, bce_loss)
+                reg_loss = reg_terms["total"]
+            else:
+                zero = prediction_loss.new_tensor(0.0)
+                reg_terms = {key: zero for key in _REG_COMPONENT_KEYS}
+                reg_terms["graph_reg_scale"] = prediction_loss.new_tensor(1.0)
+                reg_terms["total"] = zero
+                reg_loss = zero
+            loss = prediction_loss + reg_loss
             _raise_if_nonfinite(
                 stage=stage,
                 epoch=epoch,
                 batch_idx=batch_idx,
                 details=details,
                 logits=logits,
+                prediction_loss=prediction_loss,
                 bce_loss=bce_loss,
+                pairwise_auc_loss=pairwise_auc_loss,
                 reg_terms=reg_terms,
                 loss=loss,
             )
@@ -522,8 +584,13 @@ def _run_epoch(
                 optimizer.step()
 
             total_loss += float(loss.detach().item())
+            total_prediction += float(prediction_loss.detach().item())
             total_bce += float(bce_loss.detach().item())
+            total_pairwise += float(pairwise_auc_loss.detach().item())
             total_reg += float(reg_loss.detach().item())
+            pairwise_active_batches += int(
+                is_train and effective_pairwise_weight > 0.0 and has_both_classes
+            )
             for key in _REG_COMPONENT_KEYS:
                 reg_sums[key] += float(reg_terms[key].detach().item())
             processed += 1
@@ -535,6 +602,7 @@ def _run_epoch(
             all_probs.extend(probs.cpu().tolist())
 
     denominator = max(1, processed)
+    avg_prediction = total_prediction / denominator
     avg_bce = total_bce / denominator
     avg_reg = total_reg / denominator
     metrics = compute_metrics(all_labels, all_preds, all_probs)
@@ -544,8 +612,13 @@ def _run_epoch(
         )
     return {
         "loss": total_loss / denominator,
+        "prediction_loss": avg_prediction,
         "bce_loss": avg_bce,
+        "pairwise_auc_loss": total_pairwise / denominator,
+        "pairwise_auc_weight": effective_pairwise_weight,
+        "pairwise_active_batch_rate": pairwise_active_batches / denominator,
         "reg_loss": avg_reg,
+        "reg_prediction_ratio": avg_reg / (abs(avg_prediction) + 1e-12),
         "reg_bce_ratio": avg_reg / (abs(avg_bce) + 1e-12),
         **{f"reg_{key}": reg_sums[key] / denominator for key in _REG_COMPONENT_KEYS},
         **metrics,
@@ -560,6 +633,7 @@ def train_epoch(
     logger,
     epoch: int,
     max_batches: Optional[int] = None,
+    pairwise_auc_weight: float = PAIRWISE_AUC_WEIGHT,
 ) -> Dict[str, float]:
     return _run_epoch(
         model=model,
@@ -570,6 +644,7 @@ def train_epoch(
         optimizer=optimizer,
         logger=logger,
         max_batches=max_batches,
+        pairwise_auc_weight=pairwise_auc_weight,
     )
 
 
@@ -618,11 +693,8 @@ def _collect_debug_forward_stats(
     accumulators: Dict[str, List[float]] = {
         "relation_identity_delta": [],
         "knowledge_state_graph_delta": [],
-        "response_student_delta": [],
-        "response_item_delta": [],
         "irt_logit_abs_mean": [],
         "theta_abs_mean": [],
-        "item_difficulty_delta_abs_mean": [],
         "irt_discrimination_mean": [],
         "irt_difficulty_mean": [],
     }
@@ -640,17 +712,8 @@ def _collect_debug_forward_stats(
             accumulators["knowledge_state_graph_delta"].append(
                 _mean_detail(details, "knowledge_state_graph_delta")
             )
-            accumulators["response_student_delta"].append(
-                _mean_detail(details, "response_student_delta")
-            )
-            accumulators["response_item_delta"].append(
-                _mean_detail(details, "response_item_delta")
-            )
             accumulators["irt_logit_abs_mean"].append(_mean_detail(details, "irt_logit", absolute=True))
             accumulators["theta_abs_mean"].append(_mean_detail(details, "theta_c", absolute=True))
-            accumulators["item_difficulty_delta_abs_mean"].append(
-                _mean_detail(details, "item_difficulty_delta", absolute=True)
-            )
             accumulators["irt_discrimination_mean"].append(_mean_detail(details, "irt_a"))
             accumulators["irt_difficulty_mean"].append(_mean_detail(details, "irt_b"))
 
@@ -822,6 +885,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         logger.info("%s DataParallel enabled on %d GPUs", run_tag, torch.cuda.device_count())
     _log_runtime_facts(model, logger, run_tag)
 
+    pairwise_auc_weight = _resolve_pairwise_auc_weight(args)
     optimizer = _build_optimizer(model, args)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
@@ -840,13 +904,14 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     )
     logger.info(
         "%s Training protocol: optimizer=%s plateau_patience=%d early_stop_patience=%d "
-        "min_epochs=%d min_delta=%.2g",
+        "min_epochs=%d min_delta=%.2g pairwise_auc_weight=%.1f",
         run_tag,
         str(getattr(args, "optimizer", "adam")),
         int(args.patience),
         int(args.early_stop_patience),
         int(getattr(args, "min_epochs", 0)),
         float(getattr(args, "early_stop_min_delta", 0.0)),
+        pairwise_auc_weight,
     )
     if int(args.early_stop_patience) <= int(args.patience) + 1:
         logger.warning(
@@ -888,6 +953,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             logger,
             epoch,
             max_batches=getattr(args, "max_train_batches", None),
+            pairwise_auc_weight=pairwise_auc_weight,
         )
         grad_norms = _collect_debug_grad_norms(model) if debug_enabled else {}
         val_metrics = validate(
@@ -903,20 +969,23 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         history["val"].append(val_metrics)
 
         logger.info(
-            "%s Epoch [%03d/%d] | Train loss=%.4f BCE=%.4f reg=%.4f AUC=%.4f ACC=%.4f RMSE=%.4f | "
-            "Val loss=%.4f BCE=%.4f reg=%.4f AUC=%.4f ACC=%.4f RMSE=%.4f",
+            "%s Epoch [%03d/%d] | Train loss=%.4f pred=%.4f BCE=%.4f pair=%.4f "
+            "pair_w=%.1f pair_batches=%.1f%% reg=%.4f AUC=%.4f ACC=%.4f RMSE=%.4f | "
+            "Val loss(BCE)=%.4f AUC=%.4f ACC=%.4f RMSE=%.4f",
             run_tag,
             epoch,
             int(args.epochs),
             train_metrics["loss"],
+            train_metrics["prediction_loss"],
             train_metrics["bce_loss"],
+            train_metrics["pairwise_auc_loss"],
+            train_metrics["pairwise_auc_weight"],
+            100.0 * train_metrics["pairwise_active_batch_rate"],
             train_metrics["reg_loss"],
             train_metrics["auc"],
             train_metrics["acc"],
             train_metrics["rmse"],
             val_metrics["loss"],
-            val_metrics["bce_loss"],
-            val_metrics["reg_loss"],
             val_metrics["auc"],
             val_metrics["acc"],
             val_metrics["rmse"],
@@ -936,17 +1005,12 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             last_diag["grad_norms"] = grad_norms
             logger.info(
                 "%s [Graph-IRT Diag] entropy_ratio=%.4f diag_mass=%.4f relation_delta=%.6f "
-                "concept_state_delta=%.6f response_student=%.6f response_item=%.6f "
-                "item_diff_delta=%.4f "
-                "irt_logit=%.4f theta=%.4f a=%.4f b=%.4f",
+                "concept_state_delta=%.6f irt_logit=%.4f theta=%.4f a=%.4f b=%.4f",
                 run_tag,
                 last_diag["graph_entropy_ratio"],
                 last_diag["graph_diag_mass"],
                 last_diag["relation_identity_delta"],
                 last_diag["knowledge_state_graph_delta"],
-                last_diag["response_student_delta"],
-                last_diag["response_item_delta"],
-                last_diag["item_difficulty_delta_abs_mean"],
                 last_diag["irt_logit_abs_mean"],
                 last_diag["theta_abs_mean"],
                 last_diag["irt_discrimination_mean"],
@@ -1431,9 +1495,6 @@ def save_component_analysis_data(
                 ("theta_c", "theta_samples"),
                 ("irt_a", "irt_discrimination_samples"),
                 ("irt_b", "irt_difficulty_samples"),
-                ("item_difficulty_delta", "item_difficulty_delta_samples"),
-                ("response_student_delta", "response_student_delta_samples"),
-                ("response_item_delta", "response_item_delta_samples"),
                 ("knowledge_state_graph_delta", "knowledge_state_graph_delta_samples"),
                 ("relation_identity_delta", "relation_identity_delta_samples"),
             ):

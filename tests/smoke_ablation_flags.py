@@ -35,6 +35,8 @@ REMOVED_FLAGS = (
     "--student_concept_interaction_init_std",
     "--enable_item_matching",
     "--item_matching_rank",
+    "--enable_response_graph",
+    "--max_test_batches",
 )
 
 
