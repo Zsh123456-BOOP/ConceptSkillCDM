@@ -89,6 +89,8 @@ DATASET_DEFAULTS: Dict[str, Dict[str, Any]] = {
         graph_prior_strength_init=0.55,
         graph_topk=12,
     ),
+    # Per-dataset alpha follows the 2026-07-16 probe curves: dense-repeat
+    # datasets want near-zero state propagation, evidence-gap datasets more.
     "assist_17": _dataset(
         "./data/assist_17",
         batch_size=512,
@@ -105,7 +107,9 @@ DATASET_DEFAULTS: Dict[str, Dict[str, Any]] = {
         early_stop_patience=12,
         min_epochs=10,
         lambda_graph_entropy=0.60,
-        graph_propagation_alpha=0.20,
+        # Alpha sweep at dim8: 0.20:0.7818 < 0.05:0.7864 < 0.02:0.7872
+        # < 0.01:0.7876; the ablation limit (alpha 0) reaches 0.7879.
+        graph_propagation_alpha=0.01,
         graph_prior_strength_init=0.35,
         graph_topk=24,
     ),
@@ -115,7 +119,10 @@ DATASET_DEFAULTS: Dict[str, Dict[str, Any]] = {
         knowledge_dim=128,
         num_relation_heads=2,
         dropout=0.40,
-        learning_rate=3e-3,
+        # AdamW at 1e-3 beat Adam at 3e-3 in the 2026-07-16 optimizer probe
+        # (0.8246 vs 0.8233); heavier dropout or lower decay did not stack.
+        learning_rate=1e-3,
+        optimizer="adamw",
         weight_decay=1e-3,
         patience=2,
         early_stop_patience=8,
@@ -199,6 +206,9 @@ DATASET_DEFAULTS["nips34"] = {
     **_PUBLIC_BENCHMARK_DEFAULTS,
     "data_dir": "./data/nips34",
     "batch_size": 1024,
+    # dim32 edges out dim64 (0.7895 vs 0.7890, 2026-07-16); raising alpha
+    # above the inherited 0.02 hurts (-0.003 at 0.10).
+    "knowledge_dim": 32,
     "graph_topk": 24,
 }
 
@@ -218,6 +228,9 @@ DATASET_DEFAULTS["moocradar"] = {
     "num_relation_heads": 2,
     "num_gnn_layers": 1,
     "dropout": 0.20,
+    # 26% of eval rows have no same-concept history; raising propagation from
+    # the inherited 0.02 to 0.10 lifted val AUC 0.9313 -> 0.9337 (2026-07-16).
+    "graph_propagation_alpha": 0.10,
     "graph_topk": 12,
 }
 
