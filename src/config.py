@@ -233,6 +233,9 @@ DATASET_DEFAULTS["ednet_kt1"] = {
     "num_gnn_layers": 1,
     "dropout": 0.10,
     "learning_rate": 1e-4,
+    # The v9 baseline was still improving at the old 120-epoch cap
+    # (best_epoch == 120); give early stopping room to bite instead.
+    "epochs": 250,
     "early_stop_patience": 10,
     "patience": 4,
     "graph_topk": 24,
