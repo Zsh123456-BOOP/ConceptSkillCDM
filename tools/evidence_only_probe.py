@@ -116,7 +116,19 @@ def _propagated_evidence_scores(
     return np.nan_to_num(result, nan=_logit(np.asarray(global_rate)))
 
 
-def probe_dataset(data_dir: str) -> dict:
+def probe_dataset(data_dir: str, leak_mode: str = "none") -> dict:
+    """Score valid rows from sufficient statistics.
+
+    ``leak_mode`` quantifies two classic leakage bugs against the clean
+    train-only + leave-one-out contract:
+      none   -> train-only statistics (the honest floor)
+      corpus -> statistics built from train+valid, as when a prior matrix is
+                computed before the split
+      self   -> train-only statistics plus the current row's own label, the
+                exact shortcut exact-LOO removes
+    """
+    if leak_mode not in {"none", "corpus", "self"}:
+        raise ValueError(f"unknown leak_mode: {leak_mode!r}")
     train = pd.read_csv(os.path.join(data_dir, "train.csv"))
     valid = pd.read_csv(os.path.join(data_dir, "valid.csv"))
 
@@ -125,6 +137,9 @@ def probe_dataset(data_dir: str) -> dict:
     valid = valid[
         valid["stu_id"].isin(seen_students) & valid["exer_id"].isin(seen_items)
     ].reset_index(drop=True)
+
+    if leak_mode == "corpus":
+        train = pd.concat([train, valid], ignore_index=True)
 
     global_rate = float(train["label"].mean())
     labels = valid["label"].to_numpy(dtype=np.float64)
@@ -150,6 +165,10 @@ def probe_dataset(data_dir: str) -> dict:
     count = matched["count"].to_numpy(dtype=np.float64)
     correct = np.nan_to_num(correct, nan=0.0)
     count = np.nan_to_num(count, nan=0.0)
+    if leak_mode == "self":
+        row_labels = valid_sc["label"].to_numpy(dtype=np.float64)
+        correct = correct + row_labels
+        count = count + 1.0
 
     cpt_prior = valid_sc["cpt"].map(concept_rate).to_numpy(dtype=np.float64)
     cpt_prior = np.nan_to_num(cpt_prior, nan=global_rate)
@@ -194,9 +213,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--datasets", required=True, help="Comma-separated dataset dir names under data/")
     parser.add_argument("--data_root", default="./data")
+    parser.add_argument(
+        "--leak_mode",
+        default="none",
+        choices=("none", "corpus", "self"),
+        help="Quantify classic leakage bugs against the train-only + LOO contract.",
+    )
     args = parser.parse_args()
 
     names = [token.strip() for token in args.datasets.split(",") if token.strip()]
+    print(f"leak_mode={args.leak_mode}")
     print(
         f"{'dataset':<14} {'rows':>8} {'item':>7} {'evid':>7} {'evid+item':>9} "
         f"{'prop':>7} {'prop+item':>9} {'no-evid%':>8}"
@@ -206,7 +232,7 @@ def main() -> None:
         if not os.path.isfile(os.path.join(data_dir, "train.csv")):
             print(f"{name:<14} MISSING")
             continue
-        r = probe_dataset(data_dir)
+        r = probe_dataset(data_dir, leak_mode=args.leak_mode)
         print(
             f"{name:<14} {r['rows']:>8} {r['auc_item']:>7.4f} {r['auc_evidence']:>7.4f} "
             f"{r['auc_evid_plus_item']:>9.4f} {r['auc_propagated']:>7.4f} "
