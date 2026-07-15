@@ -92,8 +92,11 @@ DATASET_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "assist_17": _dataset(
         "./data/assist_17",
         batch_size=512,
-        knowledge_dim=128,
-        num_relation_heads=4,
+        # Capacity sweep (2026-07-15): val AUC rises monotonically as the
+        # state dim shrinks (128:0.7628 -> 8:0.7818, dim4 saturates), so the
+        # dataset gets the small-state configuration.
+        knowledge_dim=8,
+        num_relation_heads=2,
         dropout=0.25,
         learning_rate=1e-3,
         # Early stopping must outlast the plateau scheduler, otherwise the
