@@ -3,7 +3,7 @@
 The production prediction path is deliberately small:
 
     train-only label-free concept-graph priors
-        + leave-one-out train response evidence
+        + two-channel leave-one-out train response evidence
         -> student/concept graph encoder
         -> Q-masked scalar ability
         -> scalar-difficulty 2PL-IRT logit
@@ -24,7 +24,7 @@ from src.model_regularization import get_regularization_components as _get_regul
 from src.prediction_head import CognitiveDiagnosisHead, ExerciseDifficultyEncoder
 
 
-GRAPH_IRT_ARCHITECTURE = "graph_irt_v8"
+GRAPH_IRT_ARCHITECTURE = "graph_irt_v9"
 
 
 class CognitiveDiagnosisModel(nn.Module):
@@ -156,6 +156,9 @@ class CognitiveDiagnosisModel(nn.Module):
         names = (
             "student_concept_count",
             "student_concept_correct",
+            "student_concept_residual_sum",
+            "student_item_keys",
+            "student_item_expected_correct",
             "concept_count",
             "concept_correct",
             "global_count",
@@ -171,12 +174,21 @@ class CognitiveDiagnosisModel(nn.Module):
         expected_shapes = {
             "student_concept_count": (self.num_students, self.num_concepts),
             "student_concept_correct": (self.num_students, self.num_concepts),
+            "student_concept_residual_sum": (
+                self.num_students,
+                self.num_concepts,
+            ),
             "concept_count": (self.num_concepts,),
             "concept_correct": (self.num_concepts,),
             "global_count": (),
             "global_correct": (),
         }
-        for name in names:
+        fixed_names = tuple(
+            name
+            for name in names
+            if name not in {"student_item_keys", "student_item_expected_correct"}
+        )
+        for name in fixed_names:
             if name not in stats:
                 raise ValueError(f"response_evidence_stats is missing {name!r}")
             value = torch.as_tensor(stats[name]).detach().float()
@@ -186,6 +198,39 @@ class CognitiveDiagnosisModel(nn.Module):
                     f"got {tuple(value.shape)}"
                 )
             self.register_buffer(f"response_{name}", value)
+
+        for name in ("student_item_keys", "student_item_expected_correct"):
+            if name not in stats:
+                raise ValueError(f"response_evidence_stats is missing {name!r}")
+        pair_keys = torch.as_tensor(stats["student_item_keys"]).detach().long()
+        pair_expected = (
+            torch.as_tensor(stats["student_item_expected_correct"])
+            .detach()
+            .float()
+        )
+        if pair_keys.dim() != 1 or pair_expected.shape != pair_keys.shape:
+            raise ValueError(
+                "student-item response evidence must be aligned one-dimensional tensors"
+            )
+        if pair_keys.numel() == 0:
+            raise ValueError("student-item response evidence cannot be empty")
+        if pair_keys.numel() > 1 and bool((pair_keys[1:] <= pair_keys[:-1]).any()):
+            raise ValueError("student_item_keys must be strictly increasing")
+        if int(pair_keys[0].item()) < 0 or int(pair_keys[-1].item()) >= (
+            self.num_students * self.num_exercises
+        ):
+            raise ValueError("student_item_keys contain an out-of-range pair")
+        if not bool(torch.isfinite(pair_expected).all()) or bool(
+            ((pair_expected < 0.0) | (pair_expected > 1.0)).any()
+        ):
+            raise ValueError(
+                "student-item expected correctness must be finite and lie in [0, 1]"
+            )
+        self.register_buffer("response_student_item_keys", pair_keys)
+        self.register_buffer(
+            "response_student_item_expected_correct",
+            pair_expected,
+        )
 
         if bool((self.response_student_concept_count < 0).any()):
             raise ValueError("response evidence counts must be non-negative")
@@ -199,10 +244,18 @@ class CognitiveDiagnosisModel(nn.Module):
             raise ValueError("response evidence correct sums must lie within counts")
         if float(self.response_global_count.item()) <= 0.0:
             raise ValueError("response evidence global_count must be positive")
+        if bool(
+            (
+                self.response_student_concept_residual_sum.abs()
+                > self.response_student_concept_count + 1e-5
+            ).any()
+        ):
+            raise ValueError("response residual sums must lie within their counts")
 
     def _build_response_evidence(
         self,
         student_ids: torch.Tensor,
+        exercise_ids: Optional[torch.Tensor],
         q_vector: torch.Tensor,
         outcome_to_exclude: Optional[torch.Tensor],
     ) -> Optional[torch.Tensor]:
@@ -220,6 +273,7 @@ class CognitiveDiagnosisModel(nn.Module):
         q_mask = (q_vector > 0).to(dtype=self.response_student_concept_count.dtype)
         correct = self.response_student_concept_correct[student_ids]
         count = self.response_student_concept_count[student_ids]
+        residual_sum = self.response_student_concept_residual_sum[student_ids]
         concept_correct = self.response_concept_correct.unsqueeze(0)
         concept_count = self.response_concept_count.unsqueeze(0)
 
@@ -237,8 +291,36 @@ class CognitiveDiagnosisModel(nn.Module):
             ):
                 raise ValueError("outcome_to_exclude must be finite and in [0, 1]")
             label_column = labels.unsqueeze(1)
+            if exercise_ids is None:
+                raise ValueError(
+                    "exercise_ids are required when excluding a training outcome"
+                )
+            if exercise_ids.numel() != student_ids.numel():
+                raise ValueError(
+                    "exercise_ids must contain one value per student id"
+                )
+            pair_query = (
+                student_ids.long() * self.num_exercises + exercise_ids.long()
+            )
+            pair_positions = torch.searchsorted(
+                self.response_student_item_keys,
+                pair_query,
+            )
+            safe_positions = pair_positions.clamp(
+                max=self.response_student_item_keys.numel() - 1
+            )
+            matched = self.response_student_item_keys[safe_positions] == pair_query
+            if bool((~matched).any()):
+                raise ValueError(
+                    "training row is missing its train-only student-item expectation"
+                )
+            expected_correct = self.response_student_item_expected_correct[
+                safe_positions
+            ].unsqueeze(1)
+            current_residual = label_column - expected_correct
             correct = (correct - label_column * q_mask).clamp(min=0.0)
             count = (count - q_mask).clamp(min=0.0)
+            residual_sum = residual_sum - current_residual * q_mask
             concept_correct = (concept_correct - label_column * q_mask).clamp(min=0.0)
             concept_count = (concept_count - q_mask).clamp(min=0.0)
             global_count = (self.response_global_count - 1.0).clamp(min=1.0)
@@ -255,7 +337,14 @@ class CognitiveDiagnosisModel(nn.Module):
         eps = 1e-4
         concept_logit = torch.logit(concept_rate.clamp(min=eps, max=1.0 - eps))
         posterior_logit = torch.logit(posterior.clamp(min=eps, max=1.0 - eps))
-        return ((posterior_logit - concept_logit) * reliability).clamp(min=-4.0, max=4.0)
+        rate_evidence = ((posterior_logit - concept_logit) * reliability).clamp(
+            min=-4.0,
+            max=4.0,
+        )
+        residual_evidence = (
+            residual_sum / count.clamp(min=1.0) * reliability
+        ).clamp(min=-1.0, max=1.0)
+        return torch.stack((rate_evidence, residual_evidence), dim=-1)
 
     @staticmethod
     def _build_item_prior_from_q(q_matrix: torch.Tensor, num_concepts: int) -> torch.Tensor:
@@ -330,6 +419,7 @@ class CognitiveDiagnosisModel(nn.Module):
         relation_matrices = self.relation_learning()
         response_evidence = self._build_response_evidence(
             student_ids,
+            exercise_ids,
             q_vector,
             outcome_to_exclude,
         )
@@ -383,7 +473,7 @@ class CognitiveDiagnosisModel(nn.Module):
             "response_evidence": (
                 response_evidence.detach()
                 if response_evidence is not None
-                else q_vector.detach().new_zeros(q_vector.shape)
+                else q_vector.detach().new_zeros((*q_vector.shape, 2))
             ),
             "response_evidence_leave_one_out": q_vector.detach().new_tensor(
                 float(outcome_to_exclude is not None)
@@ -425,6 +515,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 relation_matrices = self.relation_learning()
                 response_evidence = self._build_response_evidence(
                     student_ids,
+                    None,
                     torch.ones(
                         (1, self.num_concepts),
                         device=device,

@@ -61,7 +61,7 @@ def main() -> None:
     assert args.run_mode == "train"
     assert main_module.parse_args(["--run_mode", "train"]).run_mode == "train"
     assert main_module.parse_args(["--run_mode", "test"]).run_mode == "test"
-    assert GRAPH_IRT_ARCHITECTURE == "graph_irt_v8"
+    assert GRAPH_IRT_ARCHITECTURE == "graph_irt_v9"
     assert PAIRWISE_AUC_WEIGHT == 0.5
     assert EMA_DECAY == 0.9
     parser_dests = {action.dest for action in main_module.build_parser()._actions}

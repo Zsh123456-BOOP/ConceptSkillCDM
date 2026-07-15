@@ -33,8 +33,8 @@ def main() -> None:
     frame = pd.DataFrame(
         {
             "stu_id": [10, 10, 10, 20, 20, 20],
-            "exer_id": [100, 101, 102, 100, 102, 101],
-            "cpt_seq": ["1", "1,2", "2,3", "1", "2,3", "1,2"],
+            "exer_id": [100, 100, 102, 100, 102, 101],
+            "cpt_seq": ["1", "1", "2,3", "1", "2,3", "1,2"],
             "timestamp": [1, 2, 3, 1, 2, 3],
             "label": [0, 1, 0, 1, 1, 0],
         }
@@ -65,6 +65,23 @@ def main() -> None:
     assert not torch.equal(
         stats_a["student_concept_correct"],
         stats_b["student_concept_correct"],
+    )
+    assert not torch.equal(
+        stats_a["student_concept_residual_sum"],
+        stats_b["student_concept_residual_sum"],
+    )
+    query_pair_key = students[10] * len(exercises) + exercises[100]
+    query_position_a = torch.searchsorted(
+        stats_a["student_item_keys"],
+        torch.tensor(query_pair_key),
+    )
+    query_position_b = torch.searchsorted(
+        stats_b["student_item_keys"],
+        torch.tensor(query_pair_key),
+    )
+    assert torch.equal(
+        stats_a["student_item_expected_correct"][query_position_a],
+        stats_b["student_item_expected_correct"][query_position_b],
     )
 
     kwargs = dict(
@@ -130,9 +147,8 @@ def main() -> None:
         for name, _ in list(no_evidence.named_parameters())
         + list(no_evidence.named_buffers())
     }
-    assert not any("response_evidence" in name for name in no_evidence_names)
-    assert not any("response_student_concept" in name for name in no_evidence_names)
-    assert GRAPH_IRT_ARCHITECTURE == "graph_irt_v8"
+    assert not any("response_" in name for name in no_evidence_names)
+    assert GRAPH_IRT_ARCHITECTURE == "graph_irt_v9"
     print("OK: train response evidence is target-safe under exact leave-one-out.")
 
 

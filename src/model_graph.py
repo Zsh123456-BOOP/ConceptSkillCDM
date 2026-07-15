@@ -396,7 +396,7 @@ class StudentKnowledgeEncoder(nn.Module):
         self.student_global = nn.Embedding(self.num_students, self.knowledge_dim)
         self.concept_emb = nn.Embedding(self.num_concepts, self.knowledge_dim)
         self.response_evidence_proj = (
-            nn.Linear(1, self.knowledge_dim, bias=False)
+            nn.Linear(2, self.knowledge_dim, bias=False)
             if self.use_response_evidence
             else None
         )
@@ -430,13 +430,13 @@ class StudentKnowledgeEncoder(nn.Module):
         if response_evidence is not None:
             if self.response_evidence_proj is None:
                 raise ValueError("response_evidence was supplied to a disabled evidence encoder")
-            expected = (student_ids.size(0), self.num_concepts)
+            expected = (student_ids.size(0), self.num_concepts, 2)
             if tuple(response_evidence.shape) != expected:
                 raise ValueError(
                     f"response_evidence must have shape {expected}, got {tuple(response_evidence.shape)}"
                 )
             evidence = response_evidence.to(device=initial.device, dtype=initial.dtype)
-            initial = initial + self.response_evidence_proj(evidence.unsqueeze(-1))
+            initial = initial + self.response_evidence_proj(evidence)
         return self.dropout(initial)
 
     def forward(

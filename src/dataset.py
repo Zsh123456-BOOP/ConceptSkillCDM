@@ -210,13 +210,23 @@ def build_student_concept_response_stats(
 
     The returned tensors contain raw sufficient statistics.  Training removes
     the current row from these totals before the model consumes them; valid and
-    test rows use the complete training totals.  Keeping counts and correct
-    sums separate makes that leave-one-out contract exact and auditable.
+    test rows use the complete training totals.  Keeping counts, correct sums,
+    and difficulty-adjusted residual sums separate makes that leave-one-out
+    contract exact and auditable.
     """
     num_students = len(stu_id_map)
+    num_exercises = len(exer_id_map)
     num_concepts = int(q_matrix.size(1))
     student_concept_count = np.zeros((num_students, num_concepts), dtype=np.float32)
     student_concept_correct = np.zeros((num_students, num_concepts), dtype=np.float32)
+    student_concept_residual_sum = np.zeros(
+        (num_students, num_concepts),
+        dtype=np.float32,
+    )
+    student_count = np.zeros(num_students, dtype=np.float64)
+    student_correct = np.zeros(num_students, dtype=np.float64)
+    item_count = np.zeros(num_exercises, dtype=np.float64)
+    item_correct = np.zeros(num_exercises, dtype=np.float64)
     concept_count = np.zeros(num_concepts, dtype=np.float32)
     concept_correct = np.zeros(num_concepts, dtype=np.float32)
     concepts_by_exercise = [
@@ -226,6 +236,7 @@ def build_student_concept_response_stats(
 
     global_count = 0.0
     global_correct = 0.0
+    pair_totals: Dict[int, List[float]] = {}
     for raw_student, raw_exercise, raw_label in zip(
         train_df["stu_id"].values,
         train_df["exer_id"].values,
@@ -243,6 +254,14 @@ def build_student_concept_response_stats(
         student_concept_correct[student, concepts] += label
         concept_count[concepts] += 1.0
         concept_correct[concepts] += label
+        student_count[student] += 1.0
+        student_correct[student] += label
+        item_count[exercise] += 1.0
+        item_correct[exercise] += label
+        pair_key = int(student * num_exercises + exercise)
+        pair_total = pair_totals.setdefault(pair_key, [0.0, 0.0])
+        pair_total[0] += 1.0
+        pair_total[1] += label
         global_count += 1.0
         global_correct += label
 
@@ -253,9 +272,69 @@ def build_student_concept_response_stats(
     ):
         raise ValueError("student-concept response statistics are inconsistent")
 
+    # Each item expectation excludes every response from the query student.
+    # This makes the baseline independent of that student's current target,
+    # including when a student answered the same item more than once.
+    other_student_count = global_count - student_count
+    other_student_correct = global_correct - student_correct
+    student_excluded_rate = np.divide(
+        other_student_correct,
+        other_student_count,
+        out=np.full(num_students, 0.5, dtype=np.float64),
+        where=other_student_count > 0.0,
+    )
+    expected_by_pair: Dict[int, float] = {}
+    for pair_key, (pair_count, pair_correct) in pair_totals.items():
+        student = pair_key // num_exercises
+        exercise = pair_key % num_exercises
+        other_count = item_count[exercise] - pair_count
+        other_correct = item_correct[exercise] - pair_correct
+        expected_by_pair[pair_key] = float(
+            (other_correct + student_excluded_rate[student]) / (other_count + 1.0)
+        )
+
+    for raw_student, raw_exercise, raw_label in zip(
+        train_df["stu_id"].values,
+        train_df["exer_id"].values,
+        train_df["label"].values,
+    ):
+        student = stu_id_map.get(raw_student)
+        exercise = exer_id_map.get(raw_exercise)
+        if student is None or exercise is None:
+            continue
+        concepts = concepts_by_exercise[exercise]
+        if concepts.size == 0:
+            continue
+        pair_key = int(student * num_exercises + exercise)
+        residual = float(raw_label) - expected_by_pair[pair_key]
+        student_concept_residual_sum[student, concepts] += residual
+
+    if np.any(
+        np.abs(student_concept_residual_sum)
+        > student_concept_count + 1e-5
+    ):
+        raise ValueError("difficulty-adjusted response residuals exceed their counts")
+    student_item_keys = np.asarray(sorted(expected_by_pair), dtype=np.int64)
+    student_item_expected_correct = np.asarray(
+        [expected_by_pair[int(key)] for key in student_item_keys],
+        dtype=np.float32,
+    )
+    if not np.all(np.isfinite(student_item_expected_correct)) or np.any(
+        (student_item_expected_correct < 0.0)
+        | (student_item_expected_correct > 1.0)
+    ):
+        raise ValueError("student-item expected correctness must be finite and in [0, 1]")
+
     return {
         "student_concept_count": torch.from_numpy(student_concept_count),
         "student_concept_correct": torch.from_numpy(student_concept_correct),
+        "student_concept_residual_sum": torch.from_numpy(
+            student_concept_residual_sum
+        ),
+        "student_item_keys": torch.from_numpy(student_item_keys),
+        "student_item_expected_correct": torch.from_numpy(
+            student_item_expected_correct
+        ),
         "concept_count": torch.from_numpy(concept_count),
         "concept_correct": torch.from_numpy(concept_correct),
         "global_count": torch.tensor(global_count, dtype=torch.float32),

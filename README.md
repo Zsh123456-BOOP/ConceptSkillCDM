@@ -1,8 +1,8 @@
 # ConceptSkillCDM
 
-本仓库当前实现一条单一、可审计的 **Response-Evidence Graph-IRT** 认知诊断主线。旧 CRG/LCRF 中的 personal posterior、roadmap/tutor 残差和多套预测分支已被移除；v8 只恢复其真正有用的 train-only 学生—概念响应证据，并在训练时对当前样本做精确 leave-one-out，避免旧统计先验把目标标签复制回输入。
+本仓库当前实现一条单一、可审计的 **Response-Evidence Graph-IRT** 认知诊断主线。旧 CRG/LCRF 中的 personal posterior、roadmap/tutor 残差和多套预测分支已被移除；v9 使用 train-only 学生—概念响应证据，并在训练时对当前样本做精确 leave-one-out，避免旧统计先验把目标标签复制回输入。
 
-此前已由真实输出证实有害的学生—题目协同图和逐概念题目难度偏移仍保持物理删除，不以关闭开关留在生产主线。v8 保留单一 Q-masked 2PL，并用固定的 BCE + pairwise-AUC 目标直接缓解训练目标与最终 AUC 的错位。
+此前已由真实输出证实有害的学生—题目协同图和逐概念题目难度偏移仍保持物理删除，不以关闭开关留在生产主线。v9 保留单一 Q-masked 2PL；响应证据由原始概念正确率与题目难度校正残差两个充分统计通道组成，不增加额外预测 logit 分支。
 
 ## 模型主线
 
@@ -11,12 +11,12 @@
 - item co-occurrence：同一题目的概念共现；
 - student co-exposure：同一学生在训练集中接触过的概念共现；该证据与 CSV 行顺序无关；
 - self-loop：概念自身状态保留。
-- response evidence：学生在各概念上的正确数/作答数充分统计。训练样本减去自身标签和计数后再形成证据；验证/测试只读取完整 train 统计。
+- response evidence：学生在各概念上的正确数/作答数，以及 `实际结果−该题在其他学生中的期望正确率`。训练样本精确减去自身标签、计数和残差；验证/测试只读取完整 train 统计。
 
 前向路径只有一条：
 
 ```text
-train-only Q/student-exposure metadata + leave-one-out response evidence
+train-only Q/student-exposure metadata + two-channel leave-one-out response evidence
         -> row-stochastic concept graph
         -> evidence-initialized student + concept state
         -> graph message passing
