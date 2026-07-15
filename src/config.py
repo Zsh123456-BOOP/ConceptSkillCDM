@@ -7,6 +7,11 @@ from typing import Any, Dict, Iterable, Set
 
 PAIRWISE_AUC_WEIGHT: float = 0.5
 EMA_DECAY: float = 0.9
+# Train-time probability of zeroing a row's evidence anchor.  Fixed by the
+# architecture (not a per-dataset knob): it stops the state readout from
+# co-adapting with the sufficient-statistic shortcut during training, while
+# validation and test always see the full anchor.
+EVIDENCE_ANCHOR_DROPOUT: float = 0.25
 
 
 _BASE_DEFAULTS: Dict[str, Any] = {

@@ -19,6 +19,7 @@ from typing import Dict, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
+from src.config import EVIDENCE_ANCHOR_DROPOUT
 from src.model_graph import MultiHeadRelationLearning, StudentKnowledgeEncoder
 from src.model_regularization import get_regularization_components as _get_regularization_components
 from src.prediction_head import CognitiveDiagnosisHead, ExerciseDifficultyEncoder
@@ -476,6 +477,23 @@ class CognitiveDiagnosisModel(nn.Module):
 
         difficulty, discrimination = self.exercise_encoder(exercise_ids)
         evidence_anchor = self._compose_evidence_anchor(relation_matrices, response_evidence)
+        if (
+            evidence_anchor is not None
+            and self.training
+            and EVIDENCE_ANCHOR_DROPOUT > 0.0
+        ):
+            # Row-level evidence dropout: the state path must stay predictive
+            # on its own, so it cannot co-adapt with the statistic shortcut.
+            keep = (
+                torch.rand(
+                    evidence_anchor.size(0),
+                    1,
+                    1,
+                    device=evidence_anchor.device,
+                )
+                >= EVIDENCE_ANCHOR_DROPOUT
+            ).to(dtype=evidence_anchor.dtype)
+            evidence_anchor = evidence_anchor * keep
         if return_details:
             irt_logit, head_details = self.diagnosis_head(
                 knowledge_state=knowledge_state,
