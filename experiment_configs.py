@@ -16,7 +16,9 @@ EXPERIMENT_CONFIGS: Dict[str, Dict[str, Any]] = {
     for dataset, config in DATASET_DEFAULTS.items()
 }
 
+# Keep the plateau scheduler ahead of early stopping so the learning rate can
+# decay at least once on the large public benchmarks.
 for _dataset in ("frcsub", "math2", "assist_12", "assist_15", "nips34", "nips34_l3"):
-    EXPERIMENT_CONFIGS[_dataset].update(epochs=45, early_stop_patience=8, patience=8)
+    EXPERIMENT_CONFIGS[_dataset].update(epochs=45, early_stop_patience=10, patience=4)
 
 DEFAULT_SEEDS = [42]

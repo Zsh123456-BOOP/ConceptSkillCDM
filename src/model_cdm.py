@@ -146,6 +146,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.diagnosis_head = CognitiveDiagnosisHead(
             knowledge_dim=self.knowledge_dim,
             num_concepts=self.num_concepts,
+            evidence_anchor_channels=3 if self.use_response_evidence else 0,
         )
         self.exercise_encoder = ExerciseDifficultyEncoder(num_exercises=self.num_exercises)
 
@@ -346,6 +347,33 @@ class CognitiveDiagnosisModel(nn.Module):
         ).clamp(min=-1.0, max=1.0)
         return torch.stack((rate_evidence, residual_evidence), dim=-1)
 
+    def _compose_evidence_anchor(
+        self,
+        relation_matrices: torch.Tensor,
+        response_evidence: Optional[torch.Tensor],
+    ) -> Optional[torch.Tensor]:
+        """Stack direct, residual, and graph-propagated evidence channels.
+
+        The propagated channel transports each row's leave-one-out rate
+        evidence over the learned row-stochastic concept graph, so concepts
+        without direct observations receive the evidence of their graph
+        neighbours.  All inputs are train-only statistics; the map is linear,
+        so the leave-one-out contract is preserved exactly.
+        """
+        if response_evidence is None:
+            return None
+        rate_evidence = response_evidence[..., 0]
+        residual_evidence = response_evidence[..., 1]
+        receiver_weights = relation_matrices.mean(dim=0).transpose(0, 1)
+        propagated_evidence = torch.matmul(
+            rate_evidence.to(dtype=receiver_weights.dtype),
+            receiver_weights,
+        )
+        return torch.stack(
+            (rate_evidence, residual_evidence, propagated_evidence),
+            dim=-1,
+        )
+
     @staticmethod
     def _build_item_prior_from_q(q_matrix: torch.Tensor, num_concepts: int) -> torch.Tensor:
         count = int(num_concepts)
@@ -431,12 +459,14 @@ class CognitiveDiagnosisModel(nn.Module):
         )
 
         difficulty, discrimination = self.exercise_encoder(exercise_ids)
+        evidence_anchor = self._compose_evidence_anchor(relation_matrices, response_evidence)
         if return_details:
             irt_logit, head_details = self.diagnosis_head(
                 knowledge_state=knowledge_state,
                 concept_mask=q_vector,
                 b=difficulty,
                 a=discrimination,
+                evidence_anchor=evidence_anchor,
                 return_details=True,
             )
         else:
@@ -445,6 +475,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 concept_mask=q_vector,
                 b=difficulty,
                 a=discrimination,
+                evidence_anchor=evidence_anchor,
                 return_details=False,
             )
             head_details = None
@@ -474,6 +505,11 @@ class CognitiveDiagnosisModel(nn.Module):
                 response_evidence.detach()
                 if response_evidence is not None
                 else q_vector.detach().new_zeros((*q_vector.shape, 2))
+            ),
+            "evidence_anchor": (
+                evidence_anchor.detach()
+                if evidence_anchor is not None
+                else q_vector.detach().new_zeros((*q_vector.shape, 3))
             ),
             "response_evidence_leave_one_out": q_vector.detach().new_tensor(
                 float(outcome_to_exclude is not None)
@@ -530,6 +566,15 @@ class CognitiveDiagnosisModel(nn.Module):
                 )
                 concept_state = knowledge_state.squeeze(0)
                 concept_theta = self.diagnosis_head.theta_proj(concept_state).squeeze(-1)
+                evidence_anchor = self._compose_evidence_anchor(
+                    relation_matrices,
+                    response_evidence,
+                )
+                if evidence_anchor is not None:
+                    anchor_weights = self.diagnosis_head.evidence_anchor_weights()
+                    concept_theta = concept_theta + (
+                        evidence_anchor.squeeze(0) * anchor_weights
+                    ).sum(dim=-1)
                 return {
                     "knowledge_mastery": torch.sigmoid(concept_theta),
                     "student_repr": concept_state.mean(dim=0),

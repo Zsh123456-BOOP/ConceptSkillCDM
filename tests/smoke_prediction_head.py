@@ -75,6 +75,68 @@ def main() -> None:
         a=torch.tensor([2.0]),
     )
     assert torch.equal(deterministic_logit, torch.tensor([3.0]))
+
+    # Evidence-anchored head: theta_c is shifted by non-negative channel
+    # weights before the single 2PL readout; no second logit path appears.
+    anchored = CognitiveDiagnosisHead(
+        knowledge_dim=4,
+        num_concepts=3,
+        evidence_anchor_channels=3,
+    )
+    assert set(dict(anchored.named_parameters())) == {
+        "theta_proj.weight",
+        "theta_proj.bias",
+        "evidence_anchor_raw",
+    }
+    assert (anchored.evidence_anchor_weights() > 0).all()
+    anchor = torch.zeros(2, 3, 3)
+    base_logits = anchored(
+        knowledge_state=state.detach(),
+        concept_mask=mask,
+        b=difficulty.detach(),
+        a=discrimination.detach(),
+        evidence_anchor=anchor,
+    )
+    lifted = anchor.clone()
+    lifted[:, 0, 0] = 1.0  # raise direct evidence on a Q-masked concept
+    lifted_logits = anchored(
+        knowledge_state=state.detach(),
+        concept_mask=mask,
+        b=difficulty.detach(),
+        a=discrimination.detach(),
+        evidence_anchor=lifted,
+    )
+    assert (lifted_logits > base_logits).all(), "positive evidence must not lower the logit"
+
+    for bad_call in (
+        lambda: anchored(
+            knowledge_state=state.detach(),
+            concept_mask=mask,
+            b=difficulty.detach(),
+            a=discrimination.detach(),
+        ),
+        lambda: head(
+            knowledge_state=state.detach(),
+            concept_mask=mask,
+            b=difficulty.detach(),
+            a=discrimination.detach(),
+            evidence_anchor=anchor,
+        ),
+        lambda: anchored(
+            knowledge_state=state.detach(),
+            concept_mask=mask,
+            b=difficulty.detach(),
+            a=discrimination.detach(),
+            evidence_anchor=torch.zeros(2, 3, 2),
+        ),
+    ):
+        try:
+            bad_call()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("anchor contract violation must raise")
+
     print("OK: Q-masked scalar-difficulty 2PL contracts passed.")
 
 
