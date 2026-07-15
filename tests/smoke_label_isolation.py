@@ -148,7 +148,7 @@ def main() -> None:
         + list(no_evidence.named_buffers())
     }
     assert not any("response_" in name for name in no_evidence_names)
-    assert GRAPH_IRT_ARCHITECTURE == "graph_irt_v9"
+    assert GRAPH_IRT_ARCHITECTURE == "graph_irt_v10"
     print("OK: train response evidence is target-safe under exact leave-one-out.")
 
 
