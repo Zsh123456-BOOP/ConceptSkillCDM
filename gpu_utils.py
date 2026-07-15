@@ -143,29 +143,6 @@ def get_best_gpus(
     return selected
 
 
-def pick_gpus_for_job(
-    required: int,
-    all_gpus: List[int],
-    gpu_load: Dict[int, int],
-    max_per_gpu: int,
-    memory_threshold: int = 2000,
-) -> Optional[List[int]]:
-    """
-    Pick multiple GPUs for one job:
-    - only choose GPUs that still have free slots
-    - prefer GPUs with higher free memory
-    """
-    required = max(1, int(required))
-    available = [gid for gid in all_gpus if gpu_load.get(gid, 0) < max_per_gpu]
-    if len(available) < required:
-        return None
-
-    selected = get_best_gpus(n=required, candidates=available, memory_threshold=memory_threshold)
-    if len(selected) < required:
-        selected = available[:required]
-    return selected
-
-
 def pick_gpu_with_slot_round_robin(
     gpus: List[int],
     gpu_load: Dict[int, int],

@@ -1,0 +1,94 @@
+import sys
+from pathlib import Path
+from unittest import mock
+
+import torch
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.model_graph import ConceptGraphConv, StudentKnowledgeEncoder
+
+
+def _encoder(alpha: float) -> StudentKnowledgeEncoder:
+    torch.manual_seed(7)
+    enc = StudentKnowledgeEncoder(
+        num_students=3,
+        num_concepts=4,
+        knowledge_dim=5,
+        num_gnn_layers=1,
+        num_relation_heads=2,
+        dropout=0.0,
+        gnn_residual_weight=0.5,
+        propagation_alpha=alpha,
+    )
+    enc.eval()
+    return enc
+
+
+def _relations() -> torch.Tensor:
+    return torch.tensor(
+        [
+            [
+                [0.70, 0.20, 0.10, 0.00],
+                [0.10, 0.70, 0.20, 0.00],
+                [0.00, 0.20, 0.70, 0.10],
+                [0.10, 0.00, 0.20, 0.70],
+            ],
+            [
+                [0.60, 0.00, 0.30, 0.10],
+                [0.20, 0.60, 0.00, 0.20],
+                [0.10, 0.30, 0.60, 0.00],
+                [0.00, 0.20, 0.20, 0.60],
+            ],
+        ],
+        dtype=torch.float32,
+    )
+
+
+def test_graph_propagation_alpha_zero_preserves_initial_state() -> None:
+    student_ids = torch.tensor([0, 1, 2], dtype=torch.long)
+    enc = _encoder(alpha=0.0)
+    with torch.no_grad():
+        initial = enc.compose_initial_state(student_ids)
+        out = enc(student_ids, _relations())
+    assert torch.allclose(out, initial, atol=1e-6), "alpha=0 should disable graph state updates"
+
+
+def test_graph_propagation_alpha_controls_update_strength() -> None:
+    student_ids = torch.tensor([0, 1, 2], dtype=torch.long)
+    low = _encoder(alpha=0.05)
+    high = _encoder(alpha=0.50)
+    high.load_state_dict(low.state_dict())
+    with torch.no_grad():
+        initial = low.compose_initial_state(student_ids)
+        low_delta = (low(student_ids, _relations()) - initial).pow(2).mean().sqrt()
+        high_delta = (high(student_ids, _relations()) - initial).pow(2).mean().sqrt()
+    assert high_delta > low_delta * 2.0, "larger alpha should produce a stronger graph update"
+
+
+def test_large_topk_graph_uses_exact_sparse_propagation() -> None:
+    concept_count = ConceptGraphConv.SPARSE_CONCEPT_THRESHOLD + 1
+    conv = ConceptGraphConv(5, 5, num_heads=1, dropout=0.0).eval()
+    states = torch.randn(3, concept_count, 5)
+    relation = torch.eye(concept_count).unsqueeze(0).requires_grad_(True)
+    transformed = conv.head_transforms[0](states)
+    expected = torch.matmul(relation[0], transformed) + conv.bias
+    with mock.patch("torch.sparse.mm", wraps=torch.sparse.mm) as sparse_mm:
+        actual = conv(states, relation)
+    assert sparse_mm.call_count == 1
+    assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
+    actual.sum().backward()
+    assert relation.grad is not None and torch.isfinite(relation.grad).all()
+
+
+def main() -> None:
+    test_graph_propagation_alpha_zero_preserves_initial_state()
+    test_graph_propagation_alpha_controls_update_strength()
+    test_large_topk_graph_uses_exact_sparse_propagation()
+    print("OK: graph propagation alpha semantics passed.")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run full-model baselines for the public benchmark datasets.
+# Run the full Graph-IRT baseline on public benchmark datasets.
 # Usage:
 #   bash tools/run_public_full.sh
 #
@@ -42,6 +42,7 @@ echo "python=${PYTHON_BIN}"
 
 declare -A GPU_PID=()
 declare -A GPU_DATASET=()
+FAILED=0
 
 wait_for_gpu() {
   local gpu="$1"
@@ -54,6 +55,7 @@ wait_for_gpu() {
     else
       local code="$?"
       echo "[failed] gpu=${gpu} dataset=${dataset} pid=${pid} exit=${code}" >&2
+      FAILED=1
     fi
     unset "GPU_PID[$gpu]"
     unset "GPU_DATASET[$gpu]"
@@ -96,8 +98,5 @@ for gpu in "${GPUS_ARR[@]}"; do
   wait_for_gpu "$gpu"
 done
 
-"$PYTHON_BIN" - <<'PY'
-from pathlib import Path
-run_id = Path("logs").glob("public_full_*")
-print("[summary] runs are under logs/<RUN_ID>, checkpoints/<RUN_ID>, results/<RUN_ID>")
-PY
+echo "[summary] outputs: logs/${RUN_ID}, checkpoints/${RUN_ID}, results/${RUN_ID}"
+exit "$FAILED"
