@@ -314,6 +314,11 @@ class MultiHeadRelationLearning(nn.Module):
 class ConceptGraphConv(nn.Module):
     """Multi-head graph convolution over a single global concept graph."""
 
+    # Dense matmul is faster for the small graphs used by ASSIST/Junyi.  Above
+    # this size, top-k relation matrices are overwhelmingly sparse and COO SpMM
+    # avoids the quadratic compute/memory blow-up of MOOCRadar/XES3G5M.
+    SPARSE_CONCEPT_THRESHOLD = 192
+
     def __init__(self, in_features: int, out_features: int, num_heads: int = 4, dropout: float = 0.1):
         super().__init__()
         self.num_heads = int(num_heads)
@@ -341,7 +346,26 @@ class ConceptGraphConv(nn.Module):
             transformed = transform(states)
             adjacency = relation_matrices[head].to(dtype=transformed.dtype)
             adjacency = adjacency / adjacency.sum(dim=-1, keepdim=True).clamp(min=1e-12)
-            outputs.append(torch.matmul(adjacency, transformed))
+            if int(adjacency.size(0)) >= self.SPARSE_CONCEPT_THRESHOLD:
+                concept_count = int(transformed.size(1))
+                batch_size = int(transformed.size(0))
+                feature_count = int(transformed.size(2))
+                flattened = transformed.permute(1, 0, 2).reshape(
+                    concept_count,
+                    batch_size * feature_count,
+                )
+                propagated = torch.sparse.mm(
+                    adjacency.to_sparse_coo().coalesce(),
+                    flattened,
+                )
+                propagated = propagated.reshape(
+                    concept_count,
+                    batch_size,
+                    feature_count,
+                ).permute(1, 0, 2)
+                outputs.append(propagated)
+            else:
+                outputs.append(torch.matmul(adjacency, transformed))
         stacked = torch.stack(outputs, dim=0)
         weights = F.softmax(self.head_attention, dim=0).view(-1, 1, 1, 1)
         return self.dropout((stacked * weights).sum(dim=0) + self.bias)

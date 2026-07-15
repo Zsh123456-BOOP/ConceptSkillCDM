@@ -56,7 +56,7 @@ details["logits"] == details["irt_logit"]
 
 ```bash
 python run_graph_ablation.py \
-  --datasets assist_09,assist_17,junyi \
+  --datasets assist_09,assist_17,junyi,moocradar,xes3g5m \
   --ablations full,no_pairwise_loss,no_message_passing,item_only,exposure_only,degree_random \
   --seeds 42 \
   --run_mode train \

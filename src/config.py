@@ -193,6 +193,31 @@ DATASET_DEFAULTS["nips34_l3"] = {
     "data_dir": "./data/nips34_l3",
 }
 
+# DFCD/KnoField random-split exports. Preserve every supplied row so the
+# reported metrics remain comparable with the source benchmark. Capacity is
+# reduced only to offset their larger concept vocabularies (696 / 241).
+DATASET_DEFAULTS["moocradar"] = {
+    **_PUBLIC_BENCHMARK_DEFAULTS,
+    "data_dir": "./data/moocradar",
+    "batch_size": 128,
+    "knowledge_dim": 32,
+    "num_relation_heads": 2,
+    "num_gnn_layers": 1,
+    "dropout": 0.20,
+    "graph_topk": 12,
+}
+
+DATASET_DEFAULTS["xes3g5m"] = {
+    **_PUBLIC_BENCHMARK_DEFAULTS,
+    "data_dir": "./data/xes3g5m",
+    "batch_size": 256,
+    "knowledge_dim": 64,
+    "num_relation_heads": 2,
+    "num_gnn_layers": 1,
+    "dropout": 0.20,
+    "graph_topk": 12,
+}
+
 DATASET_DEFAULTS["ednet_kt1"] = {
     **_PUBLIC_BENCHMARK_DEFAULTS,
     "data_dir": "./data/ednet_kt1",

@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+from unittest import mock
 
 import torch
 
@@ -7,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.model_graph import StudentKnowledgeEncoder
+from src.model_graph import ConceptGraphConv, StudentKnowledgeEncoder
 
 
 def _encoder(alpha: float) -> StudentKnowledgeEncoder:
@@ -67,9 +68,25 @@ def test_graph_propagation_alpha_controls_update_strength() -> None:
     assert high_delta > low_delta * 2.0, "larger alpha should produce a stronger graph update"
 
 
+def test_large_topk_graph_uses_exact_sparse_propagation() -> None:
+    concept_count = ConceptGraphConv.SPARSE_CONCEPT_THRESHOLD + 1
+    conv = ConceptGraphConv(5, 5, num_heads=1, dropout=0.0).eval()
+    states = torch.randn(3, concept_count, 5)
+    relation = torch.eye(concept_count).unsqueeze(0).requires_grad_(True)
+    transformed = conv.head_transforms[0](states)
+    expected = torch.matmul(relation[0], transformed) + conv.bias
+    with mock.patch("torch.sparse.mm", wraps=torch.sparse.mm) as sparse_mm:
+        actual = conv(states, relation)
+    assert sparse_mm.call_count == 1
+    assert torch.allclose(actual, expected, atol=1e-6, rtol=1e-6)
+    actual.sum().backward()
+    assert relation.grad is not None and torch.isfinite(relation.grad).all()
+
+
 def main() -> None:
     test_graph_propagation_alpha_zero_preserves_initial_state()
     test_graph_propagation_alpha_controls_update_strength()
+    test_large_topk_graph_uses_exact_sparse_propagation()
     print("OK: graph propagation alpha semantics passed.")
 
 
