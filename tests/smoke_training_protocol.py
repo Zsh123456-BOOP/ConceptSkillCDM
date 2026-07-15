@@ -57,7 +57,7 @@ def main() -> None:
     assert args.run_mode == "train"
     assert main_module.parse_args(["--run_mode", "train"]).run_mode == "train"
     assert main_module.parse_args(["--run_mode", "test"]).run_mode == "test"
-    assert GRAPH_IRT_ARCHITECTURE == "graph_irt_v7"
+    assert GRAPH_IRT_ARCHITECTURE == "graph_irt_v8"
     assert PAIRWISE_AUC_WEIGHT == 0.5
     parser_dests = {action.dest for action in main_module.build_parser()._actions}
     assert "pairwise_auc_weight" not in parser_dests
@@ -75,6 +75,13 @@ def main() -> None:
         variant_args = main_module.parse_args(["--model_variant", variant])
         main_module._apply_model_variant(variant_args)
         assert variant_args.pairwise_auc_weight == PAIRWISE_AUC_WEIGHT
+        assert variant_args.use_response_evidence
+    no_evidence_args = main_module.parse_args(
+        ["--model_variant", "no_response_evidence"]
+    )
+    main_module._apply_model_variant(no_evidence_args)
+    assert not no_evidence_args.use_response_evidence
+    assert no_evidence_args.pairwise_auc_weight == PAIRWISE_AUC_WEIGHT
     no_pairwise_args = main_module.parse_args(
         ["--model_variant", "no_pairwise_loss"]
     )

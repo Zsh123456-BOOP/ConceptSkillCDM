@@ -42,6 +42,7 @@ MONITOR_MODE = "max"
 
 STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "architecture",
+    "use_response_evidence",
     "graph_prior_mode",
     "graph_topk",
     "disable_self_loop",
@@ -185,6 +186,10 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "q_matrix": info_dict["q_matrix"],
         "item_prior_matrix": info_dict.get("item_prior_matrix"),
         "exposure_prior_matrix": info_dict.get("exposure_prior_matrix"),
+        "response_evidence_stats": info_dict.get("response_evidence_stats"),
+        "use_response_evidence": bool(
+            _source_get(source, "use_response_evidence", True)
+        ),
         "knowledge_dim": int(_source_get(source, "knowledge_dim", 32)),
         "num_relation_heads": int(_source_get(source, "num_relation_heads", 4)),
         "num_gnn_layers": max(0, int(_source_get(source, "num_gnn_layers", 0))),
@@ -219,6 +224,9 @@ def _runtime_facts(model: nn.Module) -> Dict[str, Any]:
     return {
         "architecture": ARCHITECTURE_NAME,
         "graph_enabled": bool(relation_learning is not None),
+        "response_evidence_enabled": bool(
+            getattr(base_model, "use_response_evidence", False)
+        ),
         "num_parameters": int(sum(parameter.numel() for parameter in base_model.parameters())),
         "num_trainable_parameters": int(
             sum(parameter.numel() for parameter in base_model.parameters() if parameter.requires_grad)
@@ -231,10 +239,11 @@ def _log_runtime_facts(model: nn.Module, logger, context: str) -> Dict[str, Any]
     if not facts["graph_enabled"]:
         raise RuntimeError("Graph-IRT requires relation_learning to be present.")
     logger.info(
-        "%s Architecture=%s | concept_graph=%s | params=%s trainable=%s",
+        "%s Architecture=%s | concept_graph=%s | response_evidence=%s | params=%s trainable=%s",
         context,
         facts["architecture"],
         facts["graph_enabled"],
+        facts["response_evidence_enabled"],
         f"{facts['num_parameters']:,}",
         f"{facts['num_trainable_parameters']:,}",
     )
@@ -248,6 +257,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "dataset_name",
         "data_dir",
         "model_variant",
+        "use_response_evidence",
         "seed",
         "batch_size",
         "epochs",
@@ -535,6 +545,7 @@ def _run_epoch(
             logits, details = model(
                 student_ids,
                 exercise_ids,
+                outcome_to_exclude=labels if is_train else None,
                 return_details=True,
                 return_logits=True,
             )

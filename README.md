@@ -1,35 +1,36 @@
 # ConceptSkillCDM
 
-本仓库当前实现一条单一、可审计的 **Graph-IRT** 认知诊断主线。此前的 CRG/LCRF reachability 假设、全训练集标签统计先验和多套预测残差已被移除：现有三元组数据接口无法提供严格的 query-time 历史前缀，继续保留这些分支会把实验性捷径误写成因果机制。
+本仓库当前实现一条单一、可审计的 **Response-Evidence Graph-IRT** 认知诊断主线。旧 CRG/LCRF 中的 personal posterior、roadmap/tutor 残差和多套预测分支已被移除；v8 只恢复其真正有用的 train-only 学生—概念响应证据，并在训练时对当前样本做精确 leave-one-out，避免旧统计先验把目标标签复制回输入。
 
-当前 v7 是一次基于真实输出的结构减法。v6 的学生—题目协同图使 assist09 前两轮 validation AUC 从无协同对照的 0.7616/0.7673 降到 0.6932/0.7056；逐概念题目难度偏移又从 0.2375 膨胀到 0.5302，同时 validation 下降。两者均已完整删除，不以关闭开关留在生产主线。现有模型回到单一 Q-masked 2PL，并用固定的 BCE + pairwise-AUC 目标直接缓解训练目标与最终 AUC 的错位。
+此前已由真实输出证实有害的学生—题目协同图和逐概念题目难度偏移仍保持物理删除，不以关闭开关留在生产主线。v8 保留单一 Q-masked 2PL，并用固定的 BCE + pairwise-AUC 目标直接缓解训练目标与最终 AUC 的错位。
 
 ## 模型主线
 
-图的先验支持与初始强度只使用训练集中的无标签元数据证据：
+模型只使用训练集构建两类证据：
 
 - item co-occurrence：同一题目的概念共现；
 - student co-exposure：同一学生在训练集中接触过的概念共现；该证据与 CSV 行顺序无关；
 - self-loop：概念自身状态保留。
+- response evidence：学生在各概念上的正确数/作答数充分统计。训练样本减去自身标签和计数后再形成证据；验证/测试只读取完整 train 统计。
 
 前向路径只有一条：
 
 ```text
-train-only Q/student-exposure metadata
+train-only Q/student-exposure metadata + leave-one-out response evidence
         -> row-stochastic concept graph
-        -> student + concept state
+        -> evidence-initialized student + concept state
         -> graph message passing
         -> Q-masked scalar ability + scalar item difficulty/discrimination
         -> 2PL-IRT logit
 ```
 
-关系强度、receiver bias、self-loop 和 temperature 通过联合训练目标的梯度学习；但标签不会被预计算成学生/题目/概念特征或 buffer。代码级不变量是：
+关系强度、receiver bias、self-loop 和 temperature 通过联合训练目标的梯度学习。标签统计仅以原始 correct/count 充分统计保存；训练前向会减掉当前行，验证与测试不会读取自身 split 标签。代码级不变量仍是：
 
 ```python
 details["logits"] == details["irt_logit"]
 ```
 
-训练 batch 同时计算 BCE 与全体正负样本 logit 差的 pairwise logistic surrogate，固定等权组合；单类 batch 自动退回 BCE。标签只进入 loss，不进入模型输入、图、buffer 或 checkpoint 特征。没有 personal posterior、统计 target encoding、query correction、theta calibration、学生—题目协同图、逐概念题目难度或额外 logit residual。已经验证无效的 Hadamard、student-concept low-rank、ratio-cap 和 Q-item matching 也已删除。这个模型应被描述为静态概念图认知诊断模型，不应再声称解决 concept reachability 或 evidence-gap transfer。
+训练 batch 同时计算 BCE 与全体正负样本 logit 差的 pairwise logistic surrogate，固定等权组合；单类 batch 自动退回 BCE。没有 personal posterior、query correction、theta calibration、学生—题目协同图、逐概念题目难度或额外 logit residual。已经验证无效的 Hadamard、student-concept low-rank、ratio-cap 和 Q-item matching 也已删除。
 
 ## 代码入口
 
@@ -46,6 +47,7 @@ details["logits"] == details["irt_logit"]
 只保留以下互不混淆的变体：
 
 - `full`：概念图与固定 BCE + pairwise-AUC 训练目标均启用。
+- `no_response_evidence`：完整移除 train 响应证据 buffer 与投影，仅保留自由 student/concept 状态。
 - `no_pairwise_loss`：模型完全相同，只把训练目标恢复为纯 BCE。
 - `no_message_passing`：令 `graph_propagation_alpha=0`，输出状态严格等于初始 student+concept state。
 - `item_only`：只使用题目概念共现。
@@ -57,7 +59,7 @@ details["logits"] == details["irt_logit"]
 ```bash
 python run_graph_ablation.py \
   --datasets assist_09,assist_17,junyi,moocradar,xes3g5m \
-  --ablations full,no_pairwise_loss,no_message_passing,item_only,exposure_only,degree_random \
+  --ablations full,no_response_evidence,no_pairwise_loss,no_message_passing,item_only,exposure_only,degree_random \
   --seeds 42 \
   --run_mode train \
   --gpus 0 \

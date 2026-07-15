@@ -372,7 +372,7 @@ class ConceptGraphConv(nn.Module):
 
 
 class StudentKnowledgeEncoder(nn.Module):
-    """Encode one concept state per student through the global concept graph."""
+    """Encode train-evidence-initialized concept states through the global graph."""
 
     def __init__(
         self,
@@ -384,6 +384,7 @@ class StudentKnowledgeEncoder(nn.Module):
         dropout: float = 0.1,
         gnn_residual_weight: float = 0.5,
         propagation_alpha: float = 0.20,
+        use_response_evidence: bool = False,
     ):
         super().__init__()
         self.num_students = int(num_students)
@@ -391,8 +392,14 @@ class StudentKnowledgeEncoder(nn.Module):
         self.knowledge_dim = int(knowledge_dim)
         self.gnn_residual_weight = float(gnn_residual_weight)
         self.propagation_alpha = max(0.0, min(1.0, float(propagation_alpha)))
+        self.use_response_evidence = bool(use_response_evidence)
         self.student_global = nn.Embedding(self.num_students, self.knowledge_dim)
         self.concept_emb = nn.Embedding(self.num_concepts, self.knowledge_dim)
+        self.response_evidence_proj = (
+            nn.Linear(1, self.knowledge_dim, bias=False)
+            if self.use_response_evidence
+            else None
+        )
         self.gnn_layers = nn.ModuleList(
             ConceptGraphConv(
                 self.knowledge_dim,
@@ -409,23 +416,41 @@ class StudentKnowledgeEncoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
         nn.init.xavier_normal_(self.student_global.weight)
         nn.init.xavier_normal_(self.concept_emb.weight)
+        if self.response_evidence_proj is not None:
+            nn.init.normal_(self.response_evidence_proj.weight, mean=0.0, std=0.02)
 
     def compose_initial_state(
         self,
         student_ids: torch.Tensor,
+        response_evidence: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         students = self.student_global(student_ids)
         concepts = self.concept_emb.weight.unsqueeze(0).expand(student_ids.size(0), -1, -1)
-        return self.dropout(concepts + students.unsqueeze(1))
+        initial = concepts + students.unsqueeze(1)
+        if response_evidence is not None:
+            if self.response_evidence_proj is None:
+                raise ValueError("response_evidence was supplied to a disabled evidence encoder")
+            expected = (student_ids.size(0), self.num_concepts)
+            if tuple(response_evidence.shape) != expected:
+                raise ValueError(
+                    f"response_evidence must have shape {expected}, got {tuple(response_evidence.shape)}"
+                )
+            evidence = response_evidence.to(device=initial.device, dtype=initial.dtype)
+            initial = initial + self.response_evidence_proj(evidence.unsqueeze(-1))
+        return self.dropout(initial)
 
     def forward(
         self,
         student_ids: torch.Tensor,
         relation_matrices: torch.Tensor,
         *,
+        response_evidence: Optional[torch.Tensor] = None,
         return_initial: bool = False,
     ):
-        initial = self.compose_initial_state(student_ids)
+        initial = self.compose_initial_state(
+            student_ids,
+            response_evidence=response_evidence,
+        )
         if self.propagation_alpha == 0.0 or not self.gnn_layers:
             return (initial, initial) if return_initial else initial
         state = initial

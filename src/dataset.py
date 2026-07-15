@@ -200,6 +200,69 @@ def build_q_matrix(
     return q_matrix
 
 
+def build_student_concept_response_stats(
+    train_df: pd.DataFrame,
+    stu_id_map: Dict[int, int],
+    exer_id_map: Dict[int, int],
+    q_matrix: torch.Tensor,
+) -> Dict[str, torch.Tensor]:
+    """Aggregate train-only response evidence without materializing row-by-concept data.
+
+    The returned tensors contain raw sufficient statistics.  Training removes
+    the current row from these totals before the model consumes them; valid and
+    test rows use the complete training totals.  Keeping counts and correct
+    sums separate makes that leave-one-out contract exact and auditable.
+    """
+    num_students = len(stu_id_map)
+    num_concepts = int(q_matrix.size(1))
+    student_concept_count = np.zeros((num_students, num_concepts), dtype=np.float32)
+    student_concept_correct = np.zeros((num_students, num_concepts), dtype=np.float32)
+    concept_count = np.zeros(num_concepts, dtype=np.float32)
+    concept_correct = np.zeros(num_concepts, dtype=np.float32)
+    concepts_by_exercise = [
+        torch.nonzero(row > 0, as_tuple=False).reshape(-1).cpu().numpy()
+        for row in q_matrix
+    ]
+
+    global_count = 0.0
+    global_correct = 0.0
+    for raw_student, raw_exercise, raw_label in zip(
+        train_df["stu_id"].values,
+        train_df["exer_id"].values,
+        train_df["label"].values,
+    ):
+        student = stu_id_map.get(raw_student)
+        exercise = exer_id_map.get(raw_exercise)
+        if student is None or exercise is None:
+            continue
+        label = float(raw_label)
+        concepts = concepts_by_exercise[exercise]
+        if concepts.size == 0:
+            continue
+        student_concept_count[student, concepts] += 1.0
+        student_concept_correct[student, concepts] += label
+        concept_count[concepts] += 1.0
+        concept_correct[concepts] += label
+        global_count += 1.0
+        global_correct += label
+
+    if global_count <= 0.0:
+        raise ValueError("response evidence requires at least one mapped training row")
+    if np.any(student_concept_correct < 0.0) or np.any(
+        student_concept_correct > student_concept_count
+    ):
+        raise ValueError("student-concept response statistics are inconsistent")
+
+    return {
+        "student_concept_count": torch.from_numpy(student_concept_count),
+        "student_concept_correct": torch.from_numpy(student_concept_correct),
+        "concept_count": torch.from_numpy(concept_count),
+        "concept_correct": torch.from_numpy(concept_correct),
+        "global_count": torch.tensor(global_count, dtype=torch.float32),
+        "global_correct": torch.tensor(global_correct, dtype=torch.float32),
+    }
+
+
 def _uniform_offdiag_prior(num_concepts: int) -> torch.Tensor:
     if num_concepts <= 0:
         raise ValueError(f"num_concepts must be positive, got {num_concepts}")
@@ -722,6 +785,20 @@ def create_dataloaders(
         _log_concept_stats("Test", test_df)
     log("[统计] 概念数量统计完成。")
 
+    response_evidence_stats = build_student_concept_response_stats(
+        train_df=train_df,
+        stu_id_map=stu_id_map,
+        exer_id_map=exer_id_map,
+        q_matrix=q_matrix,
+    )
+    observed_student_concepts = response_evidence_stats["student_concept_count"] > 0
+    log(
+        "[Response Evidence] train-only sufficient statistics: "
+        f"observed_student_concepts={int(observed_student_concepts.sum().item())}, "
+        f"coverage={float(observed_student_concepts.float().mean().item()):.2%}, "
+        f"global_rate={float(response_evidence_stats['global_correct'].item() / response_evidence_stats['global_count'].item()):.4f}"
+    )
+
     # 3. 创建数据集（直接传 DataFrame，避免重复读盘）
     log("正在加载数据集...")
     train_dataset = CognitiveDiagnosisDataset(train_df, stu_id_map, exer_id_map, cpt_id_map)
@@ -782,6 +859,7 @@ def create_dataloaders(
         'q_matrix': q_matrix,
         'item_prior_matrix': item_prior_matrix,
         'exposure_prior_matrix': exposure_prior_matrix,
+        'response_evidence_stats': response_evidence_stats,
         'graph_prior_stats': graph_prior_stats,
         'exposure_prior_disabled': bool(prior_mode in {"item_only", "degree_random"}),
         'item_prior_disabled': bool(prior_mode == "exposure_only"),

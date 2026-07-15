@@ -23,14 +23,20 @@ def main() -> None:
             "--seeds",
             "42",
             "--ablations",
-            "full,no_pairwise_loss,no_message_passing,item_only,exposure_only,degree_random",
+            "full,no_response_evidence,no_pairwise_loss,no_message_passing,item_only,exposure_only,degree_random",
             "--dry_run",
         ]
     )
     assert args.run_mode == "train"
     jobs = runner.make_jobs(args, run_id="smoke")
-    assert len(jobs) == 6
+    assert len(jobs) == 7
     by_name = {job.ablation.name: job for job in jobs}
+    no_evidence_command = by_name["no_response_evidence"].cmd
+    parsed_no_evidence = main_module.parse_args(
+        no_evidence_command[no_evidence_command.index("--dataset_name") :]
+    )
+    main_module._apply_model_variant(parsed_no_evidence)
+    assert not parsed_no_evidence.use_response_evidence
     no_pairwise_command = by_name["no_pairwise_loss"].cmd
     assert "--model_variant" in no_pairwise_command
     assert no_pairwise_command[no_pairwise_command.index("--model_variant") + 1] == "no_pairwise_loss"
