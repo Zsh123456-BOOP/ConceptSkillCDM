@@ -394,6 +394,10 @@ class StudentKnowledgeEncoder(nn.Module):
         self.propagation_alpha = max(0.0, min(1.0, float(propagation_alpha)))
         self.use_response_evidence = bool(use_response_evidence)
         self.student_global = nn.Embedding(self.num_students, self.knowledge_dim)
+        # Multiplicative student profile: without it the student vector adds
+        # the same offset to every concept state, so per-concept student
+        # differentiation would rest entirely on the evidence channels.
+        self.student_profile = nn.Embedding(self.num_students, self.knowledge_dim)
         self.concept_emb = nn.Embedding(self.num_concepts, self.knowledge_dim)
         self.response_evidence_proj = (
             nn.Linear(2, self.knowledge_dim, bias=False)
@@ -415,6 +419,7 @@ class StudentKnowledgeEncoder(nn.Module):
         self.hop_mix_logits = nn.Parameter(torch.zeros(len(self.gnn_layers) + 1))
         self.dropout = nn.Dropout(dropout)
         nn.init.xavier_normal_(self.student_global.weight)
+        nn.init.normal_(self.student_profile.weight, mean=0.0, std=0.02)
         nn.init.xavier_normal_(self.concept_emb.weight)
         if self.response_evidence_proj is not None:
             nn.init.normal_(self.response_evidence_proj.weight, mean=0.0, std=0.02)
@@ -426,7 +431,8 @@ class StudentKnowledgeEncoder(nn.Module):
     ) -> torch.Tensor:
         students = self.student_global(student_ids)
         concepts = self.concept_emb.weight.unsqueeze(0).expand(student_ids.size(0), -1, -1)
-        initial = concepts + students.unsqueeze(1)
+        profile = self.student_profile(student_ids).unsqueeze(1)
+        initial = concepts + students.unsqueeze(1) + profile * concepts
         if response_evidence is not None:
             if self.response_evidence_proj is None:
                 raise ValueError("response_evidence was supplied to a disabled evidence encoder")
