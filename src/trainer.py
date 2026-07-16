@@ -896,6 +896,7 @@ def _create_loaders(args: Any, logger, *, shuffle_train: bool = True):
         seed=int(getattr(args, "seed", 42)),
         load_test=False,
         train_label_noise=float(getattr(args, "train_label_noise", 0.0)),
+        exposure_prior_pmi=bool(getattr(args, "exposure_prior_pmi", False)),
     )
     if test_loader is not None:
         raise RuntimeError("training loader unexpectedly opened the sealed test split")

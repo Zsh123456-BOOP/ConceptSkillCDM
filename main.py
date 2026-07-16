@@ -125,6 +125,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Decision probe: False routes evidence exclusively through the anchor.",
     )
     parser.add_argument(
+        "--exposure_prior_pmi",
+        type=_parse_bool,
+        nargs="?",
+        const=True,
+        default=False,
+        help="PMI-normalize co-exposure counts before row normalization (relation-identity sharpening probe).",
+    )
+    parser.add_argument(
         "--train_label_noise",
         type=float,
         default=0.0,

@@ -476,12 +476,17 @@ def build_item_cooccurrence_prior(q_matrix: torch.Tensor) -> Tuple[torch.Tensor,
 def build_student_coexposure_prior(
     train_sources: list,
     cpt_id_map: Dict[int, int],
+    pmi_normalize: bool = False,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """Build a permutation-invariant train-only student co-exposure prior.
 
     Each student contributes equal total support mass per observed concept,
     regardless of history length. This uses only ``stu_id`` and ``cpt_seq``;
     correctness labels and physical CSV row order are irrelevant.
+
+    ``pmi_normalize`` divides each co-exposure count by the geometric mean of
+    both concepts' popularity before row normalization, sharpening relation
+    identity on popularity-skewed graphs (association strength / PMI-style).
     """
     concept_count = len(cpt_id_map)
     if concept_count <= 0:
@@ -532,6 +537,11 @@ def build_student_coexposure_prior(
     eye = torch.eye(concept_count, dtype=torch.float32)
     counts *= 1.0 - eye
     observed_mask = (counts > 0).float()
+    raw_pair_mass = float(counts.sum().item())
+    if pmi_normalize:
+        popularity = counts.sum(dim=1).clamp(min=1.0)
+        counts = counts / torch.sqrt(popularity.unsqueeze(0) * popularity.unsqueeze(1))
+        counts *= 1.0 - eye
     prior = _row_normalize_offdiag_counts(counts, shrink=0.0)
     prior = _keep_observed_support_only(prior, observed_mask)
     possible = float(concept_count * (concept_count - 1))
@@ -546,7 +556,7 @@ def build_student_coexposure_prior(
         "exposure_student_count": float(len(histories)),
         "exposure_multi_concept_student_count": float(multi_concept_histories),
         "exposure_mean_concepts_per_student": mean_concepts,
-        "exposure_pair_mass": float(counts.sum().item()),
+        "exposure_pair_mass": raw_pair_mass,
         "exposure_observed_edge_count": observed,
         "exposure_prior_density": observed / possible if possible > 0 else 0.0,
         "exposure_prior_entropy": _prior_entropy(prior),
@@ -568,6 +578,7 @@ def create_dataloaders(
         seed: int = 42,
         load_test: bool = True,
         train_label_noise: float = 0.0,
+        exposure_prior_pmi: bool = False,
 ) -> Tuple[DataLoader, DataLoader, Optional[DataLoader], dict]:
     """
     创建训练、验证和测试的数据加载器，并执行统一的数据清洗
@@ -750,6 +761,7 @@ def create_dataloaders(
         exposure_prior, exposure_stats = build_student_coexposure_prior(
             train_sources=train_sources,
             cpt_id_map=cpt_id_map,
+            pmi_normalize=bool(exposure_prior_pmi),
         )
         return item_prior, item_stats, exposure_prior, exposure_stats
 
@@ -773,6 +785,7 @@ def create_dataloaders(
             exposure_prior_matrix, exposure_prior_stats = build_student_coexposure_prior(
                 train_sources=train_sources,
                 cpt_id_map=cpt_id_map,
+                pmi_normalize=bool(exposure_prior_pmi),
             )
     graph_prior_stats = {**item_prior_stats, **exposure_prior_stats}
     graph_prior_stats["graph_prior_mode"] = prior_mode
