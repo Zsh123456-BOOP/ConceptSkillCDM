@@ -156,12 +156,20 @@ def main() -> None:
 
     checkpoint_pairwise = _checkpoint_args(
         SimpleNamespace(
-            model_variant="full",
+            model_variant="pairwise_auc",
             pairwise_auc_weight=PAIRWISE_AUC_WEIGHT,
             disable_self_loop=False,
         )
     )
     assert checkpoint_pairwise["pairwise_auc_weight"] == PAIRWISE_AUC_WEIGHT
+    checkpoint_bce = _checkpoint_args(
+        SimpleNamespace(
+            model_variant="full",
+            pairwise_auc_weight=0.0,
+            disable_self_loop=False,
+        )
+    )
+    assert checkpoint_bce["pairwise_auc_weight"] == 0.0
 
     class _TinyModel(torch.nn.Module):
         def __init__(self):
