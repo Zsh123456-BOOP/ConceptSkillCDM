@@ -365,6 +365,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "graph_prior_mode",
         "min_stu_interactions",
         "min_exer_interactions",
+        "train_label_noise",
     )
     clean = {
         key: getattr(args, key)
@@ -890,6 +891,7 @@ def _create_loaders(args: Any, logger, *, shuffle_train: bool = True):
         graph_prior_mode=str(getattr(args, "graph_prior_mode", "evidence")),
         seed=int(getattr(args, "seed", 42)),
         load_test=False,
+        train_label_noise=float(getattr(args, "train_label_noise", 0.0)),
     )
     if test_loader is not None:
         raise RuntimeError("training loader unexpectedly opened the sealed test split")

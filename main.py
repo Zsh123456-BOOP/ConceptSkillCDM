@@ -116,6 +116,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--early_stop_min_delta", type=float, default=1e-5)
 
     # Runtime and outputs
+    parser.add_argument(
+        "--train_label_noise",
+        type=float,
+        default=0.0,
+        help="Diagnostic guess/slip noise: fraction of train labels flipped before any statistic is built.",
+    )
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--max_train_batches", type=int, default=None)
     parser.add_argument("--max_val_batches", type=int, default=None)
@@ -243,6 +249,10 @@ def _validate_args(args: argparse.Namespace) -> None:
             raise SystemExit(f"error: --{name} must be in [0, 1], got {value}")
     if float(args.graph_entropy_min) > float(args.graph_entropy_max):
         raise SystemExit("error: --graph_entropy_min cannot exceed --graph_entropy_max")
+    if not 0.0 <= float(args.train_label_noise) <= 0.5:
+        raise SystemExit(
+            f"error: --train_label_noise must be in [0, 0.5], got {args.train_label_noise}"
+        )
 
 
 def _seed_everything(seed: int) -> None:

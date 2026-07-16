@@ -567,6 +567,7 @@ def create_dataloaders(
         graph_prior_mode: str = "evidence",
         seed: int = 42,
         load_test: bool = True,
+        train_label_noise: float = 0.0,
 ) -> Tuple[DataLoader, DataLoader, Optional[DataLoader], dict]:
     """
     创建训练、验证和测试的数据加载器，并执行统一的数据清洗
@@ -622,6 +623,22 @@ def create_dataloaders(
 
     if train_df.empty:
         raise ValueError("training split is empty")
+
+    # Diagnostic guess/slip noise: flip a seeded random fraction of TRAIN
+    # labels before any statistic, prior, or filter is built, so the whole
+    # train-only pipeline (including response evidence) sees the corrupted
+    # labels. Validation and test are never touched.
+    noise_rate = max(0.0, float(train_label_noise))
+    if noise_rate > 0.0:
+        if noise_rate > 0.5:
+            raise ValueError(f"train_label_noise must be <= 0.5, got {noise_rate}")
+        noise_rng = np.random.RandomState(int(seed) * 1_000_003 + 17)
+        flip_mask = noise_rng.rand(len(train_df)) < noise_rate
+        train_df.loc[flip_mask, "label"] = 1.0 - train_df.loc[flip_mask, "label"]
+        log(
+            f"[Label Noise] flipped {int(flip_mask.sum())} / {len(train_df)} train labels "
+            f"(rate={noise_rate:.2f}, seed-derived); valid/test untouched."
+        )
 
     # ============ 统一的清洗逻辑 ============
 
