@@ -1,0 +1,6 @@
+bucket,rows,auc,dataset,model_variant,seed
+"[0,1)",22111,0.8244328346612712,junyi,no_pairwise_loss,42
+"[1,3)",0,,junyi,no_pairwise_loss,42
+"[3,6)",0,,junyi,no_pairwise_loss,42
+"[6,inf)",0,,junyi,no_pairwise_loss,42
+all,22111,0.8244328346612712,junyi,no_pairwise_loss,42
