@@ -26,6 +26,9 @@ MODEL_VARIANTS = (
     "no_pairwise_loss",
     "ema_bce",
     "no_message_passing",
+    # Module-level ablation: removes every graph-calibration pathway at once
+    # (state message passing AND the anchor's propagated-evidence channel).
+    "no_graph_calibration",
     "item_only",
     "exposure_only",
     "degree_random",
@@ -150,6 +153,7 @@ def _apply_model_variant(args: argparse.Namespace) -> None:
         "no_response_evidence": "off",
         "no_evidence_anchor": "off",
         "no_evidence_propagation": "direct_only",
+        "no_graph_calibration": "direct_only",
     }.get(args.model_variant, "full")
     args.pairwise_auc_weight = (
         0.0
@@ -157,7 +161,7 @@ def _apply_model_variant(args: argparse.Namespace) -> None:
         else PAIRWISE_AUC_WEIGHT
     )
     args.ema_decay = EMA_DECAY if args.model_variant == "ema_bce" else 0.0
-    if args.model_variant == "no_message_passing":
+    if args.model_variant in {"no_message_passing", "no_graph_calibration"}:
         args.graph_propagation_alpha = 0.0
     elif args.model_variant == "item_only":
         args.graph_prior_mode = "item_only"

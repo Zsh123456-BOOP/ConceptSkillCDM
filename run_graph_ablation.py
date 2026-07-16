@@ -52,6 +52,9 @@ ABLATIONS: Dict[str, AblationSpec] = {
     "no_message_passing": AblationSpec(
         "no_message_passing", {"graph_propagation_alpha": 0.0}
     ),
+    "no_graph_calibration": AblationSpec(
+        "no_graph_calibration", {"graph_propagation_alpha": 0.0}
+    ),
     "item_only": AblationSpec("item_only", {"graph_prior_mode": "item_only"}),
     "exposure_only": AblationSpec(
         "exposure_only", {"graph_prior_mode": "exposure_only"}
