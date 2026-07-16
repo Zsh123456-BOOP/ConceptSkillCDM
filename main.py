@@ -117,6 +117,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Runtime and outputs
     parser.add_argument(
+        "--evidence_state_injection",
+        type=_parse_bool,
+        nargs="?",
+        const=True,
+        default=True,
+        help="Decision probe: False routes evidence exclusively through the anchor.",
+    )
+    parser.add_argument(
         "--train_label_noise",
         type=float,
         default=0.0,

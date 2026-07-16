@@ -51,6 +51,7 @@ class CognitiveDiagnosisModel(nn.Module):
         response_evidence_stats: Optional[Dict[str, torch.Tensor]] = None,
         use_response_evidence: bool = False,
         evidence_anchor_mode: str = "full",
+        evidence_state_injection: bool = True,
         knowledge_dim: int = 32,
         num_relation_heads: int = 4,
         num_gnn_layers: int = 2,
@@ -86,6 +87,9 @@ class CognitiveDiagnosisModel(nn.Module):
                 f"evidence_anchor_mode must be one of {EVIDENCE_ANCHOR_MODES}, got {evidence_anchor_mode!r}"
             )
         self.evidence_anchor_mode = anchor_mode if self.use_response_evidence else "off"
+        # Decision probe: when False, evidence skips the initial-state
+        # projection and reaches theta exclusively through the anchor.
+        self.evidence_state_injection = bool(evidence_state_injection)
         self.lambda_graph_entropy = max(0.0, float(lambda_graph_entropy))
         self.graph_entropy_min = float(graph_entropy_min)
         self.graph_entropy_max = float(graph_entropy_max)
@@ -156,7 +160,9 @@ class CognitiveDiagnosisModel(nn.Module):
             dropout=dropout,
             gnn_residual_weight=gnn_residual_weight,
             propagation_alpha=graph_propagation_alpha,
-            use_response_evidence=self.use_response_evidence,
+            use_response_evidence=(
+                self.use_response_evidence and self.evidence_state_injection
+            ),
         )
         self.diagnosis_head = CognitiveDiagnosisHead(
             knowledge_dim=self.knowledge_dim,
@@ -471,7 +477,9 @@ class CognitiveDiagnosisModel(nn.Module):
         knowledge_state, initial_state = self.knowledge_encoder(
             student_ids,
             relation_matrices,
-            response_evidence=response_evidence,
+            response_evidence=(
+                response_evidence if self.evidence_state_injection else None
+            ),
             return_initial=True,
         )
 
@@ -598,7 +606,9 @@ class CognitiveDiagnosisModel(nn.Module):
                 knowledge_state = self.knowledge_encoder(
                     student_ids,
                     relation_matrices,
-                    response_evidence=response_evidence,
+                    response_evidence=(
+                        response_evidence if self.evidence_state_injection else None
+                    ),
                 )
                 concept_state = knowledge_state.squeeze(0)
                 concept_theta = self.diagnosis_head.theta_proj(concept_state).squeeze(-1)

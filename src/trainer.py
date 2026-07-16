@@ -259,6 +259,9 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "evidence_anchor_mode": str(
             _source_get(source, "evidence_anchor_mode", "full")
         ),
+        "evidence_state_injection": bool(
+            _source_get(source, "evidence_state_injection", True)
+        ),
         "knowledge_dim": int(_source_get(source, "knowledge_dim", 32)),
         "num_relation_heads": int(_source_get(source, "num_relation_heads", 4)),
         "num_gnn_layers": max(0, int(_source_get(source, "num_gnn_layers", 0))),
@@ -328,6 +331,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "model_variant",
         "use_response_evidence",
         "evidence_anchor_mode",
+        "evidence_state_injection",
         "seed",
         "batch_size",
         "epochs",
