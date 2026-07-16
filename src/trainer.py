@@ -148,13 +148,13 @@ def _default_monitor_config() -> Dict[str, str]:
 
 
 def _resolve_pairwise_auc_weight(source: Any) -> float:
-    """Return the fixed objective weight implied by the named ablation."""
+    """Return the fixed objective weight implied by the named ablation.
+
+    The production objective is pure BCE; only the diagnostic
+    ``pairwise_auc`` variant re-enables the historical surrogate term.
+    """
     variant = str(_source_get(source, "model_variant", "full"))
-    expected = (
-        0.0
-        if variant in {"no_pairwise_loss", "ema_bce"}
-        else PAIRWISE_AUC_WEIGHT
-    )
+    expected = PAIRWISE_AUC_WEIGHT if variant == "pairwise_auc" else 0.0
     supplied = float(_source_get(source, "pairwise_auc_weight", expected))
     if supplied != expected:
         raise ValueError(

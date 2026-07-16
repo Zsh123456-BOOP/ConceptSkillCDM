@@ -23,7 +23,9 @@ MODEL_VARIANTS = (
     "no_response_evidence",
     "no_evidence_anchor",
     "no_evidence_propagation",
-    "no_pairwise_loss",
+    # Diagnostic: adds the historical pairwise-AUC surrogate back on top of
+    # the pure-BCE production objective (it never earned its keep on test).
+    "pairwise_auc",
     "ema_bce",
     "no_message_passing",
     # Module-level ablation: removes every graph-calibration pathway at once
@@ -156,9 +158,7 @@ def _apply_model_variant(args: argparse.Namespace) -> None:
         "no_graph_calibration": "direct_only",
     }.get(args.model_variant, "full")
     args.pairwise_auc_weight = (
-        0.0
-        if args.model_variant in {"no_pairwise_loss", "ema_bce"}
-        else PAIRWISE_AUC_WEIGHT
+        PAIRWISE_AUC_WEIGHT if args.model_variant == "pairwise_auc" else 0.0
     )
     args.ema_decay = EMA_DECAY if args.model_variant == "ema_bce" else 0.0
     if args.model_variant in {"no_message_passing", "no_graph_calibration"}:

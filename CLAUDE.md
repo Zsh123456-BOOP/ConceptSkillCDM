@@ -73,12 +73,13 @@ At training time `_build_response_evidence` (in `model_cdm.py`) subtracts the *c
 
 `--model_variant` (in `main.py::MODEL_VARIANTS`) is not a free hyperparameter knob; each variant deterministically sets the underlying switches via `_apply_model_variant`:
 
-- `full` — concept graph + evidence anchor (direct + residual + graph-propagated) + fixed BCE + pairwise-AUC objective.
-- `no_response_evidence` — removes the train response buffers/projection entirely.
+- `full` — concept graph + evidence anchor (direct + residual + graph-propagated), pure-BCE objective.
+- `no_response_evidence` — removes the train response buffers/projection entirely (module-A ablation).
+- `no_graph_calibration` — removes state message passing *and* the anchor's propagated channel (module-B ablation).
 - `no_evidence_anchor` — evidence feeds only the initial state; θ has no anchor channels (v9 behaviour).
 - `no_evidence_propagation` — anchor keeps direct rate + residual channels but drops the graph-propagated channel.
-- `no_pairwise_loss` — identical model, objective reverts to pure BCE.
-- `ema_bce` — pure BCE with a fixed 0.9 per-epoch weight EMA for validation/checkpoint selection (inference stays single-model).
+- `pairwise_auc` — diagnostic: adds the historical pairwise-AUC surrogate back (it never helped on test).
+- `ema_bce` — same objective plus a fixed 0.9 per-epoch weight EMA for validation/checkpoint selection (inference stays single-model).
 - `no_message_passing` — sets `graph_propagation_alpha=0`; output state equals the initial state.
 - `item_only` / `exposure_only` — keep only one graph-prior evidence source (`graph_prior_mode`).
 - `degree_random` — row-degree-matched random support graph (relation-identity control).

@@ -23,7 +23,7 @@ def main() -> None:
             "--seeds",
             "42",
             "--ablations",
-            "full,no_response_evidence,no_pairwise_loss,no_message_passing,item_only,exposure_only,degree_random",
+            "full,no_response_evidence,pairwise_auc,no_message_passing,item_only,exposure_only,degree_random",
             "--dry_run",
         ]
     )
@@ -37,14 +37,14 @@ def main() -> None:
     )
     main_module._apply_model_variant(parsed_no_evidence)
     assert not parsed_no_evidence.use_response_evidence
-    no_pairwise_command = by_name["no_pairwise_loss"].cmd
-    assert "--model_variant" in no_pairwise_command
-    assert no_pairwise_command[no_pairwise_command.index("--model_variant") + 1] == "no_pairwise_loss"
+    pairwise_command = by_name["pairwise_auc"].cmd
+    assert "--model_variant" in pairwise_command
+    assert pairwise_command[pairwise_command.index("--model_variant") + 1] == "pairwise_auc"
     parsed = main_module.parse_args(
-        no_pairwise_command[no_pairwise_command.index("--dataset_name") :]
+        pairwise_command[pairwise_command.index("--dataset_name") :]
     )
     main_module._apply_model_variant(parsed)
-    assert parsed.pairwise_auc_weight == 0.0
+    assert parsed.pairwise_auc_weight == 0.5
     assert by_name["no_message_passing"].params["graph_propagation_alpha"] == 0.0
     assert by_name["item_only"].params["graph_prior_mode"] == "item_only"
     assert by_name["exposure_only"].params["graph_prior_mode"] == "exposure_only"
@@ -64,7 +64,7 @@ def main() -> None:
             "--seeds",
             "42",
             "--ablations",
-            "full,no_pairwise_loss",
+            "full,pairwise_auc",
             "--run_mode",
             "test",
             "--run_id",

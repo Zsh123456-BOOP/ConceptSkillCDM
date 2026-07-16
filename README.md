@@ -46,12 +46,13 @@ details["logits"] == details["irt_logit"]
 
 只保留以下互不混淆的变体：
 
-- `full`：概念图、证据锚定 θ（直接率 + 难度残差 + 图传播率三通道，非负权重）与固定 BCE + pairwise-AUC 训练目标均启用。
-- `no_response_evidence`：完整移除 train 响应证据 buffer 与投影，仅保留自由 student/concept 状态。
+- `full`：概念图、证据锚定 θ（直接率 + 难度残差 + 图传播率三通道，非负权重），训练目标为纯 BCE。
+- `no_response_evidence`：完整移除 train 响应证据 buffer 与投影（模块 A 消融）。
+- `no_graph_calibration`：同时移除状态消息传递与锚定的图传播通道（模块 B 消融）。
 - `no_evidence_anchor`：证据只进初始状态，θ 无锚定通道（v9 行为）。
 - `no_evidence_propagation`：锚定保留直接率与残差通道，移除图传播通道。
-- `no_pairwise_loss`：模型完全相同，只把训练目标恢复为纯 BCE。
-- `ema_bce`：训练结构诊断；模型与响应证据不变，使用纯 BCE，并以固定 0.9 的逐 epoch 权重 EMA 做验证和 checkpoint 选择。EMA 不开放为 CLI 调参项，推理仍为单模型。
+- `pairwise_auc`：诊断变体；在纯 BCE 之上加回历史 pairwise-AUC 目标（test 证明其无增益）。
+- `ema_bce`：训练结构诊断；目标同 full，另以固定 0.9 的逐 epoch 权重 EMA 做验证和 checkpoint 选择。EMA 不开放为 CLI 调参项，推理仍为单模型。
 - `no_message_passing`：令 `graph_propagation_alpha=0`，输出状态严格等于初始 student+concept state。
 - `item_only`：只使用题目概念共现。
 - `exposure_only`：只使用学生概念共接触证据。

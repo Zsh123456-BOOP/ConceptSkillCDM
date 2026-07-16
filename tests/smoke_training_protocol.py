@@ -71,6 +71,7 @@ def main() -> None:
         action.dest for action in main_module.build_parser()._actions
     }
 
+    # Production objective is pure BCE for every structural variant.
     for variant in (
         "full",
         "no_message_passing",
@@ -80,7 +81,7 @@ def main() -> None:
     ):
         variant_args = main_module.parse_args(["--model_variant", variant])
         main_module._apply_model_variant(variant_args)
-        assert variant_args.pairwise_auc_weight == PAIRWISE_AUC_WEIGHT
+        assert variant_args.pairwise_auc_weight == 0.0
         assert variant_args.ema_decay == 0.0
         assert variant_args.use_response_evidence
     no_evidence_args = main_module.parse_args(
@@ -88,13 +89,13 @@ def main() -> None:
     )
     main_module._apply_model_variant(no_evidence_args)
     assert not no_evidence_args.use_response_evidence
-    assert no_evidence_args.pairwise_auc_weight == PAIRWISE_AUC_WEIGHT
-    no_pairwise_args = main_module.parse_args(
-        ["--model_variant", "no_pairwise_loss"]
+    assert no_evidence_args.pairwise_auc_weight == 0.0
+    pairwise_args = main_module.parse_args(
+        ["--model_variant", "pairwise_auc"]
     )
-    main_module._apply_model_variant(no_pairwise_args)
-    assert no_pairwise_args.pairwise_auc_weight == 0.0
-    assert no_pairwise_args.ema_decay == 0.0
+    main_module._apply_model_variant(pairwise_args)
+    assert pairwise_args.pairwise_auc_weight == PAIRWISE_AUC_WEIGHT
+    assert pairwise_args.ema_decay == 0.0
     ema_args = main_module.parse_args(["--model_variant", "ema_bce"])
     main_module._apply_model_variant(ema_args)
     assert ema_args.pairwise_auc_weight == 0.0
