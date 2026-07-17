@@ -27,7 +27,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    print(f"{'run':<50} {'direct':>8} {'residual':>9} {'propagated':>11}")
+    print(f"{'run':<50} channel-wise mean softplus weights (direct, residual, prop-heads...)")
     for run_dir in sorted(glob.glob(args.checkpoint_glob)):
         model_path = os.path.join(run_dir, "best_model.pth")
         if not os.path.isfile(model_path):
@@ -38,11 +38,12 @@ def main() -> None:
         if raw is None:
             print(f"{os.path.basename(run_dir):<50} (no anchor)")
             continue
-        weights = F.softplus(raw).tolist()
-        padded = weights + [float("nan")] * (3 - len(weights))
-        print(
-            f"{os.path.basename(run_dir):<50} {padded[0]:>8.3f} {padded[1]:>9.3f} {padded[2]:>11.3f}"
-        )
+        weights = F.softplus(raw)
+        if weights.dim() == 1:
+            weights = weights.unsqueeze(0)
+        channel_means = weights.mean(dim=0).tolist()
+        formatted = " ".join(f"{value:.3f}" for value in channel_means)
+        print(f"{os.path.basename(run_dir):<50} [{formatted}]")
 
 
 if __name__ == "__main__":
