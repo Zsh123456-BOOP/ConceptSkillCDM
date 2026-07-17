@@ -262,6 +262,13 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "evidence_state_injection": bool(
             _source_get(source, "evidence_state_injection", True)
         ),
+        "anchor_multihead_prop": bool(
+            _source_get(source, "anchor_multihead_prop", False)
+        ),
+        "anchor_spline": bool(_source_get(source, "anchor_spline", False)),
+        "anchor_cross_gate": bool(
+            _source_get(source, "anchor_cross_gate", False)
+        ),
         "knowledge_dim": int(_source_get(source, "knowledge_dim", 32)),
         "num_relation_heads": int(_source_get(source, "num_relation_heads", 4)),
         "num_gnn_layers": max(0, int(_source_get(source, "num_gnn_layers", 0))),

@@ -125,6 +125,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Decision probe: False routes evidence exclusively through the anchor.",
     )
     parser.add_argument(
+        "--anchor_multihead_prop",
+        type=_parse_bool,
+        nargs="?",
+        const=True,
+        default=False,
+        help="Anchor lever probe: one propagated channel per relation head.",
+    )
+    parser.add_argument(
+        "--anchor_spline",
+        type=_parse_bool,
+        nargs="?",
+        const=True,
+        default=False,
+        help="Anchor lever probe: monotone per-channel calibration curve.",
+    )
+    parser.add_argument(
+        "--anchor_cross_gate",
+        type=_parse_bool,
+        nargs="?",
+        const=True,
+        default=False,
+        help="Anchor lever probe: gates also read direct-evidence strength.",
+    )
+    parser.add_argument(
         "--exposure_prior_pmi",
         type=_parse_bool,
         nargs="?",

@@ -52,6 +52,9 @@ class CognitiveDiagnosisModel(nn.Module):
         use_response_evidence: bool = False,
         evidence_anchor_mode: str = "full",
         evidence_state_injection: bool = True,
+        anchor_multihead_prop: bool = False,
+        anchor_spline: bool = False,
+        anchor_cross_gate: bool = False,
         knowledge_dim: int = 32,
         num_relation_heads: int = 4,
         num_gnn_layers: int = 2,
@@ -90,12 +93,38 @@ class CognitiveDiagnosisModel(nn.Module):
         # Decision probe: when False, evidence skips the initial-state
         # projection and reaches theta exclusively through the anchor.
         self.evidence_state_injection = bool(evidence_state_injection)
-        # Count-conditioned anchor gates: sigmoid(a + b*log1p(n)) per channel.
-        # a=2 starts near fully-open (~0.88) so initial behaviour matches the
-        # ungated anchor; b learns how strongly trust should grow with counts.
-        self.anchor_gate = nn.Parameter(
-            torch.tensor([[2.0, 0.0]] * 3, dtype=torch.float32)
+        # Single-pathway anchor levers (each independently switchable):
+        #   multihead_prop -> one propagated channel per relation head
+        #   spline         -> per-channel monotone calibration curve
+        #   cross_gate     -> gates may also read |direct rate| strength
+        self.anchor_multihead_prop = bool(anchor_multihead_prop)
+        self.anchor_spline = bool(anchor_spline)
+        self.anchor_cross_gate = bool(anchor_cross_gate)
+        if self.evidence_anchor_mode == "full":
+            self._anchor_channels = 2 + (
+                self.num_relation_heads if self.anchor_multihead_prop else 1
+            )
+        else:
+            self._anchor_channels = _ANCHOR_CHANNELS[self.evidence_anchor_mode]
+        # Count-conditioned anchor gates: sigmoid(a + b*log1p(n) [+ c*|rate|])
+        # per channel. a=2 starts near fully-open (~0.88) so the initial
+        # behaviour matches an ungated anchor; b (and c when enabled) learn
+        # how trust responds to observation counts / direct-evidence strength.
+        gate_init = torch.zeros(max(1, self._anchor_channels), 3)
+        gate_init[:, 0] = 2.0
+        self.anchor_gate = nn.Parameter(gate_init)
+        # Monotone calibration: spline(e) = sum_k softplus(w_k) tanh(e / s_k)
+        # over fixed scales; initial weights make it near-identity so the
+        # lever starts as a no-op and learns curvature only when it helps.
+        self.register_buffer(
+            "anchor_spline_scales",
+            torch.tensor([0.5, 1.0, 2.0, 4.0]),
+            persistent=False,
         )
+        spline_init = torch.log(
+            torch.expm1(torch.tensor([0.125, 0.25, 0.5, 1.0]))
+        ).repeat(max(1, self._anchor_channels), 1)
+        self.anchor_spline_raw = nn.Parameter(spline_init)
         self.lambda_graph_entropy = max(0.0, float(lambda_graph_entropy))
         self.graph_entropy_min = float(graph_entropy_min)
         self.graph_entropy_max = float(graph_entropy_max)
@@ -173,7 +202,7 @@ class CognitiveDiagnosisModel(nn.Module):
         self.diagnosis_head = CognitiveDiagnosisHead(
             knowledge_dim=self.knowledge_dim,
             num_concepts=self.num_concepts,
-            evidence_anchor_channels=_ANCHOR_CHANNELS[self.evidence_anchor_mode],
+            evidence_anchor_channels=self._anchor_channels,
         )
         self.exercise_encoder = ExerciseDifficultyEncoder(num_exercises=self.num_exercises)
 
@@ -397,35 +426,43 @@ class CognitiveDiagnosisModel(nn.Module):
         rate_evidence = response_evidence[..., 0]
         residual_evidence = response_evidence[..., 1]
         log_count = torch.log1p(loo_count.to(dtype=rate_evidence.dtype))
+        rate_strength = rate_evidence.abs()
+
+        def calibrated(channel: torch.Tensor, index: int) -> torch.Tensor:
+            if not self.anchor_spline:
+                return channel
+            weights = torch.nn.functional.softplus(self.anchor_spline_raw[index])
+            scales = self.anchor_spline_scales.to(dtype=channel.dtype)
+            basis = torch.tanh(channel.unsqueeze(-1) / scales)
+            return (basis * weights.to(dtype=channel.dtype)).sum(dim=-1)
 
         def gated(channel: torch.Tensor, index: int, counts: torch.Tensor) -> torch.Tensor:
-            gate = torch.sigmoid(
-                self.anchor_gate[index, 0] + self.anchor_gate[index, 1] * counts
-            )
-            return channel * gate
+            logit = self.anchor_gate[index, 0] + self.anchor_gate[index, 1] * counts
+            if self.anchor_cross_gate:
+                logit = logit + self.anchor_gate[index, 2] * rate_strength
+            return calibrated(channel, index) * torch.sigmoid(logit)
 
-        if self.evidence_anchor_mode == "direct_only":
-            return torch.stack(
-                (
-                    gated(rate_evidence, 0, log_count),
-                    gated(residual_evidence, 1, log_count),
-                ),
-                dim=-1,
-            )
-        receiver_weights = relation_matrices.mean(dim=0).transpose(0, 1)
-        propagated_evidence = torch.matmul(
-            rate_evidence.to(dtype=receiver_weights.dtype),
-            receiver_weights,
-        )
-        propagated_log_count = torch.matmul(log_count, receiver_weights)
-        return torch.stack(
-            (
-                gated(rate_evidence, 0, log_count),
-                gated(residual_evidence, 1, log_count),
-                gated(propagated_evidence, 2, propagated_log_count),
-            ),
-            dim=-1,
-        )
+        channels = [
+            gated(rate_evidence, 0, log_count),
+            gated(residual_evidence, 1, log_count),
+        ]
+        if self.evidence_anchor_mode == "full":
+            if self.anchor_multihead_prop:
+                for head in range(self.num_relation_heads):
+                    receiver = relation_matrices[head].transpose(0, 1)
+                    propagated = torch.matmul(
+                        rate_evidence.to(dtype=receiver.dtype), receiver
+                    )
+                    propagated_count = torch.matmul(log_count, receiver)
+                    channels.append(gated(propagated, 2 + head, propagated_count))
+            else:
+                receiver = relation_matrices.mean(dim=0).transpose(0, 1)
+                propagated = torch.matmul(
+                    rate_evidence.to(dtype=receiver.dtype), receiver
+                )
+                propagated_count = torch.matmul(log_count, receiver)
+                channels.append(gated(propagated, 2, propagated_count))
+        return torch.stack(channels, dim=-1)
 
     @staticmethod
     def _build_item_prior_from_q(q_matrix: torch.Tensor, num_concepts: int) -> torch.Tensor:
