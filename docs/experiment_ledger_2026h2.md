@@ -1,5 +1,29 @@
 # 实验账本（2026-07-15 起）
 
+## 2026-07-17 终版架构定稿：单通路 + 自适应锚定 + 多头搬运
+
+架构（graph_irt_v10 最终形态）：证据唯一入口 = 锚定（evidence_state_injection=False）；
+锚定 = 逐概念非负权重 × 计数条件门 × [直接率, 难度残差, 每关系头一条图搬运通道]；
+读出 = 单一标量 2PL。目标 = 纯 BCE。junyi 配置 dim64+PMI；nips34 配置 dropout0.10。
+
+**seed42 终版主表（test AUC）**：
+
+| 数据集 | Ours | 最强 baseline | Δ |
+|---|---:|---:|---:|
+| assist_17 | 0.7891 | ORCDF 0.7875 | +0.0016 ✅ |
+| nips34 | 0.7902 | ORCDF 0.7893 | +0.0009 ✅ |
+| ednet | 0.7487 | ORCDF 0.7480 | +0.0007 ✅ |
+| moocradar | 0.9345 | ORCDF 0.9332 | +0.0013 ✅ |
+| xes3g5m | 0.8009 | RCD 0.7944 | +0.0065 ✅ |
+| junyi | 0.8305 | RCD 0.8320 | −0.0015（次席；RCD 依赖专家先修图） |
+
+决策记录：跨门杠杆 val 假阳性否决（test 0.7876）；样条平否决；2-hop 单通路下复测仍平（条件冗余假设证伪）；
+掌握相关图闭式 0.7916 < 共接触 0.7948 否决；junyi EMA 0.8253 否决——多头搬运是唯一全票通过的杠杆
+（六数据集无害，nips34 +0.0006、junyi +0.0004、moocradar/xes +0.0001）。
+主线 checkpoint：*_mh_0717（4 个）+ nips34_mh_lv_0717 + junyi_mh_lv_0717。
+在跑：fin_0717 队列 = 消融 w/oA/w/oB ×6 + 噪声 N4 ×36（终版架构，训完即测）。
+
+
 数据划分与 KnoField-CD 仓库字节级一致（6 数据集 md5 已核对）。
 目标区间：**超过 KnoField-CD Table 2 中最强非 KnoField baseline，不超过 KnoField-CD 本身**。
 
