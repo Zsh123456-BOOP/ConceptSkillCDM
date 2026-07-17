@@ -90,6 +90,12 @@ class CognitiveDiagnosisModel(nn.Module):
         # Decision probe: when False, evidence skips the initial-state
         # projection and reaches theta exclusively through the anchor.
         self.evidence_state_injection = bool(evidence_state_injection)
+        # Count-conditioned anchor gates: sigmoid(a + b*log1p(n)) per channel.
+        # a=2 starts near fully-open (~0.88) so initial behaviour matches the
+        # ungated anchor; b learns how strongly trust should grow with counts.
+        self.anchor_gate = nn.Parameter(
+            torch.tensor([[2.0, 0.0]] * 3, dtype=torch.float32)
+        )
         self.lambda_graph_entropy = max(0.0, float(lambda_graph_entropy))
         self.graph_entropy_min = float(graph_entropy_min)
         self.graph_entropy_max = float(graph_entropy_max)
@@ -280,8 +286,8 @@ class CognitiveDiagnosisModel(nn.Module):
         exercise_ids: Optional[torch.Tensor],
         q_vector: torch.Tensor,
         outcome_to_exclude: Optional[torch.Tensor],
-    ) -> Optional[torch.Tensor]:
-        """Return empirical student-concept evidence with exact train LOO.
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """Return (evidence, LOO count) with exact train leave-one-out.
 
         ``outcome_to_exclude`` is supplied only for training rows.  Its label
         and one count are subtracted from every concept attached to that row
@@ -290,7 +296,7 @@ class CognitiveDiagnosisModel(nn.Module):
         prediction.
         """
         if not self.use_response_evidence:
-            return None
+            return None, None
 
         q_mask = (q_vector > 0).to(dtype=self.response_student_concept_count.dtype)
         correct = self.response_student_concept_correct[student_ids]
@@ -366,34 +372,58 @@ class CognitiveDiagnosisModel(nn.Module):
         residual_evidence = (
             residual_sum / count.clamp(min=1.0) * reliability
         ).clamp(min=-1.0, max=1.0)
-        return torch.stack((rate_evidence, residual_evidence), dim=-1)
+        evidence = torch.stack((rate_evidence, residual_evidence), dim=-1)
+        return evidence, count
 
     def _compose_evidence_anchor(
         self,
         relation_matrices: torch.Tensor,
         response_evidence: Optional[torch.Tensor],
+        loo_count: Optional[torch.Tensor],
     ) -> Optional[torch.Tensor]:
         """Stack direct, residual, and graph-propagated evidence channels.
 
         The propagated channel transports each row's leave-one-out rate
         evidence over the learned row-stochastic concept graph, so concepts
         without direct observations receive the evidence of their graph
-        neighbours.  All inputs are train-only statistics; the map is linear,
-        so the leave-one-out contract is preserved exactly.
+        neighbours.  Each channel is scaled by a learnable count-conditioned
+        gate (monotone in log evidence count), letting the anchor trust
+        evidence more where more observations back it.  All inputs are
+        train-only statistics; every map is linear in them, so the
+        leave-one-out contract is preserved exactly.
         """
         if response_evidence is None or self.evidence_anchor_mode == "off":
             return None
         rate_evidence = response_evidence[..., 0]
         residual_evidence = response_evidence[..., 1]
+        log_count = torch.log1p(loo_count.to(dtype=rate_evidence.dtype))
+
+        def gated(channel: torch.Tensor, index: int, counts: torch.Tensor) -> torch.Tensor:
+            gate = torch.sigmoid(
+                self.anchor_gate[index, 0] + self.anchor_gate[index, 1] * counts
+            )
+            return channel * gate
+
         if self.evidence_anchor_mode == "direct_only":
-            return torch.stack((rate_evidence, residual_evidence), dim=-1)
+            return torch.stack(
+                (
+                    gated(rate_evidence, 0, log_count),
+                    gated(residual_evidence, 1, log_count),
+                ),
+                dim=-1,
+            )
         receiver_weights = relation_matrices.mean(dim=0).transpose(0, 1)
         propagated_evidence = torch.matmul(
             rate_evidence.to(dtype=receiver_weights.dtype),
             receiver_weights,
         )
+        propagated_log_count = torch.matmul(log_count, receiver_weights)
         return torch.stack(
-            (rate_evidence, residual_evidence, propagated_evidence),
+            (
+                gated(rate_evidence, 0, log_count),
+                gated(residual_evidence, 1, log_count),
+                gated(propagated_evidence, 2, propagated_log_count),
+            ),
             dim=-1,
         )
 
@@ -468,7 +498,7 @@ class CognitiveDiagnosisModel(nn.Module):
             )
 
         relation_matrices = self.relation_learning()
-        response_evidence = self._build_response_evidence(
+        response_evidence, loo_count = self._build_response_evidence(
             student_ids,
             exercise_ids,
             q_vector,
@@ -484,7 +514,11 @@ class CognitiveDiagnosisModel(nn.Module):
         )
 
         difficulty, discrimination = self.exercise_encoder(exercise_ids)
-        evidence_anchor = self._compose_evidence_anchor(relation_matrices, response_evidence)
+        evidence_anchor = self._compose_evidence_anchor(
+            relation_matrices,
+            response_evidence,
+            loo_count,
+        )
         if (
             evidence_anchor is not None
             and self.training
@@ -593,7 +627,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 device = next(self.parameters()).device
                 student_ids = torch.tensor([student_id], device=device, dtype=torch.long)
                 relation_matrices = self.relation_learning()
-                response_evidence = self._build_response_evidence(
+                response_evidence, loo_count = self._build_response_evidence(
                     student_ids,
                     None,
                     torch.ones(
@@ -615,6 +649,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 evidence_anchor = self._compose_evidence_anchor(
                     relation_matrices,
                     response_evidence,
+                    loo_count,
                 )
                 if evidence_anchor is not None:
                     anchor_weights = self.diagnosis_head.evidence_anchor_weights()
