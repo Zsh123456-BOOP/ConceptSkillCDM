@@ -28,11 +28,14 @@ from src.prediction_head import CognitiveDiagnosisHead, ExerciseDifficultyEncode
 GRAPH_IRT_ARCHITECTURE = "graph_irt_v10"
 
 # How response evidence anchors theta before the single 2PL readout.
-#   full        -> direct rate + difficulty residual + graph-propagated rate
+#   full        -> direct rate + difficulty residual + one-hop and two-hop
+#                  graph-propagated rate. Under the single-pathway design the
+#                  anchor is the sole evidence route, so the second hop is no
+#                  longer redundant with GNN state propagation.
 #   direct_only -> direct rate + difficulty residual (no graph transport)
 #   off         -> evidence feeds only the initial state (v9 behaviour)
 EVIDENCE_ANCHOR_MODES = ("full", "direct_only", "off")
-_ANCHOR_CHANNELS = {"full": 3, "direct_only": 2, "off": 0}
+_ANCHOR_CHANNELS = {"full": 4, "direct_only": 2, "off": 0}
 
 
 class CognitiveDiagnosisModel(nn.Module):
@@ -94,7 +97,7 @@ class CognitiveDiagnosisModel(nn.Module):
         # a=2 starts near fully-open (~0.88) so initial behaviour matches the
         # ungated anchor; b learns how strongly trust should grow with counts.
         self.anchor_gate = nn.Parameter(
-            torch.tensor([[2.0, 0.0]] * 3, dtype=torch.float32)
+            torch.tensor([[2.0, 0.0]] * 4, dtype=torch.float32)
         )
         self.lambda_graph_entropy = max(0.0, float(lambda_graph_entropy))
         self.graph_entropy_min = float(graph_entropy_min)
@@ -418,11 +421,14 @@ class CognitiveDiagnosisModel(nn.Module):
             receiver_weights,
         )
         propagated_log_count = torch.matmul(log_count, receiver_weights)
+        two_hop_evidence = torch.matmul(propagated_evidence, receiver_weights)
+        two_hop_log_count = torch.matmul(propagated_log_count, receiver_weights)
         return torch.stack(
             (
                 gated(rate_evidence, 0, log_count),
                 gated(residual_evidence, 1, log_count),
                 gated(propagated_evidence, 2, propagated_log_count),
+                gated(two_hop_evidence, 3, two_hop_log_count),
             ),
             dim=-1,
         )
@@ -587,7 +593,7 @@ class CognitiveDiagnosisModel(nn.Module):
             "evidence_anchor": (
                 evidence_anchor.detach()
                 if evidence_anchor is not None
-                else q_vector.detach().new_zeros((*q_vector.shape, 3))
+                else q_vector.detach().new_zeros((*q_vector.shape, 4))
             ),
             "response_evidence_leave_one_out": q_vector.detach().new_tensor(
                 float(outcome_to_exclude is not None)
