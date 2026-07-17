@@ -49,7 +49,7 @@ def _rows(model, loaded_args, info_dict, batch_size, device):
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
     q_matrix = info_dict["q_matrix"]
     counts = info_dict["response_evidence_stats"]["student_concept_count"]
-    labels, probs, support = [], [], []
+    labels, probs, support, students = [], [], [], []
     with torch.no_grad():
         for student_ids, exercise_ids, y in loader:
             p = model(student_ids.to(device), exercise_ids.to(device), return_logits=False)
@@ -61,7 +61,47 @@ def _rows(model, loaded_args, info_dict, batch_size, device):
             labels.extend(y.tolist())
             probs.extend(p.cpu().reshape(-1).tolist())
             support.extend(s.cpu().tolist())
-    return np.asarray(labels), np.asarray(probs), np.asarray(support)
+            students.extend(student_ids.tolist())
+    return (
+        np.asarray(labels),
+        np.asarray(probs),
+        np.asarray(support),
+        np.asarray(students),
+    )
+
+
+def _bucket_auc(labels, probs, mask):
+    if int(mask.sum()) == 0 or len(set(labels[mask])) < 2:
+        return None
+    return compute_metrics(
+        labels[mask], (probs[mask] > 0.5).astype(float), probs[mask]
+    )["auc"]
+
+
+def _bootstrap_gap_ci(labels, probs_full, probs_woa, students, mask, reps, rng):
+    """Student-level paired bootstrap CI for AUC(full) - AUC(woA) in a bucket."""
+    idx = np.nonzero(mask)[0]
+    if len(idx) == 0:
+        return None, None
+    student_ids = students[idx]
+    unique_students = np.unique(student_ids)
+    by_student = {s: idx[student_ids == s] for s in unique_students}
+    gaps = []
+    for _ in range(reps):
+        sampled = rng.choice(unique_students, size=len(unique_students), replace=True)
+        rows = np.concatenate([by_student[s] for s in sampled])
+        if len(set(labels[rows])) < 2:
+            continue
+        auc_f = compute_metrics(
+            labels[rows], (probs_full[rows] > 0.5).astype(float), probs_full[rows]
+        )["auc"]
+        auc_w = compute_metrics(
+            labels[rows], (probs_woa[rows] > 0.5).astype(float), probs_woa[rows]
+        )["auc"]
+        gaps.append(auc_f - auc_w)
+    if len(gaps) < max(10, reps // 4):
+        return None, None
+    return float(np.percentile(gaps, 2.5)), float(np.percentile(gaps, 97.5))
 
 
 def main() -> None:
@@ -73,6 +113,13 @@ def main() -> None:
     )
     parser.add_argument("--bucket_edges", default="0,1,3,6,12")
     parser.add_argument("--batch_size", type=int, default=2048)
+    parser.add_argument(
+        "--bootstrap",
+        type=int,
+        default=1000,
+        help="Student-level paired bootstrap replicates for per-bucket gain CIs (0 disables).",
+    )
+    parser.add_argument("--bootstrap_seed", type=int, default=7)
     parser.add_argument("--output_csv", default="results/evidence_gain_curve.csv")
     parser.add_argument("--no_cuda", action="store_true")
     args = parser.parse_args()
@@ -80,59 +127,83 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
     pairs = json.loads(args.pairs)
     edges = sorted({float(t) for t in args.bucket_edges.split(",")}) + [float("inf")]
+    rng = np.random.RandomState(args.bootstrap_seed)
 
     records = []
     for dataset_name, dirs in pairs.items():
         full_model, loaded_args, info_dict = _load(dirs["full"], device)
-        labels, probs_full, support = _rows(full_model, loaded_args, info_dict, args.batch_size, device)
+        labels, probs_full, support, students = _rows(
+            full_model, loaded_args, info_dict, args.batch_size, device
+        )
         del full_model
         woa_model, loaded_args_b, info_dict_b = _load(dirs["woA"], device)
-        labels_b, probs_woa, _ = _rows(woa_model, loaded_args_b, info_dict_b, args.batch_size, device)
+        labels_b, probs_woa, _, _ = _rows(
+            woa_model, loaded_args_b, info_dict_b, args.batch_size, device
+        )
         del woa_model
         assert len(labels) == len(labels_b), dataset_name
         for low, high in zip(edges[:-1], edges[1:]):
             mask = (support >= low) & (support < high) if high != float("inf") else (support >= low)
-            n = int(mask.sum())
-            if n == 0 or len(set(labels[mask])) < 2:
+            auc_full = _bucket_auc(labels, probs_full, mask)
+            auc_woa = _bucket_auc(labels, probs_woa, mask)
+            if auc_full is None or auc_woa is None:
                 continue
-            auc_full = compute_metrics(
-                labels[mask], (probs_full[mask] > 0.5).astype(float), probs_full[mask]
-            )["auc"]
-            auc_woa = compute_metrics(
-                labels[mask], (probs_woa[mask] > 0.5).astype(float), probs_woa[mask]
-            )["auc"]
+            ci_low, ci_high = (None, None)
+            if args.bootstrap > 0:
+                ci_low, ci_high = _bootstrap_gap_ci(
+                    labels, probs_full, probs_woa, students, mask, args.bootstrap, rng
+                )
             records.append(
                 {
                     "dataset": dataset_name,
                     "bucket_low": low,
                     "bucket_high": high,
-                    "rows": n,
+                    "rows": int(mask.sum()),
                     "auc_full": auc_full,
                     "auc_woA": auc_woa,
                     "gain": auc_full - auc_woa,
+                    "gain_ci_low": ci_low,
+                    "gain_ci_high": ci_high,
                 }
             )
         print(f"{dataset_name}: done")
 
     frame = pd.DataFrame(records)
-    pooled = []
-    for (low, high), group in frame.groupby(["bucket_low", "bucket_high"]):
-        weight = group["rows"] / group["rows"].sum()
-        pooled.append(
-            {
-                "dataset": "POOLED",
-                "bucket_low": low,
-                "bucket_high": high,
-                "rows": int(group["rows"].sum()),
-                "auc_full": float((group["auc_full"] * weight).sum()),
-                "auc_woA": float((group["auc_woA"] * weight).sum()),
-                "gain": float((group["gain"] * weight).sum()),
-            }
-        )
-    frame = pd.concat([frame, pd.DataFrame(pooled)], ignore_index=True)
+    bucket_count = frame.groupby("dataset")["bucket_low"].count()
+    max_buckets = int(bucket_count.max())
+    complete_datasets = set(bucket_count[bucket_count == max_buckets].index)
+
+    def _pool(group_frame: pd.DataFrame, tag: str) -> list:
+        pooled_rows = []
+        for (low, high), group in group_frame.groupby(["bucket_low", "bucket_high"]):
+            weight = group["rows"] / group["rows"].sum()
+            pooled_rows.append(
+                {
+                    "dataset": tag,
+                    "bucket_low": low,
+                    "bucket_high": high,
+                    "rows": int(group["rows"].sum()),
+                    "auc_full": float((group["auc_full"] * weight).sum()),
+                    "auc_woA": float((group["auc_woA"] * weight).sum()),
+                    "gain": float((group["gain"] * weight).sum()),
+                    "gain_ci_low": None,
+                    "gain_ci_high": None,
+                }
+            )
+        return pooled_rows
+
+    pooled = _pool(frame, "POOLED")
+    # Composition-controlled pool: only datasets contributing to every bucket,
+    # so the curve shape cannot come from the dataset mix changing across
+    # buckets.
+    complete = _pool(
+        frame[frame["dataset"].isin(complete_datasets)], "POOLED_COMPLETE"
+    )
+    frame = pd.concat([frame, pd.DataFrame(pooled + complete)], ignore_index=True)
     os.makedirs(os.path.dirname(args.output_csv), exist_ok=True)
     frame.to_csv(args.output_csv, index=False)
-    print(frame[frame["dataset"] == "POOLED"].to_string(index=False))
+    print(f"complete-coverage datasets: {sorted(complete_datasets)}")
+    print(frame[frame["dataset"].str.startswith("POOLED")].to_string(index=False))
     print(f"saved: {args.output_csv}")
 
 
