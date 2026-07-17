@@ -133,6 +133,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="PMI-normalize co-exposure counts before row normalization (relation-identity sharpening probe).",
     )
     parser.add_argument(
+        "--exposure_pmi_beta",
+        type=float,
+        default=0.5,
+        help="Popularity-normalization strength for the PMI co-exposure probe (0.5=sqrt, 1.0=full).",
+    )
+    parser.add_argument(
         "--train_label_noise",
         type=float,
         default=0.0,

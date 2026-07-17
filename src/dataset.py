@@ -477,6 +477,7 @@ def build_student_coexposure_prior(
     train_sources: list,
     cpt_id_map: Dict[int, int],
     pmi_normalize: bool = False,
+    pmi_beta: float = 0.5,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """Build a permutation-invariant train-only student co-exposure prior.
 
@@ -539,8 +540,9 @@ def build_student_coexposure_prior(
     observed_mask = (counts > 0).float()
     raw_pair_mass = float(counts.sum().item())
     if pmi_normalize:
+        beta = max(0.0, float(pmi_beta))
         popularity = counts.sum(dim=1).clamp(min=1.0)
-        counts = counts / torch.sqrt(popularity.unsqueeze(0) * popularity.unsqueeze(1))
+        counts = counts / (popularity.unsqueeze(0) * popularity.unsqueeze(1)).pow(beta / 2.0)
         counts *= 1.0 - eye
     prior = _row_normalize_offdiag_counts(counts, shrink=0.0)
     prior = _keep_observed_support_only(prior, observed_mask)
@@ -579,6 +581,7 @@ def create_dataloaders(
         load_test: bool = True,
         train_label_noise: float = 0.0,
         exposure_prior_pmi: bool = False,
+        exposure_pmi_beta: float = 0.5,
 ) -> Tuple[DataLoader, DataLoader, Optional[DataLoader], dict]:
     """
     创建训练、验证和测试的数据加载器，并执行统一的数据清洗
@@ -762,6 +765,7 @@ def create_dataloaders(
             train_sources=train_sources,
             cpt_id_map=cpt_id_map,
             pmi_normalize=bool(exposure_prior_pmi),
+            pmi_beta=float(exposure_pmi_beta),
         )
         return item_prior, item_stats, exposure_prior, exposure_stats
 
@@ -786,6 +790,7 @@ def create_dataloaders(
                 train_sources=train_sources,
                 cpt_id_map=cpt_id_map,
                 pmi_normalize=bool(exposure_prior_pmi),
+                pmi_beta=float(exposure_pmi_beta),
             )
     graph_prior_stats = {**item_prior_stats, **exposure_prior_stats}
     graph_prior_stats["graph_prior_mode"] = prior_mode
