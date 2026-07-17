@@ -263,7 +263,7 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
             _source_get(source, "evidence_state_injection", True)
         ),
         "anchor_multihead_prop": bool(
-            _source_get(source, "anchor_multihead_prop", False)
+            _source_get(source, "anchor_multihead_prop", True)
         ),
         "anchor_spline": bool(_source_get(source, "anchor_spline", False)),
         "anchor_cross_gate": bool(

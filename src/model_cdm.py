@@ -52,7 +52,7 @@ class CognitiveDiagnosisModel(nn.Module):
         use_response_evidence: bool = False,
         evidence_anchor_mode: str = "full",
         evidence_state_injection: bool = True,
-        anchor_multihead_prop: bool = False,
+        anchor_multihead_prop: bool = True,
         anchor_spline: bool = False,
         anchor_cross_gate: bool = False,
         knowledge_dim: int = 32,

@@ -129,8 +129,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=_parse_bool,
         nargs="?",
         const=True,
-        default=False,
-        help="Anchor lever probe: one propagated channel per relation head.",
+        default=True,
+        help="One propagated anchor channel per relation head (production default).",
     )
     parser.add_argument(
         "--anchor_spline",
