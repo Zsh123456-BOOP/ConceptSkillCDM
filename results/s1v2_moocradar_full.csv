@@ -1,0 +1,6 @@
+bucket,rows,auc,dataset,model_variant,seed
+"[0,1)",23944,0.942815922277327,moocradar,full,42
+"[1,3)",9618,0.9268825779084138,moocradar,full,42
+"[3,6)",3277,0.9048234861405435,moocradar,full,42
+"[6,inf)",1769,0.8665688061011001,moocradar,full,42
+all,38608,0.933978377061203,moocradar,full,42
