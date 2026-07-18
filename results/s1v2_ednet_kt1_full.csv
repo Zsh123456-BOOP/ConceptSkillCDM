@@ -1,6 +1,0 @@
-bucket,rows,auc,dataset,model_variant,seed
-"[0,1)",242,0.7687573069252459,ednet_kt1,full,42
-"[1,3)",619,0.7362328124642522,ednet_kt1,full,42
-"[3,6)",1577,0.7597447758297213,ednet_kt1,full,42
-"[6,inf)",21218,0.7552971528724174,ednet_kt1,full,42
-all,23656,0.7560682092531796,ednet_kt1,full,42

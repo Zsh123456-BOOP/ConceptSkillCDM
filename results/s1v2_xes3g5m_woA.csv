@@ -1,6 +1,0 @@
-bucket,rows,auc,dataset,model_variant,seed
-"[0,1)",9071,0.7795222086073152,xes3g5m,no_response_evidence,42
-"[1,3)",8182,0.7966801964115399,xes3g5m,no_response_evidence,42
-"[3,6)",3107,0.8043761162616628,xes3g5m,no_response_evidence,42
-"[6,inf)",339,0.8223217618514371,xes3g5m,no_response_evidence,42
-all,20699,0.7911037319698055,xes3g5m,no_response_evidence,42
