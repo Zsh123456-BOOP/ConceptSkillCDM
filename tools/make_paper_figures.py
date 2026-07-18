@@ -202,9 +202,9 @@ def fig_ablation():
     x = np.arange(len(KEYS))
     w = 0.36
     fig, ax = plt.subplots(figsize=(6.2, 3.4))
-    ax.bar(x - w / 2, dA, w, yerr=eA, capsize=3, label="w/o evidence anchoring",
+    ax.bar(x - w / 2, dA, w, yerr=eA, capsize=3, label="w/o LEA",
            color=C["blue"], error_kw={"lw": 1.0})
-    ax.bar(x + w / 2, dB, w, yerr=eB, capsize=3, label="w/o graph calibration",
+    ax.bar(x + w / 2, dB, w, yerr=eB, capsize=3, label="w/o GEC",
            color=C["orange"], error_kw={"lw": 1.0})
     ax.axhline(0.0, color=C["grey"], lw=0.9)
     ax.set_xticks(x)
