@@ -34,7 +34,9 @@ def main() -> None:
 
     rows = []
     for dataset, rel_path in FINAL_CHECKPOINTS.items():
-        ck = torch.load(os.path.join(ROOT, rel_path), map_location="cpu")
+        ck = torch.load(
+            os.path.join(ROOT, rel_path), map_location="cpu", weights_only=False
+        )
         state = ck.get("model_state_dict") or ck.get("state_dict") or ck
         gate = state["anchor_gate"]
         for channel in range(gate.shape[0]):
