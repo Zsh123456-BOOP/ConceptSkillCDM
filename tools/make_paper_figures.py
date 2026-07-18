@@ -214,9 +214,58 @@ def fig_ablation():
     save(fig, "fig_ablation")
 
 
+def fig_leakage_fan():
+    df = pd.read_csv(os.path.join(RESULTS, "leakage_fan.csv"))
+    rng = np.random.RandomState(11)
+    x = df["n"].to_numpy() + rng.uniform(-0.28, 0.28, size=len(df))
+    fig, ax = plt.subplots(figsize=(5.8, 3.6))
+    for label, color, name in ((1, C["blue"], "correct (y=1)"), (0, C["vermillion"], "incorrect (y=0)")):
+        mask = df["label"].to_numpy() == label
+        ax.scatter(x[mask], df["delta"].to_numpy()[mask], s=5, alpha=0.3,
+                   color=color, linewidths=0, label=name, rasterized=True)
+    n_cont = np.linspace(0, 12.4, 200)
+    env = (n_cont + 1) / ((n_cont + 2) * (n_cont + 3))
+    ax.plot(n_cont, env, color="black", ls="--", lw=1.3, label="theory envelope")
+    ax.plot(n_cont, -env, color="black", ls="--", lw=1.3)
+    ax.axhline(0.0, color=C["grey"], lw=0.8, ls=":")
+    ax.set_xlim(-0.6, 12.6)
+    ax.set_xlabel("same-concept train responses $n$")
+    ax.set_ylabel("leakage shift of the statistic")
+    leg = ax.legend(fontsize=9, frameon=False, loc="upper right")
+    for handle in leg.legend_handles:
+        if hasattr(handle, "set_alpha"):
+            handle.set_alpha(1.0)
+        if hasattr(handle, "set_sizes"):
+            handle.set_sizes([28])
+    save(fig, "fig_leakage_fan")
+
+
+def fig_gate_reliability():
+    df = pd.read_csv(os.path.join(RESULTS, "gate_reliability.csv"))
+    direct = df[df["channel"] == 0].set_index("dataset")
+    n = np.linspace(0, 30, 300)
+    fig, ax = plt.subplots(figsize=(5.6, 3.4))
+    colors = [C["blue"], C["orange"], C["green"], C["vermillion"], C["purple"], C["sky"]]
+    for (key, name), color in zip(zip(KEYS, DATASETS), colors):
+        if key not in direct.index:
+            continue
+        a, b = direct.loc[key, "a"], direct.loc[key, "b"]
+        gate = 1.0 / (1.0 + np.exp(-(a + b * np.log1p(n))))
+        ax.plot(n, gate, color=color, lw=1.8, label=name)
+    ax.plot(n, n / (n + 2), color="black", ls="--", lw=1.6,
+            label="shrinkage weight $n/(n+2)$")
+    ax.set_ylim(0, 1.05)
+    ax.set_xlabel("same-concept train responses $n$")
+    ax.set_ylabel("gate value / data weight")
+    ax.legend(fontsize=8, frameon=False, ncol=2, loc="lower right")
+    save(fig, "fig_gate_reliability")
+
+
 if __name__ == "__main__":
     fig_motivation()
     fig_framework()
     fig_gain_curve()
     fig_channel_scatter()
     fig_ablation()
+    fig_leakage_fan()
+    fig_gate_reliability()
