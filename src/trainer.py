@@ -231,10 +231,17 @@ def _temporary_model_state(
         base_model.load_state_dict(live_state, strict=STRICT_CHECKPOINT_LOADING)
 
 
+# Parameters removed from the model that may still exist in sealed checkpoints.
+# Dropped on load so strict loading of pre-cleanup checkpoints keeps working.
+DEPRECATED_STATE_KEYS: Tuple[str, ...] = ("anchor_spline_raw",)
+
+
 def _strip_module_prefix(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     return {
         key[len("module.") :] if key.startswith("module.") else key: value
         for key, value in state_dict.items()
+        if key not in DEPRECATED_STATE_KEYS
+        and (not key.startswith("module.") or key[len("module.") :] not in DEPRECATED_STATE_KEYS)
     }
 
 
@@ -265,10 +272,6 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         ),
         "anchor_multihead_prop": bool(
             _source_get(source, "anchor_multihead_prop", True)
-        ),
-        "anchor_spline": bool(_source_get(source, "anchor_spline", False)),
-        "anchor_cross_gate": bool(
-            _source_get(source, "anchor_cross_gate", False)
         ),
         "prediction_head": str(_source_get(source, "prediction_head", "irt2pl")),
         "knowledge_dim": int(_source_get(source, "knowledge_dim", 32)),
@@ -342,8 +345,6 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "evidence_anchor_mode",
         "evidence_state_injection",
         "anchor_multihead_prop",
-        "anchor_spline",
-        "anchor_cross_gate",
         "prediction_head",
         "seed",
         "batch_size",
@@ -382,7 +383,6 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "graph_prior_mode",
         "min_stu_interactions",
         "min_exer_interactions",
-        "train_label_noise",
     )
     clean = {
         key: getattr(args, key)
@@ -908,9 +908,7 @@ def _create_loaders(args: Any, logger, *, shuffle_train: bool = True):
         graph_prior_mode=str(getattr(args, "graph_prior_mode", "evidence")),
         seed=int(getattr(args, "seed", 42)),
         load_test=False,
-        train_label_noise=float(getattr(args, "train_label_noise", 0.0)),
         exposure_prior_pmi=bool(getattr(args, "exposure_prior_pmi", False)),
-        exposure_pmi_beta=float(getattr(args, "exposure_pmi_beta", 0.5)),
     )
     if test_loader is not None:
         raise RuntimeError("training loader unexpectedly opened the sealed test split")

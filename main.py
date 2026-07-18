@@ -121,8 +121,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=_parse_bool,
         nargs="?",
         const=True,
-        default=True,
-        help="Decision probe: False routes evidence exclusively through the anchor.",
+        default=False,
+        help="When False (default), response statistics reach theta only through the anchor.",
     )
     parser.add_argument(
         "--anchor_multihead_prop",
@@ -131,22 +131,6 @@ def build_parser() -> argparse.ArgumentParser:
         const=True,
         default=True,
         help="One propagated anchor channel per relation head (production default).",
-    )
-    parser.add_argument(
-        "--anchor_spline",
-        type=_parse_bool,
-        nargs="?",
-        const=True,
-        default=False,
-        help="Anchor lever probe: monotone per-channel calibration curve.",
-    )
-    parser.add_argument(
-        "--anchor_cross_gate",
-        type=_parse_bool,
-        nargs="?",
-        const=True,
-        default=False,
-        help="Anchor lever probe: gates also read direct-evidence strength.",
     )
     parser.add_argument(
         "--prediction_head",
@@ -160,19 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         const=True,
         default=False,
-        help="PMI-normalize co-exposure counts before row normalization (relation-identity sharpening probe).",
-    )
-    parser.add_argument(
-        "--exposure_pmi_beta",
-        type=float,
-        default=0.5,
-        help="Popularity-normalization strength for the PMI co-exposure probe (0.5=sqrt, 1.0=full).",
-    )
-    parser.add_argument(
-        "--train_label_noise",
-        type=float,
-        default=0.0,
-        help="Diagnostic guess/slip noise: fraction of train labels flipped before any statistic is built.",
+        help="PMI-normalize co-exposure counts before row normalization (per-dataset config).",
     )
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--max_train_batches", type=int, default=None)
@@ -301,10 +273,6 @@ def _validate_args(args: argparse.Namespace) -> None:
             raise SystemExit(f"error: --{name} must be in [0, 1], got {value}")
     if float(args.graph_entropy_min) > float(args.graph_entropy_max):
         raise SystemExit("error: --graph_entropy_min cannot exceed --graph_entropy_max")
-    if not 0.0 <= float(args.train_label_noise) <= 0.5:
-        raise SystemExit(
-            f"error: --train_label_noise must be in [0, 0.5], got {args.train_label_noise}"
-        )
 
 
 def _seed_everything(seed: int) -> None:

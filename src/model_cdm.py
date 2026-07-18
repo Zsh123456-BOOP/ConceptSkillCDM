@@ -53,8 +53,6 @@ class CognitiveDiagnosisModel(nn.Module):
         evidence_anchor_mode: str = "full",
         evidence_state_injection: bool = True,
         anchor_multihead_prop: bool = True,
-        anchor_spline: bool = False,
-        anchor_cross_gate: bool = False,
         prediction_head: str = "irt2pl",
         knowledge_dim: int = 32,
         num_relation_heads: int = 4,
@@ -91,16 +89,11 @@ class CognitiveDiagnosisModel(nn.Module):
                 f"evidence_anchor_mode must be one of {EVIDENCE_ANCHOR_MODES}, got {evidence_anchor_mode!r}"
             )
         self.evidence_anchor_mode = anchor_mode if self.use_response_evidence else "off"
-        # Decision probe: when False, evidence skips the initial-state
-        # projection and reaches theta exclusively through the anchor.
+        # When False, response statistics skip the initial-state projection
+        # and reach theta exclusively through the anchor (production default).
         self.evidence_state_injection = bool(evidence_state_injection)
-        # Single-pathway anchor levers (each independently switchable):
-        #   multihead_prop -> one propagated channel per relation head
-        #   spline         -> per-channel monotone calibration curve
-        #   cross_gate     -> gates may also read |direct rate| strength
+        # One propagated anchor channel per relation head.
         self.anchor_multihead_prop = bool(anchor_multihead_prop)
-        self.anchor_spline = bool(anchor_spline)
-        self.anchor_cross_gate = bool(anchor_cross_gate)
         # Head probe: "irt2pl" (default single scalar 2PL) or "ncd_mlp"
         # (NCDM-style positive-weight monotone MLP over per-concept 2PL terms).
         self.prediction_head = str(prediction_head)
@@ -110,25 +103,13 @@ class CognitiveDiagnosisModel(nn.Module):
             )
         else:
             self._anchor_channels = _ANCHOR_CHANNELS[self.evidence_anchor_mode]
-        # Count-conditioned anchor gates: sigmoid(a + b*log1p(n) [+ c*|rate|])
-        # per channel. a=2 starts near fully-open (~0.88) so the initial
-        # behaviour matches an ungated anchor; b (and c when enabled) learn
-        # how trust responds to observation counts / direct-evidence strength.
+        # Count-conditioned anchor gates: sigmoid(a + b*log1p(n)) per channel.
+        # a=2 starts near fully-open (~0.88) so the initial behaviour matches an
+        # ungated anchor; b learns how trust responds to observation counts. The
+        # third column is retained for checkpoint compatibility and unused.
         gate_init = torch.zeros(max(1, self._anchor_channels), 3)
         gate_init[:, 0] = 2.0
         self.anchor_gate = nn.Parameter(gate_init)
-        # Monotone calibration: spline(e) = sum_k softplus(w_k) tanh(e / s_k)
-        # over fixed scales; initial weights make it near-identity so the
-        # lever starts as a no-op and learns curvature only when it helps.
-        self.register_buffer(
-            "anchor_spline_scales",
-            torch.tensor([0.5, 1.0, 2.0, 4.0]),
-            persistent=False,
-        )
-        spline_init = torch.log(
-            torch.expm1(torch.tensor([0.125, 0.25, 0.5, 1.0]))
-        ).repeat(max(1, self._anchor_channels), 1)
-        self.anchor_spline_raw = nn.Parameter(spline_init)
         self.lambda_graph_entropy = max(0.0, float(lambda_graph_entropy))
         self.graph_entropy_min = float(graph_entropy_min)
         self.graph_entropy_max = float(graph_entropy_max)
@@ -431,21 +412,10 @@ class CognitiveDiagnosisModel(nn.Module):
         rate_evidence = response_evidence[..., 0]
         residual_evidence = response_evidence[..., 1]
         log_count = torch.log1p(loo_count.to(dtype=rate_evidence.dtype))
-        rate_strength = rate_evidence.abs()
-
-        def calibrated(channel: torch.Tensor, index: int) -> torch.Tensor:
-            if not self.anchor_spline:
-                return channel
-            weights = torch.nn.functional.softplus(self.anchor_spline_raw[index])
-            scales = self.anchor_spline_scales.to(dtype=channel.dtype)
-            basis = torch.tanh(channel.unsqueeze(-1) / scales)
-            return (basis * weights.to(dtype=channel.dtype)).sum(dim=-1)
 
         def gated(channel: torch.Tensor, index: int, counts: torch.Tensor) -> torch.Tensor:
             logit = self.anchor_gate[index, 0] + self.anchor_gate[index, 1] * counts
-            if self.anchor_cross_gate:
-                logit = logit + self.anchor_gate[index, 2] * rate_strength
-            return calibrated(channel, index) * torch.sigmoid(logit)
+            return channel * torch.sigmoid(logit)
 
         channels = [
             gated(rate_evidence, 0, log_count),
