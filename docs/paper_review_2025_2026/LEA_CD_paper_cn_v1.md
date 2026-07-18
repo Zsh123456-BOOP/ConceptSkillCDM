@@ -20,7 +20,7 @@
 
 ![图 1　六个数据集上的同概念作答覆盖与标签泄漏现象。(a) 测试作答按目标概念的同概念训练作答次数分桶的占比，浅色代表作答次数较少的分桶；(b) 不经训练的正确率统计在三种构造下的测试 AUC：剔除自身构造（绿色，图例 leave-one-out）、计入自身构造（橙色，self-leak）、全量计入构造（灰色，corpus-leak）。](figures/fig_motivation.png)
 
-基于上述发现，本文提出 LEA-CD（Leakage-free Evidence Anchoring for Cognitive Diagnosis）。针对泄漏风险，防泄漏统计锚定模块（Leakage-free Evidence Anchoring，LEA）在训练时从每条统计中扣除当前样本的标签贡献，并通过计数门控与非负权重把留一统计叠加到概念能力上；针对同概念作答稀缺，概念图校准模块（Graph Evidence Calibration，GEC）从训练日志构造不使用标签的概念关系图，把相邻概念的作答统计沿行随机关系传播到目标概念。两个模块共享同一个标量 2PL 读出。
+基于上述发现，本文提出 LEA-CD（Leakage-free Evidence Anchoring for Cognitive Diagnosis）。针对泄漏风险，防泄漏统计锚定模块（Leakage-free Evidence Anchoring，LEA）在训练时从每条统计中扣除当前样本的标签贡献，并通过计数门控与非负权重把剔除后的统计叠加到概念能力上；针对同概念作答稀缺，概念图校准模块（Graph Evidence Calibration，GEC）从训练日志构造不使用标签的概念关系图，把相邻概念的作答统计沿行随机关系传播到目标概念。两个模块共享同一个标量 2PL 读出。
 
 本文的主要贡献概括如下：
 
@@ -60,7 +60,7 @@ $$\Delta_i=\frac{y_i-\hat m_i}{n_{s,c}+2},$$
 
 设学生、习题与概念集合分别为 $\mathcal S$、$\mathcal E$ 与 $\mathcal C$（$|\mathcal C|=K$）。Q 矩阵 $\mathbf Q\in\{0,1\}^{|\mathcal E|\times K}$ 给出习题与概念的关联。训练作答集合为 $\mathcal R=\{(s_i,e_i,y_i)\}$，$y_i\in\{0,1\}$。给定学生 $s$、习题 $e$ 及其概念集合 $\mathcal C_e=\{c\mid Q_{e,c}=1\}$，模型输出答对概率 $\hat y$。测试作答按目标概念的同概念训练作答次数分桶，仅用于分组分析，不改变训练与评测样本。全部统计量、图先验与 ID 映射只从训练集构造。
 
-整体框架如图 2 所示。训练日志提供两类输入：概念共现结构与作答统计。GEC 由共现结构学习行随机关系图，用于平滑概念状态并为统计传播提供权重；LEA 构造留一作答统计，经计数门控修正概念能力。两个模块在 Q 掩码的能力读出处融合，经单一 2PL 项输出预测。
+整体框架如图 2 所示。训练日志提供两类输入：概念共现结构与作答统计。GEC 由共现结构学习行随机关系图，用于平滑概念状态并为统计传播提供权重；LEA 构造剔除当前样本的作答统计，经计数门控修正概念能力。两个模块在 Q 掩码的能力读出处融合，经单一 2PL 项输出预测。
 
 ![图 2　LEA-CD 框架。训练日志分别提供不使用标签的图先验（上）与剔除当前样本的作答统计（下）；关系学习输出行随机概念图，GNN 编码概念状态；LEA 以计数门控通道修正概念能力；Q 掩码读出后经单一 2PL 项输出预测。](figures/fig_framework.png)
 
