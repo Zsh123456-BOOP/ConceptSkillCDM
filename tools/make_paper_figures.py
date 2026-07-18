@@ -247,13 +247,13 @@ def fig_gate_reliability():
     fig, ax = plt.subplots(figsize=(5.6, 3.4))
     colors = [C["blue"], C["orange"], C["green"], C["vermillion"], C["purple"], C["sky"]]
     for (key, name), color in zip(zip(KEYS, DATASETS), colors):
-        if key not in direct.index:
+        if key not in direct.index or key == "junyi":
             continue
         a, b = direct.loc[key, "a"], direct.loc[key, "b"]
         gate = 1.0 / (1.0 + np.exp(-(a + b * np.log1p(n))))
         ax.plot(n, gate, color=color, lw=1.8, label=name)
     ax.plot(n, n / (n + 2), color="black", ls="--", lw=1.6,
-            label="shrinkage weight $n/(n+2)$")
+            label="statistic data weight $n/(n+2)$")
     ax.set_ylim(0, 1.05)
     ax.set_xlabel("same-concept train responses $n$")
     ax.set_ylabel("gate value / data weight")
