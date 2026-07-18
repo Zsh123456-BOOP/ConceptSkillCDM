@@ -55,6 +55,7 @@ class CognitiveDiagnosisModel(nn.Module):
         anchor_multihead_prop: bool = True,
         anchor_spline: bool = False,
         anchor_cross_gate: bool = False,
+        prediction_head: str = "irt2pl",
         knowledge_dim: int = 32,
         num_relation_heads: int = 4,
         num_gnn_layers: int = 2,
@@ -100,6 +101,9 @@ class CognitiveDiagnosisModel(nn.Module):
         self.anchor_multihead_prop = bool(anchor_multihead_prop)
         self.anchor_spline = bool(anchor_spline)
         self.anchor_cross_gate = bool(anchor_cross_gate)
+        # Head probe: "irt2pl" (default single scalar 2PL) or "ncd_mlp"
+        # (NCDM-style positive-weight monotone MLP over per-concept 2PL terms).
+        self.prediction_head = str(prediction_head)
         if self.evidence_anchor_mode == "full":
             self._anchor_channels = 2 + (
                 self.num_relation_heads if self.anchor_multihead_prop else 1
@@ -203,6 +207,7 @@ class CognitiveDiagnosisModel(nn.Module):
             knowledge_dim=self.knowledge_dim,
             num_concepts=self.num_concepts,
             evidence_anchor_channels=self._anchor_channels,
+            prediction_head=self.prediction_head,
         )
         self.exercise_encoder = ExerciseDifficultyEncoder(num_exercises=self.num_exercises)
 

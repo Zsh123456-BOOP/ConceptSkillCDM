@@ -45,6 +45,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "architecture",
     "use_response_evidence",
     "evidence_anchor_mode",
+    "prediction_head",
     "graph_prior_mode",
     "graph_topk",
     "disable_self_loop",
@@ -269,6 +270,7 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "anchor_cross_gate": bool(
             _source_get(source, "anchor_cross_gate", False)
         ),
+        "prediction_head": str(_source_get(source, "prediction_head", "irt2pl")),
         "knowledge_dim": int(_source_get(source, "knowledge_dim", 32)),
         "num_relation_heads": int(_source_get(source, "num_relation_heads", 4)),
         "num_gnn_layers": max(0, int(_source_get(source, "num_gnn_layers", 0))),
@@ -342,6 +344,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "anchor_multihead_prop",
         "anchor_spline",
         "anchor_cross_gate",
+        "prediction_head",
         "seed",
         "batch_size",
         "epochs",

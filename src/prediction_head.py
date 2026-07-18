@@ -26,6 +26,19 @@ class ExerciseDifficultyEncoder(nn.Module):
         return b, a
 
 
+class _PositiveLinear(nn.Module):
+    """Linear layer whose weights stay positive via softplus reparameterisation."""
+
+    def __init__(self, in_features: int, out_features: int):
+        super().__init__()
+        self.raw_weight = nn.Parameter(torch.empty(out_features, in_features))
+        self.bias = nn.Parameter(torch.zeros(out_features))
+        nn.init.normal_(self.raw_weight, mean=-3.0, std=0.5)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return F.linear(inputs, F.softplus(self.raw_weight), self.bias)
+
+
 class CognitiveDiagnosisHead(nn.Module):
     """Aggregate Q-masked concept abilities, then apply one scalar 2PL.
 
@@ -41,16 +54,30 @@ class CognitiveDiagnosisHead(nn.Module):
     weights keep the readout monotonic in the evidence.
     """
 
+    _HEAD_MODES = ("irt2pl", "ncd_mlp")
+
     def __init__(
         self,
         knowledge_dim: int,
         num_concepts: int,
         evidence_anchor_channels: int = 0,
+        prediction_head: str = "irt2pl",
     ):
         super().__init__()
         self.knowledge_dim = int(knowledge_dim)
         self.num_concepts = int(num_concepts)
         self.evidence_anchor_channels = max(0, int(evidence_anchor_channels))
+        if prediction_head not in self._HEAD_MODES:
+            raise ValueError(f"prediction_head must be one of {self._HEAD_MODES}, got {prediction_head!r}")
+        self.prediction_head = prediction_head
+        if self.prediction_head == "ncd_mlp":
+            # NCDM-style monotone interaction function: positive-weight MLP over
+            # the Q-masked per-concept 2PL terms a*(theta_c - b). Sigmoid
+            # activations + positive weights keep the logit monotone in theta_c.
+            self.mlp_fc1 = _PositiveLinear(self.num_concepts, 512)
+            self.mlp_fc2 = _PositiveLinear(512, 256)
+            self.mlp_fc3 = _PositiveLinear(256, 1)
+            self.mlp_dropout = nn.Dropout(0.5)
         self.theta_proj = nn.Linear(self.knowledge_dim, 1, bias=True)
         nn.init.normal_(self.theta_proj.weight, mean=0.0, std=0.02)
         nn.init.zeros_(self.theta_proj.bias)
@@ -119,7 +146,13 @@ class CognitiveDiagnosisHead(nn.Module):
         mask = concept_mask.to(dtype=theta_c.dtype)
         denom = mask.sum(dim=1).clamp(min=1.0)
         theta_e = (theta_c * mask).sum(dim=1) / denom
-        irt_logit = a * (theta_e - b)
+        if self.prediction_head == "ncd_mlp":
+            x = a.unsqueeze(1) * (theta_c - b.unsqueeze(1)) * mask
+            hidden = self.mlp_dropout(torch.sigmoid(self.mlp_fc1(x)))
+            hidden = self.mlp_dropout(torch.sigmoid(self.mlp_fc2(hidden)))
+            irt_logit = self.mlp_fc3(hidden).squeeze(-1)
+        else:
+            irt_logit = a * (theta_e - b)
 
         if not return_details:
             return irt_logit

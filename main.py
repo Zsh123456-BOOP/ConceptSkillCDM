@@ -149,6 +149,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Anchor lever probe: gates also read direct-evidence strength.",
     )
     parser.add_argument(
+        "--prediction_head",
+        choices=("irt2pl", "ncd_mlp"),
+        default="irt2pl",
+        help="Head probe: single scalar 2PL (default) or NCDM-style monotone MLP.",
+    )
+    parser.add_argument(
         "--exposure_prior_pmi",
         type=_parse_bool,
         nargs="?",
