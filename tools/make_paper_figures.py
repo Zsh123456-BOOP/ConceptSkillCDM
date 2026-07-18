@@ -1,10 +1,8 @@
 #!/usr/bin/env python
 """Generate all main paper figures from the final result tables.
 
-Inputs: results/evidence_gain_curve_v3.csv (bootstrap CIs incl. pooled),
-results/anchor_contribution_v2.csv (usage + causal drops),
-results/multiseed_auc_summary.csv (6-seed mean/std). The leakage-probe
-numbers are embedded from the sealed runs recorded in
+Inputs: results/evidence_gain_curve_v3.csv (bootstrap CIs incl. pooled). The
+leakage-probe numbers are embedded from the sealed runs recorded in
 docs/analysis_propositions_20260716.md. Writes PDF + PNG to
 docs/paper_figures/.
 """
@@ -163,57 +161,6 @@ def fig_gain_curve():
     save(fig, "fig_gain_curve")
 
 
-def fig_channel_scatter():
-    df = pd.read_csv(os.path.join(RESULTS, "anchor_contribution_v2.csv"))
-    order = {k: i for i, k in enumerate(KEYS)}
-    df = df.sort_values(by="dataset", key=lambda s: s.map(order))
-    chans = [("direct", "drop_direct", C["blue"]),
-             ("residual", "drop_residual", C["green"]),
-             ("prop_h1", "drop_prop_h1", C["orange"]),
-             ("prop_h2", "drop_prop_h2", C["purple"])]
-    fig, ax = plt.subplots(figsize=(5.6, 3.6))
-    for use_col, drop_col, color in chans:
-        ax.scatter(df[use_col], df[drop_col] * 1e3, s=52, color=color,
-                   edgecolors="white", linewidths=1.0, label=use_col.replace("_", "-"), zorder=3)
-    ax.axhline(0.0, color=C["grey"], lw=0.9, ls=":")
-    names = dict(zip(KEYS, DATASETS))
-    for _, r in df.iterrows():
-        if r["drop_direct"] * 1e3 > 1.0:
-            ax.annotate(names[r["dataset"]], (r["direct"], r["drop_direct"] * 1e3),
-                        xytext=(4, 4), textcoords="offset points", fontsize=8)
-    jy = df[df["dataset"] == "junyi"].iloc[0]
-    ax.annotate("Junyi: propagated only", (jy["prop_h1"], jy["drop_prop_h1"] * 1e3),
-                xytext=(8, -14), textcoords="offset points", fontsize=8,
-                arrowprops=dict(arrowstyle="-", lw=0.8, color="#444444"))
-    ax.set_xlabel(r"channel usage  $|\Delta\theta|$")
-    ax.set_ylabel(r"AUC drop when zeroed ($\times 10^{-3}$)")
-    ax.legend(fontsize=9, frameon=False, loc="upper left")
-    save(fig, "fig_channel_scatter")
-
-
-def fig_ablation():
-    df = pd.read_csv(os.path.join(RESULTS, "multiseed_auc_summary.csv"))
-    piv_m = df.pivot(index="dataset", columns="variant", values="auc_mean").loc[KEYS]
-    piv_s = df.pivot(index="dataset", columns="variant", values="auc_std").loc[KEYS]
-    dA = (piv_m["full"] - piv_m["woA"]).to_numpy() * 1e3
-    dB = (piv_m["full"] - piv_m["woB"]).to_numpy() * 1e3
-    eA = np.sqrt(piv_s["full"] ** 2 + piv_s["woA"] ** 2).to_numpy() * 1e3
-    eB = np.sqrt(piv_s["full"] ** 2 + piv_s["woB"] ** 2).to_numpy() * 1e3
-    x = np.arange(len(KEYS))
-    w = 0.36
-    fig, ax = plt.subplots(figsize=(6.2, 3.4))
-    ax.bar(x - w / 2, dA, w, yerr=eA, capsize=3, label="w/o LEA",
-           color=C["blue"], error_kw={"lw": 1.0})
-    ax.bar(x + w / 2, dB, w, yerr=eB, capsize=3, label="w/o GEC",
-           color=C["orange"], error_kw={"lw": 1.0})
-    ax.axhline(0.0, color=C["grey"], lw=0.9)
-    ax.set_xticks(x)
-    ax.set_xticklabels(DATASETS, rotation=20)
-    ax.set_ylabel(r"AUC drop when removed ($\times 10^{-3}$)")
-    ax.legend(fontsize=9, frameon=False)
-    save(fig, "fig_ablation")
-
-
 def fig_leakage_fan():
     df = pd.read_csv(os.path.join(RESULTS, "leakage_fan.csv"))
     rng = np.random.RandomState(11)
@@ -287,7 +234,5 @@ if __name__ == "__main__":
     fig_motivation()
     fig_framework()
     fig_gain_curve()
-    fig_channel_scatter()
-    fig_ablation()
     fig_leakage_fan()
     fig_neighbor_decay()
