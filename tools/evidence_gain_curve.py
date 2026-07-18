@@ -82,7 +82,7 @@ def _bootstrap_gap_ci(labels, probs_full, probs_woa, students, mask, reps, rng):
     """Student-level paired bootstrap CI for AUC(full) - AUC(woA) in a bucket."""
     idx = np.nonzero(mask)[0]
     if len(idx) == 0:
-        return None, None
+        return None, None, None
     student_ids = students[idx]
     unique_students = np.unique(student_ids)
     by_student = {s: idx[student_ids == s] for s in unique_students}
@@ -100,8 +100,9 @@ def _bootstrap_gap_ci(labels, probs_full, probs_woa, students, mask, reps, rng):
         )["auc"]
         gaps.append(auc_f - auc_w)
     if len(gaps) < max(10, reps // 4):
-        return None, None
-    return float(np.percentile(gaps, 2.5)), float(np.percentile(gaps, 97.5))
+        return None, None, None
+    gaps = np.asarray(gaps)
+    return float(np.percentile(gaps, 2.5)), float(np.percentile(gaps, 97.5)), gaps
 
 
 def main() -> None:
@@ -130,6 +131,7 @@ def main() -> None:
     rng = np.random.RandomState(args.bootstrap_seed)
 
     records = []
+    sample_store = {}
     for dataset_name, dirs in pairs.items():
         full_model, loaded_args, info_dict = _load(dirs["full"], device)
         labels, probs_full, support, students = _rows(
@@ -150,9 +152,11 @@ def main() -> None:
                 continue
             ci_low, ci_high = (None, None)
             if args.bootstrap > 0:
-                ci_low, ci_high = _bootstrap_gap_ci(
+                ci_low, ci_high, gap_samples = _bootstrap_gap_ci(
                     labels, probs_full, probs_woa, students, mask, args.bootstrap, rng
                 )
+                if gap_samples is not None:
+                    sample_store[(dataset_name, low)] = gap_samples
             records.append(
                 {
                     "dataset": dataset_name,
@@ -177,6 +181,15 @@ def main() -> None:
         pooled_rows = []
         for (low, high), group in group_frame.groupby(["bucket_low", "bucket_high"]):
             weight = group["rows"] / group["rows"].sum()
+            ci_low, ci_high = None, None
+            keys = [(ds, low) for ds in group["dataset"]]
+            if all(k in sample_store for k in keys):
+                reps_min = min(len(sample_store[k]) for k in keys)
+                pooled_samples = np.zeros(reps_min)
+                for w, k in zip(weight.to_numpy(), keys):
+                    pooled_samples += w * sample_store[k][:reps_min]
+                ci_low = float(np.percentile(pooled_samples, 2.5))
+                ci_high = float(np.percentile(pooled_samples, 97.5))
             pooled_rows.append(
                 {
                     "dataset": tag,
@@ -186,8 +199,8 @@ def main() -> None:
                     "auc_full": float((group["auc_full"] * weight).sum()),
                     "auc_woA": float((group["auc_woA"] * weight).sum()),
                     "gain": float((group["gain"] * weight).sum()),
-                    "gain_ci_low": None,
-                    "gain_ci_high": None,
+                    "gain_ci_low": ci_low,
+                    "gain_ci_high": ci_high,
                 }
             )
         return pooled_rows
