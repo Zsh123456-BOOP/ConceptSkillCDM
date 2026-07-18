@@ -261,6 +261,28 @@ def fig_gate_reliability():
     save(fig, "fig_gate_reliability")
 
 
+def fig_neighbor_decay():
+    df = pd.read_csv(os.path.join(RESULTS, "neighbor_information.csv"))
+    base = df[df["tier"] == "concept_mean"].set_index("dataset")["auc_all"]
+    tiers = ["1hop", "2hop", "random"]
+    labels = ["1-hop", "2-hop", "random"]
+    x = np.arange(len(tiers))
+    colors = [C["blue"], C["orange"], C["green"], C["vermillion"], C["purple"], C["sky"]]
+    fig, ax = plt.subplots(figsize=(5.4, 3.5))
+    for (key, name), color in zip(zip(KEYS, DATASETS), colors):
+        sub = df[df["dataset"] == key].set_index("tier")
+        delta = [sub.loc[t, "auc_all"] - base[key] for t in tiers]
+        ax.plot(x, delta, color=color, lw=1.8, marker="o", ms=5,
+                mec="white", mew=0.8, label=name)
+    ax.axhline(0.0, color=C["grey"], lw=0.9, ls=":")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_xlabel("source of the aggregated neighbor statistics")
+    ax.set_ylabel("AUC gain over concept-mean baseline")
+    ax.legend(fontsize=8, frameon=False, ncol=2)
+    save(fig, "fig_neighbor_decay")
+
+
 if __name__ == "__main__":
     fig_motivation()
     fig_framework()
@@ -268,4 +290,4 @@ if __name__ == "__main__":
     fig_channel_scatter()
     fig_ablation()
     fig_leakage_fan()
-    fig_gate_reliability()
+    fig_neighbor_decay()
