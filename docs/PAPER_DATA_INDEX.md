@@ -20,10 +20,9 @@ baseline 数字（IRT/DINA/NCDM/KaNCD/ICDM/RCD/ORCDF/SCD/SVGCD）引自 KnoField
 | 图 | 内容 | 源数据 | 脚本 |
 |---|---|---|---|
 | 图1 fig_motivation | (a) 同概念作答覆盖分桶占比；(b) 三种构造的统计 AUC | `results/evidence_gain_curve_v3.csv`（rows 列）；泄漏数字内嵌自 `tools/evidence_only_probe.py --leak_mode` | `tools/make_paper_figures.py` |
-| 图2 fig_leakage_fan | 逐样本泄漏量 vs n + 命题1 理论包络 | `results/leakage_fan.csv` | `tools/leakage_fan.py` → 同上 |
-| 图3 fig_neighbor_decay | 邻居统计的预测增益按图距离分档 | `results/neighbor_information.csv` | `tools/neighbor_information_probe.py` → 同上 |
-| 图4 fig_framework | LEA-CD 框架示意 | — | `make_paper_figures.py` 内嵌 |
-| 图5 fig_gain_curve | 合并增益倒 U 曲线 + 95% bootstrap CI | `results/evidence_gain_curve_v3.csv` | `tools/evidence_gain_curve.py --bootstrap 1000` → 同上 |
+| 图2 fig_analysis_probes | (a) 逐样本泄漏量 + 命题1 理论包络；(b) 邻居统计的预测增益按图距离分档 | `results/leakage_fan.csv`；`results/neighbor_information.csv` | `tools/leakage_fan.py` + `tools/neighbor_information_probe.py` → 同上 |
+| 图3 fig_framework | LEA-CD 框架示意 | — | `make_paper_figures.py` 内嵌 |
+| 图4 fig_gain_curve | 合并增益倒 U 曲线 + 95% bootstrap CI | `results/evidence_gain_curve_v3.csv` | `tools/evidence_gain_curve.py --bootstrap 1000` → 同上 |
 
 图文件：`docs/paper_figures/*.pdf`（矢量，投稿用）与 `*.png`（预览）；
 论文内嵌副本在 `docs/paper_review_2025_2026/figures/`。
@@ -51,9 +50,9 @@ baseline 数字（IRT/DINA/NCDM/KaNCD/ICDM/RCD/ORCDF/SCD/SVGCD）引自 KnoField
 | 工具 | 用途 |
 |---|---|
 | `tools/evidence_only_probe.py` | 不经训练的统计探针 / 三种泄漏构造 |
-| `tools/leakage_fan.py` | 图2 逐样本泄漏量（闭式） |
-| `tools/neighbor_information_probe.py` | 图3 邻居信息量分档（闭式） |
-| `tools/evidence_gain_curve.py` | 图5 分桶增益 + bootstrap CI |
+| `tools/leakage_fan.py` | 图2(a) 逐样本泄漏量（闭式） |
+| `tools/neighbor_information_probe.py` | 图2(b) 邻居信息量分档（闭式） |
+| `tools/evidence_gain_curve.py` | 图4 分桶增益 + bootstrap CI |
 | `tools/anchor_contribution.py` | 表4 通道使用量与因果置零 |
 | `tools/aggregate_multiseed.py` | 表2/表3 多 seed 汇总 |
 | `tools/make_paper_figures.py` | 一键生成全部正文图 |

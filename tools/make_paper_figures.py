@@ -161,11 +161,12 @@ def fig_gain_curve():
     save(fig, "fig_gain_curve")
 
 
-def fig_leakage_fan():
+def fig_analysis_probes():
+    fig, (ax, ax2) = plt.subplots(1, 2, figsize=(11.0, 3.6))
+
     df = pd.read_csv(os.path.join(RESULTS, "leakage_fan.csv"))
     rng = np.random.RandomState(11)
     x = df["n"].to_numpy() + rng.uniform(-0.28, 0.28, size=len(df))
-    fig, ax = plt.subplots(figsize=(5.8, 3.6))
     for label, color, name in ((1, C["blue"], "correct (y=1)"), (0, C["vermillion"], "incorrect (y=0)")):
         mask = df["label"].to_numpy() == label
         ax.scatter(x[mask], df["delta"].to_numpy()[mask], s=5, alpha=0.3,
@@ -178,13 +179,33 @@ def fig_leakage_fan():
     ax.set_xlim(-0.6, 12.6)
     ax.set_xlabel("same-concept train responses $n$")
     ax.set_ylabel("leakage shift of the statistic")
+    ax.set_title("(a) per-pair leakage shift", fontsize=11)
     leg = ax.legend(fontsize=9, frameon=False, loc="upper right")
     for handle in leg.legend_handles:
         if hasattr(handle, "set_alpha"):
             handle.set_alpha(1.0)
         if hasattr(handle, "set_sizes"):
             handle.set_sizes([28])
-    save(fig, "fig_leakage_fan")
+
+    nb = pd.read_csv(os.path.join(RESULTS, "neighbor_information.csv"))
+    base = nb[nb["tier"] == "concept_mean"].set_index("dataset")["auc_all"]
+    tiers = ["1hop", "2hop", "random"]
+    labels = ["1-hop", "2-hop", "random"]
+    xs = np.arange(len(tiers))
+    colors = [C["blue"], C["orange"], C["green"], C["vermillion"], C["purple"], C["sky"]]
+    for (key, name), color in zip(zip(KEYS, DATASETS), colors):
+        sub = nb[nb["dataset"] == key].set_index("tier")
+        delta = [sub.loc[t, "auc_all"] - base[key] for t in tiers]
+        ax2.plot(xs, delta, color=color, lw=1.8, marker="o", ms=5,
+                 mec="white", mew=0.8, label=name)
+    ax2.axhline(0.0, color=C["grey"], lw=0.9, ls=":")
+    ax2.set_xticks(xs)
+    ax2.set_xticklabels(labels)
+    ax2.set_xlabel("source of the aggregated neighbor statistics")
+    ax2.set_ylabel("AUC gain over concept-mean baseline")
+    ax2.set_title("(b) neighbor information by graph distance", fontsize=11)
+    ax2.legend(fontsize=8, frameon=False, ncol=2)
+    save(fig, "fig_analysis_probes")
 
 
 def fig_gate_reliability():
@@ -208,31 +229,8 @@ def fig_gate_reliability():
     save(fig, "fig_gate_reliability")
 
 
-def fig_neighbor_decay():
-    df = pd.read_csv(os.path.join(RESULTS, "neighbor_information.csv"))
-    base = df[df["tier"] == "concept_mean"].set_index("dataset")["auc_all"]
-    tiers = ["1hop", "2hop", "random"]
-    labels = ["1-hop", "2-hop", "random"]
-    x = np.arange(len(tiers))
-    colors = [C["blue"], C["orange"], C["green"], C["vermillion"], C["purple"], C["sky"]]
-    fig, ax = plt.subplots(figsize=(5.4, 3.5))
-    for (key, name), color in zip(zip(KEYS, DATASETS), colors):
-        sub = df[df["dataset"] == key].set_index("tier")
-        delta = [sub.loc[t, "auc_all"] - base[key] for t in tiers]
-        ax.plot(x, delta, color=color, lw=1.8, marker="o", ms=5,
-                mec="white", mew=0.8, label=name)
-    ax.axhline(0.0, color=C["grey"], lw=0.9, ls=":")
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels)
-    ax.set_xlabel("source of the aggregated neighbor statistics")
-    ax.set_ylabel("AUC gain over concept-mean baseline")
-    ax.legend(fontsize=8, frameon=False, ncol=2)
-    save(fig, "fig_neighbor_decay")
-
-
 if __name__ == "__main__":
     fig_motivation()
     fig_framework()
     fig_gain_curve()
-    fig_leakage_fan()
-    fig_neighbor_decay()
+    fig_analysis_probes()
