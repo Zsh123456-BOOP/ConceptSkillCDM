@@ -205,6 +205,7 @@ def fig_analysis_probes():
     ax2.set_ylabel("AUC gain over concept-mean baseline")
     ax2.set_title("(b) neighbor information by graph distance", fontsize=11)
     ax2.legend(fontsize=8, frameon=False, ncol=2)
+    fig.subplots_adjust(wspace=0.26)
     save(fig, "fig_analysis_probes")
 
 
