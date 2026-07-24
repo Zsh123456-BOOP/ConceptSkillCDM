@@ -42,6 +42,7 @@ def _pairs(dataset: str, split: str) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "dataset": dataset,
+            "split": split,
             "n": merged["n"].astype(int),
             "label": merged["label"].astype(int),
             "delta": (merged["label"] - m_hat) / (merged["n"] + 3.0),
@@ -58,8 +59,11 @@ def main() -> None:
     parser.add_argument("--per_dataset", type=int, default=1500)
     parser.add_argument("--max_n", type=int, default=12)
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--split", choices=("valid", "test"), default="test")
-    parser.add_argument("--output_csv", default="results/leakage_fan.csv")
+    parser.add_argument("--split", choices=("valid", "test"), default="valid")
+    parser.add_argument(
+        "--output_csv",
+        default="results/leakage_fan_valid.csv",
+    )
     args = parser.parse_args()
 
     rng = np.random.RandomState(args.seed)

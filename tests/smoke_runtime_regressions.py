@@ -90,6 +90,8 @@ def main() -> None:
     expected = model(student_ids, exercise_ids, return_logits=True)
     actual = clone(student_ids, exercise_ids, return_logits=True)
     assert torch.equal(expected, actual)
+    diagnosis = clone.get_student_diagnosis(0)
+    assert torch.isfinite(diagnosis["knowledge_mastery"]).all()
     print("OK: single-path Graph-IRT runtime invariants passed.")
 
 

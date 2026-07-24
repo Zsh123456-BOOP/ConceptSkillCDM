@@ -217,6 +217,27 @@ def _require_existing_test_checkpoints(jobs: Sequence[JobSpec]) -> None:
         )
 
 
+def _require_fresh_training_dirs(jobs: Sequence[JobSpec]) -> None:
+    """Refuse a training launch that could overwrite an earlier run."""
+    conflicts = [
+        str(path)
+        for job in jobs
+        for path in (job.save_dir, job.log_dir)
+        if path.exists()
+    ]
+    if conflicts:
+        preview = "\n  ".join(conflicts[:10])
+        suffix = (
+            f"\n  ... and {len(conflicts) - 10} more"
+            if len(conflicts) > 10
+            else ""
+        )
+        raise FileExistsError(
+            "Training run directories already exist; choose a new --run_id:\n  "
+            f"{preview}{suffix}"
+        )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
     jobs = make_jobs(args)
@@ -240,6 +261,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     if args.run_mode == "test":
         _require_existing_test_checkpoints(jobs)
+    else:
+        _require_fresh_training_dirs(jobs)
 
     running: List[tuple[subprocess.Popen, int, JobSpec]] = []
     gpu_load = {gpu: 0 for gpu in gpus}

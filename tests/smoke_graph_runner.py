@@ -131,6 +131,20 @@ def main() -> None:
         checkpoint_dir.mkdir(parents=True)
         (checkpoint_dir / "best_model.pth").write_bytes(b"smoke")
         runner._require_existing_test_checkpoints([checkpoint_job])
+
+        fresh_job = replace(
+            jobs[0],
+            save_dir=Path(directory) / "fresh_checkpoint",
+            log_dir=Path(directory) / "fresh_log",
+        )
+        runner._require_fresh_training_dirs([fresh_job])
+        fresh_job.save_dir.mkdir()
+        try:
+            runner._require_fresh_training_dirs([fresh_job])
+        except FileExistsError as exc:
+            assert "choose a new --run_id" in str(exc)
+        else:
+            raise AssertionError("training must refuse an existing run directory")
     print("OK: Graph-IRT ablation runner contract passed.")
 
 

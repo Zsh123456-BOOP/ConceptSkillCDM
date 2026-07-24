@@ -116,8 +116,11 @@ def main() -> None:
     )
     parser.add_argument("--topk", type=int, default=16)
     parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--split", choices=("valid", "test"), default="test")
-    parser.add_argument("--output_csv", default="results/neighbor_information.csv")
+    parser.add_argument("--split", choices=("valid", "test"), default="valid")
+    parser.add_argument(
+        "--output_csv",
+        default="results/neighbor_information_valid.csv",
+    )
     args = parser.parse_args()
 
     records = []
@@ -191,6 +194,7 @@ def main() -> None:
             records.append(
                 {
                     "dataset": dataset,
+                    "split": args.split,
                     "tier": tier_name,
                     "auc_all": _auc(labels_arr, aligned),
                     "auc_zero_same_concept": _auc(

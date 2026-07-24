@@ -680,6 +680,7 @@ class CognitiveDiagnosisModel(nn.Module):
                         dtype=self.q_matrix.dtype,
                     ),
                     outcome_to_exclude=None,
+                    outcome_to_neutralize=None,
                 )
                 knowledge_state = self.knowledge_encoder(
                     student_ids,
