@@ -64,7 +64,7 @@ $$\Delta_i=\frac{y_i-\hat m_i}{n_{s,c}+2},$$
 
 本节介绍 LEA-CD。框架的两个模块分别落实第 3 节的两条设计要求：LEA 模块以剔除自身的构造把作答统计送入概念能力，GEC 模块把 1 跳邻居的作答统计传播到目标概念；两者在同一个 Q 掩码能力读出处汇合，经单一 2PL 项输出预测。整体框架如图 3 所示。
 
-![图 3　LEA-CD 框架。训练日志分别提供不使用标签的图先验（上）与剔除当前样本的作答统计（下）；关系学习输出行随机概念图，GNN 编码概念状态；LEA 以计数门控通道修正概念能力；Q 掩码读出后经单一 2PL 项输出预测。](figures/fig_framework.png)
+![图 3　LEA-CD 整体框架。(a) 仅从训练集构造作答记录与 Q 矩阵；(b) GEC 从不使用标签的图先验学习关系矩阵，并编码基础概念状态；(c) LEA 以剔除当前样本的统计构造四个统计通道，经计数门控的非负聚合得到能力修正；(d) 基础状态与修正量在 Q 掩码读出处汇合，并由单一 2PL 项输出预测。](figures/fig_framework.png)
 
 ### 4.1 记号与问题定义
 
@@ -84,9 +84,10 @@ $$\hat r^{\setminus i}_{s,c}=\frac{S^{\setminus i}_{s,c}+\bar m_c}{n^{\setminus 
 
 $$g_{\mathrm{ch}}(n)=\sigma\!\left(a_{\mathrm{ch}}+b_{\mathrm{ch}}\log(1+n)\right),$$
 
-并以逐概念的非负权重把门控后的统计量叠加到概念能力上：
+并以逐概念的非负权重把门控后的统计量叠加到概念能力上。记 $W^+_{c,\mathrm{ch}}=\mathrm{softplus}(W_{c,\mathrm{ch}})$，统计修正量与最终概念能力写为
 
-$$\theta_{s,c}=\theta^{\mathrm{state}}_{s,c}+\sum_{\mathrm{ch}}\mathrm{softplus}(W_{c,\mathrm{ch}})\,g_{\mathrm{ch}}(n_{s,c})\,e^{\mathrm{ch}}_{s,c},$$
+$$\Delta\theta_{s,c}=\sum_{\mathrm{ch}}W^+_{c,\mathrm{ch}}\,g_{\mathrm{ch}}(n_{s,c})\,e^{\mathrm{ch}}_{s,c},\qquad
+\theta_{s,c}=\theta^{\mathrm{state}}_{s,c}+\Delta\theta_{s,c},$$
 
 其中 $\theta^{\mathrm{state}}_{s,c}$ 为图状态读出（4.3 节），通道集合包含正确率通道、残差通道与传播通道（4.3 节）。训练期间对修正项施加随机失活，防止模型过度依赖单一统计。
 
@@ -98,7 +99,7 @@ $$\theta_{s,c}=\theta^{\mathrm{state}}_{s,c}+\sum_{\mathrm{ch}}\mathrm{softplus}
 
 **不使用标签的图先验。** 从训练日志构造两个概念共现矩阵：习题共现 $M^{\mathrm{item}}_{a,b}=\sum_e Q_{e,a}Q_{e,b}\,\mathbb I[a\neq b]$，以及学生共接触矩阵 $M^{\mathrm{exp}}_{a,b}$（统计同一学生在训练中同时接触概念 $a,b$ 的人数）。两者只反映概念在教学中的组织方式，与作答对错无关。
 
-**行随机关系学习。** 先验只给出候选邻域；每个邻居对目标概念的重要程度仍需从数据中学习。为此，模型以先验为支撑集，对每个关系头 $h$ 学习
+**行随机关系学习。** 先验只给出候选邻域；每个邻居对目标概念的重要程度仍需从数据中学习。为此，模型以先验为支撑集，对两个关系头 $h\in\{1,2\}$ 分别学习
 
 $$R_h(c,k)=\operatorname{softmax}_{k\in\mathcal N(c)}\!\left(\frac{s_h(c,k)}{\tau}\right),$$
 
