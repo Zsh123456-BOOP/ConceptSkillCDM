@@ -30,6 +30,7 @@ def main() -> None:
     assert args.run_mode == "train"
     jobs = runner.make_jobs(args, run_id="smoke")
     assert len(jobs) == 7
+    assert {job.train_evidence_mode for job in jobs} == {"excluded"}
     by_name = {job.ablation.name: job for job in jobs}
     no_evidence_command = by_name["no_response_evidence"].cmd
     parsed_no_evidence = main_module.parse_args(
@@ -49,6 +50,32 @@ def main() -> None:
     assert by_name["item_only"].params["graph_prior_mode"] == "item_only"
     assert by_name["exposure_only"].params["graph_prior_mode"] == "exposure_only"
     assert by_name["degree_random"].params["graph_prior_mode"] == "degree_random"
+
+    boundary_args = runner.parse_args(
+        [
+            "--datasets",
+            "assist_09",
+            "--seeds",
+            "42,43",
+            "--ablations",
+            "full",
+            "--train_evidence_modes",
+            "neutralized,self_included",
+            "--dry_run",
+        ]
+    )
+    boundary_jobs = runner.make_jobs(boundary_args, run_id="boundary_smoke")
+    assert len(boundary_jobs) == 4
+    assert {job.train_evidence_mode for job in boundary_jobs} == {
+        "neutralized",
+        "self_included",
+    }
+    assert len({job.save_dir for job in boundary_jobs}) == len(boundary_jobs)
+    for job in boundary_jobs:
+        parsed_boundary = main_module.parse_args(
+            job.cmd[job.cmd.index("--dataset_name") :]
+        )
+        assert parsed_boundary.train_evidence_mode == job.train_evidence_mode
 
     banned = ("no_A", "no_E", "personal", "ae_", "roadmap", "tutor")
     for job in jobs:

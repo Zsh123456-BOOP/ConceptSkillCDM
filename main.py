@@ -13,6 +13,7 @@ from src.config import (
     DATASET_DEFAULTS,
     EMA_DECAY,
     PAIRWISE_AUC_WEIGHT,
+    TRAIN_EVIDENCE_MODES,
     apply_dataset_defaults,
     collect_explicit_arg_dests,
 )
@@ -42,7 +43,6 @@ GRAPH_PRIOR_MODES = (
     "exposure_only",
     "degree_random",
 )
-
 
 def _parse_bool(value: object) -> bool:
     if isinstance(value, bool):
@@ -96,6 +96,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # Training and regularization
+    parser.add_argument(
+        "--train_evidence_mode",
+        default="excluded",
+        choices=TRAIN_EVIDENCE_MODES,
+        help=(
+            "Training-query response-statistic boundary: subtract the current "
+            "row, replace its outcome by a label-independent expectation while "
+            "retaining its count, or include the current row unchanged. "
+            "Validation and test always read complete train-only statistics."
+        ),
+    )
     parser.add_argument("--batch_size", type=int, default=512)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--learning_rate", type=float, default=1e-4)
@@ -273,6 +284,13 @@ def _validate_args(args: argparse.Namespace) -> None:
             raise SystemExit(f"error: --{name} must be in [0, 1], got {value}")
     if float(args.graph_entropy_min) > float(args.graph_entropy_max):
         raise SystemExit("error: --graph_entropy_min cannot exceed --graph_entropy_max")
+    if (
+        str(args.train_evidence_mode) != "excluded"
+        and not bool(args.use_response_evidence)
+    ):
+        raise SystemExit(
+            "error: non-default --train_evidence_mode requires response evidence"
+        )
 
 
 def _seed_everything(seed: int) -> None:
@@ -363,6 +381,7 @@ def main() -> None:
         validation_result = {
             "dataset": args.dataset_name,
             "model_variant": args.model_variant,
+            "train_evidence_mode": args.train_evidence_mode,
             "seed": int(args.seed),
             "best_val_auc": float(best_val_auc),
             "best_epoch": int(best_epoch),

@@ -301,17 +301,24 @@ class CognitiveDiagnosisModel(nn.Module):
         exercise_ids: Optional[torch.Tensor],
         q_vector: torch.Tensor,
         outcome_to_exclude: Optional[torch.Tensor],
+        outcome_to_neutralize: Optional[torch.Tensor],
     ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-        """Return (evidence, LOO count) with exact train leave-one-out.
+        """Return response evidence under an explicit training-query boundary.
 
-        ``outcome_to_exclude`` is supplied only for training rows.  Its label
-        and one count are subtracted from every concept attached to that row
-        before either the student-concept posterior or its concept prior is
-        computed.  Therefore the current target cannot be copied into its own
-        prediction.
+        ``outcome_to_exclude`` subtracts the current label, count, and residual
+        from every statistic consumed by that training row.  The optional
+        ``outcome_to_neutralize`` control retains the current count but replaces
+        its correct contribution by the label-independent student-item
+        expectation and its residual by zero.  Passing neither control reads
+        the complete train-only totals, which is the validation/test contract
+        and the deliberately self-included training control.
         """
         if not self.use_response_evidence:
             return None, None
+        if outcome_to_exclude is not None and outcome_to_neutralize is not None:
+            raise ValueError(
+                "a query outcome cannot be both excluded and neutralized"
+            )
 
         q_mask = (q_vector > 0).to(dtype=self.response_student_concept_count.dtype)
         correct = self.response_student_concept_correct[student_ids]
@@ -320,23 +327,28 @@ class CognitiveDiagnosisModel(nn.Module):
         concept_correct = self.response_concept_correct.unsqueeze(0)
         concept_count = self.response_concept_count.unsqueeze(0)
 
-        if outcome_to_exclude is not None:
-            labels = outcome_to_exclude.reshape(-1).to(
+        current_outcome = (
+            outcome_to_exclude
+            if outcome_to_exclude is not None
+            else outcome_to_neutralize
+        )
+        if current_outcome is not None:
+            labels = current_outcome.reshape(-1).to(
                 device=student_ids.device,
                 dtype=correct.dtype,
             )
             if labels.numel() != student_ids.numel():
                 raise ValueError(
-                    "outcome_to_exclude must contain one value per student id"
+                    "the query outcome must contain one value per student id"
                 )
             if bool((~torch.isfinite(labels)).any()) or bool(
                 ((labels < 0.0) | (labels > 1.0)).any()
             ):
-                raise ValueError("outcome_to_exclude must be finite and in [0, 1]")
+                raise ValueError("the query outcome must be finite and in [0, 1]")
             label_column = labels.unsqueeze(1)
             if exercise_ids is None:
                 raise ValueError(
-                    "exercise_ids are required when excluding a training outcome"
+                    "exercise_ids are required when adjusting a training outcome"
                 )
             if exercise_ids.numel() != student_ids.numel():
                 raise ValueError(
@@ -361,13 +373,28 @@ class CognitiveDiagnosisModel(nn.Module):
                 safe_positions
             ].unsqueeze(1)
             current_residual = label_column - expected_correct
-            correct = (correct - label_column * q_mask).clamp(min=0.0)
-            count = (count - q_mask).clamp(min=0.0)
-            residual_sum = residual_sum - current_residual * q_mask
-            concept_correct = (concept_correct - label_column * q_mask).clamp(min=0.0)
-            concept_count = (concept_count - q_mask).clamp(min=0.0)
-            global_count = (self.response_global_count - 1.0).clamp(min=1.0)
-            global_rate = (self.response_global_correct - labels) / global_count
+            if outcome_to_exclude is not None:
+                correct = (correct - label_column * q_mask).clamp(min=0.0)
+                count = (count - q_mask).clamp(min=0.0)
+                residual_sum = residual_sum - current_residual * q_mask
+                concept_correct = (
+                    concept_correct - label_column * q_mask
+                ).clamp(min=0.0)
+                concept_count = (concept_count - q_mask).clamp(min=0.0)
+                global_count = (self.response_global_count - 1.0).clamp(min=1.0)
+                global_rate = (
+                    self.response_global_correct - labels
+                ) / global_count
+            else:
+                neutral_shift = expected_correct - label_column
+                correct = (correct + neutral_shift * q_mask).clamp(min=0.0)
+                residual_sum = residual_sum - current_residual * q_mask
+                concept_correct = (
+                    concept_correct + neutral_shift * q_mask
+                ).clamp(min=0.0)
+                global_rate = (
+                    self.response_global_correct + neutral_shift.reshape(-1)
+                ) / self.response_global_count
             global_rate = global_rate.unsqueeze(1)
         else:
             global_rate = self.response_global_correct / self.response_global_count
@@ -491,6 +518,7 @@ class CognitiveDiagnosisModel(nn.Module):
         exercise_ids: torch.Tensor,
         concept_vector: Optional[torch.Tensor] = None,
         outcome_to_exclude: Optional[torch.Tensor] = None,
+        outcome_to_neutralize: Optional[torch.Tensor] = None,
         return_details: bool = False,
         return_logits: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
@@ -515,6 +543,7 @@ class CognitiveDiagnosisModel(nn.Module):
             exercise_ids,
             q_vector,
             outcome_to_exclude,
+            outcome_to_neutralize,
         )
         knowledge_state, initial_state = self.knowledge_encoder(
             student_ids,
@@ -603,6 +632,9 @@ class CognitiveDiagnosisModel(nn.Module):
             ),
             "response_evidence_leave_one_out": q_vector.detach().new_tensor(
                 float(outcome_to_exclude is not None)
+            ),
+            "response_evidence_neutralized": q_vector.detach().new_tensor(
+                float(outcome_to_neutralize is not None)
             ),
             "irt_b": difficulty.detach(),
             "irt_a": discrimination.detach(),

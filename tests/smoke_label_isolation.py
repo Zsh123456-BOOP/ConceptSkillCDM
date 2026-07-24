@@ -126,12 +126,57 @@ def main() -> None:
     )
     assert torch.allclose(loo_a, loo_b, atol=1e-7, rtol=0.0)
 
-    # At validation/test time the complete train evidence is intentionally
-    # visible, so changing a train outcome must change the evidence path.
-    assert not torch.equal(
-        model_a(student_ids, exercise_ids, return_logits=True),
-        model_b(student_ids, exercise_ids, return_logits=True),
+    # The neutralized control keeps the current support count but replaces its
+    # outcome by a label-independent student-item expectation.  It must retain
+    # the same flip invariance as exclusion.
+    neutral_a = model_a(
+        student_ids,
+        exercise_ids,
+        outcome_to_neutralize=torch.tensor([frame.loc[0, "label"]]),
+        return_logits=True,
     )
+    neutral_b = model_b(
+        student_ids,
+        exercise_ids,
+        outcome_to_neutralize=torch.tensor([flipped.loc[0, "label"]]),
+        return_logits=True,
+    )
+    assert torch.allclose(neutral_a, neutral_b, atol=1e-7, rtol=0.0)
+
+    q_vector = model_a.q_matrix[exercise_ids]
+    _, excluded_count = model_a._build_response_evidence(
+        student_ids,
+        exercise_ids,
+        q_vector,
+        torch.tensor([frame.loc[0, "label"]]),
+        None,
+    )
+    _, neutral_count = model_a._build_response_evidence(
+        student_ids,
+        exercise_ids,
+        q_vector,
+        None,
+        torch.tensor([frame.loc[0, "label"]]),
+    )
+    _, included_count = model_a._build_response_evidence(
+        student_ids,
+        exercise_ids,
+        q_vector,
+        None,
+        None,
+    )
+    assert torch.equal(neutral_count, included_count)
+    assert torch.equal(
+        excluded_count,
+        (included_count - (q_vector > 0).float()).clamp(min=0.0),
+    )
+
+    # At validation/test time, and in the self-included training control, the
+    # complete train evidence is visible.  Changing a train outcome must then
+    # change the evidence path.
+    included_a = model_a(student_ids, exercise_ids, return_logits=True)
+    included_b = model_b(student_ids, exercise_ids, return_logits=True)
+    assert not torch.equal(included_a, included_b)
     structural_names = {
         name for name, _ in list(model_a.named_parameters()) + list(model_a.named_buffers())
     }
@@ -149,7 +194,10 @@ def main() -> None:
     }
     assert not any("response_" in name for name in no_evidence_names)
     assert GRAPH_IRT_ARCHITECTURE == "graph_irt_v10"
-    print("OK: train response evidence is target-safe under exact leave-one-out.")
+    print(
+        "OK: excluded/neutralized evidence is flip-invariant; "
+        "self-included evidence remains outcome-sensitive."
+    )
 
 
 if __name__ == "__main__":

@@ -33,6 +33,7 @@ from src.trainer import (
     _resolve_ema_decay,
     _resolve_pairwise_auc_weight,
     _temporary_model_state,
+    _training_evidence_kwargs,
     _update_ema_state,
     _validate_checkpoint_data_identity,
     run_inference,
@@ -59,6 +60,10 @@ def main() -> None:
     )
     main_module._validate_args(args)
     assert args.run_mode == "train"
+    assert args.train_evidence_mode == "excluded"
+    for mode in ("excluded", "neutralized", "self_included"):
+        parsed_mode = main_module.parse_args(["--train_evidence_mode", mode])
+        assert parsed_mode.train_evidence_mode == mode
     assert main_module.parse_args(["--run_mode", "train"]).run_mode == "train"
     assert main_module.parse_args(["--run_mode", "test"]).run_mode == "test"
     assert GRAPH_IRT_ARCHITECTURE == "graph_irt_v10"
@@ -103,6 +108,31 @@ def main() -> None:
     assert ema_args.use_response_evidence
     assert _resolve_ema_decay(ema_args) == EMA_DECAY
     assert "no_response_graph" not in main_module.MODEL_VARIANTS
+    boundary_labels = torch.tensor([0.0, 1.0])
+    assert set(_training_evidence_kwargs(boundary_labels, "excluded")) == {
+        "outcome_to_exclude"
+    }
+    assert set(_training_evidence_kwargs(boundary_labels, "neutralized")) == {
+        "outcome_to_neutralize"
+    }
+    assert _training_evidence_kwargs(boundary_labels, "self_included") == {}
+    invalid_boundary_args = main_module.parse_args(
+        [
+            "--model_variant",
+            "no_response_evidence",
+            "--train_evidence_mode",
+            "self_included",
+        ]
+    )
+    main_module._apply_model_variant(invalid_boundary_args)
+    try:
+        main_module._validate_args(invalid_boundary_args)
+    except SystemExit as exc:
+        assert "requires response evidence" in str(exc)
+    else:
+        raise AssertionError(
+            "a non-default training evidence mode must require response evidence"
+        )
 
     logits = torch.tensor([2.0, -0.5, 1.0, -1.0], requires_grad=True)
     labels = torch.tensor([1.0, 0.0, 1.0, 0.0])
@@ -166,10 +196,12 @@ def main() -> None:
         SimpleNamespace(
             model_variant="full",
             pairwise_auc_weight=0.0,
+            train_evidence_mode="neutralized",
             disable_self_loop=False,
         )
     )
     assert checkpoint_bce["pairwise_auc_weight"] == 0.0
+    assert checkpoint_bce["train_evidence_mode"] == "neutralized"
 
     class _TinyModel(torch.nn.Module):
         def __init__(self):

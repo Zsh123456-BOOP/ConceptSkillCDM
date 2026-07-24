@@ -17,7 +17,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
-from src.config import EMA_DECAY, PAIRWISE_AUC_WEIGHT
+from src.config import EMA_DECAY, PAIRWISE_AUC_WEIGHT, TRAIN_EVIDENCE_MODES
 from src.dataset import CognitiveDiagnosisDataset, create_dataloaders
 from src.experiment_utils import (
     _config_hash,
@@ -55,6 +55,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "graph_prior_strength_init",
     "pairwise_auc_weight",
     "ema_decay",
+    "train_evidence_mode",
     "num_gnn_layers",
 )
 
@@ -176,6 +177,24 @@ def _resolve_ema_decay(source: Any) -> float:
             f"variant={variant!r} requires {expected}, got {supplied}"
         )
     return expected
+
+
+def _training_evidence_kwargs(
+    labels: torch.Tensor,
+    mode: str,
+) -> Dict[str, torch.Tensor]:
+    """Map one auditable training-query boundary to model forward inputs."""
+    normalized = str(mode).strip().lower()
+    if normalized not in TRAIN_EVIDENCE_MODES:
+        raise ValueError(
+            f"train_evidence_mode must be one of {TRAIN_EVIDENCE_MODES}, "
+            f"got {mode!r}"
+        )
+    if normalized == "excluded":
+        return {"outcome_to_exclude": labels}
+    if normalized == "neutralized":
+        return {"outcome_to_neutralize": labels}
+    return {}
 
 
 def _collect_structural_switches(source: Any) -> Dict[str, Any]:
@@ -341,6 +360,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "dataset_name",
         "data_dir",
         "model_variant",
+        "train_evidence_mode",
         "use_response_evidence",
         "evidence_anchor_mode",
         "evidence_state_injection",
@@ -600,6 +620,7 @@ def _run_epoch(
     logger=None,
     max_batches: Optional[int] = None,
     pairwise_auc_weight: float = 0.0,
+    train_evidence_mode: str = "excluded",
 ) -> Dict[str, float]:
     is_train = optimizer is not None
     effective_pairwise_weight = float(pairwise_auc_weight) if is_train else 0.0
@@ -632,12 +653,17 @@ def _run_epoch(
             exercise_ids = exercise_ids.to(device)
             labels = _ensure_1d(labels.to(device).float())
 
+            evidence_kwargs = (
+                _training_evidence_kwargs(labels, train_evidence_mode)
+                if is_train
+                else {}
+            )
             logits, details = model(
                 student_ids,
                 exercise_ids,
-                outcome_to_exclude=labels if is_train else None,
                 return_details=True,
                 return_logits=True,
+                **evidence_kwargs,
             )
             logits = _ensure_1d(logits)
             prediction_loss, bce_loss, pairwise_auc_loss, has_both_classes = (
@@ -735,6 +761,7 @@ def train_epoch(
     epoch: int,
     max_batches: Optional[int] = None,
     pairwise_auc_weight: float = PAIRWISE_AUC_WEIGHT,
+    train_evidence_mode: str = "excluded",
 ) -> Dict[str, float]:
     return _run_epoch(
         model=model,
@@ -746,6 +773,7 @@ def train_epoch(
         logger=logger,
         max_batches=max_batches,
         pairwise_auc_weight=pairwise_auc_weight,
+        train_evidence_mode=train_evidence_mode,
     )
 
 
@@ -958,6 +986,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     run_tag = (
         f"[{getattr(args, 'dataset_name', 'unknown')}"
         f"|{getattr(args, 'model_variant', 'full')}"
+        f"|evidence={getattr(args, 'train_evidence_mode', 'excluded')}"
         f"|lr={args.learning_rate:g}|drop={args.dropout:.2f}]"
     )
     os.makedirs(args.save_dir, exist_ok=True)
@@ -1013,7 +1042,8 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     )
     logger.info(
         "%s Training protocol: optimizer=%s plateau_patience=%d early_stop_patience=%d "
-        "min_epochs=%d min_delta=%.2g pairwise_auc_weight=%.1f ema_decay=%.1f",
+        "min_epochs=%d min_delta=%.2g pairwise_auc_weight=%.1f ema_decay=%.1f "
+        "train_evidence_mode=%s",
         run_tag,
         str(getattr(args, "optimizer", "adam")),
         int(args.patience),
@@ -1022,6 +1052,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         float(getattr(args, "early_stop_min_delta", 0.0)),
         pairwise_auc_weight,
         ema_decay,
+        str(getattr(args, "train_evidence_mode", "excluded")),
     )
     if int(args.early_stop_patience) <= int(args.patience) + 1:
         logger.warning(
@@ -1065,6 +1096,9 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             epoch,
             max_batches=getattr(args, "max_train_batches", None),
             pairwise_auc_weight=pairwise_auc_weight,
+            train_evidence_mode=str(
+                getattr(args, "train_evidence_mode", "excluded")
+            ),
         )
         if ema_state is not None:
             _update_ema_state(ema_state, model, ema_decay)
@@ -1412,6 +1446,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
             "checkpoint_sha256": checkpoint_sha256,
             "dataset_name": loaded_args.get("dataset_name"),
             "model_variant": loaded_args.get("model_variant"),
+            "train_evidence_mode": loaded_args.get(
+                "train_evidence_mode", "excluded"
+            ),
             "seed": loaded_args.get("seed"),
         },
     )
@@ -1493,6 +1530,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         "architecture": ARCHITECTURE_NAME,
         "dataset_name": loaded_args.get("dataset_name"),
         "model_variant": loaded_args.get("model_variant"),
+        "train_evidence_mode": loaded_args.get(
+            "train_evidence_mode", "excluded"
+        ),
         "seed": int(loaded_args.get("seed", 0)),
         "config_hash": _config_hash(SimpleNamespace(**loaded_args)),
         "checkpoint_sha256": checkpoint_sha256,
@@ -1527,6 +1567,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
             "test_results_sha256": _sha256_file(test_results_path),
             "dataset_name": loaded_args.get("dataset_name"),
             "model_variant": loaded_args.get("model_variant"),
+            "train_evidence_mode": loaded_args.get(
+                "train_evidence_mode", "excluded"
+            ),
             "seed": loaded_args.get("seed"),
         },
     )

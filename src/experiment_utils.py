@@ -128,6 +128,7 @@ CONFIG_HASH_KEYS = (
     "dataset_name",
     "seed",
     "model_variant",
+    "train_evidence_mode",
     "knowledge_dim",
     "num_relation_heads",
     "num_gnn_layers",
@@ -232,6 +233,9 @@ def append_summary_csv(
         "architecture": GRAPH_IRT_ARCHITECTURE,
         "dataset": getattr(args, "dataset_name", "unknown"),
         "model_variant": getattr(args, "model_variant", "full"),
+        "train_evidence_mode": getattr(
+            args, "train_evidence_mode", "excluded"
+        ),
         "seed": int(getattr(args, "seed", 0)),
         "git_sha": _git_sha(project_root),
         "run_dir": os.path.abspath(getattr(args, "save_dir", "")),

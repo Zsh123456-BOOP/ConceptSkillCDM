@@ -1,6 +1,6 @@
 """Per-sample leakage-shift fan data for the analysis figure.
 
-For every (test row, target concept) pair, the self-included statistic minus
+For every (evaluation row, target concept) pair, the self-included statistic minus
 the self-excluded statistic equals (y - m_hat) / (n + 3) in closed form, where
 m_hat = (S + 1) / (n + 2) is the smoothed train-only rate and n, S are the
 train-only same-concept counts. This script materialises a subsample of those
@@ -19,11 +19,11 @@ import pandas as pd
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def _pairs(dataset: str) -> pd.DataFrame:
+def _pairs(dataset: str, split: str) -> pd.DataFrame:
     data_dir = os.path.join(ROOT, "data", dataset)
     train = pd.read_csv(os.path.join(data_dir, "train.csv"))
-    test = pd.read_csv(os.path.join(data_dir, "test.csv"))
-    for frame in (train, test):
+    evaluation = pd.read_csv(os.path.join(data_dir, f"{split}.csv"))
+    for frame in (train, evaluation):
         frame["cpt_list"] = (
             frame["cpt_seq"].astype(str).str.strip('"').str.split(",")
         )
@@ -34,9 +34,9 @@ def _pairs(dataset: str) -> pd.DataFrame:
         .agg(n="count", S="sum")
         .reset_index()
     )
-    test_x = test.explode("cpt_list")
-    test_x["cpt"] = test_x["cpt_list"].astype(int)
-    merged = test_x.merge(stats, on=["stu_id", "cpt"], how="left")
+    evaluation_x = evaluation.explode("cpt_list")
+    evaluation_x["cpt"] = evaluation_x["cpt_list"].astype(int)
+    merged = evaluation_x.merge(stats, on=["stu_id", "cpt"], how="left")
     merged[["n", "S"]] = merged[["n", "S"]].fillna(0)
     m_hat = (merged["S"] + 1.0) / (merged["n"] + 2.0)
     return pd.DataFrame(
@@ -58,20 +58,21 @@ def main() -> None:
     parser.add_argument("--per_dataset", type=int, default=1500)
     parser.add_argument("--max_n", type=int, default=12)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--split", choices=("valid", "test"), default="test")
     parser.add_argument("--output_csv", default="results/leakage_fan.csv")
     args = parser.parse_args()
 
     rng = np.random.RandomState(args.seed)
     frames = []
     for dataset in args.datasets.split(","):
-        pairs = _pairs(dataset)
+        pairs = _pairs(dataset, args.split)
         pairs = pairs[pairs["n"] <= args.max_n]
         if len(pairs) > args.per_dataset:
             pairs = pairs.iloc[
                 rng.choice(len(pairs), size=args.per_dataset, replace=False)
             ]
         frames.append(pairs)
-        print(f"{dataset}: {len(pairs)} pairs sampled")
+        print(f"{dataset}/{args.split}: {len(pairs)} pairs sampled")
     out = pd.concat(frames, ignore_index=True)
     out_path = os.path.join(ROOT, args.output_csv)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)

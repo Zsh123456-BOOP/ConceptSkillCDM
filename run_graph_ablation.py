@@ -24,6 +24,7 @@ from gpu_utils import (
     parse_int_csv,
     pick_gpu_with_slot_round_robin,
 )
+from src.config import TRAIN_EVIDENCE_MODES
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class JobSpec:
     dataset: str
     seed: int
     ablation: AblationSpec
+    train_evidence_mode: str
     save_dir: Path
     log_dir: Path
     params: Dict[str, Any]
@@ -83,6 +85,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Graph-IRT ablations.")
     parser.add_argument("--datasets", default="assist_09,assist_17,junyi")
     parser.add_argument("--ablations", default=",".join(ABLATIONS))
+    parser.add_argument(
+        "--train_evidence_modes",
+        default="excluded",
+        help=(
+            "Comma-separated training-query evidence modes. "
+            f"Available={','.join(TRAIN_EVIDENCE_MODES)}"
+        ),
+    )
     parser.add_argument("--seeds", default=None, help="Comma-separated seeds.")
     parser.add_argument("--gpus", default="0")
     parser.add_argument("--max_concurrent", type=int, default=1)
@@ -119,6 +129,15 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
     datasets = _csv_tokens(args.datasets)
     seeds = list(DEFAULT_SEEDS) if args.seeds is None else parse_int_csv(args.seeds)
     ablations = _selected_ablations(args.ablations)
+    train_evidence_modes = _csv_tokens(args.train_evidence_modes)
+    unknown_modes = sorted(set(train_evidence_modes) - set(TRAIN_EVIDENCE_MODES))
+    if unknown_modes:
+        raise ValueError(
+            "Unknown training evidence mode(s): "
+            f"{unknown_modes}. Available={list(TRAIN_EVIDENCE_MODES)}"
+        )
+    if not train_evidence_modes:
+        raise ValueError("At least one training evidence mode is required.")
     requested_run_id = run_id or args.run_id
     if args.run_mode == "test" and not requested_run_id:
         raise ValueError(
@@ -131,48 +150,54 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
         if dataset not in EXPERIMENT_CONFIGS:
             raise ValueError(f"Dataset {dataset!r} is not present in EXPERIMENT_CONFIGS.")
         for ablation in ablations:
-            for seed in seeds:
-                params = dict(EXPERIMENT_CONFIGS[dataset])
-                params.update(ablation.overrides)
-                params.pop("num_gpus", None)
-                params.pop("seed", None)
-                params["model_variant"] = ablation.name
+            for train_evidence_mode in train_evidence_modes:
+                for seed in seeds:
+                    params = dict(EXPERIMENT_CONFIGS[dataset])
+                    params.update(ablation.overrides)
+                    params.pop("num_gpus", None)
+                    params.pop("seed", None)
+                    params["model_variant"] = ablation.name
+                    params["train_evidence_mode"] = train_evidence_mode
 
-                tag = f"{dataset}_graph_irt_{ablation.name}_seed{seed}_{session}"
-                save_dir = Path("checkpoints") / tag
-                log_dir = Path("logs") / tag
-                cmd = [
-                    sys.executable,
-                    "main.py",
-                    "--dataset_name",
-                    dataset,
-                    "--seed",
-                    str(seed),
-                    "--save_dir",
-                    str(save_dir),
-                    "--log_dir",
-                    str(log_dir),
-                    "--run_mode",
-                    str(args.run_mode),
-                ]
-                for key, value in params.items():
-                    _append_cli_arg(cmd, key, value)
-                if args.generate_diagnosis:
-                    cmd.extend(("--generate_diagnosis", "True"))
-                else:
-                    cmd.extend(("--generate_diagnosis", "False"))
-
-                jobs.append(
-                    JobSpec(
-                        dataset=dataset,
-                        seed=int(seed),
-                        ablation=ablation,
-                        save_dir=save_dir,
-                        log_dir=log_dir,
-                        params=params,
-                        cmd=cmd,
+                    tag = (
+                        f"{dataset}_graph_irt_{ablation.name}_"
+                        f"{train_evidence_mode}_seed{seed}_{session}"
                     )
-                )
+                    save_dir = Path("checkpoints") / tag
+                    log_dir = Path("logs") / tag
+                    cmd = [
+                        sys.executable,
+                        "main.py",
+                        "--dataset_name",
+                        dataset,
+                        "--seed",
+                        str(seed),
+                        "--save_dir",
+                        str(save_dir),
+                        "--log_dir",
+                        str(log_dir),
+                        "--run_mode",
+                        str(args.run_mode),
+                    ]
+                    for key, value in params.items():
+                        _append_cli_arg(cmd, key, value)
+                    if args.generate_diagnosis:
+                        cmd.extend(("--generate_diagnosis", "True"))
+                    else:
+                        cmd.extend(("--generate_diagnosis", "False"))
+
+                    jobs.append(
+                        JobSpec(
+                            dataset=dataset,
+                            seed=int(seed),
+                            ablation=ablation,
+                            train_evidence_mode=train_evidence_mode,
+                            save_dir=save_dir,
+                            log_dir=log_dir,
+                            params=params,
+                            cmd=cmd,
+                        )
+                    )
     return jobs
 
 
@@ -205,6 +230,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     print(
         f"Graph-IRT phase={args.run_mode}, jobs={len(jobs)}, "
         f"ablations={_csv_tokens(args.ablations)}, "
+        f"train_evidence_modes={_csv_tokens(args.train_evidence_modes)}, "
         f"seeds={args.seeds or DEFAULT_SEEDS}, dry_run={args.dry_run}"
     )
     if args.dry_run:
@@ -231,7 +257,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 gpu_load[gpu] = max(0, gpu_load[gpu] - 1)
                 if code != 0:
                     failures.append(
-                        f"{job.dataset}/{job.ablation.name}/seed{job.seed}: exit {code}"
+                        f"{job.dataset}/{job.ablation.name}/"
+                        f"{job.train_evidence_mode}/seed{job.seed}: exit {code}"
                     )
             running = active
 
@@ -254,7 +281,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 env = os.environ.copy()
                 env["CUDA_VISIBLE_DEVICES"] = str(gpu)
                 print(
-                    f"[LAUNCH] {job.dataset}/{job.ablation.name}/seed{job.seed} gpu={gpu}\n"
+                    f"[LAUNCH] {job.dataset}/{job.ablation.name}/"
+                    f"{job.train_evidence_mode}/seed{job.seed} gpu={gpu}\n"
                     f"         {' '.join(job.cmd)}"
                 )
                 process = subprocess.Popen(job.cmd, env=env)

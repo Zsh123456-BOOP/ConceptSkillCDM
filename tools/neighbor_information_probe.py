@@ -3,7 +3,7 @@ concepts' response statistics carry, as a function of graph distance?
 
 For each dataset, build the label-free concept graph from train.csv (union of
 item co-occurrence and student co-exposure, top-K neighbors per concept by
-count). For every (test row, target concept), predict the response using ONLY
+count). For every (evaluation row, target concept), predict the response using ONLY
 other concepts' self-excluded deviations, aggregated over one of three tiers:
 1-hop prior neighbors, 2-hop neighbors (neighbors of neighbors, excluding
 1-hop and self), and K random non-neighbor concepts. The per-tier score is
@@ -37,15 +37,15 @@ def _auc(labels: np.ndarray, scores: np.ndarray) -> float:
     return float((ranks[pos].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
 
 
-def _load(dataset: str):
+def _load(dataset: str, split: str):
     data_dir = os.path.join(ROOT, "data", dataset)
     train = pd.read_csv(os.path.join(data_dir, "train.csv"))
-    test = pd.read_csv(os.path.join(data_dir, "test.csv"))
-    for frame in (train, test):
+    evaluation = pd.read_csv(os.path.join(data_dir, f"{split}.csv"))
+    for frame in (train, evaluation):
         frame["cpt_list"] = (
             frame["cpt_seq"].astype(str).str.strip('"').str.split(",")
         )
-    return train, test
+    return train, evaluation
 
 
 def _build_graph(train: pd.DataFrame, num_concepts: int, topk: int) -> np.ndarray:
@@ -116,12 +116,13 @@ def main() -> None:
     )
     parser.add_argument("--topk", type=int, default=16)
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--split", choices=("valid", "test"), default="test")
     parser.add_argument("--output_csv", default="results/neighbor_information.csv")
     args = parser.parse_args()
 
     records = []
     for dataset in args.datasets.split(","):
-        train, test = _load(dataset)
+        train, evaluation = _load(dataset, args.split)
         train_x = train.explode("cpt_list")
         train_x["cpt"] = train_x["cpt_list"].astype(int)
         num_concepts = int(train_x["cpt"].max()) + 1
@@ -148,17 +149,19 @@ def main() -> None:
         adjacency = _build_graph(train, num_concepts, args.topk)
         tiers = _tier_weights(adjacency, args.topk, args.seed)
 
-        test_x = test.explode("cpt_list").copy()
-        test_x["cpt"] = test_x["cpt_list"].astype(int)
-        test_x = test_x[test_x["stu_id"].isin(stu_index)]
-        test_x["srow"] = test_x["stu_id"].map(stu_index)
-        srow = test_x["srow"].to_numpy()
-        cpt = test_x["cpt"].to_numpy()
-        row_id = test_x.index.to_numpy()
-        labels_row = test.loc[test_x.index.unique(), "label"]
+        evaluation_x = evaluation.explode("cpt_list").copy()
+        evaluation_x["cpt"] = evaluation_x["cpt_list"].astype(int)
+        evaluation_x = evaluation_x[evaluation_x["stu_id"].isin(stu_index)]
+        evaluation_x["srow"] = evaluation_x["stu_id"].map(stu_index)
+        srow = evaluation_x["srow"].to_numpy()
+        cpt = evaluation_x["cpt"].to_numpy()
+        row_id = evaluation_x.index.to_numpy()
+        labels_row = evaluation.loc[evaluation_x.index.unique(), "label"]
 
         n_same = np.zeros_like(cpt, dtype=np.float64)
-        pairs = pd.MultiIndex.from_arrays([test_x["stu_id"], test_x["cpt"]])
+        pairs = pd.MultiIndex.from_arrays(
+            [evaluation_x["stu_id"], evaluation_x["cpt"]]
+        )
         stat_map = stats.set_index(["stu_id", "cpt"])["n"]
         n_same = stat_map.reindex(pairs).fillna(0).to_numpy()
 
@@ -198,7 +201,7 @@ def main() -> None:
                     "rows_zero_same_concept": int(zero_mask.sum()),
                 }
             )
-        print(f"{dataset}: done ({len(labels_arr)} rows)")
+        print(f"{dataset}/{args.split}: done ({len(labels_arr)} rows)")
 
     out = pd.DataFrame(records)
     out_path = os.path.join(ROOT, args.output_csv)

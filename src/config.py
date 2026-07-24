@@ -12,6 +12,11 @@ EMA_DECAY: float = 0.9
 # co-adapting with the sufficient-statistic shortcut during training, while
 # validation and test always see the full anchor.
 EVIDENCE_ANCHOR_DROPOUT: float = 0.25
+TRAIN_EVIDENCE_MODES = (
+    "excluded",
+    "neutralized",
+    "self_included",
+)
 
 
 _BASE_DEFAULTS: Dict[str, Any] = {
@@ -55,6 +60,7 @@ _BASE_DEFAULTS: Dict[str, Any] = {
     "min_stu_interactions": 15,
     "min_exer_interactions": 0,
     "model_variant": "full",
+    "train_evidence_mode": "excluded",
 }
 
 
