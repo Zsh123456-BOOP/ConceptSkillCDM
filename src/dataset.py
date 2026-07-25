@@ -1,5 +1,5 @@
 import math
-from typing import Tuple, Dict, List, Optional, Union
+from typing import Tuple, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -445,51 +445,32 @@ def _prior_entropy(prior: torch.Tensor) -> float:
     return float((-(p * p.log()).sum(dim=-1)).mean().item())
 
 
-def build_item_cooccurrence_prior(
-    q_matrix: torch.Tensor,
-    return_support: bool = False,
-) -> Union[
-    Tuple[torch.Tensor, Dict[str, float]],
-    Tuple[torch.Tensor, Dict[str, float], torch.Tensor],
-]:
-    """Build the normalized item prior and optionally its raw support counts.
-
-    The optional support matrix is the label-free, off-diagonal number of
-    exercises shared by each concept pair.  The default two-value return
-    remains backward compatible.
-    """
+def build_item_cooccurrence_prior(q_matrix: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, float]]:
     q = q_matrix.detach().float()
     if q.dim() != 2:
         raise ValueError(f"q_matrix must be 2D, got {tuple(q.shape)}")
     C = int(q.size(1))
     if C == 1:
         prior = torch.ones(1, 1, dtype=torch.float32)
-        stats = {
+        return prior, {
             "item_observed_edge_count": 0.0,
             "item_prior_density": 0.0,
             "item_prior_entropy": 0.0,
         }
-        if return_support:
-            return prior, stats, torch.zeros_like(prior)
-        return prior, stats
     concept_occurs = (q > 0).float()
     counts = concept_occurs.t().matmul(concept_occurs)
     eye = torch.eye(C, dtype=torch.float32, device=counts.device)
     counts = counts * (1.0 - eye)
-    raw_support = counts.detach().clone()
     observed_mask = (counts > 0).float()
     prior = _row_normalize_offdiag_counts(counts, shrink=0.0)
     prior = _keep_observed_support_only(prior, observed_mask)
     possible = float(C * (C - 1))
     observed = float((counts > 0).float().sum().item())
-    stats = {
+    return prior, {
         "item_observed_edge_count": observed,
         "item_prior_density": observed / possible if possible > 0 else 0.0,
         "item_prior_entropy": _prior_entropy(prior),
     }
-    if return_support:
-        return prior, stats, raw_support
-    return prior, stats
 
 
 def build_student_coexposure_prior(
@@ -497,11 +478,7 @@ def build_student_coexposure_prior(
     cpt_id_map: Dict[int, int],
     pmi_normalize: bool = False,
     pmi_beta: float = 0.5,
-    return_support: bool = False,
-) -> Union[
-    Tuple[torch.Tensor, Dict[str, float]],
-    Tuple[torch.Tensor, Dict[str, float], torch.Tensor],
-]:
+) -> Tuple[torch.Tensor, Dict[str, float]]:
     """Build a permutation-invariant train-only student co-exposure prior.
 
     Each student contributes equal total support mass per observed concept,
@@ -511,17 +488,13 @@ def build_student_coexposure_prior(
     ``pmi_normalize`` divides each co-exposure count by the geometric mean of
     both concepts' popularity before row normalization, sharpening relation
     identity on popularity-skewed graphs (association strength / PMI-style).
-
-    When requested, the third return value is the label-free weighted
-    co-exposure count matrix before PMI normalization.  The default return
-    remains the original ``(prior, stats)`` pair.
     """
     concept_count = len(cpt_id_map)
     if concept_count <= 0:
         raise ValueError("cpt_id_map must not be empty")
     if concept_count == 1:
         prior = torch.ones(1, 1, dtype=torch.float32)
-        stats = {
+        return prior, {
             "exposure_student_count": 0.0,
             "exposure_multi_concept_student_count": 0.0,
             "exposure_mean_concepts_per_student": 0.0,
@@ -530,9 +503,6 @@ def build_student_coexposure_prior(
             "exposure_prior_density": 0.0,
             "exposure_prior_entropy": 0.0,
         }
-        if return_support:
-            return prior, stats, torch.zeros_like(prior)
-        return prior, stats
 
     student_concepts: Dict[object, set] = {}
     for dataframe in _iter_source_dfs(train_sources):
@@ -567,7 +537,6 @@ def build_student_coexposure_prior(
 
     eye = torch.eye(concept_count, dtype=torch.float32)
     counts *= 1.0 - eye
-    raw_support = counts.detach().clone()
     observed_mask = (counts > 0).float()
     raw_pair_mass = float(counts.sum().item())
     if pmi_normalize:
@@ -585,7 +554,7 @@ def build_student_coexposure_prior(
         if histories
         else 0.0
     )
-    stats = {
+    return prior, {
         "exposure_student_count": float(len(histories)),
         "exposure_multi_concept_student_count": float(multi_concept_histories),
         "exposure_mean_concepts_per_student": mean_concepts,
@@ -594,9 +563,6 @@ def build_student_coexposure_prior(
         "exposure_prior_density": observed / possible if possible > 0 else 0.0,
         "exposure_prior_entropy": _prior_entropy(prior),
     }
-    if return_support:
-        return prior, stats, raw_support
-    return prior, stats
 
 
 def create_dataloaders(
@@ -746,21 +712,15 @@ def create_dataloaders(
     log("正在构建Q矩阵...")
     q_matrix = build_q_matrix(train_sources=train_sources, exer_id_map=exer_id_map, cpt_id_map=cpt_id_map)
 
-    def _zero_item_prior(
-        num_concepts: int,
-    ) -> Tuple[torch.Tensor, Dict[str, float], torch.Tensor]:
-        zero = torch.zeros(num_concepts, num_concepts, dtype=torch.float32)
-        return zero, {
+    def _zero_item_prior(num_concepts: int) -> Tuple[torch.Tensor, Dict[str, float]]:
+        return torch.zeros(num_concepts, num_concepts, dtype=torch.float32), {
             "item_observed_edge_count": 0.0,
             "item_prior_density": 0.0,
             "item_prior_entropy": 0.0,
-        }, zero.clone()
+        }
 
-    def _zero_exposure_prior(
-        num_concepts: int,
-    ) -> Tuple[torch.Tensor, Dict[str, float], torch.Tensor]:
-        zero = torch.zeros(num_concepts, num_concepts, dtype=torch.float32)
-        return zero, {
+    def _zero_exposure_prior(num_concepts: int) -> Tuple[torch.Tensor, Dict[str, float]]:
+        return torch.zeros(num_concepts, num_concepts, dtype=torch.float32), {
             "exposure_student_count": 0.0,
             "exposure_multi_concept_student_count": 0.0,
             "exposure_mean_concepts_per_student": 0.0,
@@ -768,7 +728,7 @@ def create_dataloaders(
             "exposure_observed_edge_count": 0.0,
             "exposure_prior_density": 0.0,
             "exposure_prior_entropy": 0.0,
-        }, zero.clone()
+        }
 
     prior_mode = str(graph_prior_mode or "evidence").strip().lower()
     valid_prior_modes = {
@@ -781,55 +741,37 @@ def create_dataloaders(
         raise ValueError(f"graph_prior_mode must be one of {sorted(valid_prior_modes)}, got {graph_prior_mode!r}")
     num_concepts = len(cpt_id_map)
 
-    if prior_mode in {"evidence", "item_only", "degree_random"}:
-        (
-            item_prior_matrix,
-            item_prior_stats,
-            item_support_matrix,
-        ) = build_item_cooccurrence_prior(
-            q_matrix,
-            return_support=True,
-        )
-    else:
-        (
-            item_prior_matrix,
-            item_prior_stats,
-            item_support_matrix,
-        ) = _zero_item_prior(num_concepts)
-        log("[Graph Prior] mode=exposure_only: item co-occurrence evidence disabled.")
-
-    if prior_mode in {"evidence", "exposure_only", "degree_random"}:
-        (
-            exposure_prior_matrix,
-            exposure_prior_stats,
-            exposure_support_matrix,
-        ) = build_student_coexposure_prior(
+    def _build_evidence_priors() -> Tuple[torch.Tensor, Dict[str, float], torch.Tensor, Dict[str, float]]:
+        item_prior, item_stats = build_item_cooccurrence_prior(q_matrix)
+        exposure_prior, exposure_stats = build_student_coexposure_prior(
             train_sources=train_sources,
             cpt_id_map=cpt_id_map,
             pmi_normalize=bool(exposure_prior_pmi),
-            return_support=True,
         )
-    else:
-        (
-            exposure_prior_matrix,
-            exposure_prior_stats,
-            exposure_support_matrix,
-        ) = _zero_exposure_prior(num_concepts)
-        log("[Graph Prior] mode=item_only: student co-exposure evidence disabled.")
+        return item_prior, item_stats, exposure_prior, exposure_stats
 
     if prior_mode == "degree_random":
-        item_prior_matrix, random_stats = make_degree_random_prior(
-            item_prior_matrix,
-            exposure_prior_matrix,
-        )
+        evidence_item, item_prior_stats, evidence_exposure, exposure_prior_stats = _build_evidence_priors()
+        item_prior_matrix, random_stats = make_degree_random_prior(evidence_item, evidence_exposure)
         item_prior_stats = {**item_prior_stats, **random_stats}
-        item_support_matrix = (item_prior_matrix > 0.0).to(dtype=torch.float32)
-        (
-            exposure_prior_matrix,
-            _,
-            exposure_support_matrix,
-        ) = _zero_exposure_prior(num_concepts)
+        exposure_prior_matrix, _ = _zero_exposure_prior(num_concepts)
         log("[Graph Prior] mode=degree_random: using row-degree-matched random support control prior.")
+    else:
+        if prior_mode == "exposure_only":
+            item_prior_matrix, item_prior_stats = _zero_item_prior(num_concepts)
+            log("[Graph Prior] mode=exposure_only: item co-occurrence evidence disabled.")
+        else:
+            item_prior_matrix, item_prior_stats = build_item_cooccurrence_prior(q_matrix)
+
+        if prior_mode == "item_only":
+            exposure_prior_matrix, exposure_prior_stats = _zero_exposure_prior(num_concepts)
+            log("[Graph Prior] mode=item_only: student co-exposure evidence disabled.")
+        else:
+            exposure_prior_matrix, exposure_prior_stats = build_student_coexposure_prior(
+                train_sources=train_sources,
+                cpt_id_map=cpt_id_map,
+                pmi_normalize=bool(exposure_prior_pmi),
+            )
     graph_prior_stats = {**item_prior_stats, **exposure_prior_stats}
     graph_prior_stats["graph_prior_mode"] = prior_mode
     log(
@@ -1011,8 +953,6 @@ def create_dataloaders(
         'q_matrix': q_matrix,
         'item_prior_matrix': item_prior_matrix,
         'exposure_prior_matrix': exposure_prior_matrix,
-        'item_support_matrix': item_support_matrix,
-        'exposure_support_matrix': exposure_support_matrix,
         'response_evidence_stats': response_evidence_stats,
         'graph_prior_stats': graph_prior_stats,
         'exposure_prior_disabled': bool(prior_mode in {"item_only", "degree_random"}),

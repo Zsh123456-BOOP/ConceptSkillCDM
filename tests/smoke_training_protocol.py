@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import tempfile
@@ -30,14 +29,9 @@ from src.trainer import (
     _clone_model_state,
     _claim_test_seal,
     _is_validation_improvement,
-    _load_inference_selection_metadata,
-    _materialize_checkpoint,
-    _passes_residual_error_guards,
     _prediction_loss,
     _resolve_ema_decay,
     _resolve_pairwise_auc_weight,
-    _select_residual_candidate,
-    _sha256_file,
     _temporary_model_state,
     _training_evidence_kwargs,
     _update_ema_state,
@@ -45,230 +39,6 @@ from src.trainer import (
     run_inference,
     _should_early_stop,
 )
-
-
-def _write_selection_manifest(
-    directory: str,
-    *,
-    selected_sha256: str,
-    selected_source: str,
-    residual_active: bool,
-    accepted: bool,
-    reason: str,
-    deltas,
-    residual_mode: str = "relation_residual_v4",
-) -> None:
-    manifest = {
-        "schema_version": 1,
-        "residual_mode": residual_mode,
-        "accepted": accepted,
-        "reason": reason,
-        "deltas": deltas,
-        "selected": {
-            "source": selected_source,
-            "sha256": selected_sha256,
-            "residual_active": residual_active,
-        },
-    }
-    (Path(directory) / "selection_manifest.json").write_text(
-        json.dumps(manifest),
-        encoding="utf-8",
-    )
-
-
-def _assert_inference_selection_metadata_contract() -> None:
-    loaded_args = {
-        "model_variant": "gec_relation_residual",
-        "gec_mode": "relation_residual_v4",
-    }
-    candidate_deltas = {
-        "auc": 0.0002,
-        "bce_loss": -0.0001,
-        "rmse": -0.00005,
-    }
-
-    with tempfile.TemporaryDirectory() as directory:
-        directory_path = Path(directory)
-        candidate_path = directory_path / "candidate_best.pth"
-        selected_path = directory_path / "selected_model.pth"
-        best_path = directory_path / "best_model.pth"
-        candidate_path.write_bytes(b"candidate-checkpoint")
-        selected_path.write_bytes(b"stale-selected-checkpoint")
-        best_path.write_bytes(b"stale-best-checkpoint")
-        _materialize_checkpoint(str(candidate_path), str(selected_path))
-        _materialize_checkpoint(str(candidate_path), str(best_path))
-        candidate_sha256 = _sha256_file(str(candidate_path))
-        assert _sha256_file(str(selected_path)) == candidate_sha256
-        assert _sha256_file(str(best_path)) == candidate_sha256
-
-        _write_selection_manifest(
-            directory,
-            selected_sha256=candidate_sha256,
-            selected_source="candidate",
-            residual_active=True,
-            accepted=True,
-            reason="accepted",
-            deltas=candidate_deltas,
-        )
-        candidate_metadata = _load_inference_selection_metadata(
-            directory,
-            checkpoint_sha256=_sha256_file(str(best_path)),
-            loaded_args=loaded_args,
-        )
-        assert candidate_metadata == {
-            "selection_manifest_present": True,
-            "selected_source": "candidate",
-            "residual_active": True,
-            "selection_reason": "accepted",
-            "selection_accepted": True,
-            "candidate_parent_deltas": candidate_deltas,
-            "effective_model_variant": "gec_relation_residual",
-        }
-
-        _write_selection_manifest(
-            directory,
-            selected_sha256="0" * 64,
-            selected_source="candidate",
-            residual_active=True,
-            accepted=True,
-            reason="accepted",
-            deltas=candidate_deltas,
-        )
-        try:
-            _load_inference_selection_metadata(
-                directory,
-                checkpoint_sha256=_sha256_file(str(best_path)),
-                loaded_args=loaded_args,
-            )
-        except RuntimeError as exc:
-            assert "selected SHA" in str(exc)
-        else:
-            raise AssertionError(
-                "inference must reject a manifest whose selected SHA does not "
-                "match best_model.pth"
-            )
-
-        parent_path = directory_path / "parent_fallback.pth"
-        parent_path.write_bytes(b"parent-fallback-checkpoint")
-        _materialize_checkpoint(str(parent_path), str(selected_path))
-        _materialize_checkpoint(str(parent_path), str(best_path))
-        parent_sha256 = _sha256_file(str(parent_path))
-        assert _sha256_file(str(selected_path)) == parent_sha256
-        assert _sha256_file(str(best_path)) == parent_sha256
-        parent_deltas = {
-            "auc": -0.0001,
-            "bce_loss": 0.0002,
-            "rmse": 0.0001,
-        }
-        _write_selection_manifest(
-            directory,
-            selected_sha256=parent_sha256,
-            selected_source="parent",
-            residual_active=False,
-            accepted=False,
-            reason="auc_gain_below_threshold",
-            deltas=parent_deltas,
-        )
-        parent_metadata = _load_inference_selection_metadata(
-            directory,
-            checkpoint_sha256=_sha256_file(str(best_path)),
-            loaded_args=loaded_args,
-        )
-        assert parent_metadata == {
-            "selection_manifest_present": True,
-            "selected_source": "parent",
-            "residual_active": False,
-            "selection_reason": "auc_gain_below_threshold",
-            "selection_accepted": False,
-            "candidate_parent_deltas": parent_deltas,
-            "effective_model_variant": "full_fallback",
-        }
-
-        branch_loaded_args = {
-            "model_variant": "gec_branch_gate",
-            "gec_mode": "branch_gate_v5",
-        }
-        try:
-            _load_inference_selection_metadata(
-                directory,
-                checkpoint_sha256=_sha256_file(str(best_path)),
-                loaded_args=branch_loaded_args,
-            )
-        except RuntimeError as exc:
-            assert "residual_mode does not match" in str(exc)
-        else:
-            raise AssertionError(
-                "branch inference must reject a manifest for another residual "
-                "mode"
-            )
-
-        _write_selection_manifest(
-            directory,
-            selected_sha256=parent_sha256,
-            selected_source="parent",
-            residual_active=False,
-            accepted=False,
-            reason="auc_gain_below_threshold",
-            deltas=parent_deltas,
-            residual_mode="branch_gate_v5",
-        )
-        branch_metadata = _load_inference_selection_metadata(
-            directory,
-            checkpoint_sha256=_sha256_file(str(best_path)),
-            loaded_args=branch_loaded_args,
-        )
-        assert branch_metadata["selection_manifest_present"] is True
-        assert branch_metadata["selected_source"] == "parent"
-        assert branch_metadata["residual_active"] is False
-        assert branch_metadata["effective_model_variant"] == "full_fallback"
-
-        (directory_path / "selection_manifest.json").unlink()
-        try:
-            _load_inference_selection_metadata(
-                directory,
-                checkpoint_sha256=_sha256_file(str(best_path)),
-                loaded_args=loaded_args,
-            )
-        except RuntimeError as exc:
-            assert "requires selection_manifest.json" in str(exc)
-        else:
-            raise AssertionError(
-                "relation_residual_v4 inference must reject a missing selection "
-                "manifest"
-            )
-
-        try:
-            _load_inference_selection_metadata(
-                directory,
-                checkpoint_sha256=_sha256_file(str(best_path)),
-                loaded_args={
-                    "model_variant": "gec_branch_gate",
-                    "gec_mode": "branch_gate_v5",
-                },
-            )
-        except RuntimeError as exc:
-            assert "branch_gate_v5" in str(exc)
-            assert "requires selection_manifest.json" in str(exc)
-        else:
-            raise AssertionError(
-                "branch_gate_v5 inference must reject a missing selection "
-                "manifest"
-            )
-
-        legacy_metadata = _load_inference_selection_metadata(
-            directory,
-            checkpoint_sha256=_sha256_file(str(best_path)),
-            loaded_args={"model_variant": "full", "gec_mode": "v1"},
-        )
-        assert legacy_metadata == {
-            "selection_manifest_present": False,
-            "selected_source": "checkpoint",
-            "residual_active": False,
-            "selection_reason": "legacy_checkpoint_without_manifest",
-            "selection_accepted": None,
-            "candidate_parent_deltas": None,
-            "effective_model_variant": "full",
-        }
 
 
 def main() -> None:
@@ -337,63 +107,6 @@ def main() -> None:
     assert ema_args.ema_decay == EMA_DECAY
     assert ema_args.use_response_evidence
     assert _resolve_ema_decay(ema_args) == EMA_DECAY
-    residual_args = main_module.parse_args(
-        [
-            "--model_variant",
-            "gec_residual",
-            "--warm_start_checkpoint",
-            "paired_full/best_model.pth",
-        ]
-    )
-    main_module._apply_model_variant(residual_args)
-    main_module._validate_args(residual_args)
-    assert residual_args.gec_mode == "residual_v3"
-    assert residual_args.evidence_anchor_mode == "full"
-    relation_residual_args = main_module.parse_args(
-        [
-            "--model_variant",
-            "gec_relation_residual",
-            "--warm_start_checkpoint",
-            "paired_full/best_model.pth",
-        ]
-    )
-    main_module._apply_model_variant(relation_residual_args)
-    main_module._validate_args(relation_residual_args)
-    assert relation_residual_args.gec_mode == "relation_residual_v4"
-    assert relation_residual_args.evidence_anchor_mode == "full"
-    assert relation_residual_args.train_evidence_mode == "excluded"
-    assert relation_residual_args.pairwise_auc_weight == 0.0
-    assert relation_residual_args.ema_decay == 0.0
-    assert relation_residual_args.use_response_evidence
-    branch_gate_args = main_module.parse_args(
-        [
-            "--model_variant",
-            "gec_branch_gate",
-            "--warm_start_checkpoint",
-            "paired_full/best_model.pth",
-        ]
-    )
-    main_module._apply_model_variant(branch_gate_args)
-    main_module._validate_args(branch_gate_args)
-    assert branch_gate_args.gec_mode == "branch_gate_v5"
-    assert branch_gate_args.evidence_anchor_mode == "full"
-    assert branch_gate_args.train_evidence_mode == "excluded"
-    assert branch_gate_args.pairwise_auc_weight == PAIRWISE_AUC_WEIGHT
-    assert branch_gate_args.ema_decay == 0.0
-    assert branch_gate_args.use_response_evidence
-    assert _resolve_pairwise_auc_weight(branch_gate_args) == PAIRWISE_AUC_WEIGHT
-    missing_relation_parent = main_module.parse_args(
-        ["--model_variant", "gec_relation_residual"]
-    )
-    main_module._apply_model_variant(missing_relation_parent)
-    try:
-        main_module._validate_args(missing_relation_parent)
-    except SystemExit as exc:
-        assert "warm_start_checkpoint" in str(exc)
-    else:
-        raise AssertionError(
-            "relation residual training must require a warm-start checkpoint"
-        )
     assert "no_response_graph" not in main_module.MODEL_VARIANTS
     boundary_labels = torch.tensor([0.0, 1.0])
     assert set(_training_evidence_kwargs(boundary_labels, "excluded")) == {
@@ -470,20 +183,6 @@ def main() -> None:
         assert "fixed by model_variant" in str(exc)
     else:
         raise AssertionError("pairwise weight must not become a free hyperparameter")
-    try:
-        _resolve_pairwise_auc_weight(
-            SimpleNamespace(
-                model_variant="gec_branch_gate",
-                gec_mode="branch_gate_v5",
-                pairwise_auc_weight=0.0,
-            )
-        )
-    except ValueError as exc:
-        assert "requires 0.5" in str(exc)
-    else:
-        raise AssertionError(
-            "branch_gate_v5 must use the fixed pairwise-AUC objective"
-        )
 
     checkpoint_pairwise = _checkpoint_args(
         SimpleNamespace(
@@ -535,69 +234,6 @@ def main() -> None:
 
     assert not _is_validation_improvement(0.700005, 0.700000, 1e-5)
     assert _is_validation_improvement(0.70002, 0.700000, 1e-5)
-    assert _is_validation_improvement(0.700005, 0.700000, 0.0)
-
-    parent_metrics = {"auc": 0.8, "bce_loss": 0.4, "rmse": 0.35}
-    accepted_candidate = _select_residual_candidate(
-        parent_metrics,
-        {"auc": 0.8002, "bce_loss": 0.40005, "rmse": 0.35005},
-    )
-    assert accepted_candidate["accepted"] is True
-    assert accepted_candidate["reason"] == "accepted"
-    assert set(accepted_candidate["deltas"]) == {"auc", "bce_loss", "rmse"}
-    assert abs(accepted_candidate["deltas"]["auc"] - 0.0002) < 1e-12
-    assert abs(accepted_candidate["deltas"]["bce_loss"] - 0.00005) < 1e-12
-    assert abs(accepted_candidate["deltas"]["rmse"] - 0.00005) < 1e-12
-
-    insufficient_auc = _select_residual_candidate(
-        parent_metrics,
-        {"auc": 0.80005, "bce_loss": 0.3999, "rmse": 0.3499},
-    )
-    assert insufficient_auc["accepted"] is False
-    assert "auc" in insufficient_auc["reason"].lower()
-
-    bce_regression = _select_residual_candidate(
-        parent_metrics,
-        {"auc": 0.8003, "bce_loss": 0.4002, "rmse": 0.35},
-    )
-    assert bce_regression["accepted"] is False
-    assert "bce" in bce_regression["reason"].lower()
-
-    rmse_regression = _select_residual_candidate(
-        parent_metrics,
-        {"auc": 0.8003, "bce_loss": 0.4, "rmse": 0.3502},
-    )
-    assert rmse_regression["accepted"] is False
-    assert "rmse" in rmse_regression["reason"].lower()
-
-    threshold_boundary = _select_residual_candidate(
-        parent_metrics,
-        {"auc": 0.8001, "bce_loss": 0.4001, "rmse": 0.3501},
-    )
-    assert threshold_boundary["accepted"] is True
-    assert _passes_residual_error_guards(
-        parent_metrics,
-        {"auc": 0.7, "bce_loss": 0.4001, "rmse": 0.3501},
-    )
-    assert not _passes_residual_error_guards(
-        parent_metrics,
-        {"auc": 0.9, "bce_loss": 0.4002, "rmse": 0.35},
-    )
-    for invalid_candidate in (
-        {"auc": float("nan"), "bce_loss": 0.4, "rmse": 0.35},
-        {"auc": 0.8002, "bce_loss": float("inf"), "rmse": 0.35},
-        {"auc": 0.8002, "bce_loss": 0.4},
-    ):
-        try:
-            _select_residual_candidate(parent_metrics, invalid_candidate)
-        except ValueError as exc:
-            assert "finite" in str(exc)
-        else:
-            raise AssertionError(
-                "residual selection must reject missing or non-finite metrics"
-            )
-
-    _assert_inference_selection_metadata_contract()
 
     hash_args = SimpleNamespace(
         dataset_name="assist_09",

@@ -51,143 +51,6 @@ def main() -> None:
     assert by_name["exposure_only"].params["graph_prior_mode"] == "exposure_only"
     assert by_name["degree_random"].params["graph_prior_mode"] == "degree_random"
 
-    residual_args = runner.parse_args(
-        [
-            "--datasets",
-            "assist_09",
-            "--seeds",
-            "42",
-            "--ablations",
-            "gec_residual",
-            "--warm_start_run_id",
-            "paired_v1",
-            "--dry_run",
-        ]
-    )
-    residual_jobs = runner.make_jobs(residual_args, run_id="residual_smoke")
-    assert len(residual_jobs) == 1
-    residual_job = residual_jobs[0]
-    assert residual_job.params["warm_start_checkpoint"] == (
-        "checkpoints/assist_09_graph_irt_full_excluded_seed42_paired_v1/"
-        "best_model.pth"
-    )
-    parsed_residual = main_module.parse_args(
-        residual_job.cmd[residual_job.cmd.index("--dataset_name") :]
-    )
-    main_module._apply_model_variant(parsed_residual)
-    main_module._validate_args(parsed_residual)
-    assert parsed_residual.gec_mode == "residual_v3"
-
-    relation_residual_args = runner.parse_args(
-        [
-            "--datasets",
-            "assist_09",
-            "--seeds",
-            "42",
-            "--ablations",
-            "gec_relation_residual",
-            "--warm_start_run_id",
-            "paired_v1",
-            "--dry_run",
-        ]
-    )
-    relation_residual_jobs = runner.make_jobs(
-        relation_residual_args,
-        run_id="relation_residual_smoke",
-    )
-    assert len(relation_residual_jobs) == 1
-    relation_residual_job = relation_residual_jobs[0]
-    assert relation_residual_job.params["warm_start_checkpoint"] == (
-        "checkpoints/assist_09_graph_irt_full_excluded_seed42_paired_v1/"
-        "best_model.pth"
-    )
-    assert {
-        key: relation_residual_job.params[key]
-        for key in (
-            "epochs",
-            "min_epochs",
-            "patience",
-            "early_stop_patience",
-            "learning_rate",
-            "weight_decay",
-            "optimizer",
-        )
-    } == {
-        "epochs": 30,
-        "min_epochs": 3,
-        "patience": 3,
-        "early_stop_patience": 6,
-        "learning_rate": 1e-3,
-        "weight_decay": 0.0,
-        "optimizer": "adamw",
-    }
-    parsed_relation_residual = main_module.parse_args(
-        relation_residual_job.cmd[
-            relation_residual_job.cmd.index("--dataset_name") :
-        ]
-    )
-    main_module._apply_model_variant(parsed_relation_residual)
-    main_module._validate_args(parsed_relation_residual)
-    assert parsed_relation_residual.gec_mode == "relation_residual_v4"
-    assert parsed_relation_residual.evidence_anchor_mode == "full"
-    assert parsed_relation_residual.train_evidence_mode == "excluded"
-    assert parsed_relation_residual.pairwise_auc_weight == 0.0
-
-    branch_gate_args = runner.parse_args(
-        [
-            "--datasets",
-            "assist_09",
-            "--seeds",
-            "42",
-            "--ablations",
-            "gec_branch_gate",
-            "--warm_start_run_id",
-            "paired_v1",
-            "--dry_run",
-        ]
-    )
-    branch_gate_jobs = runner.make_jobs(
-        branch_gate_args,
-        run_id="branch_gate_smoke",
-    )
-    assert len(branch_gate_jobs) == 1
-    branch_gate_job = branch_gate_jobs[0]
-    assert branch_gate_job.params["warm_start_checkpoint"] == (
-        "checkpoints/assist_09_graph_irt_full_excluded_seed42_paired_v1/"
-        "best_model.pth"
-    )
-    assert {
-        key: branch_gate_job.params[key]
-        for key in (
-            "epochs",
-            "min_epochs",
-            "patience",
-            "early_stop_patience",
-            "learning_rate",
-            "weight_decay",
-            "optimizer",
-            "max_train_batches",
-        )
-    } == {
-        "epochs": 30,
-        "min_epochs": 3,
-        "patience": 3,
-        "early_stop_patience": 6,
-        "learning_rate": 1e-3,
-        "weight_decay": 0.0,
-        "optimizer": "adamw",
-        "max_train_batches": 200,
-    }
-    parsed_branch_gate = main_module.parse_args(
-        branch_gate_job.cmd[branch_gate_job.cmd.index("--dataset_name") :]
-    )
-    main_module._apply_model_variant(parsed_branch_gate)
-    main_module._validate_args(parsed_branch_gate)
-    assert parsed_branch_gate.gec_mode == "branch_gate_v5"
-    assert parsed_branch_gate.evidence_anchor_mode == "full"
-    assert parsed_branch_gate.train_evidence_mode == "excluded"
-    assert parsed_branch_gate.pairwise_auc_weight == 0.5
-
     boundary_args = runner.parse_args(
         [
             "--datasets",
@@ -213,31 +76,6 @@ def main() -> None:
             job.cmd[job.cmd.index("--dataset_name") :]
         )
         assert parsed_boundary.train_evidence_mode == job.train_evidence_mode
-
-    for residual_name in (
-        "gec_residual",
-        "gec_relation_residual",
-        "gec_branch_gate",
-    ):
-        missing_parent = runner.parse_args(
-            [
-                "--datasets",
-                "assist_09",
-                "--seeds",
-                "42",
-                "--ablations",
-                residual_name,
-                "--dry_run",
-            ]
-        )
-        try:
-            runner.make_jobs(missing_parent, run_id="missing_parent")
-        except ValueError as exc:
-            assert "warm_start_run_id" in str(exc)
-        else:
-            raise AssertionError(
-                f"{residual_name} training must require a paired v1 run"
-            )
 
     banned = ("no_A", "no_E", "personal", "ae_", "roadmap", "tutor")
     for job in jobs:
@@ -293,26 +131,6 @@ def main() -> None:
         checkpoint_dir.mkdir(parents=True)
         (checkpoint_dir / "best_model.pth").write_bytes(b"smoke")
         runner._require_existing_test_checkpoints([checkpoint_job])
-
-        warm_start_path = Path(directory) / "paired_full" / "best_model.pth"
-        guarded_relation_job = replace(
-            relation_residual_job,
-            params={
-                **relation_residual_job.params,
-                "warm_start_checkpoint": str(warm_start_path),
-            },
-        )
-        try:
-            runner._require_residual_warm_starts([guarded_relation_job])
-        except FileNotFoundError as exc:
-            assert str(warm_start_path) in str(exc)
-        else:
-            raise AssertionError(
-                "relation residual launch must reject a missing warm start"
-            )
-        warm_start_path.parent.mkdir(parents=True)
-        warm_start_path.write_bytes(b"smoke")
-        runner._require_residual_warm_starts([guarded_relation_job])
 
         fresh_job = replace(
             jobs[0],

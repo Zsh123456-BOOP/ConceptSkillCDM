@@ -44,8 +44,7 @@ class CognitiveDiagnosisHead(nn.Module):
 
     ``theta_c`` remains available for diagnosis, but prediction has exactly one
     item logit: ``a * (mean_Q(theta_c) - b)``. There is no item-concept
-    difficulty factor, matching term, or post-hoc calibration branch.  An
-    optional bounded adjustment may be added to ``theta_c`` before Q masking.
+    difficulty factor, matching term, residual, or calibration branch.
 
     When ``evidence_anchor_channels > 0`` the concept ability is anchored at
     the train-only response-evidence logits: ``theta_c`` becomes the state
@@ -107,7 +106,6 @@ class CognitiveDiagnosisHead(nn.Module):
         b: torch.Tensor,
         a: torch.Tensor,
         evidence_anchor: torch.Tensor = None,
-        theta_adjustment: torch.Tensor = None,
         return_details: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         if knowledge_state.dim() != 3:
@@ -145,14 +143,6 @@ class CognitiveDiagnosisHead(nn.Module):
             ).sum(dim=-1)
         elif self.evidence_anchor_channels > 0:
             raise ValueError("head expects an evidence_anchor but none was supplied")
-        if theta_adjustment is not None:
-            expected_adjustment = (batch_size, self.num_concepts)
-            if tuple(theta_adjustment.shape) != expected_adjustment:
-                raise ValueError(
-                    "theta_adjustment must have shape "
-                    f"{expected_adjustment}, got {tuple(theta_adjustment.shape)}"
-                )
-            theta_c = theta_c + theta_adjustment.to(dtype=theta_c.dtype)
         mask = concept_mask.to(dtype=theta_c.dtype)
         denom = mask.sum(dim=1).clamp(min=1.0)
         theta_e = (theta_c * mask).sum(dim=1) / denom
@@ -175,6 +165,4 @@ class CognitiveDiagnosisHead(nn.Module):
         }
         if self.evidence_anchor_channels > 0:
             details["evidence_anchor_weights"] = self.evidence_anchor_weights().detach()
-        if theta_adjustment is not None:
-            details["theta_adjustment"] = theta_adjustment.detach()
         return irt_logit, details

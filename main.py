@@ -21,14 +21,6 @@ from src.config import (
 
 MODEL_VARIANTS = (
     "full",
-    # Reproducibility path for the scalar v3 plug-in.
-    "gec_residual",
-    # Relation-quality, signed-evidence v4 plug-in.  It warm-starts the
-    # complete v1 model and trains only the bounded adapter.
-    "gec_relation_residual",
-    # Branch-scale v5 plug-in. It warm-starts the complete v1 model and
-    # learns only bounded rescaling of existing graph/evidence branches.
-    "gec_branch_gate",
     "no_response_evidence",
     "no_evidence_anchor",
     "no_evidence_propagation",
@@ -85,15 +77,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Model
     parser.add_argument("--model_variant", default="full", choices=MODEL_VARIANTS)
-    parser.add_argument(
-        "--warm_start_checkpoint",
-        default=None,
-        help=(
-            "Required only for residual-adapter training. Must point to the "
-            "paired full/v1 best_model.pth from the same data, seed, and "
-            "configuration."
-        ),
-    )
     parser.add_argument("--knowledge_dim", type=int, default=128)
     parser.add_argument("--num_relation_heads", type=int, default=4)
     parser.add_argument("--num_gnn_layers", type=int, default=2)
@@ -208,11 +191,6 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 def _apply_model_variant(args: argparse.Namespace) -> None:
     """Map named, interpretable controls to the underlying graph settings."""
-    args.gec_mode = {
-        "gec_residual": "residual_v3",
-        "gec_relation_residual": "relation_residual_v4",
-        "gec_branch_gate": "branch_gate_v5",
-    }.get(args.model_variant, "v1")
     args.use_response_evidence = args.model_variant != "no_response_evidence"
     args.evidence_anchor_mode = {
         "no_response_evidence": "off",
@@ -221,9 +199,7 @@ def _apply_model_variant(args: argparse.Namespace) -> None:
         "no_graph_calibration": "direct_only",
     }.get(args.model_variant, "full")
     args.pairwise_auc_weight = (
-        PAIRWISE_AUC_WEIGHT
-        if args.model_variant in {"pairwise_auc", "gec_branch_gate"}
-        else 0.0
+        PAIRWISE_AUC_WEIGHT if args.model_variant == "pairwise_auc" else 0.0
     )
     args.ema_decay = EMA_DECAY if args.model_variant == "ema_bce" else 0.0
     if args.model_variant in {"no_message_passing", "no_graph_calibration"}:
@@ -315,24 +291,6 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit(
             "error: non-default --train_evidence_mode requires response evidence"
         )
-    residual_variants = {
-        "gec_residual",
-        "gec_relation_residual",
-        "gec_branch_gate",
-    }
-    if args.model_variant in residual_variants:
-        if str(args.train_evidence_mode) != "excluded":
-            raise SystemExit(
-                "error: residual adapters require --train_evidence_mode excluded"
-            )
-        if args.run_mode in {"train", "train_test"} and not args.warm_start_checkpoint:
-            raise SystemExit(
-                "error: residual-adapter training requires --warm_start_checkpoint"
-            )
-    elif args.warm_start_checkpoint:
-        raise SystemExit(
-            "error: --warm_start_checkpoint is only valid for residual adapters"
-        )
 
 
 def _seed_everything(seed: int) -> None:
@@ -423,7 +381,6 @@ def main() -> None:
         validation_result = {
             "dataset": args.dataset_name,
             "model_variant": args.model_variant,
-            "gec_mode": args.gec_mode,
             "train_evidence_mode": args.train_evidence_mode,
             "seed": int(args.seed),
             "best_val_auc": float(best_val_auc),

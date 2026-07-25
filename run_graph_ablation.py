@@ -47,34 +47,6 @@ class JobSpec:
 
 ABLATIONS: Dict[str, AblationSpec] = {
     "full": AblationSpec("full", {}),
-    "gec_residual": AblationSpec("gec_residual", {}),
-    "gec_relation_residual": AblationSpec(
-        "gec_relation_residual",
-        {
-            # One global adapter protocol for every dataset.  Candidate early
-            # stopping is separate from the final parent/candidate selection.
-            "epochs": 30,
-            "min_epochs": 3,
-            "patience": 3,
-            "early_stop_patience": 6,
-            "learning_rate": 1e-3,
-            "weight_decay": 0.0,
-            "optimizer": "adamw",
-        },
-    ),
-    "gec_branch_gate": AblationSpec(
-        "gec_branch_gate",
-        {
-            "epochs": 30,
-            "min_epochs": 3,
-            "patience": 3,
-            "early_stop_patience": 6,
-            "learning_rate": 1e-3,
-            "weight_decay": 0.0,
-            "optimizer": "adamw",
-            "max_train_batches": 200,
-        },
-    ),
     "no_response_evidence": AblationSpec("no_response_evidence", {}),
     "no_evidence_anchor": AblationSpec("no_evidence_anchor", {}),
     "no_evidence_propagation": AblationSpec("no_evidence_propagation", {}),
@@ -112,23 +84,7 @@ def _append_cli_arg(cmd: List[str], key: str, value: Any) -> None:
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Graph-IRT ablations.")
     parser.add_argument("--datasets", default="assist_09,assist_17,junyi")
-    parser.add_argument(
-        "--ablations",
-        default=",".join(
-            name
-            for name in ABLATIONS
-            if name
-            not in {
-                "gec_residual",
-                "gec_relation_residual",
-                "gec_branch_gate",
-            }
-        ),
-        help=(
-            "Comma-separated variants. Residual adapters are opt-in because "
-            "they require --warm_start_run_id."
-        ),
-    )
+    parser.add_argument("--ablations", default=",".join(ABLATIONS))
     parser.add_argument(
         "--train_evidence_modes",
         default="excluded",
@@ -143,14 +99,6 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max_per_gpu", type=int, default=1)
     parser.add_argument("--poll_interval", type=int, default=10)
     parser.add_argument("--run_id", default=None)
-    parser.add_argument(
-        "--warm_start_run_id",
-        default=None,
-        help=(
-            "Run id containing paired full/v1 checkpoints. Required when "
-            "training a residual adapter."
-        ),
-    )
     parser.add_argument(
         "--run_mode",
         choices=("train", "test"),
@@ -196,26 +144,6 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
             "--run_mode test requires --run_id for an existing validation-selected run."
         )
     session = requested_run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
-    residual_names = {
-        "gec_residual",
-        "gec_relation_residual",
-        "gec_branch_gate",
-    }
-    residual_requested = any(
-        ablation.name in residual_names for ablation in ablations
-    )
-    if args.run_mode == "train" and residual_requested and not args.warm_start_run_id:
-        raise ValueError(
-            "training a residual adapter requires --warm_start_run_id"
-        )
-    if (
-        args.run_mode == "train"
-        and args.warm_start_run_id
-        and not residual_requested
-    ):
-        raise ValueError(
-            "--warm_start_run_id is only valid when training a residual adapter"
-        )
     jobs: List[JobSpec] = []
 
     for dataset in datasets:
@@ -230,18 +158,6 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
                     params.pop("seed", None)
                     params["model_variant"] = ablation.name
                     params["train_evidence_mode"] = train_evidence_mode
-                    if (
-                        args.run_mode == "train"
-                        and ablation.name in residual_names
-                    ):
-                        base_tag = (
-                            f"{dataset}_graph_irt_full_"
-                            f"{train_evidence_mode}_seed{seed}_"
-                            f"{args.warm_start_run_id}"
-                        )
-                        params["warm_start_checkpoint"] = str(
-                            Path("checkpoints") / base_tag / "best_model.pth"
-                        )
 
                     tag = (
                         f"{dataset}_graph_irt_{ablation.name}_"
@@ -322,24 +238,6 @@ def _require_fresh_training_dirs(jobs: Sequence[JobSpec]) -> None:
         )
 
 
-def _require_residual_warm_starts(jobs: Sequence[JobSpec]) -> None:
-    """Fail before launch unless every residual job has its paired v1 parent."""
-    missing = [
-        str(job.params.get("warm_start_checkpoint", ""))
-        for job in jobs
-        if job.ablation.name
-        in {"gec_residual", "gec_relation_residual", "gec_branch_gate"}
-        and not Path(str(job.params.get("warm_start_checkpoint", ""))).is_file()
-    ]
-    if missing:
-        preview = "\n  ".join(missing[:10])
-        suffix = f"\n  ... and {len(missing) - 10} more" if len(missing) > 10 else ""
-        raise FileNotFoundError(
-            "Residual training requires paired full/v1 checkpoints:\n  "
-            f"{preview}{suffix}"
-        )
-
-
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
     jobs = make_jobs(args)
@@ -365,7 +263,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         _require_existing_test_checkpoints(jobs)
     else:
         _require_fresh_training_dirs(jobs)
-        _require_residual_warm_starts(jobs)
 
     running: List[tuple[subprocess.Popen, int, JobSpec]] = []
     gpu_load = {gpu: 0 for gpu in gpus}

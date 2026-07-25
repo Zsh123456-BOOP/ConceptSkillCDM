@@ -1,18 +1,16 @@
 #!/usr/bin/env python
-"""Evaluate selected checkpoint families on validation evidence-count subsets.
+"""Evaluate the graph 2x2 checkpoints on validation evidence-count subsets.
 
 The tool never opens ``test.csv``.  Each validation row is assigned the
 minimum train-only student-concept response count among the concepts attached
-to its exercise.  It reports metrics for all rows, the legacy overlapping
-subset ``n<3``, and mutually exclusive ``n=0``, ``n=1-2``, and ``n>=3``
-subsets.  It then computes same-dataset/same-seed paired contrasts for the
-graph 2x2 family or any residual adapter family.
+to its exercise.  It reports metrics for all rows and the overlapping
+diagnostic subsets ``n=0`` and ``n<3``, then computes same-dataset/same-seed
+paired contrasts across the four graph variants.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Mapping, Tuple
@@ -36,20 +34,16 @@ from src.trainer import (  # noqa: E402
     _strip_module_prefix,
     _validate_checkpoint_data_identity,
 )
-from tools.summarize_validation_runs import (  # noqa: E402
-    _candidate_dirs,
-    _role_checkpoint_path,
-    _tokens,
-)
+from tools.summarize_validation_runs import _candidate_dirs, _tokens  # noqa: E402
 
 
-GRAPH_2X2_VARIANTS = (
+VARIANTS = (
     "full",
     "no_evidence_propagation",
     "no_message_passing",
     "no_graph_calibration",
 )
-GRAPH_2X2_CONTRASTS: Tuple[Tuple[str, Mapping[str, float]], ...] = (
+CONTRASTS: Tuple[Tuple[str, Mapping[str, float]], ...] = (
     (
         "propagation|state_on",
         {"full": 1.0, "no_evidence_propagation": -1.0},
@@ -77,111 +71,16 @@ GRAPH_2X2_CONTRASTS: Tuple[Tuple[str, Mapping[str, float]], ...] = (
     ),
 )
 
-RESIDUAL_VARIANTS = ("full", "gec_residual")
-RESIDUAL_CONTRASTS: Tuple[Tuple[str, Mapping[str, float]], ...] = (
-    ("residual-full", {"gec_residual": 1.0, "full": -1.0}),
-)
-RELATION_RESIDUAL_VARIANTS = (
-    "full",
-    "gec_relation_residual_candidate",
-    "gec_relation_residual_selected",
-)
-RELATION_RESIDUAL_CONTRASTS: Tuple[
-    Tuple[str, Mapping[str, float]], ...
-] = (
-    (
-        "relation-candidate-full",
-        {"gec_relation_residual_candidate": 1.0, "full": -1.0},
-    ),
-    (
-        "relation-selected-full",
-        {"gec_relation_residual_selected": 1.0, "full": -1.0},
-    ),
-)
-BRANCH_GATE_VARIANTS = (
-    "full",
-    "gec_branch_gate_candidate",
-    "gec_branch_gate_selected",
-)
-BRANCH_GATE_CONTRASTS: Tuple[
-    Tuple[str, Mapping[str, float]], ...
-] = (
-    (
-        "branch-candidate-full",
-        {"gec_branch_gate_candidate": 1.0, "full": -1.0},
-    ),
-    (
-        "branch-selected-full",
-        {"gec_branch_gate_selected": 1.0, "full": -1.0},
-    ),
-)
-VARIANT_FAMILIES = {
-    "graph2x2": (GRAPH_2X2_VARIANTS, GRAPH_2X2_CONTRASTS),
-    "residual": (RESIDUAL_VARIANTS, RESIDUAL_CONTRASTS),
-    "relation_residual": (
-        RELATION_RESIDUAL_VARIANTS,
-        RELATION_RESIDUAL_CONTRASTS,
-    ),
-    "branch_gate": (BRANCH_GATE_VARIANTS, BRANCH_GATE_CONTRASTS),
-}
-
 
 def _resolve(value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else ROOT / path
 
 
-def _selection_manifest(checkpoint_dir: Path) -> Mapping[str, object]:
-    path = checkpoint_dir / "selection_manifest.json"
-    if not path.is_file():
-        return {}
-    with path.open(encoding="utf-8") as handle:
-        manifest = json.load(handle)
-    if not isinstance(manifest, dict):
-        raise TypeError(
-            f"selection manifest must contain a JSON object: {path}"
-        )
-    return manifest
-
-
-def _required_role_checkpoint(
-    checkpoint_dir: Path,
-    manifest: Mapping[str, object],
-    role: str,
-) -> Path:
-    path = _role_checkpoint_path(checkpoint_dir, manifest, role)
-    if path is None:
-        raise FileNotFoundError(
-            f"missing {role} checkpoint in {checkpoint_dir}"
-        )
-    return path
-
-
-def _diagnostic_candidate_checkpoint(
-    checkpoint_dir: Path,
-    manifest: Mapping[str, object],
-) -> Path:
-    """Prefer the unconstrained max-AUC candidate when it is recorded."""
-    raw_best = _role_checkpoint_path(
-        checkpoint_dir,
-        manifest,
-        "raw_best",
-    )
-    if raw_best is not None:
-        return raw_best
-    return _required_role_checkpoint(
-        checkpoint_dir,
-        manifest,
-        "candidate",
-    )
-
-
 def _bucket_masks(support: np.ndarray) -> Dict[str, np.ndarray]:
     return {
         "all": np.ones(support.shape, dtype=bool),
         "n=0": support == 0,
-        "n=1-2": (support >= 1) & (support < 3),
-        "n>=3": support >= 3,
         "n<3": support < 3,
     }
 
@@ -204,15 +103,8 @@ def _read_validation(
     *,
     batch_size: int,
     device: torch.device,
-    checkpoint_name: str = "best_model.pth",
-    checkpoint_path: Path | None = None,
-    variant_label: str = "",
 ) -> List[Dict[str, object]]:
-    checkpoint_path = (
-        checkpoint_dir / checkpoint_name
-        if checkpoint_path is None
-        else checkpoint_path
-    )
+    checkpoint_path = checkpoint_dir / "best_model.pth"
     if not checkpoint_path.is_file():
         raise FileNotFoundError(f"missing checkpoint: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
@@ -299,18 +191,8 @@ def _read_validation(
     support_array = np.asarray(supports, dtype=np.float64)
     identity = {
         "run_dir": str(checkpoint_dir),
-        "checkpoint_artifact": checkpoint_path.name,
-        "architecture": str(
-            checkpoint.get("architecture", loaded_args.get("architecture", ""))
-        ),
-        "gec_mode": str(loaded_args.get("gec_mode", "v1")),
         "dataset": str(loaded_args.get("dataset_name", "")),
-        "model_variant_source": str(loaded_args.get("model_variant", "full")),
-        "model_variant": (
-            variant_label
-            if variant_label
-            else str(loaded_args.get("model_variant", "full"))
-        ),
+        "model_variant": str(loaded_args.get("model_variant", "full")),
         "train_evidence_mode": str(loaded_args.get("train_evidence_mode", "excluded")),
         "seed": int(loaded_args.get("seed", 0)),
         "best_epoch": int(checkpoint.get("epoch", 0)),
@@ -335,59 +217,31 @@ def _read_validation(
     return rows
 
 
-def _paired_contrasts(
-    frame: pd.DataFrame,
-    *,
-    variants: Tuple[str, ...],
-    contrasts: Tuple[Tuple[str, Mapping[str, float]], ...],
-) -> pd.DataFrame:
+def _paired_contrasts(frame: pd.DataFrame) -> pd.DataFrame:
     duplicate = frame.duplicated(
-        [
-            "architecture",
-            "train_evidence_mode",
-            "dataset",
-            "seed",
-            "bucket",
-            "model_variant",
-        ],
+        ["dataset", "seed", "bucket", "model_variant"],
         keep=False,
     )
     if duplicate.any():
-        columns = [
-            "architecture",
-            "train_evidence_mode",
-            "dataset",
-            "seed",
-            "bucket",
-            "model_variant",
-            "run_dir",
-        ]
+        columns = ["dataset", "seed", "bucket", "model_variant", "run_dir"]
         raise ValueError(f"duplicate paired cells:\n{frame.loc[duplicate, columns]}")
 
     records: List[Dict[str, object]] = []
-    group_columns = [
-        "architecture",
-        "train_evidence_mode",
-        "dataset",
-        "bucket",
-    ]
-    for keys, group in frame.groupby(group_columns, sort=True):
-        architecture, train_evidence_mode, dataset, bucket = keys
-        present = set(group["model_variant"])
-        absent = sorted(set(variants) - present)
+    group_columns = ["dataset", "bucket"]
+    for (dataset, bucket), group in frame.groupby(group_columns, sort=True):
+        variants = set(group["model_variant"])
+        absent = sorted(set(VARIANTS) - variants)
         if absent:
             raise ValueError(f"{dataset}/{bucket} is missing graph variants: {absent}")
         for metric in ("auc", "bce_loss", "rmse"):
             table = group.pivot(index="seed", columns="model_variant", values=metric)
-            table = table.reindex(columns=variants)
+            table = table.reindex(columns=VARIANTS)
             total_seed_cells = int(len(table))
-            for contrast, weights in contrasts:
+            for contrast, weights in CONTRASTS:
                 values = sum(table[cell] * coefficient for cell, coefficient in weights.items())
                 values = values[np.isfinite(values)]
                 records.append(
                     {
-                        "architecture": architecture,
-                        "train_evidence_mode": train_evidence_mode,
                         "dataset": dataset,
                         "bucket": bucket,
                         "metric": metric,
@@ -420,11 +274,6 @@ def main() -> None:
     )
     parser.add_argument("--batch_size", type=int, default=2048)
     parser.add_argument("--no_cuda", action="store_true")
-    parser.add_argument(
-        "--variant_family",
-        choices=tuple(VARIANT_FAMILIES),
-        default="graph2x2",
-    )
     parser.add_argument("--output_csv", required=True)
     args = parser.parse_args()
 
@@ -437,9 +286,6 @@ def main() -> None:
     device = torch.device(
         "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
     )
-    selected_variants, selected_contrasts = VARIANT_FAMILIES[
-        args.variant_family
-    ]
     rows: List[Dict[str, object]] = []
     for index, checkpoint_dir in enumerate(checkpoint_dirs, start=1):
         evaluated = _read_validation(
@@ -447,73 +293,21 @@ def main() -> None:
             batch_size=max(1, int(args.batch_size)),
             device=device,
         )
-        source_variant = str(evaluated[0]["model_variant_source"])
-        evaluated_sets = [evaluated]
-        if (
-            args.variant_family == "relation_residual"
-            and source_variant == "gec_relation_residual"
-        ):
-            for row in evaluated:
-                row["model_variant"] = "gec_relation_residual_selected"
-            manifest = _selection_manifest(checkpoint_dir)
-            evaluated_sets.append(
-                _read_validation(
-                    checkpoint_dir,
-                    batch_size=max(1, int(args.batch_size)),
-                    device=device,
-                    checkpoint_path=_diagnostic_candidate_checkpoint(
-                        checkpoint_dir,
-                        manifest,
-                    ),
-                    variant_label="gec_relation_residual_candidate",
-                )
-            )
-        elif (
-            args.variant_family == "branch_gate"
-            and source_variant == "gec_branch_gate"
-        ):
-            for row in evaluated:
-                row["model_variant"] = "gec_branch_gate_selected"
-            manifest = _selection_manifest(checkpoint_dir)
-            evaluated_sets.append(
-                _read_validation(
-                    checkpoint_dir,
-                    batch_size=max(1, int(args.batch_size)),
-                    device=device,
-                    checkpoint_path=_diagnostic_candidate_checkpoint(
-                        checkpoint_dir,
-                        manifest,
-                    ),
-                    variant_label="gec_branch_gate_candidate",
-                )
-            )
-        for evaluated_set in evaluated_sets:
-            identity = evaluated_set[0]
-            if identity["model_variant"] not in selected_variants:
-                continue
-            rows.extend(evaluated_set)
-            print(
-                f"[{index}/{len(checkpoint_dirs)}] "
-                f"{identity['dataset']} seed={identity['seed']} "
-                f"variant={identity['model_variant']} "
-                f"artifact={identity['checkpoint_artifact']}"
-            )
-
-    if not rows:
-        raise ValueError(
-            f"no checkpoints matched variant family {args.variant_family!r}"
+        rows.extend(evaluated)
+        identity = evaluated[0]
+        print(
+            f"[{index}/{len(checkpoint_dirs)}] "
+            f"{identity['dataset']} seed={identity['seed']} "
+            f"variant={identity['model_variant']}"
         )
+
     frame = pd.DataFrame(rows).sort_values(
         ["dataset", "seed", "model_variant", "bucket"]
     )
     output = _resolve(args.output_csv)
     output.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(output, index=False)
-    contrasts = _paired_contrasts(
-        frame,
-        variants=selected_variants,
-        contrasts=selected_contrasts,
-    )
+    contrasts = _paired_contrasts(frame)
     contrast_output = output.with_name(f"{output.stem}_paired_contrasts.csv")
     contrasts.to_csv(contrast_output, index=False)
     print(f"rows={len(frame)} -> {output}")
