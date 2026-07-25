@@ -216,13 +216,13 @@ def collect_frozen_branch_outputs(
             count_parts.append(target_count.reshape(-1).cpu())
 
     outputs = FrozenBranchOutputs(
-        labels=torch.cat(labels_parts).numpy().astype(np.float64),
-        base_logits=torch.cat(base_parts).numpy().astype(np.float64),
-        state_logit_delta=torch.cat(state_parts).numpy().astype(np.float64),
+        labels=torch.cat(labels_parts).numpy().astype(np.float32),
+        base_logits=torch.cat(base_parts).numpy().astype(np.float32),
+        state_logit_delta=torch.cat(state_parts).numpy().astype(np.float32),
         propagation_logit_delta=torch.cat(propagation_parts)
         .numpy()
-        .astype(np.float64),
-        target_count=torch.cat(count_parts).numpy().astype(np.float64),
+        .astype(np.float32),
+        target_count=torch.cat(count_parts).numpy().astype(np.float32),
     )
     dataset_name = str(loaded_args.get("dataset_name", "unknown"))
     stored_auc = float(checkpoint.get("val_auc", float("nan")))
@@ -242,17 +242,24 @@ def collect_frozen_branch_outputs(
 def _metrics(labels: np.ndarray, logits: np.ndarray) -> Dict[str, float]:
     if labels.size == 0:
         return {"auc": float("nan"), "bce_loss": float("nan"), "rmse": float("nan")}
-    probabilities = np.where(
-        logits >= 0.0,
-        1.0 / (1.0 + np.exp(-logits)),
-        np.exp(logits) / (1.0 + np.exp(logits)),
-    )
+    logits_f32 = np.asarray(logits, dtype=np.float32)
+    # Match the production metric path exactly: sigmoid is evaluated in
+    # float32 before probabilities are moved to scikit-learn.  This matters
+    # for very confident models where sigmoid intentionally creates ties.
+    probabilities = torch.sigmoid(torch.from_numpy(logits_f32)).numpy()
     auc = (
         float(roc_auc_score(labels, probabilities))
         if np.unique(labels).size >= 2
         else float("nan")
     )
-    bce = float(np.mean(np.logaddexp(0.0, logits) - labels * logits))
+    logits_f64 = logits_f32.astype(np.float64)
+    labels_f64 = labels.astype(np.float64)
+    bce = float(
+        np.mean(
+            np.logaddexp(0.0, logits_f64)
+            - labels_f64 * logits_f64
+        )
+    )
     rmse = float(np.sqrt(np.mean(np.square(labels - probabilities))))
     return {"auc": auc, "bce_loss": bce, "rmse": rmse}
 
