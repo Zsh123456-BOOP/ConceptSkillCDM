@@ -149,7 +149,19 @@ def collect_frozen_branch_outputs(
     if model._anchor_channels <= 2:
         raise ValueError("checkpoint has no graph-propagated anchor channels")
 
-    loader = _validation_loader(loaded_args, info_dict, batch_size)
+    # Sparse graph matmul can change the final float32 rounding when the
+    # flattened batch width changes.  Reuse the checkpoint's validation batch
+    # size by default so near-tied predictions retain their original ordering.
+    effective_batch_size = (
+        int(batch_size)
+        if int(batch_size) > 0
+        else int(loaded_args["batch_size"])
+    )
+    loader = _validation_loader(
+        loaded_args,
+        info_dict,
+        effective_batch_size,
+    )
     anchor_weights = model.diagnosis_head.evidence_anchor_weights().to(device)
     labels_parts: List[torch.Tensor] = []
     base_parts: List[torch.Tensor] = []
@@ -325,7 +337,12 @@ def main() -> None:
         default="0,0.25,0.5,0.75,1",
         help="Comma-separated non-negative state/propagation multipliers.",
     )
-    parser.add_argument("--batch_size", type=int, default=2048)
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=0,
+        help="Validation batch size; 0 reuses each checkpoint's stored value.",
+    )
     parser.add_argument(
         "--output_csv",
         default="results/graph_branch_scale_probe.csv",
