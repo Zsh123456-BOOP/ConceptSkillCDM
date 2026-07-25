@@ -3,9 +3,10 @@
 
 The tool never opens ``test.csv``.  Each validation row is assigned the
 minimum train-only student-concept response count among the concepts attached
-to its exercise.  It reports metrics for all rows and the overlapping
-diagnostic subsets ``n=0`` and ``n<3``, then computes same-dataset/same-seed
-paired contrasts for either the graph 2x2 family or the safe residual pair.
+to its exercise.  It reports metrics for all rows, the legacy overlapping
+subset ``n<3``, and mutually exclusive ``n=0``, ``n=1-2``, and ``n>=3``
+subsets.  It then computes same-dataset/same-seed paired contrasts for the
+graph 2x2 family or either residual adapter family.
 """
 
 from __future__ import annotations
@@ -75,9 +76,30 @@ RESIDUAL_VARIANTS = ("full", "gec_residual")
 RESIDUAL_CONTRASTS: Tuple[Tuple[str, Mapping[str, float]], ...] = (
     ("residual-full", {"gec_residual": 1.0, "full": -1.0}),
 )
+RELATION_RESIDUAL_VARIANTS = (
+    "full",
+    "gec_relation_residual_candidate",
+    "gec_relation_residual_selected",
+)
+RELATION_RESIDUAL_CONTRASTS: Tuple[
+    Tuple[str, Mapping[str, float]], ...
+] = (
+    (
+        "relation-candidate-full",
+        {"gec_relation_residual_candidate": 1.0, "full": -1.0},
+    ),
+    (
+        "relation-selected-full",
+        {"gec_relation_residual_selected": 1.0, "full": -1.0},
+    ),
+)
 VARIANT_FAMILIES = {
     "graph2x2": (GRAPH_2X2_VARIANTS, GRAPH_2X2_CONTRASTS),
     "residual": (RESIDUAL_VARIANTS, RESIDUAL_CONTRASTS),
+    "relation_residual": (
+        RELATION_RESIDUAL_VARIANTS,
+        RELATION_RESIDUAL_CONTRASTS,
+    ),
 }
 
 
@@ -90,6 +112,8 @@ def _bucket_masks(support: np.ndarray) -> Dict[str, np.ndarray]:
     return {
         "all": np.ones(support.shape, dtype=bool),
         "n=0": support == 0,
+        "n=1-2": (support >= 1) & (support < 3),
+        "n>=3": support >= 3,
         "n<3": support < 3,
     }
 
@@ -112,8 +136,10 @@ def _read_validation(
     *,
     batch_size: int,
     device: torch.device,
+    checkpoint_name: str = "best_model.pth",
+    variant_label: str = "",
 ) -> List[Dict[str, object]]:
-    checkpoint_path = checkpoint_dir / "best_model.pth"
+    checkpoint_path = checkpoint_dir / checkpoint_name
     if not checkpoint_path.is_file():
         raise FileNotFoundError(f"missing checkpoint: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
@@ -200,12 +226,18 @@ def _read_validation(
     support_array = np.asarray(supports, dtype=np.float64)
     identity = {
         "run_dir": str(checkpoint_dir),
+        "checkpoint_artifact": checkpoint_name,
         "architecture": str(
             checkpoint.get("architecture", loaded_args.get("architecture", ""))
         ),
         "gec_mode": str(loaded_args.get("gec_mode", "v1")),
         "dataset": str(loaded_args.get("dataset_name", "")),
-        "model_variant": str(loaded_args.get("model_variant", "full")),
+        "model_variant_source": str(loaded_args.get("model_variant", "full")),
+        "model_variant": (
+            variant_label
+            if variant_label
+            else str(loaded_args.get("model_variant", "full"))
+        ),
         "train_evidence_mode": str(loaded_args.get("train_evidence_mode", "excluded")),
         "seed": int(loaded_args.get("seed", 0)),
         "best_epoch": int(checkpoint.get("epoch", 0)),
@@ -342,15 +374,34 @@ def main() -> None:
             batch_size=max(1, int(args.batch_size)),
             device=device,
         )
-        if evaluated[0]["model_variant"] not in selected_variants:
-            continue
-        rows.extend(evaluated)
-        identity = evaluated[0]
-        print(
-            f"[{index}/{len(checkpoint_dirs)}] "
-            f"{identity['dataset']} seed={identity['seed']} "
-            f"variant={identity['model_variant']}"
-        )
+        source_variant = str(evaluated[0]["model_variant_source"])
+        evaluated_sets = [evaluated]
+        if (
+            args.variant_family == "relation_residual"
+            and source_variant == "gec_relation_residual"
+        ):
+            for row in evaluated:
+                row["model_variant"] = "gec_relation_residual_selected"
+            evaluated_sets.append(
+                _read_validation(
+                    checkpoint_dir,
+                    batch_size=max(1, int(args.batch_size)),
+                    device=device,
+                    checkpoint_name="candidate_best.pth",
+                    variant_label="gec_relation_residual_candidate",
+                )
+            )
+        for evaluated_set in evaluated_sets:
+            identity = evaluated_set[0]
+            if identity["model_variant"] not in selected_variants:
+                continue
+            rows.extend(evaluated_set)
+            print(
+                f"[{index}/{len(checkpoint_dirs)}] "
+                f"{identity['dataset']} seed={identity['seed']} "
+                f"variant={identity['model_variant']} "
+                f"artifact={identity['checkpoint_artifact']}"
+            )
 
     if not rows:
         raise ValueError(

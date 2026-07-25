@@ -21,9 +21,11 @@ from src.config import (
 
 MODEL_VARIANTS = (
     "full",
-    # SOTA-preserving plug-in: warm-start the complete v1 model and train only
-    # one bounded, reliability-gated concept-ability residual.
+    # Reproducibility path for the scalar v3 plug-in.
     "gec_residual",
+    # Relation-quality, signed-evidence v4 plug-in.  It warm-starts the
+    # complete v1 model and trains only the bounded adapter.
+    "gec_relation_residual",
     "no_response_evidence",
     "no_evidence_anchor",
     "no_evidence_propagation",
@@ -84,8 +86,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--warm_start_checkpoint",
         default=None,
         help=(
-            "Required only for gec_residual training. Must point to the paired "
-            "full/v1 best_model.pth from the same data, seed, and configuration."
+            "Required only for residual-adapter training. Must point to the "
+            "paired full/v1 best_model.pth from the same data, seed, and "
+            "configuration."
         ),
     )
     parser.add_argument("--knowledge_dim", type=int, default=128)
@@ -202,9 +205,10 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 def _apply_model_variant(args: argparse.Namespace) -> None:
     """Map named, interpretable controls to the underlying graph settings."""
-    args.gec_mode = (
-        "residual_v3" if args.model_variant == "gec_residual" else "v1"
-    )
+    args.gec_mode = {
+        "gec_residual": "residual_v3",
+        "gec_relation_residual": "relation_residual_v4",
+    }.get(args.model_variant, "v1")
     args.use_response_evidence = args.model_variant != "no_response_evidence"
     args.evidence_anchor_mode = {
         "no_response_evidence": "off",
@@ -305,18 +309,19 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit(
             "error: non-default --train_evidence_mode requires response evidence"
         )
-    if args.model_variant == "gec_residual":
+    residual_variants = {"gec_residual", "gec_relation_residual"}
+    if args.model_variant in residual_variants:
         if str(args.train_evidence_mode) != "excluded":
             raise SystemExit(
-                "error: gec_residual requires --train_evidence_mode excluded"
+                "error: residual adapters require --train_evidence_mode excluded"
             )
         if args.run_mode in {"train", "train_test"} and not args.warm_start_checkpoint:
             raise SystemExit(
-                "error: gec_residual training requires --warm_start_checkpoint"
+                "error: residual-adapter training requires --warm_start_checkpoint"
             )
     elif args.warm_start_checkpoint:
         raise SystemExit(
-            "error: --warm_start_checkpoint is only valid for gec_residual"
+            "error: --warm_start_checkpoint is only valid for residual adapters"
         )
 
 

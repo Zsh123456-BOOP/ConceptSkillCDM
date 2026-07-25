@@ -30,11 +30,54 @@ def _mean(values: List[float]) -> float:
     return float(np.mean(values)) if values else 0.0
 
 
+def _empty_tensor_stats() -> Dict[str, Any]:
+    return {
+        "sum": 0.0,
+        "abs_sum": 0.0,
+        "count": 0,
+        "abs_max": 0.0,
+        "finite": True,
+    }
+
+
+def _update_tensor_stats(stats: Dict[str, Any], value: Any) -> None:
+    """Accumulate tensor diagnostics without retaining large graph tensors."""
+    if not isinstance(value, torch.Tensor) or value.numel() == 0:
+        return
+    detached = value.detach().float()
+    finite = torch.isfinite(detached)
+    stats["finite"] = bool(stats["finite"] and finite.all().item())
+    safe = torch.nan_to_num(detached, nan=0.0, posinf=0.0, neginf=0.0)
+    stats["sum"] += float(safe.sum().item())
+    stats["abs_sum"] += float(safe.abs().sum().item())
+    stats["count"] += int(safe.numel())
+    stats["abs_max"] = max(stats["abs_max"], float(safe.abs().max().item()))
+
+
+def _stats_mean(stats: Dict[str, Any], *, absolute: bool = False) -> float:
+    count = max(0, int(stats.get("count", 0)))
+    if count == 0:
+        return 0.0
+    key = "abs_sum" if absolute else "sum"
+    return float(stats.get(key, 0.0)) / float(count)
+
+
+def _first_tensor(details: Dict[str, Any], *keys: str) -> Optional[torch.Tensor]:
+    for key in keys:
+        value = details.get(key)
+        if isinstance(value, torch.Tensor):
+            return value
+    return None
+
+
 def _relation_learning(base_model: CognitiveDiagnosisModel) -> Optional[nn.Module]:
     return getattr(base_model, "relation_learning", None)
 
 
 def _to_serializable(obj: Any) -> Any:
+    if isinstance(obj, torch.Tensor):
+        value = obj.detach().cpu()
+        return value.item() if value.numel() == 1 else value.tolist()
     if isinstance(obj, (np.bool_, np.integer)):
         return int(obj)
     if isinstance(obj, np.floating):
@@ -46,6 +89,71 @@ def _to_serializable(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {key: _to_serializable(value) for key, value in obj.items()}
     return obj
+
+
+def _residual_parameter_summary(
+    residual_module: Optional[nn.Module],
+) -> Dict[str, Any]:
+    """Prefer a module-owned summary and fill only missing compatibility keys."""
+    if residual_module is None:
+        return {}
+
+    summary: Dict[str, Any] = {}
+    summary_fn = getattr(residual_module, "parameter_summary", None)
+    if callable(summary_fn):
+        try:
+            reported = summary_fn()
+            if isinstance(reported, dict):
+                summary.update(_to_serializable(reported))
+            else:
+                summary["summary_error"] = (
+                    "parameter_summary() did not return a dictionary"
+                )
+        except Exception as exc:  # diagnostics must not break checkpointing
+            summary["summary_error"] = str(exc)
+
+    parameters = tuple(residual_module.parameters())
+    summary.setdefault(
+        "enabled",
+        bool(getattr(residual_module, "enabled", True)),
+    )
+    summary.setdefault(
+        "num_parameters",
+        int(sum(parameter.numel() for parameter in parameters)),
+    )
+    summary.setdefault(
+        "num_trainable_parameters",
+        int(
+            sum(
+                parameter.numel()
+                for parameter in parameters
+                if parameter.requires_grad
+            )
+        ),
+    )
+    summary.setdefault(
+        "all_parameters_finite",
+        bool(all(torch.isfinite(parameter.detach()).all().item() for parameter in parameters)),
+    )
+    summary.setdefault(
+        "max_abs_adjustment",
+        float(getattr(residual_module, "max_abs_adjustment", 0.0)),
+    )
+
+    # v3 compatibility.  v4 intentionally has no scalar rho.
+    rho = getattr(residual_module, "rho", None)
+    if isinstance(rho, torch.Tensor) and rho.numel() == 1:
+        rho_value = float(rho.detach().item())
+        summary.setdefault("rho", rho_value)
+        max_adjustment = float(summary.get("max_abs_adjustment", 0.0))
+        alpha = max_adjustment * float(torch.tanh(rho.detach()).item())
+        summary.setdefault("effective_alpha", alpha)
+        summary.setdefault("route_abs_max", abs(alpha))
+    else:
+        summary.setdefault("rho", 0.0)
+        summary.setdefault("effective_alpha", 0.0)
+        summary.setdefault("route_abs_max", 0.0)
+    return summary
 
 
 def compute_module_activity(
@@ -65,9 +173,21 @@ def compute_module_activity(
     difficulty_values: List[float] = []
     graph_state_deltas: List[float] = []
     relation_identity_deltas: List[float] = []
-    residual_adjustments: List[float] = []
-    residual_gates: List[float] = []
-    residual_supports: List[float] = []
+    residual_stats = {
+        name: _empty_tensor_stats()
+        for name in (
+            "adjustment",
+            "gate",
+            "support",
+            "conflict",
+            "quality",
+            "quality_positive",
+            "quality_negative",
+            "positive_message",
+            "negative_message",
+            "route",
+        )
+    }
 
     sample_count = 0
     with torch.no_grad():
@@ -89,25 +209,75 @@ def compute_module_activity(
             difficulty_values.extend(_as_values(details.get("irt_b")))
             graph_state_deltas.extend(_as_values(details.get("knowledge_state_graph_delta")))
             relation_identity_deltas.extend(_as_values(details.get("relation_identity_delta")))
-            residual_adjustments.extend(_as_values(details.get("theta_adjustment")))
-            residual_gates.extend(_as_values(details.get("gec_residual_gate")))
-            residual_supports.extend(_as_values(details.get("gec_residual_support")))
+            _update_tensor_stats(
+                residual_stats["adjustment"],
+                _first_tensor(
+                    details,
+                    "gec_residual_adjustment",
+                    "theta_adjustment",
+                ),
+            )
+            for name in (
+                "gate",
+                "support",
+                "conflict",
+                "quality",
+                "quality_positive",
+                "quality_negative",
+                "positive_message",
+                "negative_message",
+                "route",
+            ):
+                _update_tensor_stats(
+                    residual_stats[name],
+                    details.get(f"gec_residual_{name}"),
+                )
             sample_count += take
 
     relation_learning = _relation_learning(base_model)
     residual_module = getattr(base_model, "evidence_residual", None)
-    residual_rho = (
-        float(residual_module.rho.detach().item())
-        if residual_module is not None
-        else 0.0
+    residual_summary = _residual_parameter_summary(residual_module)
+    residual_rho = float(residual_summary.get("rho", 0.0))
+    residual_alpha = float(residual_summary.get("effective_alpha", 0.0))
+    residual_route_abs_max = max(
+        float(residual_summary.get("route_abs_max", 0.0)),
+        float(residual_stats["route"]["abs_max"]),
     )
-    residual_alpha = (
-        float(
-            residual_module.max_abs_adjustment
-            * torch.tanh(residual_module.rho.detach()).item()
+    residual_adjustment_abs_mean = _stats_mean(
+        residual_stats["adjustment"],
+        absolute=True,
+    )
+    residual_runtime_enabled = bool(
+        residual_summary.get("enabled", residual_module is not None)
+    )
+    residual_live = bool(
+        residual_module is not None
+        and residual_runtime_enabled
+        and max(
+            abs(residual_alpha),
+            residual_route_abs_max,
+            residual_adjustment_abs_mean,
         )
-        if residual_module is not None
-        else 0.0
+        > 1e-8
+    )
+    residual_diagnostics_finite = bool(
+        all(stats["finite"] for stats in residual_stats.values())
+        and residual_summary.get("all_parameters_finite", True)
+    )
+    positive_quality_mean = _stats_mean(
+        residual_stats["quality_positive"]
+    )
+    negative_quality_mean = _stats_mean(
+        residual_stats["quality_negative"]
+    )
+    legacy_quality_mean = _stats_mean(residual_stats["quality"])
+    residual_quality_mean = (
+        0.5 * (positive_quality_mean + negative_quality_mean)
+        if (
+            residual_stats["quality_positive"]["count"] > 0
+            or residual_stats["quality_negative"]["count"] > 0
+        )
+        else legacy_quality_mean
     )
     propagation_alpha = float(base_model.knowledge_encoder.propagation_alpha)
     results: Dict[str, Any] = {
@@ -124,13 +294,46 @@ def compute_module_activity(
         "knowledge_state_graph_delta": _mean(graph_state_deltas),
         "relation_identity_delta": _mean(relation_identity_deltas),
         "gec_residual_enabled": residual_module is not None,
+        "gec_residual_runtime_enabled": residual_runtime_enabled,
+        "gec_residual_live": residual_live,
+        "gec_residual_mode": str(getattr(base_model, "gec_mode", "v1")),
+        "gec_residual_module": (
+            type(residual_module).__name__ if residual_module is not None else ""
+        ),
+        "gec_residual_parameter_summary": residual_summary,
+        "gec_residual_num_parameters": int(
+            residual_summary.get("num_parameters", 0)
+        ),
+        "gec_residual_num_trainable_parameters": int(
+            residual_summary.get("num_trainable_parameters", 0)
+        ),
+        "gec_residual_parameters_finite": bool(
+            residual_summary.get("all_parameters_finite", True)
+        ),
+        "gec_residual_diagnostics_finite": residual_diagnostics_finite,
         "gec_residual_rho": residual_rho,
         "gec_residual_alpha": residual_alpha,
-        "gec_residual_adjustment_abs_mean": _mean(
-            [abs(value) for value in residual_adjustments]
+        "gec_residual_route_abs_mean": _stats_mean(
+            residual_stats["route"],
+            absolute=True,
         ),
-        "gec_residual_gate_mean": _mean(residual_gates),
-        "gec_residual_support_mean": _mean(residual_supports),
+        "gec_residual_route_abs_max": residual_route_abs_max,
+        "gec_residual_adjustment_abs_mean": residual_adjustment_abs_mean,
+        "gec_residual_adjustment_abs_max": float(
+            residual_stats["adjustment"]["abs_max"]
+        ),
+        "gec_residual_gate_mean": _stats_mean(residual_stats["gate"]),
+        "gec_residual_support_mean": _stats_mean(residual_stats["support"]),
+        "gec_residual_conflict_mean": _stats_mean(residual_stats["conflict"]),
+        "gec_residual_quality_mean": residual_quality_mean,
+        "gec_residual_positive_quality_mean": positive_quality_mean,
+        "gec_residual_negative_quality_mean": negative_quality_mean,
+        "gec_residual_positive_message_mean": _stats_mean(
+            residual_stats["positive_message"]
+        ),
+        "gec_residual_negative_message_mean": _stats_mean(
+            residual_stats["negative_message"]
+        ),
     }
 
     if results["graph_enabled"]:
@@ -210,11 +413,13 @@ def format_activity_brief(activity: Dict[str, Any]) -> str:
     irt_mode = "LIVE" if activity.get("irt_active") else "INACTIVE"
     residual = ""
     if activity.get("gec_residual_enabled"):
-        residual_mode = (
-            "LIVE"
-            if abs(float(activity.get("gec_residual_alpha", 0.0))) > 1e-8
-            else "FALLBACK"
+        residual_live = bool(
+            activity.get(
+                "gec_residual_live",
+                abs(float(activity.get("gec_residual_alpha", 0.0))) > 1e-8,
+            )
         )
+        residual_mode = "LIVE" if residual_live else "FALLBACK"
         residual = f" GECResidual[{residual_mode}]"
     return f"ConceptGraph[{graph_mode}] IRT[{irt_mode}]{residual}"
 
@@ -260,16 +465,35 @@ def format_activity_report(
         ]
     )
     if activity.get("gec_residual_enabled"):
+        residual_live = bool(
+            activity.get(
+                "gec_residual_live",
+                abs(float(activity.get("gec_residual_alpha", 0.0))) > 1e-8,
+            )
+        )
         lines.extend(
             [
                 "",
                 "3. Bounded evidence residual:",
+                f"   - Mode: {activity.get('gec_residual_mode', 'unknown')}",
+                "   - Runtime status: "
+                f"{'LIVE' if residual_live else 'FALLBACK'}",
                 f"   - Rho: {activity.get('gec_residual_rho', 0.0):.6f}",
                 f"   - Effective alpha: {activity.get('gec_residual_alpha', 0.0):.6f}",
+                "   - Route |max|: "
+                f"{activity.get('gec_residual_route_abs_max', 0.0):.6f}",
                 "   - Theta adjustment |mean|: "
                 f"{activity.get('gec_residual_adjustment_abs_mean', 0.0):.6f}",
                 f"   - Reliability gate mean: {activity.get('gec_residual_gate_mean', 0.0):.6f}",
                 f"   - Cross-concept support mean: {activity.get('gec_residual_support_mean', 0.0):.6f}",
+                f"   - Conflict mean: {activity.get('gec_residual_conflict_mean', 0.0):.6f}",
+                f"   - Relation quality mean: {activity.get('gec_residual_quality_mean', 0.0):.6f}",
+                "   - Positive/negative quality mean: "
+                f"{activity.get('gec_residual_positive_quality_mean', 0.0):.6f} / "
+                f"{activity.get('gec_residual_negative_quality_mean', 0.0):.6f}",
+                "   - Positive/negative message mean: "
+                f"{activity.get('gec_residual_positive_message_mean', 0.0):.6f} / "
+                f"{activity.get('gec_residual_negative_message_mean', 0.0):.6f}",
             ]
         )
     lines.append("=" * 60)
