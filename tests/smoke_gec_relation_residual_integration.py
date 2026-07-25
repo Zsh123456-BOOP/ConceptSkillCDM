@@ -255,11 +255,9 @@ def _assert_warm_start_freezes_parent(
         loss = F.binary_cross_entropy_with_logits(logits, labels)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
-        assert residual.evidence_residual.route_raw.grad is not None
-        assert torch.isfinite(
-            residual.evidence_residual.route_raw.grad
-        ).all()
-        assert residual.evidence_residual.route_raw.grad.abs().sum().item() > 0.0
+        assert residual.evidence_residual.rho.grad is not None
+        assert torch.isfinite(residual.evidence_residual.rho.grad)
+        assert residual.evidence_residual.rho.grad.abs().item() > 0.0
         for name, parameter in residual.named_parameters():
             if not name.startswith(RESIDUAL_PREFIX):
                 assert not parameter.requires_grad
@@ -290,10 +288,16 @@ def _assert_leave_one_out_flip_invariance(frame: pd.DataFrame) -> None:
     model_b = _model(inputs_b, gec_mode=RESIDUAL_MODE).eval()
     with torch.no_grad():
         for model in (model_a, model_b):
-            model.evidence_residual.route_raw[..., 0].fill_(0.8)
-            model.evidence_residual.route_raw[..., 1].fill_(0.4)
-            model.evidence_residual.quality_weight.fill_(0.15)
-            model.evidence_residual.quality_bias.fill_(0.05)
+            model.evidence_residual.rho.fill_(0.8)
+            model.evidence_residual.quality_output_weight.copy_(
+                torch.tensor(
+                    [[0.20, -0.10, 0.15], [-0.10, 0.25, -0.20]],
+                    dtype=torch.float32,
+                )
+            )
+            model.evidence_residual.quality_output_bias.copy_(
+                torch.tensor([0.05, -0.05], dtype=torch.float32)
+            )
 
     query_student_a = torch.tensor([students_a[10]], dtype=torch.long)
     query_exercise_a = torch.tensor([exercises_a[100]], dtype=torch.long)
