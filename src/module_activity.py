@@ -64,7 +64,10 @@ def compute_module_activity(
     discrimination_values: List[float] = []
     difficulty_values: List[float] = []
     graph_state_deltas: List[float] = []
+    gec_state_adjustments: List[float] = []
+    gec_evidence_adjustments: List[float] = []
     relation_identity_deltas: List[float] = []
+    evidence_relation_snapshot: Optional[torch.Tensor] = None
 
     sample_count = 0
     with torch.no_grad():
@@ -85,7 +88,14 @@ def compute_module_activity(
             discrimination_values.extend(_as_values(details.get("irt_a")))
             difficulty_values.extend(_as_values(details.get("irt_b")))
             graph_state_deltas.extend(_as_values(details.get("knowledge_state_graph_delta")))
+            gec_state_adjustments.extend(_as_values(details.get("gec_state_adjustment")))
+            gec_evidence_adjustments.extend(
+                _as_values(details.get("gec_evidence_adjustment"))
+            )
             relation_identity_deltas.extend(_as_values(details.get("relation_identity_delta")))
+            evidence_relations = details.get("evidence_relation_matrices")
+            if isinstance(evidence_relations, torch.Tensor):
+                evidence_relation_snapshot = evidence_relations.detach()
             sample_count += take
 
     relation_learning = _relation_learning(base_model)
@@ -102,12 +112,27 @@ def compute_module_activity(
         "irt_discrimination_mean": _mean(discrimination_values),
         "irt_difficulty_mean": _mean(difficulty_values),
         "knowledge_state_graph_delta": _mean(graph_state_deltas),
+        "gec_state_adjustment_abs_mean": _mean(
+            [abs(value) for value in gec_state_adjustments]
+        ),
+        "gec_evidence_adjustment_abs_mean": _mean(
+            [abs(value) for value in gec_evidence_adjustments]
+        ),
         "relation_identity_delta": _mean(relation_identity_deltas),
     }
 
     if results["graph_enabled"]:
         with torch.no_grad():
-            relation_matrices = relation_learning()
+            if (
+                not results["message_passing_enabled"]
+                and evidence_relation_snapshot is not None
+                and results["gec_evidence_adjustment_abs_mean"] > 1e-8
+            ):
+                relation_matrices = base_model.evidence_router.off_diagonal_relations(
+                    evidence_relation_snapshot
+                )
+            else:
+                relation_matrices = relation_learning()
             matrices = relation_matrices.detach().float().cpu().numpy()
         eps = 1e-12
         row_entropies = -np.sum(matrices * np.log(matrices + eps), axis=-1)
@@ -122,12 +147,22 @@ def compute_module_activity(
         graph_trivial = bool(entropy_ratio > 0.98)
         graph_over_sparse = bool(diagonal_mass > 0.98)
         graph_active = bool(
-            results["message_passing_enabled"]
+            (
+                results["message_passing_enabled"]
+                or results["gec_evidence_adjustment_abs_mean"] > 1e-8
+            )
             and not graph_trivial
             and not graph_over_sparse
-            and results["knowledge_state_graph_delta"] > 1e-6
+            and (
+                results["knowledge_state_graph_delta"] > 1e-6
+                or results["gec_state_adjustment_abs_mean"] > 1e-8
+                or results["gec_evidence_adjustment_abs_mean"] > 1e-8
+            )
         )
-        if not results["message_passing_enabled"]:
+        if (
+            not results["message_passing_enabled"]
+            and results["gec_evidence_adjustment_abs_mean"] <= 1e-8
+        ):
             graph_mode = "NO_MESSAGE_PASSING"
         elif graph_trivial:
             graph_mode = "UNIFORM"

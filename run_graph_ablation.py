@@ -57,6 +57,21 @@ ABLATIONS: Dict[str, AblationSpec] = {
     "no_graph_calibration": AblationSpec(
         "no_graph_calibration", {"graph_propagation_alpha": 0.0}
     ),
+    "gec_v2": AblationSpec(
+        "gec_v2", {"graph_propagation_alpha": 1.0, "num_gnn_layers": 1}
+    ),
+    "gec_v2_no_state": AblationSpec(
+        "gec_v2_no_state",
+        {"graph_propagation_alpha": 0.0, "num_gnn_layers": 1},
+    ),
+    "gec_v2_no_evidence_propagation": AblationSpec(
+        "gec_v2_no_evidence_propagation",
+        {"graph_propagation_alpha": 1.0, "num_gnn_layers": 1},
+    ),
+    "gec_v2_no_graph": AblationSpec(
+        "gec_v2_no_graph",
+        {"graph_propagation_alpha": 0.0, "num_gnn_layers": 1},
+    ),
     "item_only": AblationSpec("item_only", {"graph_prior_mode": "item_only"}),
     "exposure_only": AblationSpec(
         "exposure_only", {"graph_prior_mode": "exposure_only"}

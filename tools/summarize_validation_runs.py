@@ -66,6 +66,7 @@ def _read_run(path: Path) -> Dict[str, object]:
 
     row: Dict[str, object] = {
         "run_dir": str(path),
+        "architecture": str(checkpoint.get("architecture", "")),
         "dataset": str(args.get("dataset_name", validation.get("dataset", ""))),
         "model_variant": str(
             args.get("model_variant", validation.get("model_variant", "full"))
@@ -76,6 +77,7 @@ def _read_run(path: Path) -> Dict[str, object]:
                 validation.get("train_evidence_mode", "excluded"),
             )
         ),
+        "gec_mode": str(args.get("gec_mode", "v1")),
         "seed": int(args.get("seed", validation.get("seed", 0))),
         "best_epoch": int(checkpoint.get("epoch", validation.get("best_epoch", 0))),
     }
@@ -118,7 +120,14 @@ def main() -> None:
 
     runs = pd.DataFrame([_read_run(path) for path in directories])
     runs = runs.sort_values(
-        ["dataset", "model_variant", "train_evidence_mode", "seed"]
+        [
+            "architecture",
+            "dataset",
+            "model_variant",
+            "gec_mode",
+            "train_evidence_mode",
+            "seed",
+        ]
     ).reset_index(drop=True)
 
     output = Path(args.output_csv)
@@ -134,7 +143,13 @@ def main() -> None:
         and pd.api.types.is_numeric_dtype(runs[column])
     ]
     grouped = runs.groupby(
-        ["dataset", "model_variant", "train_evidence_mode"],
+        [
+            "architecture",
+            "dataset",
+            "model_variant",
+            "gec_mode",
+            "train_evidence_mode",
+        ],
         dropna=False,
     )
     summary = grouped[metric_columns].agg(["mean", "std"])

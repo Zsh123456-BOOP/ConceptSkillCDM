@@ -80,6 +80,65 @@ def get_regularization_components(
                 }
             )
 
+    evidence_relation_learning = getattr(
+        model,
+        "evidence_relation_learning",
+        None,
+    )
+    evidence_relations = (
+        details.get("evidence_relation_matrices")
+        if details is not None
+        else None
+    )
+    evidence_router = getattr(model, "evidence_router", None)
+    if (
+        evidence_relation_learning is not None
+        and evidence_router is not None
+        and isinstance(evidence_relations, torch.Tensor)
+    ):
+        # Evidence transport is defined only on non-self relations.  Constrain
+        # entropy only where at least two edges can actually compete, and leave
+        # isolated concepts at exactly zero.  A diagonal penalty would be
+        # meaningless because the router removes the diagonal by construction.
+        offdiag = evidence_router.off_diagonal_relations(evidence_relations)
+        valid_rows = offdiag.sum(dim=-1) > 1e-12
+        entropy_rows = (offdiag > 1e-12).sum(dim=-1) > 1
+        if bool(entropy_rows.any()):
+            row_entropy = -(
+                offdiag.clamp(min=1e-12)
+                * offdiag.clamp(min=1e-12).log()
+            ).sum(dim=-1)
+            evidence_entropy = row_entropy[entropy_rows].mean()
+            evidence_node_count = int(offdiag.size(-1)) - 1
+            normalized_evidence_entropy = evidence_entropy / (
+                math.log(float(evidence_node_count)) + 1e-8
+            )
+            lower = offdiag.new_tensor(model.graph_entropy_min)
+            upper = offdiag.new_tensor(model.graph_entropy_max)
+            evidence_entropy_penalty = F.relu(
+                lower - normalized_evidence_entropy
+            ) + F.relu(normalized_evidence_entropy - upper)
+            if model.lambda_graph_entropy > 0.0:
+                terms["graph_entropy"] = terms["graph_entropy"] + (
+                    model.lambda_graph_entropy
+                    * evidence_entropy_penalty
+                    * graph_reg_ramp
+                )
+            if details is not None:
+                details.update(
+                    {
+                        "evidence_graph_entropy_raw": evidence_entropy.detach(),
+                        "evidence_graph_entropy_norm": normalized_evidence_entropy.detach(),
+                        "evidence_graph_entropy_pen": evidence_entropy_penalty.detach(),
+                        "evidence_graph_valid_row_fraction": valid_rows.float()
+                        .mean()
+                        .detach(),
+                        "evidence_graph_entropy_row_fraction": entropy_rows.float()
+                        .mean()
+                        .detach(),
+                    }
+                )
+
     if base_loss is not None and model.graph_reg_cap_ratio > 0.0:
         raw_graph_regularization = (
             terms["graph_entropy"] + terms["graph_diag"] + terms["graph_uniform"]

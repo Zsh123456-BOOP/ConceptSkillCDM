@@ -45,6 +45,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "architecture",
     "use_response_evidence",
     "evidence_anchor_mode",
+    "gec_mode",
     "prediction_head",
     "graph_prior_mode",
     "graph_topk",
@@ -286,6 +287,7 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "evidence_anchor_mode": str(
             _source_get(source, "evidence_anchor_mode", "full")
         ),
+        "gec_mode": str(_source_get(source, "gec_mode", "v1")),
         "evidence_state_injection": bool(
             _source_get(source, "evidence_state_injection", True)
         ),
@@ -330,6 +332,7 @@ def _runtime_facts(model: nn.Module) -> Dict[str, Any]:
         "response_evidence_enabled": bool(
             getattr(base_model, "use_response_evidence", False)
         ),
+        "gec_mode": str(getattr(base_model, "gec_mode", "v1")),
         "num_parameters": int(sum(parameter.numel() for parameter in base_model.parameters())),
         "num_trainable_parameters": int(
             sum(parameter.numel() for parameter in base_model.parameters() if parameter.requires_grad)
@@ -363,6 +366,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "train_evidence_mode",
         "use_response_evidence",
         "evidence_anchor_mode",
+        "gec_mode",
         "evidence_state_injection",
         "anchor_multihead_prop",
         "prediction_head",
@@ -438,9 +442,20 @@ def _sanitize_nonfinite_grads(
 
 def _clip_stability_sensitive_grads(model: nn.Module) -> Dict[str, Any]:
     base_model = _get_base_model(model)
-    relation_learning = getattr(base_model, "relation_learning", None)
-
-    graph_ids = {id(parameter) for parameter in relation_learning.parameters()} if relation_learning is not None else set()
+    graph_modules = tuple(
+        module
+        for module in (
+            getattr(base_model, "relation_learning", None),
+            getattr(base_model, "evidence_relation_learning", None),
+            getattr(base_model, "evidence_router", None),
+        )
+        if isinstance(module, nn.Module)
+    )
+    graph_ids = {
+        id(parameter)
+        for module in graph_modules
+        for parameter in module.parameters()
+    }
     graph_named = [
         (name, parameter)
         for name, parameter in base_model.named_parameters()
@@ -562,6 +577,9 @@ def _raise_if_nonfinite(
         "reg_loss": reg_terms.get("total"),
         "loss": loss,
         "relation_matrices": details.get("relation_matrices"),
+        "evidence_relation_matrices": details.get(
+            "evidence_relation_matrices"
+        ),
     }
     bad_name = next(
         (

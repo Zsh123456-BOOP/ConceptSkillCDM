@@ -28,6 +28,7 @@ class MultiHeadRelationLearning(nn.Module):
         prior_matrix: Optional[torch.Tensor] = None,
         exposure_prior_matrix: Optional[torch.Tensor] = None,
         prior_strength_init: float = 1.0,
+        allow_empty_rows: bool = False,
     ):
         super().__init__()
         self.num_concepts = int(num_concepts)
@@ -37,6 +38,7 @@ class MultiHeadRelationLearning(nn.Module):
         self.identity_residual = (
             float(max(0.0, min(1.0, identity_residual))) if self.allow_self_loop else 0.0
         )
+        self.allow_empty_rows = bool(allow_empty_rows)
         self.prior_strength_init = max(1e-4, float(prior_strength_init))
 
         item_scores, item_support_scores = self._build_prior_buffers(prior_matrix, "prior_matrix")
@@ -60,7 +62,12 @@ class MultiHeadRelationLearning(nn.Module):
             self._build_topk_support_mask(exposure_support_scores),
             persistent=False,
         )
-        if self.topk is not None and self.topk > 0 and not self.allow_self_loop:
+        if (
+            self.topk is not None
+            and self.topk > 0
+            and not self.allow_self_loop
+            and not self.allow_empty_rows
+        ):
             evidence_support = self.item_support_mask | self.exposure_support_mask
             empty_rows = torch.nonzero(~evidence_support.any(dim=-1), as_tuple=False).reshape(-1)
             if empty_rows.numel() > 0:
@@ -205,7 +212,7 @@ class MultiHeadRelationLearning(nn.Module):
             offdiag_budget - selected_count(selected),
         )
 
-        if not self.allow_self_loop:
+        if not self.allow_self_loop and not self.allow_empty_rows:
             empty_rows = torch.nonzero(~selected.any(dim=-1), as_tuple=False).reshape(-1)
             if empty_rows.numel() > 0:
                 raise RuntimeError(
@@ -284,7 +291,18 @@ class MultiHeadRelationLearning(nn.Module):
                     k=int(self.topk),
                 )
 
-            base_adjacency = F.softmax(scores, dim=-1)
+            finite_rows = torch.isfinite(scores).any(dim=-1, keepdim=True)
+            safe_scores = torch.where(
+                finite_rows,
+                scores,
+                torch.zeros_like(scores),
+            )
+            base_adjacency = F.softmax(safe_scores, dim=-1)
+            base_adjacency = torch.where(
+                finite_rows,
+                base_adjacency,
+                torch.zeros_like(base_adjacency),
+            )
             adjacency = self.dropout(base_adjacency)
             row_sum = adjacency.sum(dim=-1, keepdim=True)
             zero_rows = row_sum.squeeze(-1) < 1e-12
@@ -309,6 +327,275 @@ class MultiHeadRelationLearning(nn.Module):
     def get_entropy_sparsity(relation_matrices: torch.Tensor) -> torch.Tensor:
         adjacency = relation_matrices.clamp(min=1e-12)
         return -(adjacency * adjacency.log()).sum(dim=-1).mean()
+
+
+class ReliabilityAwareEvidenceRouter(nn.Module):
+    """Route label-excluded cross-concept evidence with explicit reliability.
+
+    The input relation convention is ``A[target, source]``.  Evidence
+    transport always removes the diagonal and keeps genuinely empty rows at
+    zero.  The returned ``support`` is a relation-weighted support quantity,
+    not an independent sample count.
+    """
+
+    SPARSE_CONCEPT_THRESHOLD = 192
+
+    def __init__(self, num_heads: int):
+        super().__init__()
+        self.num_heads = int(num_heads)
+        if self.num_heads <= 0:
+            raise ValueError(f"num_heads must be positive, got {num_heads}")
+
+        self.propagation_shrink_raw = nn.Parameter(
+            self._inverse_softplus(torch.tensor(1.0))
+        )
+        self.direct_scale_raw = nn.Parameter(
+            self._inverse_softplus(torch.tensor(2.0))
+        )
+        self.support_scale_raw = nn.Parameter(
+            self._inverse_softplus(torch.tensor(2.0))
+        )
+        self.conflict_scale_raw = nn.Parameter(
+            self._inverse_softplus(torch.tensor(1.0))
+        )
+        self.head_bias = nn.Parameter(torch.zeros(self.num_heads))
+        self.head_support_raw = nn.Parameter(
+            self._inverse_softplus(torch.tensor(0.5))
+        )
+        self.head_conflict_raw = nn.Parameter(
+            self._inverse_softplus(torch.tensor(0.5))
+        )
+        # Unnormalised graph-expert weights.  A fixed null expert has weight
+        # one, so both graph corrections start small and can be exactly
+        # rejected when unavailable.
+        self.state_route_raw = nn.Parameter(
+            self._inverse_softplus(torch.tensor(0.1))
+        )
+        self.evidence_route_raw = nn.Parameter(
+            self._inverse_softplus(torch.tensor(0.2))
+        )
+
+    @staticmethod
+    def _inverse_softplus(value: torch.Tensor) -> torch.Tensor:
+        value = value.detach().float().clamp(min=1e-4)
+        return torch.log(torch.expm1(value).clamp(min=1e-12))
+
+    @staticmethod
+    def off_diagonal_relations(relation_matrices: torch.Tensor) -> torch.Tensor:
+        """Remove self loops and row-normalise without filling empty rows."""
+        if relation_matrices.dim() != 3:
+            raise ValueError(
+                "relation_matrices must have shape (heads, concepts, concepts); "
+                f"got {tuple(relation_matrices.shape)}"
+            )
+        heads, rows, columns = relation_matrices.shape
+        if rows != columns:
+            raise ValueError(
+                f"relation matrices must be square, got {(heads, rows, columns)}"
+            )
+        if rows <= 1:
+            return torch.zeros_like(relation_matrices)
+        eye = torch.eye(
+            rows,
+            device=relation_matrices.device,
+            dtype=relation_matrices.dtype,
+        ).unsqueeze(0)
+        offdiag = relation_matrices * (1.0 - eye)
+        row_sum = offdiag.sum(dim=-1, keepdim=True)
+        return torch.where(
+            row_sum > 1e-12,
+            offdiag / row_sum.clamp(min=1e-12),
+            torch.zeros_like(offdiag),
+        )
+
+    @classmethod
+    def _propagate(
+        cls,
+        source: torch.Tensor,
+        relation: torch.Tensor,
+    ) -> torch.Tensor:
+        """Apply one ``A[target, source]`` relation without BxCxC tensors."""
+        if source.dim() != 2 or relation.dim() != 2:
+            raise ValueError("source and relation must both be two-dimensional")
+        if source.size(1) != relation.size(0) or relation.size(0) != relation.size(1):
+            raise ValueError(
+                f"incompatible source/relation shapes: {tuple(source.shape)} and "
+                f"{tuple(relation.shape)}"
+            )
+        if int(relation.size(0)) >= cls.SPARSE_CONCEPT_THRESHOLD:
+            propagated = torch.sparse.mm(
+                relation.to_sparse_coo().coalesce(),
+                source.transpose(0, 1),
+            )
+            return propagated.transpose(0, 1)
+        return torch.matmul(source, relation.transpose(0, 1))
+
+    def evidence_gate(
+        self,
+        target_count: torch.Tensor,
+        support: torch.Tensor,
+        conflict: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return a gate decreasing in target count/conflict and increasing in support."""
+        direct_scale = F.softplus(self.direct_scale_raw) + 1e-6
+        support_scale = F.softplus(self.support_scale_raw) + 1e-6
+        conflict_scale = F.softplus(self.conflict_scale_raw) + 1e-6
+        need = direct_scale / (target_count.clamp(min=0.0) + direct_scale)
+        backed = support.clamp(min=0.0) / (
+            support.clamp(min=0.0) + support_scale
+        )
+        agreement = torch.exp(-conflict_scale * conflict.clamp(min=0.0))
+        return (need * backed * agreement).clamp(min=0.0, max=1.0)
+
+    def graph_routes(
+        self,
+        evidence_gate: torch.Tensor,
+        *,
+        state_enabled: bool,
+        evidence_enabled: bool,
+    ) -> torch.Tensor:
+        """Return ``[..., state, evidence]`` routes with an implicit null expert."""
+        null_weight = torch.ones_like(evidence_gate)
+        state_weight = (
+            F.softplus(self.state_route_raw).to(dtype=evidence_gate.dtype)
+            * torch.ones_like(evidence_gate)
+            if state_enabled
+            else torch.zeros_like(evidence_gate)
+        )
+        evidence_weight = (
+            F.softplus(self.evidence_route_raw).to(dtype=evidence_gate.dtype)
+            * evidence_gate
+            if evidence_enabled
+            else torch.zeros_like(evidence_gate)
+        )
+        denominator = null_weight + state_weight + evidence_weight
+        return torch.stack(
+            (
+                state_weight / denominator.clamp(min=1e-12),
+                evidence_weight / denominator.clamp(min=1e-12),
+            ),
+            dim=-1,
+        )
+
+    def forward(
+        self,
+        relation_matrices: torch.Tensor,
+        *,
+        count: torch.Tensor,
+        correct: torch.Tensor,
+        concept_rate: torch.Tensor,
+        direct_probability_delta: torch.Tensor,
+        state_enabled: bool,
+        evidence_enabled: bool,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict[str, torch.Tensor]]:
+        """Return propagated logit correction, gate, routes, and diagnostics."""
+        if relation_matrices.size(0) != self.num_heads:
+            raise ValueError(
+                f"expected {self.num_heads} relation heads, got "
+                f"{relation_matrices.size(0)}"
+            )
+        expected = tuple(count.shape)
+        for name, tensor in (
+            ("correct", correct),
+            ("concept_rate", concept_rate),
+            ("direct_probability_delta", direct_probability_delta),
+        ):
+            if tuple(tensor.shape) != expected:
+                raise ValueError(
+                    f"{name} must have shape {expected}, got {tuple(tensor.shape)}"
+                )
+
+        relations = self.off_diagonal_relations(relation_matrices)
+        count = count.to(dtype=relations.dtype).clamp(min=0.0)
+        correct = correct.to(dtype=relations.dtype)
+        concept_rate = concept_rate.to(dtype=relations.dtype)
+        centered = correct - count * concept_rate
+        source_rate_delta = centered / count.clamp(min=1.0)
+        second_moment_mass = count * source_rate_delta.square()
+
+        supports = []
+        mean_deltas = []
+        conflicts = []
+        shrink = F.softplus(self.propagation_shrink_raw) + 1e-6
+        combined_source = torch.cat(
+            (count, centered, second_moment_mass),
+            dim=0,
+        )
+        batch_size = int(count.size(0))
+        for head in range(self.num_heads):
+            propagated = self._propagate(combined_source, relations[head])
+            support, centered_sum, second_sum = propagated.split(batch_size, dim=0)
+            support = support.clamp(min=0.0)
+            raw_mean = torch.where(
+                support > 1e-12,
+                centered_sum / support.clamp(min=1e-12),
+                torch.zeros_like(centered_sum),
+            )
+            mean_delta = raw_mean * support / (support + shrink)
+            variance = torch.where(
+                support > 1e-12,
+                second_sum / support.clamp(min=1e-12) - raw_mean.square(),
+                torch.zeros_like(second_sum),
+            ).clamp(min=0.0)
+            target_reliability = count / (count + 1.0)
+            direct_conflict = (
+                target_reliability
+                * (
+                    mean_delta
+                    - direct_probability_delta.to(dtype=mean_delta.dtype)
+                ).abs()
+            )
+            supports.append(support)
+            mean_deltas.append(mean_delta)
+            conflicts.append(variance + direct_conflict.square())
+
+        support_by_head = torch.stack(supports, dim=1)
+        delta_by_head = torch.stack(mean_deltas, dim=1)
+        conflict_by_head = torch.stack(conflicts, dim=1)
+        head_scores = (
+            self.head_bias.view(1, -1, 1)
+            + F.softplus(self.head_support_raw)
+            * torch.log1p(support_by_head)
+            - F.softplus(self.head_conflict_raw) * conflict_by_head
+        )
+        valid_heads = support_by_head > 1e-12
+        safe_scores = head_scores.masked_fill(~valid_heads, -1e9)
+        head_weights = F.softmax(safe_scores, dim=1) * valid_heads.to(
+            dtype=safe_scores.dtype
+        )
+        head_weights = head_weights / head_weights.sum(
+            dim=1, keepdim=True
+        ).clamp(min=1e-12)
+
+        propagated_delta = (head_weights * delta_by_head).sum(dim=1)
+        support = (head_weights * support_by_head).sum(dim=1)
+        conflict = (head_weights * conflict_by_head).sum(dim=1)
+        eps = 1e-4
+        propagated_rate = (
+            concept_rate + propagated_delta
+        ).clamp(min=eps, max=1.0 - eps)
+        propagated_logit = (
+            torch.logit(propagated_rate)
+            - torch.logit(concept_rate.clamp(min=eps, max=1.0 - eps))
+        ).clamp(min=-4.0, max=4.0)
+        propagated_logit = torch.where(
+            support > 1e-12,
+            propagated_logit,
+            torch.zeros_like(propagated_logit),
+        )
+        gate = self.evidence_gate(count, support, conflict)
+        routes = self.graph_routes(
+            gate,
+            state_enabled=state_enabled,
+            evidence_enabled=evidence_enabled,
+        )
+        return propagated_logit, gate, routes, {
+            "offdiag_relations": relations,
+            "head_weights": head_weights,
+            "support": support,
+            "conflict": conflict,
+            "propagated_delta": propagated_delta,
+        }
 
 
 class ConceptGraphConv(nn.Module):

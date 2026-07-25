@@ -43,6 +43,12 @@ VARIANTS = (
     "no_message_passing",
     "no_graph_calibration",
 )
+GEC_V2_VARIANTS = (
+    "gec_v2",
+    "gec_v2_no_evidence_propagation",
+    "gec_v2_no_state",
+    "gec_v2_no_graph",
+)
 CONTRASTS: Tuple[Tuple[str, Mapping[str, float]], ...] = (
     (
         "propagation|state_on",
@@ -70,6 +76,40 @@ CONTRASTS: Tuple[Tuple[str, Mapping[str, float]], ...] = (
         },
     ),
 )
+GEC_V2_CONTRASTS: Tuple[Tuple[str, Mapping[str, float]], ...] = (
+    (
+        "propagation|state_on",
+        {"gec_v2": 1.0, "gec_v2_no_evidence_propagation": -1.0},
+    ),
+    (
+        "propagation|state_off",
+        {"gec_v2_no_state": 1.0, "gec_v2_no_graph": -1.0},
+    ),
+    (
+        "state|propagation_on",
+        {"gec_v2": 1.0, "gec_v2_no_state": -1.0},
+    ),
+    (
+        "state|propagation_off",
+        {
+            "gec_v2_no_evidence_propagation": 1.0,
+            "gec_v2_no_graph": -1.0,
+        },
+    ),
+    (
+        "interaction",
+        {
+            "gec_v2": 1.0,
+            "gec_v2_no_evidence_propagation": -1.0,
+            "gec_v2_no_state": -1.0,
+            "gec_v2_no_graph": 1.0,
+        },
+    ),
+)
+VARIANT_FAMILIES = {
+    "v1": (VARIANTS, CONTRASTS),
+    "v2": (GEC_V2_VARIANTS, GEC_V2_CONTRASTS),
+}
 
 
 def _resolve(value: str) -> Path:
@@ -191,6 +231,10 @@ def _read_validation(
     support_array = np.asarray(supports, dtype=np.float64)
     identity = {
         "run_dir": str(checkpoint_dir),
+        "architecture": str(
+            checkpoint.get("architecture", loaded_args.get("architecture", ""))
+        ),
+        "gec_mode": str(loaded_args.get("gec_mode", "v1")),
         "dataset": str(loaded_args.get("dataset_name", "")),
         "model_variant": str(loaded_args.get("model_variant", "full")),
         "train_evidence_mode": str(loaded_args.get("train_evidence_mode", "excluded")),
@@ -217,9 +261,26 @@ def _read_validation(
     return rows
 
 
-def _paired_contrasts(frame: pd.DataFrame) -> pd.DataFrame:
+def _paired_contrasts(
+    frame: pd.DataFrame,
+    *,
+    variants: Tuple[str, ...] = VARIANTS,
+    contrasts: Tuple[Tuple[str, Mapping[str, float]], ...] = CONTRASTS,
+) -> pd.DataFrame:
     duplicate = frame.duplicated(
-        ["dataset", "seed", "bucket", "model_variant"],
+        [
+            column
+            for column in (
+                "architecture",
+                "gec_mode",
+                "train_evidence_mode",
+                "dataset",
+                "seed",
+                "bucket",
+                "model_variant",
+            )
+            if column in frame.columns
+        ],
         keep=False,
     )
     if duplicate.any():
@@ -227,23 +288,37 @@ def _paired_contrasts(frame: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"duplicate paired cells:\n{frame.loc[duplicate, columns]}")
 
     records: List[Dict[str, object]] = []
-    group_columns = ["dataset", "bucket"]
-    for (dataset, bucket), group in frame.groupby(group_columns, sort=True):
-        variants = set(group["model_variant"])
-        absent = sorted(set(VARIANTS) - variants)
+    group_columns = [
+        column
+        for column in (
+            "architecture",
+            "gec_mode",
+            "train_evidence_mode",
+            "dataset",
+            "bucket",
+        )
+        if column in frame.columns
+    ]
+    for group_key, group in frame.groupby(group_columns, sort=True):
+        if not isinstance(group_key, tuple):
+            group_key = (group_key,)
+        identity = dict(zip(group_columns, group_key))
+        dataset = str(identity["dataset"])
+        bucket = str(identity["bucket"])
+        present_variants = set(group["model_variant"])
+        absent = sorted(set(variants) - present_variants)
         if absent:
             raise ValueError(f"{dataset}/{bucket} is missing graph variants: {absent}")
         for metric in ("auc", "bce_loss", "rmse"):
             table = group.pivot(index="seed", columns="model_variant", values=metric)
-            table = table.reindex(columns=VARIANTS)
+            table = table.reindex(columns=variants)
             total_seed_cells = int(len(table))
-            for contrast, weights in CONTRASTS:
+            for contrast, weights in contrasts:
                 values = sum(table[cell] * coefficient for cell, coefficient in weights.items())
                 values = values[np.isfinite(values)]
                 records.append(
                     {
-                        "dataset": dataset,
-                        "bucket": bucket,
+                        **identity,
                         "metric": metric,
                         "contrast": contrast,
                         "total_seed_cells": total_seed_cells,
@@ -274,6 +349,12 @@ def main() -> None:
     )
     parser.add_argument("--batch_size", type=int, default=2048)
     parser.add_argument("--no_cuda", action="store_true")
+    parser.add_argument(
+        "--variant_family",
+        choices=tuple(VARIANT_FAMILIES),
+        default="v1",
+        help="Select the legacy or reliability-routed graph 2x2 design.",
+    )
     parser.add_argument("--output_csv", required=True)
     args = parser.parse_args()
 
@@ -287,27 +368,45 @@ def main() -> None:
         "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
     )
     rows: List[Dict[str, object]] = []
+    selected_variants, selected_contrasts = VARIANT_FAMILIES[
+        args.variant_family
+    ]
     for index, checkpoint_dir in enumerate(checkpoint_dirs, start=1):
         evaluated = _read_validation(
             checkpoint_dir,
             batch_size=max(1, int(args.batch_size)),
             device=device,
         )
-        rows.extend(evaluated)
         identity = evaluated[0]
+        if identity["model_variant"] not in selected_variants:
+            print(
+                f"[{index}/{len(checkpoint_dirs)}] skipped "
+                f"{identity['dataset']} seed={identity['seed']} "
+                f"variant={identity['model_variant']}"
+            )
+            continue
+        rows.extend(evaluated)
         print(
             f"[{index}/{len(checkpoint_dirs)}] "
             f"{identity['dataset']} seed={identity['seed']} "
             f"variant={identity['model_variant']}"
         )
 
+    if not rows:
+        raise ValueError(
+            f"no checkpoints matched variant family {args.variant_family!r}"
+        )
     frame = pd.DataFrame(rows).sort_values(
         ["dataset", "seed", "model_variant", "bucket"]
     )
     output = _resolve(args.output_csv)
     output.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(output, index=False)
-    contrasts = _paired_contrasts(frame)
+    contrasts = _paired_contrasts(
+        frame,
+        variants=selected_variants,
+        contrasts=selected_contrasts,
+    )
     contrast_output = output.with_name(f"{output.stem}_paired_contrasts.csv")
     contrasts.to_csv(contrast_output, index=False)
     print(f"rows={len(frame)} -> {output}")

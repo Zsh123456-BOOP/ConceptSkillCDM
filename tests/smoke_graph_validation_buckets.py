@@ -14,6 +14,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.evaluate_graph_validation_buckets import (
+    GEC_V2_CONTRASTS,
+    GEC_V2_VARIANTS,
     VARIANTS,
     _bucket_masks,
     _metrics,
@@ -78,6 +80,44 @@ def main() -> None:
         & (contrasts["contrast"] == "propagation|state_on")
     ].iloc[0]
     assert selected["n_paired"] == 1
+
+    v2_offsets = {
+        "gec_v2": 0.04,
+        "gec_v2_no_evidence_propagation": 0.03,
+        "gec_v2_no_state": 0.02,
+        "gec_v2_no_graph": 0.01,
+    }
+    v2_rows = []
+    for variant in GEC_V2_VARIANTS:
+        for bucket in ("all", "n=0", "n<3"):
+            offset = v2_offsets[variant]
+            v2_rows.append(
+                {
+                    "run_dir": f"{variant}-42",
+                    "architecture": "graph_irt_v10",
+                    "gec_mode": "reliability_v2",
+                    "train_evidence_mode": "excluded",
+                    "dataset": "demo",
+                    "seed": 42,
+                    "bucket": bucket,
+                    "model_variant": variant,
+                    "auc": 0.7 + offset,
+                    "bce_loss": 0.6 - offset,
+                    "rmse": 0.5 - offset,
+                }
+            )
+    contrasts = _paired_contrasts(
+        pd.DataFrame(v2_rows),
+        variants=GEC_V2_VARIANTS,
+        contrasts=GEC_V2_CONTRASTS,
+    )
+    selected = contrasts[
+        (contrasts["bucket"] == "n<3")
+        & (contrasts["metric"] == "auc")
+        & (contrasts["contrast"] == "interaction")
+    ].iloc[0]
+    assert selected["n_paired"] == 1
+    assert math.isclose(selected["mean"], 0.0, abs_tol=1e-12)
 
 
 if __name__ == "__main__":

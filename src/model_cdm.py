@@ -14,13 +14,17 @@ consume only the complete training statistics.  No validation/test outcome is
 registered or accepted by the model.
 """
 
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, NamedTuple, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 
 from src.config import EVIDENCE_ANCHOR_DROPOUT
-from src.model_graph import MultiHeadRelationLearning, StudentKnowledgeEncoder
+from src.model_graph import (
+    MultiHeadRelationLearning,
+    ReliabilityAwareEvidenceRouter,
+    StudentKnowledgeEncoder,
+)
 from src.model_regularization import get_regularization_components as _get_regularization_components
 from src.prediction_head import CognitiveDiagnosisHead, ExerciseDifficultyEncoder
 
@@ -33,6 +37,15 @@ GRAPH_IRT_ARCHITECTURE = "graph_irt_v10"
 #   off         -> evidence feeds only the initial state (v9 behaviour)
 EVIDENCE_ANCHOR_MODES = ("full", "direct_only", "off")
 _ANCHOR_CHANNELS = {"full": 3, "direct_only": 2, "off": 0}
+GEC_MODES = ("v1", "reliability_v2")
+
+
+class _ResponseEvidenceComponents(NamedTuple):
+    evidence: Optional[torch.Tensor]
+    count: Optional[torch.Tensor]
+    correct: Optional[torch.Tensor]
+    concept_rate: Optional[torch.Tensor]
+    direct_probability_delta: Optional[torch.Tensor]
 
 
 class CognitiveDiagnosisModel(nn.Module):
@@ -53,6 +66,7 @@ class CognitiveDiagnosisModel(nn.Module):
         evidence_anchor_mode: str = "full",
         evidence_state_injection: bool = True,
         anchor_multihead_prop: bool = True,
+        gec_mode: str = "v1",
         prediction_head: str = "irt2pl",
         knowledge_dim: int = 32,
         num_relation_heads: int = 4,
@@ -83,6 +97,13 @@ class CognitiveDiagnosisModel(nn.Module):
         self.knowledge_dim = int(knowledge_dim)
         self.num_relation_heads = int(num_relation_heads)
         self.use_response_evidence = bool(use_response_evidence)
+        normalized_gec_mode = str(gec_mode).strip().lower()
+        if normalized_gec_mode not in GEC_MODES:
+            raise ValueError(f"gec_mode must be one of {GEC_MODES}, got {gec_mode!r}")
+        self.gec_mode = normalized_gec_mode
+        self.reliability_routed_gec = self.gec_mode == "reliability_v2"
+        if self.reliability_routed_gec and not self.use_response_evidence:
+            raise ValueError("reliability_v2 requires response evidence")
         anchor_mode = str(evidence_anchor_mode).strip().lower()
         if anchor_mode not in EVIDENCE_ANCHOR_MODES:
             raise ValueError(
@@ -92,12 +113,24 @@ class CognitiveDiagnosisModel(nn.Module):
         # When False, response statistics skip the initial-state projection
         # and reach theta exclusively through the anchor (production default).
         self.evidence_state_injection = bool(evidence_state_injection)
+        if self.reliability_routed_gec and self.evidence_state_injection:
+            raise ValueError(
+                "reliability_v2 keeps direct evidence outside graph-state propagation; "
+                "set evidence_state_injection=False"
+            )
         # One propagated anchor channel per relation head.
         self.anchor_multihead_prop = bool(anchor_multihead_prop)
         # Head probe: "irt2pl" (default single scalar 2PL) or "ncd_mlp"
         # (NCDM-style positive-weight monotone MLP over per-concept 2PL terms).
         self.prediction_head = str(prediction_head)
-        if self.evidence_anchor_mode == "full":
+        if self.reliability_routed_gec:
+            # Direct rate and residual remain outside the graph router.  The
+            # graph evidence correction is applied as one bounded scalar theta
+            # adjustment rather than another freely additive anchor channel.
+            self._anchor_channels = (
+                0 if self.evidence_anchor_mode == "off" else 2
+            )
+        elif self.evidence_anchor_mode == "full":
             self._anchor_channels = 2 + (
                 self.num_relation_heads if self.anchor_multihead_prop else 1
             )
@@ -107,9 +140,20 @@ class CognitiveDiagnosisModel(nn.Module):
         # a=2 starts near fully-open (~0.88) so the initial behaviour matches an
         # ungated anchor; b learns how trust responds to observation counts. The
         # third column is retained for checkpoint compatibility and unused.
-        gate_init = torch.zeros(max(1, self._anchor_channels), 3)
-        gate_init[:, 0] = 2.0
-        self.anchor_gate = nn.Parameter(gate_init)
+        if self.reliability_routed_gec:
+            self.anchor_gate = None
+            self.evidence_router = ReliabilityAwareEvidenceRouter(
+                num_heads=self.num_relation_heads
+            )
+            self.v2_evidence_scale_raw = nn.Parameter(
+                torch.full((self.num_concepts,), 0.54132485)
+            )
+        else:
+            gate_init = torch.zeros(max(1, self._anchor_channels), 3)
+            gate_init[:, 0] = 2.0
+            self.anchor_gate = nn.Parameter(gate_init)
+            self.evidence_router = None
+            self.v2_evidence_scale_raw = None
         self.lambda_graph_entropy = max(0.0, float(lambda_graph_entropy))
         self.graph_entropy_min = float(graph_entropy_min)
         self.graph_entropy_max = float(graph_entropy_max)
@@ -170,12 +214,40 @@ class CognitiveDiagnosisModel(nn.Module):
             exposure_prior_matrix=exposure_prior,
             prior_strength_init=graph_prior_strength_init,
         )
+        if (
+            self.reliability_routed_gec
+            and self.evidence_anchor_mode == "full"
+        ):
+            # Share only the label-free candidate priors.  State calibration
+            # and evidence transport own independent trainable graph
+            # parameters because the two paths impose different edge roles.
+            self.evidence_relation_learning = MultiHeadRelationLearning(
+                num_concepts=self.num_concepts,
+                num_heads=self.num_relation_heads,
+                dropout=relation_dropout,
+                tau_init=float(graph_tau_init),
+                topk=graph_topk,
+                allow_self_loop=False,
+                identity_residual=0.0,
+                prior_matrix=self.item_prior_matrix,
+                exposure_prior_matrix=exposure_prior,
+                prior_strength_init=graph_prior_strength_init,
+                allow_empty_rows=True,
+            )
+            self.evidence_relation_learning.self_loop_logit.requires_grad_(False)
+        else:
+            self.evidence_relation_learning = None
 
+        encoder_layers = (
+            min(1, max(0, int(num_gnn_layers)))
+            if self.reliability_routed_gec
+            else num_gnn_layers
+        )
         self.knowledge_encoder = StudentKnowledgeEncoder(
             num_students=self.num_students,
             num_concepts=self.num_concepts,
             knowledge_dim=self.knowledge_dim,
-            num_gnn_layers=num_gnn_layers,
+            num_gnn_layers=encoder_layers,
             num_relation_heads=self.num_relation_heads,
             dropout=dropout,
             gnn_residual_weight=gnn_residual_weight,
@@ -295,15 +367,15 @@ class CognitiveDiagnosisModel(nn.Module):
         ):
             raise ValueError("response residual sums must lie within their counts")
 
-    def _build_response_evidence(
+    def _build_response_components(
         self,
         student_ids: torch.Tensor,
         exercise_ids: Optional[torch.Tensor],
         q_vector: torch.Tensor,
-        outcome_to_exclude: Optional[torch.Tensor],
-        outcome_to_neutralize: Optional[torch.Tensor],
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
-        """Return response evidence under an explicit training-query boundary.
+        outcome_to_exclude: Optional[torch.Tensor] = None,
+        outcome_to_neutralize: Optional[torch.Tensor] = None,
+    ) -> _ResponseEvidenceComponents:
+        """Return response evidence and adjusted sufficient-statistic components.
 
         ``outcome_to_exclude`` subtracts the current label, count, and residual
         from every statistic consumed by that training row.  The optional
@@ -314,7 +386,7 @@ class CognitiveDiagnosisModel(nn.Module):
         and the deliberately self-included training control.
         """
         if not self.use_response_evidence:
-            return None, None
+            return _ResponseEvidenceComponents(None, None, None, None, None)
         if outcome_to_exclude is not None and outcome_to_neutralize is not None:
             raise ValueError(
                 "a query outcome cannot be both excluded and neutralized"
@@ -402,6 +474,7 @@ class CognitiveDiagnosisModel(nn.Module):
         # One empirical-Bayes pseudo-observation is fixed by the architecture;
         # there is no dataset-specific smoothing knob to tune.
         concept_rate = (concept_correct + global_rate) / (concept_count + 1.0)
+        concept_rate = concept_rate.expand_as(correct)
         posterior = (correct + concept_rate) / (count + 1.0)
         reliability = count / (count + 1.0)
         eps = 1e-4
@@ -415,7 +488,35 @@ class CognitiveDiagnosisModel(nn.Module):
             residual_sum / count.clamp(min=1.0) * reliability
         ).clamp(min=-1.0, max=1.0)
         evidence = torch.stack((rate_evidence, residual_evidence), dim=-1)
-        return evidence, count
+        direct_probability_delta = (posterior - concept_rate).clamp(
+            min=-1.0,
+            max=1.0,
+        )
+        return _ResponseEvidenceComponents(
+            evidence=evidence,
+            count=count,
+            correct=correct,
+            concept_rate=concept_rate,
+            direct_probability_delta=direct_probability_delta,
+        )
+
+    def _build_response_evidence(
+        self,
+        student_ids: torch.Tensor,
+        exercise_ids: Optional[torch.Tensor],
+        q_vector: torch.Tensor,
+        outcome_to_exclude: Optional[torch.Tensor] = None,
+        outcome_to_neutralize: Optional[torch.Tensor] = None,
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """Backward-compatible two-tensor view of response components."""
+        components = self._build_response_components(
+            student_ids,
+            exercise_ids,
+            q_vector,
+            outcome_to_exclude,
+            outcome_to_neutralize,
+        )
+        return components.evidence, components.count
 
     def _compose_evidence_anchor(
         self,
@@ -429,11 +530,12 @@ class CognitiveDiagnosisModel(nn.Module):
         evidence over the learned row-stochastic concept graph, so concepts
         without direct observations receive the evidence of their graph
         neighbours.  Each channel is scaled by a learnable count-conditioned
-        gate (monotone in log evidence count), letting the anchor trust
-        evidence more where more observations back it.  All inputs are
+        gate conditioned on log evidence count.  All inputs are
         train-only statistics; every map is linear in them, so the
         leave-one-out contract is preserved exactly.
         """
+        if self.reliability_routed_gec:
+            raise RuntimeError("legacy anchor composition is unavailable in reliability_v2")
         if response_evidence is None or self.evidence_anchor_mode == "off":
             return None
         rate_evidence = response_evidence[..., 0]
@@ -465,6 +567,94 @@ class CognitiveDiagnosisModel(nn.Module):
                 propagated_count = torch.matmul(log_count, receiver)
                 channels.append(gated(propagated, 2, propagated_count))
         return torch.stack(channels, dim=-1)
+
+    def _compose_v2_prediction_adjustments(
+        self,
+        components: _ResponseEvidenceComponents,
+        knowledge_state: torch.Tensor,
+        initial_state: torch.Tensor,
+    ) -> Tuple[
+        Optional[torch.Tensor],
+        torch.Tensor,
+        torch.Tensor,
+        Dict[str, torch.Tensor],
+    ]:
+        """Return direct anchor plus separately routed state/evidence corrections."""
+        if not self.reliability_routed_gec or self.evidence_router is None:
+            raise RuntimeError("reliability_v2 adjustments requested from a v1 model")
+        if components.count is None or components.evidence is None:
+            raise RuntimeError("reliability_v2 requires response evidence components")
+
+        state_enabled = bool(
+            self.knowledge_encoder.propagation_alpha > 0.0
+            and len(self.knowledge_encoder.gnn_layers) > 0
+        )
+        evidence_enabled = bool(
+            self.evidence_anchor_mode == "full"
+            and self.evidence_relation_learning is not None
+        )
+        count = components.count
+        if evidence_enabled:
+            evidence_relations = self.evidence_relation_learning()
+            propagated_logit, evidence_gate, routes, router_details = (
+                self.evidence_router(
+                    evidence_relations,
+                    count=count,
+                    correct=components.correct,
+                    concept_rate=components.concept_rate,
+                    direct_probability_delta=components.direct_probability_delta,
+                    state_enabled=state_enabled,
+                    evidence_enabled=True,
+                )
+            )
+        else:
+            evidence_relations = count.new_zeros(
+                (self.num_relation_heads, self.num_concepts, self.num_concepts)
+            )
+            propagated_logit = count.new_zeros(count.shape)
+            evidence_gate = count.new_zeros(count.shape)
+            routes = self.evidence_router.graph_routes(
+                evidence_gate,
+                state_enabled=state_enabled,
+                evidence_enabled=False,
+            )
+            router_details = {
+                "offdiag_relations": evidence_relations,
+                "head_weights": count.new_zeros(
+                    (count.size(0), self.num_relation_heads, self.num_concepts)
+                ),
+                "support": count.new_zeros(count.shape),
+                "conflict": count.new_zeros(count.shape),
+                "propagated_delta": count.new_zeros(count.shape),
+            }
+
+        theta_state = self.diagnosis_head.theta_proj(knowledge_state).squeeze(-1)
+        theta_initial = self.diagnosis_head.theta_proj(initial_state).squeeze(-1)
+        state_adjustment = routes[..., 0] * (theta_state - theta_initial)
+        evidence_scale = torch.nn.functional.softplus(
+            self.v2_evidence_scale_raw
+        ).view(1, -1)
+        evidence_adjustment = (
+            routes[..., 1] * evidence_scale * propagated_logit
+        )
+        direct_anchor = (
+            components.evidence
+            if self.evidence_anchor_mode != "off"
+            else None
+        )
+        return direct_anchor, state_adjustment, evidence_adjustment, {
+            "evidence_relation_matrices": evidence_relations,
+            "gec_offdiag_relations": router_details["offdiag_relations"],
+            "gec_head_weights": router_details["head_weights"],
+            "gec_relation_weighted_support": router_details["support"],
+            "gec_conflict": router_details["conflict"],
+            "gec_probability_delta": router_details["propagated_delta"],
+            "gec_propagated_logit": propagated_logit,
+            "gec_evidence_gate": evidence_gate,
+            "gec_state_route": routes[..., 0],
+            "gec_evidence_route": routes[..., 1],
+            "gec_null_route": (1.0 - routes.sum(dim=-1)).clamp(min=0.0),
+        }
 
     @staticmethod
     def _build_item_prior_from_q(q_matrix: torch.Tensor, num_concepts: int) -> torch.Tensor:
@@ -538,13 +728,15 @@ class CognitiveDiagnosisModel(nn.Module):
             )
 
         relation_matrices = self.relation_learning()
-        response_evidence, loo_count = self._build_response_evidence(
+        response_components = self._build_response_components(
             student_ids,
             exercise_ids,
             q_vector,
             outcome_to_exclude,
             outcome_to_neutralize,
         )
+        response_evidence = response_components.evidence
+        loo_count = response_components.count
         knowledge_state, initial_state = self.knowledge_encoder(
             student_ids,
             relation_matrices,
@@ -555,11 +747,32 @@ class CognitiveDiagnosisModel(nn.Module):
         )
 
         difficulty, discrimination = self.exercise_encoder(exercise_ids)
-        evidence_anchor = self._compose_evidence_anchor(
-            relation_matrices,
-            response_evidence,
-            loo_count,
-        )
+        theta_adjustment = None
+        routed_details: Dict[str, torch.Tensor] = {}
+        state_adjustment = None
+        evidence_adjustment = None
+        head_knowledge_state = knowledge_state
+        if self.reliability_routed_gec:
+            (
+                evidence_anchor,
+                state_adjustment,
+                evidence_adjustment,
+                routed_details,
+            ) = self._compose_v2_prediction_adjustments(
+                response_components,
+                knowledge_state,
+                initial_state,
+            )
+            # The direct LEA evidence is outside the graph router.  The head
+            # starts from the unpropagated state and receives only the two
+            # bounded graph corrections through theta_adjustment.
+            head_knowledge_state = initial_state
+        else:
+            evidence_anchor = self._compose_evidence_anchor(
+                relation_matrices,
+                response_evidence,
+                loo_count,
+            )
         if (
             evidence_anchor is not None
             and self.training
@@ -579,22 +792,32 @@ class CognitiveDiagnosisModel(nn.Module):
                 >= EVIDENCE_ANCHOR_DROPOUT
             ).to(dtype=evidence_anchor.dtype)
             evidence_anchor = evidence_anchor * keep / (1.0 - EVIDENCE_ANCHOR_DROPOUT)
+            if evidence_adjustment is not None:
+                evidence_adjustment = (
+                    evidence_adjustment
+                    * keep.squeeze(-1)
+                    / (1.0 - EVIDENCE_ANCHOR_DROPOUT)
+                )
+        if state_adjustment is not None and evidence_adjustment is not None:
+            theta_adjustment = state_adjustment + evidence_adjustment
         if return_details:
             irt_logit, head_details = self.diagnosis_head(
-                knowledge_state=knowledge_state,
+                knowledge_state=head_knowledge_state,
                 concept_mask=q_vector,
                 b=difficulty,
                 a=discrimination,
                 evidence_anchor=evidence_anchor,
+                theta_adjustment=theta_adjustment,
                 return_details=True,
             )
         else:
             irt_logit = self.diagnosis_head(
-                knowledge_state=knowledge_state,
+                knowledge_state=head_knowledge_state,
                 concept_mask=q_vector,
                 b=difficulty,
                 a=discrimination,
                 evidence_anchor=evidence_anchor,
+                theta_adjustment=theta_adjustment,
                 return_details=False,
             )
             head_details = None
@@ -628,7 +851,9 @@ class CognitiveDiagnosisModel(nn.Module):
             "evidence_anchor": (
                 evidence_anchor.detach()
                 if evidence_anchor is not None
-                else q_vector.detach().new_zeros((*q_vector.shape, 3))
+                else q_vector.detach().new_zeros(
+                    (*q_vector.shape, self._anchor_channels)
+                )
             ),
             "response_evidence_leave_one_out": q_vector.detach().new_tensor(
                 float(outcome_to_exclude is not None)
@@ -641,6 +866,27 @@ class CognitiveDiagnosisModel(nn.Module):
             "irt_logit": irt_logit.detach(),
             "logits": total_logit.detach(),
         }
+        if state_adjustment is not None:
+            details["gec_state_adjustment"] = state_adjustment.detach()
+        if evidence_adjustment is not None:
+            details["gec_evidence_adjustment"] = evidence_adjustment.detach()
+        evidence_relation_matrices = routed_details.get(
+            "evidence_relation_matrices"
+        )
+        details.update(
+            {
+                key: value.detach()
+                for key, value in routed_details.items()
+                if (
+                    isinstance(value, torch.Tensor)
+                    and key != "evidence_relation_matrices"
+                )
+            }
+        )
+        if isinstance(evidence_relation_matrices, torch.Tensor):
+            # Keep this graph live only so the training objective can apply its
+            # non-empty off-diagonal entropy constraint.
+            details["evidence_relation_matrices"] = evidence_relation_matrices
         if head_details is not None:
             details.update(head_details)
         return output, details
@@ -671,7 +917,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 device = next(self.parameters()).device
                 student_ids = torch.tensor([student_id], device=device, dtype=torch.long)
                 relation_matrices = self.relation_learning()
-                response_evidence, loo_count = self._build_response_evidence(
+                response_components = self._build_response_components(
                     student_ids,
                     None,
                     torch.ones(
@@ -682,20 +928,42 @@ class CognitiveDiagnosisModel(nn.Module):
                     outcome_to_exclude=None,
                     outcome_to_neutralize=None,
                 )
-                knowledge_state = self.knowledge_encoder(
+                response_evidence = response_components.evidence
+                knowledge_state, initial_state = self.knowledge_encoder(
                     student_ids,
                     relation_matrices,
                     response_evidence=(
                         response_evidence if self.evidence_state_injection else None
                     ),
+                    return_initial=True,
                 )
                 concept_state = knowledge_state.squeeze(0)
-                concept_theta = self.diagnosis_head.theta_proj(concept_state).squeeze(-1)
-                evidence_anchor = self._compose_evidence_anchor(
-                    relation_matrices,
-                    response_evidence,
-                    loo_count,
-                )
+                if self.reliability_routed_gec:
+                    (
+                        evidence_anchor,
+                        state_adjustment,
+                        evidence_adjustment,
+                        _,
+                    ) = self._compose_v2_prediction_adjustments(
+                        response_components,
+                        knowledge_state,
+                        initial_state,
+                    )
+                    concept_theta = self.diagnosis_head.theta_proj(
+                        initial_state.squeeze(0)
+                    ).squeeze(-1)
+                    concept_theta = concept_theta + state_adjustment.squeeze(
+                        0
+                    ) + evidence_adjustment.squeeze(0)
+                else:
+                    concept_theta = self.diagnosis_head.theta_proj(
+                        concept_state
+                    ).squeeze(-1)
+                    evidence_anchor = self._compose_evidence_anchor(
+                        relation_matrices,
+                        response_evidence,
+                        response_components.count,
+                    )
                 if evidence_anchor is not None:
                     anchor_weights = self.diagnosis_head.evidence_anchor_weights()
                     concept_theta = concept_theta + (

@@ -32,6 +32,11 @@ MODEL_VARIANTS = (
     # Module-level ablation: removes every graph-calibration pathway at once
     # (state message passing AND the anchor's propagated-evidence channel).
     "no_graph_calibration",
+    # Reliability-routed GEC-v2 and its graph 2x2 controls.
+    "gec_v2",
+    "gec_v2_no_state",
+    "gec_v2_no_evidence_propagation",
+    "gec_v2_no_graph",
     "item_only",
     "exposure_only",
     "degree_random",
@@ -191,19 +196,40 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 def _apply_model_variant(args: argparse.Namespace) -> None:
     """Map named, interpretable controls to the underlying graph settings."""
+    args.gec_mode = (
+        "reliability_v2"
+        if str(args.model_variant).startswith("gec_v2")
+        else "v1"
+    )
     args.use_response_evidence = args.model_variant != "no_response_evidence"
     args.evidence_anchor_mode = {
         "no_response_evidence": "off",
         "no_evidence_anchor": "off",
         "no_evidence_propagation": "direct_only",
         "no_graph_calibration": "direct_only",
+        "gec_v2_no_evidence_propagation": "direct_only",
+        "gec_v2_no_graph": "direct_only",
     }.get(args.model_variant, "full")
     args.pairwise_auc_weight = (
         PAIRWISE_AUC_WEIGHT if args.model_variant == "pairwise_auc" else 0.0
     )
     args.ema_decay = EMA_DECAY if args.model_variant == "ema_bce" else 0.0
-    if args.model_variant in {"no_message_passing", "no_graph_calibration"}:
+    if str(args.model_variant).startswith("gec_v2"):
+        args.num_gnn_layers = min(1, max(0, int(args.num_gnn_layers)))
+    if args.model_variant in {
+        "no_message_passing",
+        "no_graph_calibration",
+        "gec_v2_no_state",
+        "gec_v2_no_graph",
+    }:
         args.graph_propagation_alpha = 0.0
+    elif args.model_variant in {
+        "gec_v2",
+        "gec_v2_no_evidence_propagation",
+    }:
+        # GEC-v2 forms one full-strength state-graph candidate and lets its
+        # explicit null/state/evidence router determine the applied strength.
+        args.graph_propagation_alpha = 1.0
     elif args.model_variant == "item_only":
         args.graph_prior_mode = "item_only"
     elif args.model_variant == "exposure_only":

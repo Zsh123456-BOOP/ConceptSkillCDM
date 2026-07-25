@@ -23,13 +23,15 @@ def main() -> None:
             "--seeds",
             "42",
             "--ablations",
-            "full,no_response_evidence,pairwise_auc,no_message_passing,item_only,exposure_only,degree_random",
+            "full,no_response_evidence,pairwise_auc,no_message_passing,"
+            "gec_v2,gec_v2_no_state,gec_v2_no_evidence_propagation,"
+            "gec_v2_no_graph,item_only,exposure_only,degree_random",
             "--dry_run",
         ]
     )
     assert args.run_mode == "train"
     jobs = runner.make_jobs(args, run_id="smoke")
-    assert len(jobs) == 7
+    assert len(jobs) == 11
     assert {job.train_evidence_mode for job in jobs} == {"excluded"}
     by_name = {job.ablation.name: job for job in jobs}
     no_evidence_command = by_name["no_response_evidence"].cmd
@@ -47,6 +49,29 @@ def main() -> None:
     main_module._apply_model_variant(parsed)
     assert parsed.pairwise_auc_weight == 0.5
     assert by_name["no_message_passing"].params["graph_propagation_alpha"] == 0.0
+    assert by_name["gec_v2_no_state"].params["graph_propagation_alpha"] == 0.0
+    assert by_name["gec_v2_no_graph"].params["graph_propagation_alpha"] == 0.0
+    assert by_name["gec_v2"].params["graph_propagation_alpha"] == 1.0
+    assert by_name["gec_v2"].params["num_gnn_layers"] == 1
+    assert (
+        by_name["gec_v2_no_evidence_propagation"].params[
+            "graph_propagation_alpha"
+        ]
+        == 1.0
+    )
+    for variant in (
+        "gec_v2",
+        "gec_v2_no_state",
+        "gec_v2_no_evidence_propagation",
+        "gec_v2_no_graph",
+    ):
+        command = by_name[variant].cmd
+        parsed_v2 = main_module.parse_args(
+            command[command.index("--dataset_name") :]
+        )
+        main_module._apply_model_variant(parsed_v2)
+        assert parsed_v2.gec_mode == "reliability_v2"
+    assert by_name["gec_v2"].params["model_variant"] == "gec_v2"
     assert by_name["item_only"].params["graph_prior_mode"] == "item_only"
     assert by_name["exposure_only"].params["graph_prior_mode"] == "exposure_only"
     assert by_name["degree_random"].params["graph_prior_mode"] == "degree_random"
