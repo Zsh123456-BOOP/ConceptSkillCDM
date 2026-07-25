@@ -215,7 +215,11 @@ def collect_frozen_branch_outputs(
     dataset_name = str(loaded_args.get("dataset_name", "unknown"))
     stored_auc = float(checkpoint.get("val_auc", float("nan")))
     reproduced_auc = _metrics(outputs.labels, outputs.base_logits)["auc"]
-    if not math.isfinite(stored_auc) or abs(reproduced_auc - stored_auc) > 1e-10:
+    # The stored metric is computed from float32 probabilities whereas this
+    # offline grid keeps float64 logits.  Near-tied predictions can therefore
+    # differ by a few billionths in rank AUC even though the logits are the
+    # exact frozen outputs.
+    if not math.isfinite(stored_auc) or abs(reproduced_auc - stored_auc) > 1e-7:
         raise RuntimeError(
             f"{dataset_name}: frozen (1,1) AUC mismatch "
             f"stored={stored_auc:.12f} reproduced={reproduced_auc:.12f}"
