@@ -21,6 +21,9 @@ from src.config import (
 
 MODEL_VARIANTS = (
     "full",
+    # SOTA-preserving plug-in: warm-start the complete v1 model and train only
+    # one bounded, reliability-gated concept-ability residual.
+    "gec_residual",
     "no_response_evidence",
     "no_evidence_anchor",
     "no_evidence_propagation",
@@ -32,11 +35,6 @@ MODEL_VARIANTS = (
     # Module-level ablation: removes every graph-calibration pathway at once
     # (state message passing AND the anchor's propagated-evidence channel).
     "no_graph_calibration",
-    # Reliability-routed GEC-v2 and its graph 2x2 controls.
-    "gec_v2",
-    "gec_v2_no_state",
-    "gec_v2_no_evidence_propagation",
-    "gec_v2_no_graph",
     "item_only",
     "exposure_only",
     "degree_random",
@@ -82,6 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Model
     parser.add_argument("--model_variant", default="full", choices=MODEL_VARIANTS)
+    parser.add_argument(
+        "--warm_start_checkpoint",
+        default=None,
+        help=(
+            "Required only for gec_residual training. Must point to the paired "
+            "full/v1 best_model.pth from the same data, seed, and configuration."
+        ),
+    )
     parser.add_argument("--knowledge_dim", type=int, default=128)
     parser.add_argument("--num_relation_heads", type=int, default=4)
     parser.add_argument("--num_gnn_layers", type=int, default=2)
@@ -197,9 +203,7 @@ def parse_args(argv=None) -> argparse.Namespace:
 def _apply_model_variant(args: argparse.Namespace) -> None:
     """Map named, interpretable controls to the underlying graph settings."""
     args.gec_mode = (
-        "reliability_v2"
-        if str(args.model_variant).startswith("gec_v2")
-        else "v1"
+        "residual_v3" if args.model_variant == "gec_residual" else "v1"
     )
     args.use_response_evidence = args.model_variant != "no_response_evidence"
     args.evidence_anchor_mode = {
@@ -207,29 +211,13 @@ def _apply_model_variant(args: argparse.Namespace) -> None:
         "no_evidence_anchor": "off",
         "no_evidence_propagation": "direct_only",
         "no_graph_calibration": "direct_only",
-        "gec_v2_no_evidence_propagation": "direct_only",
-        "gec_v2_no_graph": "direct_only",
     }.get(args.model_variant, "full")
     args.pairwise_auc_weight = (
         PAIRWISE_AUC_WEIGHT if args.model_variant == "pairwise_auc" else 0.0
     )
     args.ema_decay = EMA_DECAY if args.model_variant == "ema_bce" else 0.0
-    if str(args.model_variant).startswith("gec_v2"):
-        args.num_gnn_layers = min(1, max(0, int(args.num_gnn_layers)))
-    if args.model_variant in {
-        "no_message_passing",
-        "no_graph_calibration",
-        "gec_v2_no_state",
-        "gec_v2_no_graph",
-    }:
+    if args.model_variant in {"no_message_passing", "no_graph_calibration"}:
         args.graph_propagation_alpha = 0.0
-    elif args.model_variant in {
-        "gec_v2",
-        "gec_v2_no_evidence_propagation",
-    }:
-        # GEC-v2 forms one full-strength state-graph candidate and lets its
-        # explicit null/state/evidence router determine the applied strength.
-        args.graph_propagation_alpha = 1.0
     elif args.model_variant == "item_only":
         args.graph_prior_mode = "item_only"
     elif args.model_variant == "exposure_only":
@@ -316,6 +304,19 @@ def _validate_args(args: argparse.Namespace) -> None:
     ):
         raise SystemExit(
             "error: non-default --train_evidence_mode requires response evidence"
+        )
+    if args.model_variant == "gec_residual":
+        if str(args.train_evidence_mode) != "excluded":
+            raise SystemExit(
+                "error: gec_residual requires --train_evidence_mode excluded"
+            )
+        if args.run_mode in {"train", "train_test"} and not args.warm_start_checkpoint:
+            raise SystemExit(
+                "error: gec_residual training requires --warm_start_checkpoint"
+            )
+    elif args.warm_start_checkpoint:
+        raise SystemExit(
+            "error: --warm_start_checkpoint is only valid for gec_residual"
         )
 
 
@@ -407,6 +408,7 @@ def main() -> None:
         validation_result = {
             "dataset": args.dataset_name,
             "model_variant": args.model_variant,
+            "gec_mode": args.gec_mode,
             "train_evidence_mode": args.train_evidence_mode,
             "seed": int(args.seed),
             "best_val_auc": float(best_val_auc),

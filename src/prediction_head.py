@@ -44,7 +44,8 @@ class CognitiveDiagnosisHead(nn.Module):
 
     ``theta_c`` remains available for diagnosis, but prediction has exactly one
     item logit: ``a * (mean_Q(theta_c) - b)``. There is no item-concept
-    difficulty factor, matching term, residual, or calibration branch.
+    difficulty factor, matching term, or post-hoc calibration branch.  An
+    optional bounded adjustment may be added to ``theta_c`` before Q masking.
 
     When ``evidence_anchor_channels > 0`` the concept ability is anchored at
     the train-only response-evidence logits: ``theta_c`` becomes the state

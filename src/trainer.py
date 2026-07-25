@@ -43,9 +43,9 @@ MONITOR_MODE = "max"
 
 STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "architecture",
+    "gec_mode",
     "use_response_evidence",
     "evidence_anchor_mode",
-    "gec_mode",
     "prediction_head",
     "graph_prior_mode",
     "graph_topk",
@@ -265,6 +265,140 @@ def _strip_module_prefix(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch
     }
 
 
+def _parameter_sha256(
+    model: nn.Module,
+    *,
+    excluded_prefix: str = "",
+) -> str:
+    digest = hashlib.sha256()
+    for name, parameter in model.named_parameters():
+        if excluded_prefix and name.startswith(excluded_prefix):
+            continue
+        value = parameter.detach().cpu().contiguous()
+        digest.update(name.encode("utf-8"))
+        digest.update(str(value.dtype).encode("ascii"))
+        digest.update(str(tuple(value.shape)).encode("ascii"))
+        digest.update(value.numpy().tobytes())
+    return digest.hexdigest()
+
+
+_RESIDUAL_BASE_MATCH_KEYS: Tuple[str, ...] = (
+    "dataset_name",
+    "seed",
+    "train_evidence_mode",
+    "knowledge_dim",
+    "num_relation_heads",
+    "num_gnn_layers",
+    "dropout",
+    "graph_topk",
+    "disable_self_loop",
+    "gnn_residual_weight",
+    "graph_identity_residual",
+    "graph_propagation_alpha",
+    "graph_prior_strength_init",
+    "graph_tau_init",
+    "graph_dropout",
+    "evidence_state_injection",
+    "anchor_multihead_prop",
+    "prediction_head",
+    "graph_prior_mode",
+    "min_stu_interactions",
+    "min_exer_interactions",
+)
+
+
+def _load_residual_warm_start(
+    model: CognitiveDiagnosisModel,
+    args: Any,
+    info_dict: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Load one paired full/v1 checkpoint and freeze every base parameter.
+
+    This is the only intentionally non-strict checkpoint load in the runtime.
+    Missing keys must be exactly the new residual plug-in parameters.
+    """
+    if str(_source_get(args, "gec_mode", "v1")) != "residual_v3":
+        raise ValueError("residual warm-start requested for a non-residual model")
+    checkpoint_path = os.path.realpath(
+        str(_source_get(args, "warm_start_checkpoint", ""))
+    )
+    if not checkpoint_path or not os.path.isfile(checkpoint_path):
+        raise FileNotFoundError(
+            f"paired full/v1 checkpoint is missing: {checkpoint_path}"
+        )
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    _require_graph_irt_checkpoint(checkpoint, checkpoint_path)
+    loaded_args = checkpoint.get("args", {})
+    if str(loaded_args.get("model_variant", "")) != "full":
+        raise ValueError(
+            "gec_residual must warm-start from model_variant='full', got "
+            f"{loaded_args.get('model_variant')!r}"
+        )
+    if str(loaded_args.get("gec_mode", "v1")) != "v1":
+        raise ValueError("gec_residual parent must use gec_mode='v1'")
+
+    mismatches = []
+    for key in _RESIDUAL_BASE_MATCH_KEYS:
+        parent = loaded_args.get(key)
+        current = _source_get(args, key)
+        if parent != current:
+            mismatches.append(f"{key}: parent={parent!r} current={current!r}")
+    if mismatches:
+        raise ValueError(
+            "residual parent configuration mismatch: " + "; ".join(mismatches)
+        )
+
+    parent_info = checkpoint.get("info_dict")
+    parent_identity = (
+        parent_info.get("data_identity") if isinstance(parent_info, dict) else None
+    )
+    current_identity = info_dict.get("data_identity")
+    if not isinstance(parent_identity, dict) or parent_identity != current_identity:
+        raise ValueError(
+            "residual parent train/validation data identity does not match"
+        )
+
+    state_dict = _strip_module_prefix(checkpoint["model_state_dict"])
+    incompatible = model.load_state_dict(state_dict, strict=False)
+    expected_missing = {
+        f"evidence_residual.{name}"
+        for name, _ in model.evidence_residual.named_parameters()
+    }
+    missing = set(getattr(incompatible, "missing_keys", ()))
+    unexpected = set(getattr(incompatible, "unexpected_keys", ()))
+    if missing != expected_missing or unexpected:
+        raise RuntimeError(
+            "unsafe residual warm-start mismatch: "
+            f"missing={sorted(missing)} expected={sorted(expected_missing)} "
+            f"unexpected={sorted(unexpected)}"
+        )
+
+    for name, parameter in model.named_parameters():
+        parameter.requires_grad_(name.startswith("evidence_residual."))
+    trainable = [
+        name for name, parameter in model.named_parameters() if parameter.requires_grad
+    ]
+    if trainable != sorted(expected_missing):
+        raise RuntimeError(
+            f"residual trainable-parameter whitelist mismatch: {trainable}"
+        )
+    model.residual_base_frozen = True
+    args.residual_base_frozen = True
+    args.warm_start_checkpoint = checkpoint_path
+    args.warm_start_checkpoint_sha256 = _sha256_file(checkpoint_path)
+    parent_val_auc = float(checkpoint.get("val_auc", float("nan")))
+    if not math.isfinite(parent_val_auc):
+        raise ValueError(
+            "residual parent checkpoint must contain a finite validation AUC"
+        )
+    args.warm_start_parent_val_auc = parent_val_auc
+    args.residual_frozen_parameter_sha256 = _parameter_sha256(
+        model,
+        excluded_prefix="evidence_residual.",
+    )
+    return checkpoint
+
+
 def _resolve_allow_self_loop(source: Any) -> bool:
     explicit = _source_get(source, "allow_self_loop", None)
     if explicit is not None:
@@ -287,13 +421,13 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "evidence_anchor_mode": str(
             _source_get(source, "evidence_anchor_mode", "full")
         ),
-        "gec_mode": str(_source_get(source, "gec_mode", "v1")),
         "evidence_state_injection": bool(
             _source_get(source, "evidence_state_injection", True)
         ),
         "anchor_multihead_prop": bool(
             _source_get(source, "anchor_multihead_prop", True)
         ),
+        "gec_mode": str(_source_get(source, "gec_mode", "v1")),
         "prediction_head": str(_source_get(source, "prediction_head", "irt2pl")),
         "knowledge_dim": int(_source_get(source, "knowledge_dim", 32)),
         "num_relation_heads": int(_source_get(source, "num_relation_heads", 4)),
@@ -363,10 +497,15 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "dataset_name",
         "data_dir",
         "model_variant",
+        "gec_mode",
+        "warm_start_checkpoint",
+        "warm_start_checkpoint_sha256",
+        "warm_start_parent_val_auc",
+        "residual_base_frozen",
+        "residual_frozen_parameter_sha256",
         "train_evidence_mode",
         "use_response_evidence",
         "evidence_anchor_mode",
-        "gec_mode",
         "evidence_state_injection",
         "anchor_multihead_prop",
         "prediction_head",
@@ -442,20 +581,9 @@ def _sanitize_nonfinite_grads(
 
 def _clip_stability_sensitive_grads(model: nn.Module) -> Dict[str, Any]:
     base_model = _get_base_model(model)
-    graph_modules = tuple(
-        module
-        for module in (
-            getattr(base_model, "relation_learning", None),
-            getattr(base_model, "evidence_relation_learning", None),
-            getattr(base_model, "evidence_router", None),
-        )
-        if isinstance(module, nn.Module)
-    )
-    graph_ids = {
-        id(parameter)
-        for module in graph_modules
-        for parameter in module.parameters()
-    }
+    relation_learning = getattr(base_model, "relation_learning", None)
+
+    graph_ids = {id(parameter) for parameter in relation_learning.parameters()} if relation_learning is not None else set()
     graph_named = [
         (name, parameter)
         for name, parameter in base_model.named_parameters()
@@ -577,9 +705,6 @@ def _raise_if_nonfinite(
         "reg_loss": reg_terms.get("total"),
         "loss": loss,
         "relation_matrices": details.get("relation_matrices"),
-        "evidence_relation_matrices": details.get(
-            "evidence_relation_matrices"
-        ),
     }
     bad_name = next(
         (
@@ -648,6 +773,17 @@ def _run_epoch(
             f"0.0 or {PAIRWISE_AUC_WEIGHT}"
         )
     model.train(is_train)
+    base_model = _get_base_model(model)
+    residual_only = bool(
+        is_train
+        and getattr(base_model, "residual_base_frozen", False)
+        and getattr(base_model, "evidence_residual", None) is not None
+    )
+    if residual_only:
+        # Gradients still flow through eval-mode modules to the residual, but
+        # every frozen v1 dropout path remains deterministic.
+        model.eval()
+        base_model.evidence_residual.train()
     max_batches = None if max_batches is None else max(1, int(max_batches))
 
     total_loss = 0.0
@@ -691,7 +827,7 @@ def _run_epoch(
                     effective_pairwise_weight,
                 )
             )
-            if is_train:
+            if is_train and not residual_only:
                 reg_terms = _regularization_terms(model, details, bce_loss)
                 reg_loss = reg_terms["total"]
             else:
@@ -1032,6 +1168,22 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     )
 
     model = _build_model(args, info_dict, device)
+    residual_training = str(getattr(args, "gec_mode", "v1")) == "residual_v3"
+    if residual_training:
+        parent_checkpoint = _load_residual_warm_start(
+            model,
+            args,
+            info_dict,
+        )
+        logger.info(
+            "%s Warm-started frozen v1 parent %s (sha256=%s, val_auc=%.6f)",
+            run_tag,
+            args.warm_start_checkpoint,
+            args.warm_start_checkpoint_sha256,
+            float(parent_checkpoint.get("val_auc", float("nan"))),
+        )
+    else:
+        args.residual_base_frozen = False
     if bool(getattr(args, "multi_gpu", False)) and torch.cuda.device_count() > 1:
         raw_ids = getattr(args, "gpu_ids", None)
         device_ids = list(range(torch.cuda.device_count())) if raw_ids else None
@@ -1082,14 +1234,14 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         )
 
     best_val_auc = float("-inf")
-    best_epoch = 0
+    best_epoch = -1
     patience_counter = 0
     history: Dict[str, Any] = {
         "architecture": ARCHITECTURE_NAME,
         "ema_decay": ema_decay,
         "train": [],
         "val": [],
-        "best_epoch": 0,
+        "best_epoch": -1,
         "best_val_auc": float("-inf"),
         "monitor": monitor,
     }
@@ -1098,6 +1250,50 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     last_diag: Dict[str, Any] = {}
     graph_uniform_streak = 0
     graph_low_grad_streak = 0
+
+    if residual_training:
+        initial_val_metrics = validate(
+            model,
+            val_loader,
+            device,
+            logger,
+            0,
+            max_batches=getattr(args, "max_val_batches", None),
+        )
+        parent_auc = float(getattr(args, "warm_start_parent_val_auc"))
+        if abs(float(initial_val_metrics["auc"]) - parent_auc) > 1e-8:
+            raise RuntimeError(
+                "zero residual failed to reproduce the paired v1 validation AUC: "
+                f"parent={parent_auc:.12f} residual0="
+                f"{float(initial_val_metrics['auc']):.12f}"
+            )
+        best_val_auc = float(initial_val_metrics["auc"])
+        best_epoch = 0
+        history["initial_val"] = initial_val_metrics
+        history["best_epoch"] = 0
+        history["best_val_auc"] = best_val_auc
+        _save_checkpoint(
+            path=os.path.join(args.save_dir, "best_model.pth"),
+            epoch=0,
+            model=model,
+            optimizer=optimizer,
+            args=args,
+            info_dict=info_dict,
+            monitor=monitor,
+            val_metrics=initial_val_metrics,
+            diagnostics=last_diag,
+            best_val_auc=best_val_auc,
+        )
+        logger.info(
+            "%s Epoch [000/%d] frozen-v1 fallback | "
+            "Val loss(BCE)=%.4f AUC=%.6f ACC=%.4f RMSE=%.4f",
+            run_tag,
+            int(args.epochs),
+            initial_val_metrics["loss"],
+            initial_val_metrics["auc"],
+            initial_val_metrics["acc"],
+            initial_val_metrics["rmse"],
+        )
 
     last_epoch = 0
     for epoch in range(1, int(args.epochs) + 1):
@@ -1165,6 +1361,19 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             train_metrics["reg_prediction_l2"],
             train_metrics["reg_graph_reg_scale"],
         )
+        if residual_training:
+            residual_module = _get_base_model(model).evidence_residual
+            residual_rho = float(residual_module.rho.detach().item())
+            residual_alpha = float(
+                residual_module.max_abs_adjustment
+                * torch.tanh(residual_module.rho.detach()).item()
+            )
+            logger.info(
+                "%s [GEC residual] rho=%+.6f effective_alpha=%+.6f",
+                run_tag,
+                residual_rho,
+                residual_alpha,
+            )
 
         if debug_enabled:
             with _temporary_model_state(model, ema_state):
@@ -1256,6 +1465,17 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             logger.info("%s Early stopping at epoch %d (best AUC=%.4f @ %d)", run_tag, epoch, best_val_auc, best_epoch)
             break
 
+    if residual_training:
+        frozen_hash = _parameter_sha256(
+            _get_base_model(model),
+            excluded_prefix="evidence_residual.",
+        )
+        if frozen_hash != args.residual_frozen_parameter_sha256:
+            raise RuntimeError(
+                "frozen v1 parameters changed during residual-only training"
+            )
+        history["frozen_v1_parameter_sha256"] = frozen_hash
+
     history["best_epoch"] = best_epoch
     history["best_val_auc"] = best_val_auc
     history["last_graph_irt_diagnostics"] = last_diag
@@ -1264,7 +1484,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         json.dump(history, handle, indent=4)
 
     best_model_path = os.path.join(args.save_dir, "best_model.pth")
-    if best_epoch <= 0 or not os.path.exists(best_model_path):
+    if best_epoch < 0 or not os.path.exists(best_model_path):
         raise RuntimeError("training finished without a validation-selected best checkpoint")
     best_checkpoint = torch.load(best_model_path, map_location="cpu", weights_only=False)
     _require_graph_irt_checkpoint(best_checkpoint, best_model_path)

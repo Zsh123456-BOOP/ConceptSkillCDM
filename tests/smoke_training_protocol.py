@@ -80,10 +80,6 @@ def main() -> None:
     for variant in (
         "full",
         "no_message_passing",
-        "gec_v2",
-        "gec_v2_no_state",
-        "gec_v2_no_evidence_propagation",
-        "gec_v2_no_graph",
         "item_only",
         "exposure_only",
         "degree_random",
@@ -93,10 +89,6 @@ def main() -> None:
         assert variant_args.pairwise_auc_weight == 0.0
         assert variant_args.ema_decay == 0.0
         assert variant_args.use_response_evidence
-        expected_gec_mode = (
-            "reliability_v2" if variant.startswith("gec_v2") else "v1"
-        )
-        assert variant_args.gec_mode == expected_gec_mode
     no_evidence_args = main_module.parse_args(
         ["--model_variant", "no_response_evidence"]
     )
@@ -115,6 +107,18 @@ def main() -> None:
     assert ema_args.ema_decay == EMA_DECAY
     assert ema_args.use_response_evidence
     assert _resolve_ema_decay(ema_args) == EMA_DECAY
+    residual_args = main_module.parse_args(
+        [
+            "--model_variant",
+            "gec_residual",
+            "--warm_start_checkpoint",
+            "paired_full/best_model.pth",
+        ]
+    )
+    main_module._apply_model_variant(residual_args)
+    main_module._validate_args(residual_args)
+    assert residual_args.gec_mode == "residual_v3"
+    assert residual_args.evidence_anchor_mode == "full"
     assert "no_response_graph" not in main_module.MODEL_VARIANTS
     boundary_labels = torch.tensor([0.0, 1.0])
     assert set(_training_evidence_kwargs(boundary_labels, "excluded")) == {
@@ -245,7 +249,6 @@ def main() -> None:
 
     hash_args = SimpleNamespace(
         dataset_name="assist_09",
-        gec_mode="v1",
         epochs=120,
         min_stu_interactions=15,
         min_exer_interactions=0,
@@ -263,9 +266,6 @@ def main() -> None:
     assert _config_hash(hash_args) != baseline_hash
     hash_args.pairwise_auc_weight = PAIRWISE_AUC_WEIGHT
     hash_args.ema_decay = EMA_DECAY
-    assert _config_hash(hash_args) != baseline_hash
-    hash_args.ema_decay = 0.0
-    hash_args.gec_mode = "reliability_v2"
     assert _config_hash(hash_args) != baseline_hash
 
     trainer_source = (Path(ROOT) / "src" / "trainer.py").read_text(encoding="utf-8")

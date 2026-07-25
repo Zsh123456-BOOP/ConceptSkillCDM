@@ -64,10 +64,10 @@ def compute_module_activity(
     discrimination_values: List[float] = []
     difficulty_values: List[float] = []
     graph_state_deltas: List[float] = []
-    gec_state_adjustments: List[float] = []
-    gec_evidence_adjustments: List[float] = []
     relation_identity_deltas: List[float] = []
-    evidence_relation_snapshot: Optional[torch.Tensor] = None
+    residual_adjustments: List[float] = []
+    residual_gates: List[float] = []
+    residual_supports: List[float] = []
 
     sample_count = 0
     with torch.no_grad():
@@ -88,17 +88,27 @@ def compute_module_activity(
             discrimination_values.extend(_as_values(details.get("irt_a")))
             difficulty_values.extend(_as_values(details.get("irt_b")))
             graph_state_deltas.extend(_as_values(details.get("knowledge_state_graph_delta")))
-            gec_state_adjustments.extend(_as_values(details.get("gec_state_adjustment")))
-            gec_evidence_adjustments.extend(
-                _as_values(details.get("gec_evidence_adjustment"))
-            )
             relation_identity_deltas.extend(_as_values(details.get("relation_identity_delta")))
-            evidence_relations = details.get("evidence_relation_matrices")
-            if isinstance(evidence_relations, torch.Tensor):
-                evidence_relation_snapshot = evidence_relations.detach()
+            residual_adjustments.extend(_as_values(details.get("theta_adjustment")))
+            residual_gates.extend(_as_values(details.get("gec_residual_gate")))
+            residual_supports.extend(_as_values(details.get("gec_residual_support")))
             sample_count += take
 
     relation_learning = _relation_learning(base_model)
+    residual_module = getattr(base_model, "evidence_residual", None)
+    residual_rho = (
+        float(residual_module.rho.detach().item())
+        if residual_module is not None
+        else 0.0
+    )
+    residual_alpha = (
+        float(
+            residual_module.max_abs_adjustment
+            * torch.tanh(residual_module.rho.detach()).item()
+        )
+        if residual_module is not None
+        else 0.0
+    )
     propagation_alpha = float(base_model.knowledge_encoder.propagation_alpha)
     results: Dict[str, Any] = {
         "architecture": GRAPH_IRT_ARCHITECTURE,
@@ -112,27 +122,20 @@ def compute_module_activity(
         "irt_discrimination_mean": _mean(discrimination_values),
         "irt_difficulty_mean": _mean(difficulty_values),
         "knowledge_state_graph_delta": _mean(graph_state_deltas),
-        "gec_state_adjustment_abs_mean": _mean(
-            [abs(value) for value in gec_state_adjustments]
-        ),
-        "gec_evidence_adjustment_abs_mean": _mean(
-            [abs(value) for value in gec_evidence_adjustments]
-        ),
         "relation_identity_delta": _mean(relation_identity_deltas),
+        "gec_residual_enabled": residual_module is not None,
+        "gec_residual_rho": residual_rho,
+        "gec_residual_alpha": residual_alpha,
+        "gec_residual_adjustment_abs_mean": _mean(
+            [abs(value) for value in residual_adjustments]
+        ),
+        "gec_residual_gate_mean": _mean(residual_gates),
+        "gec_residual_support_mean": _mean(residual_supports),
     }
 
     if results["graph_enabled"]:
         with torch.no_grad():
-            if (
-                not results["message_passing_enabled"]
-                and evidence_relation_snapshot is not None
-                and results["gec_evidence_adjustment_abs_mean"] > 1e-8
-            ):
-                relation_matrices = base_model.evidence_router.off_diagonal_relations(
-                    evidence_relation_snapshot
-                )
-            else:
-                relation_matrices = relation_learning()
+            relation_matrices = relation_learning()
             matrices = relation_matrices.detach().float().cpu().numpy()
         eps = 1e-12
         row_entropies = -np.sum(matrices * np.log(matrices + eps), axis=-1)
@@ -147,22 +150,12 @@ def compute_module_activity(
         graph_trivial = bool(entropy_ratio > 0.98)
         graph_over_sparse = bool(diagonal_mass > 0.98)
         graph_active = bool(
-            (
-                results["message_passing_enabled"]
-                or results["gec_evidence_adjustment_abs_mean"] > 1e-8
-            )
+            results["message_passing_enabled"]
             and not graph_trivial
             and not graph_over_sparse
-            and (
-                results["knowledge_state_graph_delta"] > 1e-6
-                or results["gec_state_adjustment_abs_mean"] > 1e-8
-                or results["gec_evidence_adjustment_abs_mean"] > 1e-8
-            )
+            and results["knowledge_state_graph_delta"] > 1e-6
         )
-        if (
-            not results["message_passing_enabled"]
-            and results["gec_evidence_adjustment_abs_mean"] <= 1e-8
-        ):
+        if not results["message_passing_enabled"]:
             graph_mode = "NO_MESSAGE_PASSING"
         elif graph_trivial:
             graph_mode = "UNIFORM"
@@ -215,7 +208,15 @@ def format_activity_brief(activity: Dict[str, Any]) -> str:
     """Format a compact checkpoint-time activity summary."""
     graph_mode = str(activity.get("graph_mode", "DISABLED"))
     irt_mode = "LIVE" if activity.get("irt_active") else "INACTIVE"
-    return f"ConceptGraph[{graph_mode}] IRT[{irt_mode}]"
+    residual = ""
+    if activity.get("gec_residual_enabled"):
+        residual_mode = (
+            "LIVE"
+            if abs(float(activity.get("gec_residual_alpha", 0.0))) > 1e-8
+            else "FALLBACK"
+        )
+        residual = f" GECResidual[{residual_mode}]"
+    return f"ConceptGraph[{graph_mode}] IRT[{irt_mode}]{residual}"
 
 
 def format_activity_report(
@@ -256,7 +257,20 @@ def format_activity_report(
             f"   - Theta |mean|: {activity.get('irt_theta_abs_mean', 0.0):.4f}",
             f"   - Discrimination mean: {activity.get('irt_discrimination_mean', 0.0):.4f}",
             f"   - Difficulty mean: {activity.get('irt_difficulty_mean', 0.0):.4f}",
-            "=" * 60,
         ]
     )
+    if activity.get("gec_residual_enabled"):
+        lines.extend(
+            [
+                "",
+                "3. Bounded evidence residual:",
+                f"   - Rho: {activity.get('gec_residual_rho', 0.0):.6f}",
+                f"   - Effective alpha: {activity.get('gec_residual_alpha', 0.0):.6f}",
+                "   - Theta adjustment |mean|: "
+                f"{activity.get('gec_residual_adjustment_abs_mean', 0.0):.6f}",
+                f"   - Reliability gate mean: {activity.get('gec_residual_gate_mean', 0.0):.6f}",
+                f"   - Cross-concept support mean: {activity.get('gec_residual_support_mean', 0.0):.6f}",
+            ]
+        )
+    lines.append("=" * 60)
     return "\n".join(lines)

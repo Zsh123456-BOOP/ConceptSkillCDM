@@ -129,6 +129,7 @@ CONFIG_HASH_KEYS = (
     "seed",
     "model_variant",
     "gec_mode",
+    "warm_start_checkpoint_sha256",
     "train_evidence_mode",
     "knowledge_dim",
     "num_relation_heads",

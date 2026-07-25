@@ -1,11 +1,11 @@
 #!/usr/bin/env python
-"""Evaluate the graph 2x2 checkpoints on validation evidence-count subsets.
+"""Evaluate selected checkpoint families on validation evidence-count subsets.
 
 The tool never opens ``test.csv``.  Each validation row is assigned the
 minimum train-only student-concept response count among the concepts attached
 to its exercise.  It reports metrics for all rows and the overlapping
 diagnostic subsets ``n=0`` and ``n<3``, then computes same-dataset/same-seed
-paired contrasts across the four graph variants.
+paired contrasts for either the graph 2x2 family or the safe residual pair.
 """
 
 from __future__ import annotations
@@ -37,19 +37,13 @@ from src.trainer import (  # noqa: E402
 from tools.summarize_validation_runs import _candidate_dirs, _tokens  # noqa: E402
 
 
-VARIANTS = (
+GRAPH_2X2_VARIANTS = (
     "full",
     "no_evidence_propagation",
     "no_message_passing",
     "no_graph_calibration",
 )
-GEC_V2_VARIANTS = (
-    "gec_v2",
-    "gec_v2_no_evidence_propagation",
-    "gec_v2_no_state",
-    "gec_v2_no_graph",
-)
-CONTRASTS: Tuple[Tuple[str, Mapping[str, float]], ...] = (
+GRAPH_2X2_CONTRASTS: Tuple[Tuple[str, Mapping[str, float]], ...] = (
     (
         "propagation|state_on",
         {"full": 1.0, "no_evidence_propagation": -1.0},
@@ -76,39 +70,14 @@ CONTRASTS: Tuple[Tuple[str, Mapping[str, float]], ...] = (
         },
     ),
 )
-GEC_V2_CONTRASTS: Tuple[Tuple[str, Mapping[str, float]], ...] = (
-    (
-        "propagation|state_on",
-        {"gec_v2": 1.0, "gec_v2_no_evidence_propagation": -1.0},
-    ),
-    (
-        "propagation|state_off",
-        {"gec_v2_no_state": 1.0, "gec_v2_no_graph": -1.0},
-    ),
-    (
-        "state|propagation_on",
-        {"gec_v2": 1.0, "gec_v2_no_state": -1.0},
-    ),
-    (
-        "state|propagation_off",
-        {
-            "gec_v2_no_evidence_propagation": 1.0,
-            "gec_v2_no_graph": -1.0,
-        },
-    ),
-    (
-        "interaction",
-        {
-            "gec_v2": 1.0,
-            "gec_v2_no_evidence_propagation": -1.0,
-            "gec_v2_no_state": -1.0,
-            "gec_v2_no_graph": 1.0,
-        },
-    ),
+
+RESIDUAL_VARIANTS = ("full", "gec_residual")
+RESIDUAL_CONTRASTS: Tuple[Tuple[str, Mapping[str, float]], ...] = (
+    ("residual-full", {"gec_residual": 1.0, "full": -1.0}),
 )
 VARIANT_FAMILIES = {
-    "v1": (VARIANTS, CONTRASTS),
-    "v2": (GEC_V2_VARIANTS, GEC_V2_CONTRASTS),
+    "graph2x2": (GRAPH_2X2_VARIANTS, GRAPH_2X2_CONTRASTS),
+    "residual": (RESIDUAL_VARIANTS, RESIDUAL_CONTRASTS),
 }
 
 
@@ -264,49 +233,43 @@ def _read_validation(
 def _paired_contrasts(
     frame: pd.DataFrame,
     *,
-    variants: Tuple[str, ...] = VARIANTS,
-    contrasts: Tuple[Tuple[str, Mapping[str, float]], ...] = CONTRASTS,
+    variants: Tuple[str, ...],
+    contrasts: Tuple[Tuple[str, Mapping[str, float]], ...],
 ) -> pd.DataFrame:
     duplicate = frame.duplicated(
         [
-            column
-            for column in (
-                "architecture",
-                "gec_mode",
-                "train_evidence_mode",
-                "dataset",
-                "seed",
-                "bucket",
-                "model_variant",
-            )
-            if column in frame.columns
+            "architecture",
+            "train_evidence_mode",
+            "dataset",
+            "seed",
+            "bucket",
+            "model_variant",
         ],
         keep=False,
     )
     if duplicate.any():
-        columns = ["dataset", "seed", "bucket", "model_variant", "run_dir"]
+        columns = [
+            "architecture",
+            "train_evidence_mode",
+            "dataset",
+            "seed",
+            "bucket",
+            "model_variant",
+            "run_dir",
+        ]
         raise ValueError(f"duplicate paired cells:\n{frame.loc[duplicate, columns]}")
 
     records: List[Dict[str, object]] = []
     group_columns = [
-        column
-        for column in (
-            "architecture",
-            "gec_mode",
-            "train_evidence_mode",
-            "dataset",
-            "bucket",
-        )
-        if column in frame.columns
+        "architecture",
+        "train_evidence_mode",
+        "dataset",
+        "bucket",
     ]
-    for group_key, group in frame.groupby(group_columns, sort=True):
-        if not isinstance(group_key, tuple):
-            group_key = (group_key,)
-        identity = dict(zip(group_columns, group_key))
-        dataset = str(identity["dataset"])
-        bucket = str(identity["bucket"])
-        present_variants = set(group["model_variant"])
-        absent = sorted(set(variants) - present_variants)
+    for keys, group in frame.groupby(group_columns, sort=True):
+        architecture, train_evidence_mode, dataset, bucket = keys
+        present = set(group["model_variant"])
+        absent = sorted(set(variants) - present)
         if absent:
             raise ValueError(f"{dataset}/{bucket} is missing graph variants: {absent}")
         for metric in ("auc", "bce_loss", "rmse"):
@@ -318,7 +281,10 @@ def _paired_contrasts(
                 values = values[np.isfinite(values)]
                 records.append(
                     {
-                        **identity,
+                        "architecture": architecture,
+                        "train_evidence_mode": train_evidence_mode,
+                        "dataset": dataset,
+                        "bucket": bucket,
                         "metric": metric,
                         "contrast": contrast,
                         "total_seed_cells": total_seed_cells,
@@ -352,8 +318,7 @@ def main() -> None:
     parser.add_argument(
         "--variant_family",
         choices=tuple(VARIANT_FAMILIES),
-        default="v1",
-        help="Select the legacy or reliability-routed graph 2x2 design.",
+        default="graph2x2",
     )
     parser.add_argument("--output_csv", required=True)
     args = parser.parse_args()
@@ -367,25 +332,20 @@ def main() -> None:
     device = torch.device(
         "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
     )
-    rows: List[Dict[str, object]] = []
     selected_variants, selected_contrasts = VARIANT_FAMILIES[
         args.variant_family
     ]
+    rows: List[Dict[str, object]] = []
     for index, checkpoint_dir in enumerate(checkpoint_dirs, start=1):
         evaluated = _read_validation(
             checkpoint_dir,
             batch_size=max(1, int(args.batch_size)),
             device=device,
         )
-        identity = evaluated[0]
-        if identity["model_variant"] not in selected_variants:
-            print(
-                f"[{index}/{len(checkpoint_dirs)}] skipped "
-                f"{identity['dataset']} seed={identity['seed']} "
-                f"variant={identity['model_variant']}"
-            )
+        if evaluated[0]["model_variant"] not in selected_variants:
             continue
         rows.extend(evaluated)
+        identity = evaluated[0]
         print(
             f"[{index}/{len(checkpoint_dirs)}] "
             f"{identity['dataset']} seed={identity['seed']} "

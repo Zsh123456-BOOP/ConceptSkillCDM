@@ -63,6 +63,19 @@ def _read_run(path: Path) -> Dict[str, object]:
     with validation_path.open(encoding="utf-8") as handle:
         validation = json.load(handle)
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    checkpoint_args = checkpoint.get("args", {})
+    state_dict = checkpoint.get("model_state_dict", {})
+    residual_rho = state_dict.get("evidence_residual.rho")
+    if residual_rho is None:
+        residual_rho = state_dict.get("module.evidence_residual.rho")
+    residual_rho_value = (
+        float(torch.as_tensor(residual_rho).item())
+        if residual_rho is not None
+        else float("nan")
+    )
+    parent_val_auc = float(
+        checkpoint_args.get("warm_start_parent_val_auc", float("nan"))
+    )
 
     row: Dict[str, object] = {
         "run_dir": str(path),
@@ -77,12 +90,24 @@ def _read_run(path: Path) -> Dict[str, object]:
                 validation.get("train_evidence_mode", "excluded"),
             )
         ),
-        "gec_mode": str(args.get("gec_mode", "v1")),
+        "gec_mode": str(args.get("gec_mode", validation.get("gec_mode", "v1"))),
+        "warm_start_checkpoint_sha256": str(
+            checkpoint_args.get("warm_start_checkpoint_sha256", "")
+        ),
+        "warm_start_parent_val_auc": parent_val_auc,
+        "residual_rho": residual_rho_value,
+        "residual_alpha": (
+            float(0.20 * torch.tanh(torch.tensor(residual_rho_value)).item())
+            if residual_rho is not None
+            else float("nan")
+        ),
         "seed": int(args.get("seed", validation.get("seed", 0))),
         "best_epoch": int(checkpoint.get("epoch", validation.get("best_epoch", 0))),
     }
     _metric(row, "train", checkpoint.get("train_metrics", {}))
     _metric(row, "val", checkpoint.get("val_metrics", {}))
+    if "val_auc" in row and parent_val_auc == parent_val_auc:
+        row["val_auc_delta_from_parent"] = float(row["val_auc"]) - parent_val_auc
 
     test_path = path / "test_results.json"
     if test_path.is_file():
