@@ -133,6 +133,61 @@ def main() -> None:
     assert parsed_relation_residual.train_evidence_mode == "excluded"
     assert parsed_relation_residual.pairwise_auc_weight == 0.0
 
+    branch_gate_args = runner.parse_args(
+        [
+            "--datasets",
+            "assist_09",
+            "--seeds",
+            "42",
+            "--ablations",
+            "gec_branch_gate",
+            "--warm_start_run_id",
+            "paired_v1",
+            "--dry_run",
+        ]
+    )
+    branch_gate_jobs = runner.make_jobs(
+        branch_gate_args,
+        run_id="branch_gate_smoke",
+    )
+    assert len(branch_gate_jobs) == 1
+    branch_gate_job = branch_gate_jobs[0]
+    assert branch_gate_job.params["warm_start_checkpoint"] == (
+        "checkpoints/assist_09_graph_irt_full_excluded_seed42_paired_v1/"
+        "best_model.pth"
+    )
+    assert {
+        key: branch_gate_job.params[key]
+        for key in (
+            "epochs",
+            "min_epochs",
+            "patience",
+            "early_stop_patience",
+            "learning_rate",
+            "weight_decay",
+            "optimizer",
+            "max_train_batches",
+        )
+    } == {
+        "epochs": 30,
+        "min_epochs": 3,
+        "patience": 3,
+        "early_stop_patience": 6,
+        "learning_rate": 1e-3,
+        "weight_decay": 0.0,
+        "optimizer": "adamw",
+        "max_train_batches": 200,
+    }
+    parsed_branch_gate = main_module.parse_args(
+        branch_gate_job.cmd[branch_gate_job.cmd.index("--dataset_name") :]
+    )
+    main_module._apply_model_variant(parsed_branch_gate)
+    main_module._validate_args(parsed_branch_gate)
+    assert parsed_branch_gate.gec_mode == "branch_gate_v5"
+    assert parsed_branch_gate.evidence_anchor_mode == "full"
+    assert parsed_branch_gate.train_evidence_mode == "excluded"
+    assert parsed_branch_gate.pairwise_auc_weight == 0.5
+
     boundary_args = runner.parse_args(
         [
             "--datasets",
@@ -159,7 +214,11 @@ def main() -> None:
         )
         assert parsed_boundary.train_evidence_mode == job.train_evidence_mode
 
-    for residual_name in ("gec_residual", "gec_relation_residual"):
+    for residual_name in (
+        "gec_residual",
+        "gec_relation_residual",
+        "gec_branch_gate",
+    ):
         missing_parent = runner.parse_args(
             [
                 "--datasets",

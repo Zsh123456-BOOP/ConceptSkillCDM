@@ -62,6 +62,19 @@ ABLATIONS: Dict[str, AblationSpec] = {
             "optimizer": "adamw",
         },
     ),
+    "gec_branch_gate": AblationSpec(
+        "gec_branch_gate",
+        {
+            "epochs": 30,
+            "min_epochs": 3,
+            "patience": 3,
+            "early_stop_patience": 6,
+            "learning_rate": 1e-3,
+            "weight_decay": 0.0,
+            "optimizer": "adamw",
+            "max_train_batches": 200,
+        },
+    ),
     "no_response_evidence": AblationSpec("no_response_evidence", {}),
     "no_evidence_anchor": AblationSpec("no_evidence_anchor", {}),
     "no_evidence_propagation": AblationSpec("no_evidence_propagation", {}),
@@ -104,7 +117,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=",".join(
             name
             for name in ABLATIONS
-            if name not in {"gec_residual", "gec_relation_residual"}
+            if name
+            not in {
+                "gec_residual",
+                "gec_relation_residual",
+                "gec_branch_gate",
+            }
         ),
         help=(
             "Comma-separated variants. Residual adapters are opt-in because "
@@ -178,7 +196,11 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
             "--run_mode test requires --run_id for an existing validation-selected run."
         )
     session = requested_run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
-    residual_names = {"gec_residual", "gec_relation_residual"}
+    residual_names = {
+        "gec_residual",
+        "gec_relation_residual",
+        "gec_branch_gate",
+    }
     residual_requested = any(
         ablation.name in residual_names for ablation in ablations
     )
@@ -305,7 +327,8 @@ def _require_residual_warm_starts(jobs: Sequence[JobSpec]) -> None:
     missing = [
         str(job.params.get("warm_start_checkpoint", ""))
         for job in jobs
-        if job.ablation.name in {"gec_residual", "gec_relation_residual"}
+        if job.ablation.name
+        in {"gec_residual", "gec_relation_residual", "gec_branch_gate"}
         and not Path(str(job.params.get("warm_start_checkpoint", ""))).is_file()
     ]
     if missing:

@@ -1,0 +1,297 @@
+"""Integration checks for the Full-anchored branch-scale v5 adapter."""
+
+import os
+import sys
+import tempfile
+from types import SimpleNamespace
+
+import pandas as pd
+import torch
+import torch.nn.functional as F
+
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from src.dataset import (
+    build_id_mappings,
+    build_item_cooccurrence_prior,
+    build_q_matrix,
+    build_student_concept_response_stats,
+    build_student_coexposure_prior,
+)
+from src.model import CognitiveDiagnosisModel, GRAPH_IRT_ARCHITECTURE
+from src.trainer import (
+    _build_optimizer,
+    _load_residual_warm_start,
+    _parameter_sha256,
+)
+
+
+RESIDUAL_MODE = "branch_gate_v5"
+RESIDUAL_PREFIX = "evidence_residual."
+
+
+def _inputs(frame: pd.DataFrame):
+    students, exercises, concepts = build_id_mappings([frame])
+    q_matrix = build_q_matrix([frame], exercises, concepts)
+    item_prior, _ = build_item_cooccurrence_prior(q_matrix)
+    exposure_prior, _ = build_student_coexposure_prior([frame], concepts)
+    stats = build_student_concept_response_stats(
+        frame,
+        students,
+        exercises,
+        q_matrix,
+    )
+    return students, exercises, concepts, q_matrix, item_prior, exposure_prior, stats
+
+
+def _model(inputs, *, gec_mode: str) -> CognitiveDiagnosisModel:
+    students, exercises, concepts, q_matrix, item_prior, exposure_prior, stats = (
+        inputs
+    )
+    return CognitiveDiagnosisModel(
+        num_students=len(students),
+        num_exercises=len(exercises),
+        num_concepts=len(concepts),
+        q_matrix=q_matrix,
+        item_prior_matrix=item_prior,
+        exposure_prior_matrix=exposure_prior,
+        response_evidence_stats=stats,
+        use_response_evidence=True,
+        evidence_anchor_mode="full",
+        evidence_state_injection=True,
+        anchor_multihead_prop=True,
+        gec_mode=gec_mode,
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+    )
+
+
+def _paired_args(checkpoint_path: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        dataset_name="demo",
+        seed=42,
+        train_evidence_mode="excluded",
+        knowledge_dim=8,
+        num_relation_heads=2,
+        num_gnn_layers=1,
+        dropout=0.0,
+        graph_topk=None,
+        disable_self_loop=False,
+        gnn_residual_weight=0.5,
+        graph_identity_residual=0.0,
+        graph_propagation_alpha=0.2,
+        graph_prior_strength_init=1.0,
+        graph_tau_init=1.0,
+        graph_dropout=-1.0,
+        evidence_state_injection=True,
+        anchor_multihead_prop=True,
+        prediction_head="irt2pl",
+        graph_prior_mode="evidence",
+        min_stu_interactions=0,
+        min_exer_interactions=0,
+        gec_mode=RESIDUAL_MODE,
+        warm_start_checkpoint=checkpoint_path,
+        learning_rate=1e-3,
+        weight_decay=0.0,
+        optimizer="adamw",
+    )
+
+
+def _adapter_parameter_names(model: CognitiveDiagnosisModel):
+    return {
+        f"{RESIDUAL_PREFIX}{name}"
+        for name, _ in model.evidence_residual.named_parameters()
+    }
+
+
+def _assert_exact_full_fallback(inputs, student_ids, exercise_ids):
+    torch.manual_seed(123)
+    parent = _model(inputs, gec_mode="v1").eval()
+    torch.manual_seed(123)
+    adapter = _model(inputs, gec_mode=RESIDUAL_MODE).eval()
+
+    expected_missing = _adapter_parameter_names(adapter)
+    incompatible = adapter.load_state_dict(parent.state_dict(), strict=False)
+    assert set(incompatible.missing_keys) == expected_missing
+    assert not incompatible.unexpected_keys
+
+    parent_logits = parent(student_ids, exercise_ids, return_logits=True)
+    adapter_logits, details = adapter(
+        student_ids,
+        exercise_ids,
+        return_details=True,
+        return_logits=True,
+    )
+    assert torch.equal(parent_logits, adapter_logits)
+    assert torch.equal(
+        details["theta_adjustment"],
+        torch.zeros_like(details["theta_adjustment"]),
+    )
+    return parent
+
+
+def _assert_warm_start_freezes_full(
+    inputs,
+    parent,
+    student_ids,
+    exercise_ids,
+) -> None:
+    parent_args = vars(_paired_args("unused")).copy()
+    parent_args.update({"model_variant": "full", "gec_mode": "v1"})
+    data_identity = {
+        "schema": "graph_irt_data_v1",
+        "dataset_name": "demo",
+        "train_sha256": "train",
+        "valid_sha256": "valid",
+    }
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        checkpoint_path = os.path.join(temp_dir, "best_model.pth")
+        torch.save(
+            {
+                "architecture": GRAPH_IRT_ARCHITECTURE,
+                "model_state_dict": parent.state_dict(),
+                "args": parent_args,
+                "info_dict": {"data_identity": data_identity},
+                "val_auc": 0.75,
+            },
+            checkpoint_path,
+        )
+        args = _paired_args(checkpoint_path)
+        adapter = _model(inputs, gec_mode=RESIDUAL_MODE)
+        _load_residual_warm_start(
+            adapter,
+            args,
+            {"data_identity": data_identity},
+        )
+
+        expected_trainable = _adapter_parameter_names(adapter)
+        trainable = {
+            name
+            for name, parameter in adapter.named_parameters()
+            if parameter.requires_grad
+        }
+        assert trainable == expected_trainable
+        frozen_hash = _parameter_sha256(
+            adapter,
+            excluded_prefix=RESIDUAL_PREFIX,
+        )
+        assert frozen_hash == args.residual_frozen_parameter_sha256
+
+        optimizer = _build_optimizer(adapter, args)
+        optimized = [
+            parameter
+            for group in optimizer.param_groups
+            for parameter in group["params"]
+        ]
+        assert {id(parameter) for parameter in optimized} == {
+            id(parameter)
+            for parameter in adapter.evidence_residual.parameters()
+        }
+
+        adapter.eval()
+        labels = torch.tensor([0.0, 1.0])
+        logits = adapter(
+            student_ids,
+            exercise_ids,
+            outcome_to_exclude=labels,
+            return_logits=True,
+        )
+        loss = F.binary_cross_entropy_with_logits(logits, labels)
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        adapter_gradients = [
+            parameter.grad
+            for parameter in adapter.evidence_residual.parameters()
+            if parameter.grad is not None
+        ]
+        assert adapter_gradients
+        assert all(torch.isfinite(gradient).all() for gradient in adapter_gradients)
+        assert sum(gradient.abs().sum() for gradient in adapter_gradients).item() > 0.0
+        for name, parameter in adapter.named_parameters():
+            if not name.startswith(RESIDUAL_PREFIX):
+                assert not parameter.requires_grad
+                assert parameter.grad is None
+        optimizer.step()
+
+        assert _parameter_sha256(
+            adapter,
+            excluded_prefix=RESIDUAL_PREFIX,
+        ) == frozen_hash
+
+
+def _assert_leave_one_out_flip_invariance(frame: pd.DataFrame) -> None:
+    flipped = frame.copy()
+    flipped.loc[0, "label"] = 1.0
+    inputs_a = _inputs(frame)
+    inputs_b = _inputs(flipped)
+    students_a, exercises_a = inputs_a[:2]
+    students_b, exercises_b = inputs_b[:2]
+
+    torch.manual_seed(456)
+    model_a = _model(inputs_a, gec_mode=RESIDUAL_MODE).eval()
+    torch.manual_seed(456)
+    model_b = _model(inputs_b, gec_mode=RESIDUAL_MODE).eval()
+    with torch.no_grad():
+        for model in (model_a, model_b):
+            for parameter in model.evidence_residual.parameters():
+                parameter.fill_(0.25)
+
+    query_student_a = torch.tensor([students_a[10]], dtype=torch.long)
+    query_exercise_a = torch.tensor([exercises_a[100]], dtype=torch.long)
+    query_student_b = torch.tensor([students_b[10]], dtype=torch.long)
+    query_exercise_b = torch.tensor([exercises_b[100]], dtype=torch.long)
+    logits_a = model_a(
+        query_student_a,
+        query_exercise_a,
+        outcome_to_exclude=torch.tensor([0.0]),
+        return_logits=True,
+    )
+    logits_b = model_b(
+        query_student_b,
+        query_exercise_b,
+        outcome_to_exclude=torch.tensor([1.0]),
+        return_logits=True,
+    )
+    assert torch.allclose(logits_a, logits_b, atol=1e-7, rtol=0.0)
+
+
+def main() -> None:
+    frame = pd.DataFrame(
+        {
+            "stu_id": [10, 10, 10, 20, 20, 20],
+            "exer_id": [100, 100, 102, 100, 102, 101],
+            "cpt_seq": ["1", "1", "2,3", "1", "2,3", "1,2"],
+            "timestamp": [1, 2, 3, 1, 2, 3],
+            "label": [0, 1, 0, 1, 1, 0],
+        }
+    )
+    inputs = _inputs(frame)
+    students, exercises = inputs[:2]
+    student_ids = torch.tensor([students[10], students[20]], dtype=torch.long)
+    exercise_ids = torch.tensor(
+        [exercises[100], exercises[102]],
+        dtype=torch.long,
+    )
+
+    parent = _assert_exact_full_fallback(inputs, student_ids, exercise_ids)
+    _assert_warm_start_freezes_full(
+        inputs,
+        parent,
+        student_ids,
+        exercise_ids,
+    )
+    _assert_leave_one_out_flip_invariance(frame)
+    print(
+        "OK: branch gate v5 exactly preserves Full at initialization, "
+        "warm-starts only its adapter, freezes Full, and remains LOO invariant."
+    )
+
+
+if __name__ == "__main__":
+    main()

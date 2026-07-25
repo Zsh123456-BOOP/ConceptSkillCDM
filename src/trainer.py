@@ -41,7 +41,13 @@ ARCHITECTURE_NAME = GRAPH_IRT_ARCHITECTURE
 STRICT_CHECKPOINT_LOADING = True
 MONITOR_NAME = "val_auc"
 MONITOR_MODE = "max"
-RESIDUAL_GEC_MODES = frozenset({"residual_v3", "relation_residual_v4"})
+RESIDUAL_GEC_MODES = frozenset(
+    {"residual_v3", "relation_residual_v4", "branch_gate_v5"}
+)
+PAIRWISE_AUC_GEC_MODES = frozenset({"branch_gate_v5"})
+MANIFEST_REQUIRED_GEC_MODES = frozenset(
+    {"relation_residual_v4", "branch_gate_v5"}
+)
 # Pre-registered deployment guardrails.  These are run-level materiality
 # thresholds, not claims of statistical significance.
 RESIDUAL_DEPLOY_MIN_AUC_GAIN = 1e-4
@@ -158,13 +164,19 @@ def _default_monitor_config() -> Dict[str, str]:
 
 
 def _resolve_pairwise_auc_weight(source: Any) -> float:
-    """Return the fixed objective weight implied by the named ablation.
+    """Return the fixed objective weight implied by the named experiment.
 
     The production objective is pure BCE; only the diagnostic
-    ``pairwise_auc`` variant re-enables the historical surrogate term.
+    ``pairwise_auc`` variant and the pre-registered branch-gate residual
+    re-enable the historical surrogate term.
     """
     variant = str(_source_get(source, "model_variant", "full"))
-    expected = PAIRWISE_AUC_WEIGHT if variant == "pairwise_auc" else 0.0
+    gec_mode = str(_source_get(source, "gec_mode", "v1"))
+    expected = (
+        PAIRWISE_AUC_WEIGHT
+        if variant == "pairwise_auc" or gec_mode in PAIRWISE_AUC_GEC_MODES
+        else 0.0
+    )
     supplied = float(_source_get(source, "pairwise_auc_weight", expected))
     if supplied != expected:
         raise ValueError(
@@ -774,15 +786,11 @@ def _materialize_checkpoint(source: str, destination: str) -> None:
             os.remove(temp_path)
 
 
-def _select_residual_candidate(
+def _residual_candidate_deltas(
     parent_metrics: Dict[str, float],
     candidate_metrics: Dict[str, float],
-) -> Dict[str, Any]:
-    """Apply the pre-registered residual deployment guardrails.
-
-    Deltas always use ``candidate - parent``.  Positive AUC is desirable,
-    whereas positive BCE/RMSE denotes regression.
-    """
+) -> Dict[str, float]:
+    """Return finite candidate-minus-parent deployment metrics."""
     metric_keys = ("auc", "bce_loss", "rmse")
     parent: Dict[str, float] = {}
     candidate: Dict[str, float] = {}
@@ -796,10 +804,37 @@ def _select_residual_candidate(
         parent[key] = parent_value
         candidate[key] = candidate_value
 
-    deltas = {
+    return {
         key: candidate[key] - parent[key]
         for key in metric_keys
     }
+
+
+def _passes_residual_error_guards(
+    parent_metrics: Dict[str, float],
+    candidate_metrics: Dict[str, float],
+) -> bool:
+    """Whether BCE and RMSE remain within the deployment regressions."""
+    deltas = _residual_candidate_deltas(parent_metrics, candidate_metrics)
+    threshold_tolerance = 1e-12
+    return bool(
+        deltas["bce_loss"]
+        <= RESIDUAL_DEPLOY_MAX_BCE_REGRESSION + threshold_tolerance
+        and deltas["rmse"]
+        <= RESIDUAL_DEPLOY_MAX_RMSE_REGRESSION + threshold_tolerance
+    )
+
+
+def _select_residual_candidate(
+    parent_metrics: Dict[str, float],
+    candidate_metrics: Dict[str, float],
+) -> Dict[str, Any]:
+    """Apply the pre-registered residual deployment guardrails.
+
+    Deltas always use ``candidate - parent``.  Positive AUC is desirable,
+    whereas positive BCE/RMSE denotes regression.
+    """
+    deltas = _residual_candidate_deltas(parent_metrics, candidate_metrics)
     threshold_tolerance = 1e-12
     if (
         deltas["auc"] + threshold_tolerance
@@ -1489,9 +1524,18 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     parent_val_metrics: Optional[Dict[str, float]] = None
     parent_fallback_path = os.path.join(args.save_dir, "parent_fallback.pth")
     candidate_best_path = os.path.join(args.save_dir, "candidate_best.pth")
+    candidate_raw_best_path = os.path.join(
+        args.save_dir,
+        "candidate_raw_best.pth",
+    )
     candidate_best_auc = float("-inf")
     candidate_best_epoch = -1
     candidate_best_metrics: Optional[Dict[str, float]] = None
+    candidate_raw_best_auc = float("-inf")
+    candidate_raw_best_epoch = -1
+    candidate_raw_best_metrics: Optional[Dict[str, float]] = None
+    early_stop_best_auc = float("-inf")
+    early_stop_best_epoch = -1
     zero_identity: Optional[Dict[str, Any]] = None
     history: Dict[str, Any] = {
         "architecture": ARCHITECTURE_NAME,
@@ -1714,59 +1758,138 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             ):
                 logger.warning("%s Graph gradients have remained near zero for %d epochs.", run_tag, graph_low_grad_streak)
 
-        tracked_auc = candidate_best_auc if residual_training else best_val_auc
-        if _is_validation_improvement(
-            val_metrics["auc"],
-            tracked_auc,
-            getattr(args, "early_stop_min_delta", 0.0),
-        ):
-            patience_counter = 0
-            if residual_training:
+        if residual_training:
+            if parent_val_metrics is None:
+                raise RuntimeError(
+                    "residual parent metrics are unavailable during selection"
+                )
+            float_val_metrics = {
+                key: float(value)
+                for key, value in val_metrics.items()
+            }
+
+            # Keep the unconstrained maximum-AUC checkpoint for diagnosis.
+            # Checkpoint ranking intentionally uses min_delta=0 and is
+            # independent of early stopping's noise tolerance.
+            if _is_validation_improvement(
+                val_metrics["auc"],
+                candidate_raw_best_auc,
+                0.0,
+            ):
+                candidate_raw_best_auc = float(val_metrics["auc"])
+                candidate_raw_best_epoch = epoch
+                candidate_raw_best_metrics = float_val_metrics
+                _save_checkpoint(
+                    path=candidate_raw_best_path,
+                    epoch=epoch,
+                    model=model,
+                    optimizer=optimizer,
+                    args=args,
+                    info_dict=info_dict,
+                    monitor=monitor,
+                    val_metrics=val_metrics,
+                    train_metrics=train_metrics,
+                    diagnostics=last_diag,
+                    best_val_auc=candidate_raw_best_auc,
+                    model_state_dict=ema_state,
+                )
+                _write_json_atomic(
+                    os.path.join(args.save_dir, "diag_candidate_raw_best.json"),
+                    last_diag,
+                )
+                logger.info(
+                    "%s -> New raw candidate best AUC=%.6f at epoch %d",
+                    run_tag,
+                    candidate_raw_best_auc,
+                    epoch,
+                )
+
+            # Deployment ranking first enforces the fixed BCE/RMSE guards,
+            # then keeps the strict maximum AUC among eligible epochs.
+            error_guard_passed = _passes_residual_error_guards(
+                parent_val_metrics,
+                float_val_metrics,
+            )
+            if error_guard_passed and _is_validation_improvement(
+                val_metrics["auc"],
+                candidate_best_auc,
+                0.0,
+            ):
                 candidate_best_auc = float(val_metrics["auc"])
                 candidate_best_epoch = epoch
-                candidate_best_metrics = {
-                    key: float(value)
-                    for key, value in val_metrics.items()
-                }
-                checkpoint_path = candidate_best_path
-                checkpoint_auc = candidate_best_auc
-                diagnostic_path = os.path.join(
-                    args.save_dir,
-                    "diag_candidate_best.json",
+                candidate_best_metrics = float_val_metrics
+                _save_checkpoint(
+                    path=candidate_best_path,
+                    epoch=epoch,
+                    model=model,
+                    optimizer=optimizer,
+                    args=args,
+                    info_dict=info_dict,
+                    monitor=monitor,
+                    val_metrics=val_metrics,
+                    train_metrics=train_metrics,
+                    diagnostics=last_diag,
+                    best_val_auc=candidate_best_auc,
+                    model_state_dict=ema_state,
                 )
-                log_label = "candidate"
+                _write_json_atomic(
+                    os.path.join(args.save_dir, "diag_candidate_best.json"),
+                    last_diag,
+                )
+                logger.info(
+                    "%s -> New error-guarded candidate best AUC=%.6f "
+                    "at epoch %d",
+                    run_tag,
+                    candidate_best_auc,
+                    epoch,
+                )
+
+            if _is_validation_improvement(
+                val_metrics["auc"],
+                early_stop_best_auc,
+                getattr(args, "early_stop_min_delta", 0.0),
+            ):
+                early_stop_best_auc = float(val_metrics["auc"])
+                early_stop_best_epoch = epoch
+                patience_counter = 0
             else:
+                patience_counter += 1
+        else:
+            if _is_validation_improvement(
+                val_metrics["auc"],
+                best_val_auc,
+                getattr(args, "early_stop_min_delta", 0.0),
+            ):
+                patience_counter = 0
                 best_val_auc = float(val_metrics["auc"])
                 best_epoch = epoch
                 checkpoint_path = os.path.join(args.save_dir, "best_model.pth")
-                checkpoint_auc = best_val_auc
-                diagnostic_path = os.path.join(args.save_dir, "diag_best.json")
-                log_label = "deployment"
-            _save_checkpoint(
-                path=checkpoint_path,
-                epoch=epoch,
-                model=model,
-                optimizer=optimizer,
-                args=args,
-                info_dict=info_dict,
-                monitor=monitor,
-                val_metrics=val_metrics,
-                train_metrics=train_metrics,
-                diagnostics=last_diag,
-                best_val_auc=checkpoint_auc,
-                model_state_dict=ema_state,
-            )
-            with open(diagnostic_path, "w", encoding="utf-8") as handle:
-                json.dump(last_diag, handle, indent=2)
-            logger.info(
-                "%s -> New %s best AUC=%.6f at epoch %d",
-                run_tag,
-                log_label,
-                checkpoint_auc,
-                epoch,
-            )
-        else:
-            patience_counter += 1
+                _save_checkpoint(
+                    path=checkpoint_path,
+                    epoch=epoch,
+                    model=model,
+                    optimizer=optimizer,
+                    args=args,
+                    info_dict=info_dict,
+                    monitor=monitor,
+                    val_metrics=val_metrics,
+                    train_metrics=train_metrics,
+                    diagnostics=last_diag,
+                    best_val_auc=best_val_auc,
+                    model_state_dict=ema_state,
+                )
+                _write_json_atomic(
+                    os.path.join(args.save_dir, "diag_best.json"),
+                    last_diag,
+                )
+                logger.info(
+                    "%s -> New deployment best AUC=%.6f at epoch %d",
+                    run_tag,
+                    best_val_auc,
+                    epoch,
+                )
+            else:
+                patience_counter += 1
 
         if epoch % int(args.save_interval) == 0:
             checkpoint_path = os.path.join(args.save_dir, f"checkpoint_epoch_{epoch}.pth")
@@ -1797,13 +1920,17 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 logger.warning("%s Module activity failed: %s", run_tag, exc)
 
         if _should_early_stop(epoch, patience_counter, args):
-            stop_auc = candidate_best_auc if residual_training else best_val_auc
-            stop_epoch = candidate_best_epoch if residual_training else best_epoch
+            stop_auc = (
+                early_stop_best_auc if residual_training else best_val_auc
+            )
+            stop_epoch = (
+                early_stop_best_epoch if residual_training else best_epoch
+            )
             logger.info(
                 "%s Early stopping at epoch %d (%s best AUC=%.6f @ %d)",
                 run_tag,
                 epoch,
-                "candidate" if residual_training else "deployment",
+                "early-stop" if residual_training else "deployment",
                 stop_auc,
                 stop_epoch,
             )
@@ -1876,6 +2003,39 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         )
 
         residual_module = _get_base_model(model).evidence_residual
+        max_abs_adjustment = getattr(
+            residual_module,
+            "max_abs_adjustment",
+            None,
+        )
+        guarded_candidate_manifest = {
+            "checkpoint": (
+                os.path.realpath(candidate_best_path)
+                if os.path.exists(candidate_best_path)
+                else None
+            ),
+            "sha256": (
+                _sha256_file(candidate_best_path)
+                if os.path.exists(candidate_best_path)
+                else None
+            ),
+            "epoch": candidate_best_epoch,
+            "metrics": candidate_best_metrics,
+        }
+        raw_best_manifest = {
+            "checkpoint": (
+                os.path.realpath(candidate_raw_best_path)
+                if os.path.exists(candidate_raw_best_path)
+                else None
+            ),
+            "sha256": (
+                _sha256_file(candidate_raw_best_path)
+                if os.path.exists(candidate_raw_best_path)
+                else None
+            ),
+            "epoch": candidate_raw_best_epoch,
+            "metrics": candidate_raw_best_metrics,
+        }
         manifest = {
             "schema_version": 1,
             "residual_mode": residual_mode,
@@ -1884,12 +2044,24 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "num_parameters": int(
                     sum(parameter.numel() for parameter in residual_module.parameters())
                 ),
-                "max_abs_adjustment": float(
-                    getattr(residual_module, "max_abs_adjustment", 0.0)
+                "max_abs_adjustment": (
+                    float(max_abs_adjustment)
+                    if max_abs_adjustment is not None
+                    else None
                 ),
                 "support_offset": float(
                     getattr(residual_module, "SUPPORT_OFFSET", 0.0)
                 ),
+            },
+            "training_objective": {
+                "pairwise_auc_weight": pairwise_auc_weight,
+            },
+            "candidate_selection_policy": {
+                "checkpoint_auc_min_delta": 0.0,
+                "early_stop_auc_min_delta": float(
+                    getattr(args, "early_stop_min_delta", 0.0)
+                ),
+                "checkpoint_requires_bce_rmse_guards": True,
             },
             "thresholds": {
                 "min_auc_gain": RESIDUAL_DEPLOY_MIN_AUC_GAIN,
@@ -1908,20 +2080,10 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 "source_sha256": str(args.warm_start_checkpoint_sha256),
                 "source_epoch": int(parent_checkpoint.get("epoch", -1)),
             },
-            "candidate": {
-                "checkpoint": (
-                    os.path.realpath(candidate_best_path)
-                    if os.path.exists(candidate_best_path)
-                    else None
-                ),
-                "sha256": (
-                    _sha256_file(candidate_best_path)
-                    if os.path.exists(candidate_best_path)
-                    else None
-                ),
-                "epoch": candidate_best_epoch,
-                "metrics": candidate_best_metrics,
-            },
+            # Keep ``candidate`` for existing summary consumers.
+            "candidate": guarded_candidate_manifest,
+            "guarded_selected": guarded_candidate_manifest,
+            "raw_best": raw_best_manifest,
             "deltas": selection["deltas"],
             "accepted": bool(selection["accepted"]),
             "reason": str(selection["reason"]),
@@ -1942,18 +2104,36 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
             "epoch": candidate_best_epoch,
             "metrics": candidate_best_metrics,
         }
+        history["candidate_raw_best"] = {
+            "epoch": candidate_raw_best_epoch,
+            "metrics": candidate_raw_best_metrics,
+        }
+        history["early_stop_best"] = {
+            "epoch": early_stop_best_epoch,
+            "auc": (
+                early_stop_best_auc
+                if math.isfinite(early_stop_best_auc)
+                else None
+            ),
+        }
         history["selection"] = manifest
         candidate_auc_text = (
             f"{candidate_best_auc:.6f}"
             if math.isfinite(candidate_best_auc)
             else "missing"
         )
+        raw_candidate_auc_text = (
+            f"{candidate_raw_best_auc:.6f}"
+            if math.isfinite(candidate_raw_best_auc)
+            else "missing"
+        )
         logger.info(
-            "%s Residual selection: parent_auc=%.6f candidate_auc=%s "
-            "selected=%s reason=%s",
+            "%s Residual selection: parent_auc=%.6f guarded_candidate_auc=%s "
+            "raw_candidate_auc=%s selected=%s reason=%s",
             run_tag,
             float(parent_val_metrics["auc"]),
             candidate_auc_text,
+            raw_candidate_auc_text,
             selected_source,
             selection["reason"],
         )
@@ -2110,9 +2290,9 @@ def _load_inference_selection_metadata(
     model_variant = str(loaded_args.get("model_variant", "full"))
     residual_mode = str(loaded_args.get("gec_mode", "v1"))
     if not os.path.isfile(manifest_path):
-        if residual_mode == "relation_residual_v4":
+        if residual_mode in MANIFEST_REQUIRED_GEC_MODES:
             raise RuntimeError(
-                "relation_residual_v4 inference requires selection_manifest.json"
+                f"{residual_mode} inference requires selection_manifest.json"
             )
         return {
             "selection_manifest_present": False,
@@ -2128,6 +2308,15 @@ def _load_inference_selection_metadata(
         manifest = json.load(handle)
     if not isinstance(manifest, dict):
         raise RuntimeError("selection_manifest.json must contain an object")
+    manifest_residual_mode = str(manifest.get("residual_mode", ""))
+    if (
+        residual_mode in MANIFEST_REQUIRED_GEC_MODES
+        and manifest_residual_mode != residual_mode
+    ):
+        raise RuntimeError(
+            "selection manifest residual_mode does not match checkpoint: "
+            f"manifest={manifest_residual_mode!r} checkpoint={residual_mode!r}"
+        )
     selected = manifest.get("selected")
     if not isinstance(selected, dict):
         raise RuntimeError("selection manifest is missing selected metadata")

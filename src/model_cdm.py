@@ -22,6 +22,7 @@ import torch.nn as nn
 
 from src.config import EVIDENCE_ANCHOR_DROPOUT
 from src.evidence_residual import (
+    GraphBranchScaleResidual,
     RelationQualitySignedResidual,
     SparseEvidenceThetaResidual,
 )
@@ -38,7 +39,12 @@ GRAPH_IRT_ARCHITECTURE = "graph_irt_v10"
 #   off         -> evidence feeds only the initial state (v9 behaviour)
 EVIDENCE_ANCHOR_MODES = ("full", "direct_only", "off")
 _ANCHOR_CHANNELS = {"full": 3, "direct_only": 2, "off": 0}
-GEC_MODES = ("v1", "residual_v3", "relation_residual_v4")
+GEC_MODES = (
+    "v1",
+    "residual_v3",
+    "relation_residual_v4",
+    "branch_gate_v5",
+)
 
 
 class _ResponseEvidenceComponents(NamedTuple):
@@ -109,9 +115,11 @@ class CognitiveDiagnosisModel(nn.Module):
         self.use_relation_evidence_residual = (
             self.gec_mode == "relation_residual_v4"
         )
+        self.use_branch_gate_residual = self.gec_mode == "branch_gate_v5"
         self.use_evidence_residual = (
             self.use_sparse_evidence_residual
             or self.use_relation_evidence_residual
+            or self.use_branch_gate_residual
         )
         if self.use_evidence_residual and not self.use_response_evidence:
             raise ValueError(f"{self.gec_mode} requires response evidence")
@@ -237,6 +245,13 @@ class CognitiveDiagnosisModel(nn.Module):
                 num_relation_heads=self.num_relation_heads,
                 item_support_matrix=item_support_matrix,
                 exposure_support_matrix=exposure_support_matrix,
+            )
+        elif self.use_branch_gate_residual:
+            if self.evidence_anchor_mode != "full":
+                raise ValueError("branch_gate_v5 requires the full evidence anchor")
+            self.evidence_residual = GraphBranchScaleResidual(
+                num_propagation_heads=self._anchor_channels - 2,
+                enabled=True,
             )
         else:
             self.evidence_residual = None
@@ -543,11 +558,30 @@ class CognitiveDiagnosisModel(nn.Module):
         relation_matrices: torch.Tensor,
         components: _ResponseEvidenceComponents,
         *,
+        projected_state_delta: Optional[torch.Tensor] = None,
+        evidence_anchor: Optional[torch.Tensor] = None,
+        evidence_anchor_weights: Optional[torch.Tensor] = None,
         return_details: bool = False,
     ):
         """Dispatch one opt-in residual without changing the v1 path."""
         if self.evidence_residual is None:
             return (None, {}) if return_details else None
+        if self.use_branch_gate_residual:
+            if (
+                projected_state_delta is None
+                or evidence_anchor is None
+                or evidence_anchor_weights is None
+            ):
+                raise RuntimeError(
+                    "branch_gate_v5 requires projected state delta, full "
+                    "evidence anchor, and frozen anchor weights"
+                )
+            return self.evidence_residual(
+                projected_state_delta=projected_state_delta,
+                evidence_anchor=evidence_anchor,
+                anchor_weights=evidence_anchor_weights,
+                return_details=return_details,
+            )
         if components.count is None:
             raise RuntimeError(f"{self.gec_mode} requires response counts")
         if self.use_sparse_evidence_residual:
@@ -669,14 +703,6 @@ class CognitiveDiagnosisModel(nn.Module):
             response_evidence,
             loo_count,
         )
-        theta_adjustment = None
-        residual_details: Dict[str, torch.Tensor] = {}
-        if self.evidence_residual is not None:
-            theta_adjustment, residual_details = self._compute_evidence_residual(
-                relation_matrices,
-                response_components,
-                return_details=True,
-            )
         if (
             evidence_anchor is not None
             and self.training
@@ -696,6 +722,27 @@ class CognitiveDiagnosisModel(nn.Module):
                 >= EVIDENCE_ANCHOR_DROPOUT
             ).to(dtype=evidence_anchor.dtype)
             evidence_anchor = evidence_anchor * keep / (1.0 - EVIDENCE_ANCHOR_DROPOUT)
+        theta_adjustment = None
+        residual_details: Dict[str, torch.Tensor] = {}
+        if self.evidence_residual is not None:
+            projected_state_delta = None
+            evidence_anchor_weights = None
+            if self.use_branch_gate_residual:
+                projected_state_delta = (
+                    self.diagnosis_head.theta_proj(knowledge_state)
+                    - self.diagnosis_head.theta_proj(initial_state)
+                ).squeeze(-1)
+                evidence_anchor_weights = (
+                    self.diagnosis_head.evidence_anchor_weights().detach()
+                )
+            theta_adjustment, residual_details = self._compute_evidence_residual(
+                relation_matrices,
+                response_components,
+                projected_state_delta=projected_state_delta,
+                evidence_anchor=evidence_anchor,
+                evidence_anchor_weights=evidence_anchor_weights,
+                return_details=True,
+            )
         if return_details:
             irt_logit, head_details = self.diagnosis_head(
                 knowledge_state=knowledge_state,
@@ -811,12 +858,13 @@ class CognitiveDiagnosisModel(nn.Module):
                 )
                 response_evidence = response_components.evidence
                 loo_count = response_components.count
-                knowledge_state = self.knowledge_encoder(
+                knowledge_state, initial_state = self.knowledge_encoder(
                     student_ids,
                     relation_matrices,
                     response_evidence=(
                         response_evidence if self.evidence_state_injection else None
                     ),
+                    return_initial=True,
                 )
                 concept_state = knowledge_state.squeeze(0)
                 concept_theta = self.diagnosis_head.theta_proj(concept_state).squeeze(-1)
@@ -831,9 +879,22 @@ class CognitiveDiagnosisModel(nn.Module):
                         evidence_anchor.squeeze(0) * anchor_weights
                     ).sum(dim=-1)
                 if self.evidence_residual is not None:
+                    projected_state_delta = None
+                    evidence_anchor_weights = None
+                    if self.use_branch_gate_residual:
+                        projected_state_delta = (
+                            self.diagnosis_head.theta_proj(knowledge_state)
+                            - self.diagnosis_head.theta_proj(initial_state)
+                        ).squeeze(-1)
+                        evidence_anchor_weights = (
+                            self.diagnosis_head.evidence_anchor_weights().detach()
+                        )
                     theta_adjustment = self._compute_evidence_residual(
                         relation_matrices,
                         response_components,
+                        projected_state_delta=projected_state_delta,
+                        evidence_anchor=evidence_anchor,
+                        evidence_anchor_weights=evidence_anchor_weights,
                     )
                     concept_theta = concept_theta + theta_adjustment.squeeze(0)
                 return {

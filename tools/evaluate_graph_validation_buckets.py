@@ -6,12 +6,13 @@ minimum train-only student-concept response count among the concepts attached
 to its exercise.  It reports metrics for all rows, the legacy overlapping
 subset ``n<3``, and mutually exclusive ``n=0``, ``n=1-2``, and ``n>=3``
 subsets.  It then computes same-dataset/same-seed paired contrasts for the
-graph 2x2 family or either residual adapter family.
+graph 2x2 family or any residual adapter family.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Mapping, Tuple
@@ -35,7 +36,11 @@ from src.trainer import (  # noqa: E402
     _strip_module_prefix,
     _validate_checkpoint_data_identity,
 )
-from tools.summarize_validation_runs import _candidate_dirs, _tokens  # noqa: E402
+from tools.summarize_validation_runs import (  # noqa: E402
+    _candidate_dirs,
+    _role_checkpoint_path,
+    _tokens,
+)
 
 
 GRAPH_2X2_VARIANTS = (
@@ -93,6 +98,23 @@ RELATION_RESIDUAL_CONTRASTS: Tuple[
         {"gec_relation_residual_selected": 1.0, "full": -1.0},
     ),
 )
+BRANCH_GATE_VARIANTS = (
+    "full",
+    "gec_branch_gate_candidate",
+    "gec_branch_gate_selected",
+)
+BRANCH_GATE_CONTRASTS: Tuple[
+    Tuple[str, Mapping[str, float]], ...
+] = (
+    (
+        "branch-candidate-full",
+        {"gec_branch_gate_candidate": 1.0, "full": -1.0},
+    ),
+    (
+        "branch-selected-full",
+        {"gec_branch_gate_selected": 1.0, "full": -1.0},
+    ),
+)
 VARIANT_FAMILIES = {
     "graph2x2": (GRAPH_2X2_VARIANTS, GRAPH_2X2_CONTRASTS),
     "residual": (RESIDUAL_VARIANTS, RESIDUAL_CONTRASTS),
@@ -100,12 +122,39 @@ VARIANT_FAMILIES = {
         RELATION_RESIDUAL_VARIANTS,
         RELATION_RESIDUAL_CONTRASTS,
     ),
+    "branch_gate": (BRANCH_GATE_VARIANTS, BRANCH_GATE_CONTRASTS),
 }
 
 
 def _resolve(value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else ROOT / path
+
+
+def _selection_manifest(checkpoint_dir: Path) -> Mapping[str, object]:
+    path = checkpoint_dir / "selection_manifest.json"
+    if not path.is_file():
+        return {}
+    with path.open(encoding="utf-8") as handle:
+        manifest = json.load(handle)
+    if not isinstance(manifest, dict):
+        raise TypeError(
+            f"selection manifest must contain a JSON object: {path}"
+        )
+    return manifest
+
+
+def _required_role_checkpoint(
+    checkpoint_dir: Path,
+    manifest: Mapping[str, object],
+    role: str,
+) -> Path:
+    path = _role_checkpoint_path(checkpoint_dir, manifest, role)
+    if path is None:
+        raise FileNotFoundError(
+            f"missing {role} checkpoint in {checkpoint_dir}"
+        )
+    return path
 
 
 def _bucket_masks(support: np.ndarray) -> Dict[str, np.ndarray]:
@@ -137,9 +186,14 @@ def _read_validation(
     batch_size: int,
     device: torch.device,
     checkpoint_name: str = "best_model.pth",
+    checkpoint_path: Path | None = None,
     variant_label: str = "",
 ) -> List[Dict[str, object]]:
-    checkpoint_path = checkpoint_dir / checkpoint_name
+    checkpoint_path = (
+        checkpoint_dir / checkpoint_name
+        if checkpoint_path is None
+        else checkpoint_path
+    )
     if not checkpoint_path.is_file():
         raise FileNotFoundError(f"missing checkpoint: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
@@ -226,7 +280,7 @@ def _read_validation(
     support_array = np.asarray(supports, dtype=np.float64)
     identity = {
         "run_dir": str(checkpoint_dir),
-        "checkpoint_artifact": checkpoint_name,
+        "checkpoint_artifact": checkpoint_path.name,
         "architecture": str(
             checkpoint.get("architecture", loaded_args.get("architecture", ""))
         ),
@@ -382,13 +436,38 @@ def main() -> None:
         ):
             for row in evaluated:
                 row["model_variant"] = "gec_relation_residual_selected"
+            manifest = _selection_manifest(checkpoint_dir)
             evaluated_sets.append(
                 _read_validation(
                     checkpoint_dir,
                     batch_size=max(1, int(args.batch_size)),
                     device=device,
-                    checkpoint_name="candidate_best.pth",
+                    checkpoint_path=_required_role_checkpoint(
+                        checkpoint_dir,
+                        manifest,
+                        "candidate",
+                    ),
                     variant_label="gec_relation_residual_candidate",
+                )
+            )
+        elif (
+            args.variant_family == "branch_gate"
+            and source_variant == "gec_branch_gate"
+        ):
+            for row in evaluated:
+                row["model_variant"] = "gec_branch_gate_selected"
+            manifest = _selection_manifest(checkpoint_dir)
+            evaluated_sets.append(
+                _read_validation(
+                    checkpoint_dir,
+                    batch_size=max(1, int(args.batch_size)),
+                    device=device,
+                    checkpoint_path=_required_role_checkpoint(
+                        checkpoint_dir,
+                        manifest,
+                        "candidate",
+                    ),
+                    variant_label="gec_branch_gate_candidate",
                 )
             )
         for evaluated_set in evaluated_sets:

@@ -32,6 +32,7 @@ from src.trainer import (
     _is_validation_improvement,
     _load_inference_selection_metadata,
     _materialize_checkpoint,
+    _passes_residual_error_guards,
     _prediction_loss,
     _resolve_ema_decay,
     _resolve_pairwise_auc_weight,
@@ -55,10 +56,11 @@ def _write_selection_manifest(
     accepted: bool,
     reason: str,
     deltas,
+    residual_mode: str = "relation_residual_v4",
 ) -> None:
     manifest = {
         "schema_version": 1,
-        "residual_mode": "relation_residual_v4",
+        "residual_mode": residual_mode,
         "accepted": accepted,
         "reason": reason,
         "deltas": deltas,
@@ -182,6 +184,44 @@ def _assert_inference_selection_metadata_contract() -> None:
             "effective_model_variant": "full_fallback",
         }
 
+        branch_loaded_args = {
+            "model_variant": "gec_branch_gate",
+            "gec_mode": "branch_gate_v5",
+        }
+        try:
+            _load_inference_selection_metadata(
+                directory,
+                checkpoint_sha256=_sha256_file(str(best_path)),
+                loaded_args=branch_loaded_args,
+            )
+        except RuntimeError as exc:
+            assert "residual_mode does not match" in str(exc)
+        else:
+            raise AssertionError(
+                "branch inference must reject a manifest for another residual "
+                "mode"
+            )
+
+        _write_selection_manifest(
+            directory,
+            selected_sha256=parent_sha256,
+            selected_source="parent",
+            residual_active=False,
+            accepted=False,
+            reason="auc_gain_below_threshold",
+            deltas=parent_deltas,
+            residual_mode="branch_gate_v5",
+        )
+        branch_metadata = _load_inference_selection_metadata(
+            directory,
+            checkpoint_sha256=_sha256_file(str(best_path)),
+            loaded_args=branch_loaded_args,
+        )
+        assert branch_metadata["selection_manifest_present"] is True
+        assert branch_metadata["selected_source"] == "parent"
+        assert branch_metadata["residual_active"] is False
+        assert branch_metadata["effective_model_variant"] == "full_fallback"
+
         (directory_path / "selection_manifest.json").unlink()
         try:
             _load_inference_selection_metadata(
@@ -194,6 +234,24 @@ def _assert_inference_selection_metadata_contract() -> None:
         else:
             raise AssertionError(
                 "relation_residual_v4 inference must reject a missing selection "
+                "manifest"
+            )
+
+        try:
+            _load_inference_selection_metadata(
+                directory,
+                checkpoint_sha256=_sha256_file(str(best_path)),
+                loaded_args={
+                    "model_variant": "gec_branch_gate",
+                    "gec_mode": "branch_gate_v5",
+                },
+            )
+        except RuntimeError as exc:
+            assert "branch_gate_v5" in str(exc)
+            assert "requires selection_manifest.json" in str(exc)
+        else:
+            raise AssertionError(
+                "branch_gate_v5 inference must reject a missing selection "
                 "manifest"
             )
 
@@ -307,6 +365,23 @@ def main() -> None:
     assert relation_residual_args.pairwise_auc_weight == 0.0
     assert relation_residual_args.ema_decay == 0.0
     assert relation_residual_args.use_response_evidence
+    branch_gate_args = main_module.parse_args(
+        [
+            "--model_variant",
+            "gec_branch_gate",
+            "--warm_start_checkpoint",
+            "paired_full/best_model.pth",
+        ]
+    )
+    main_module._apply_model_variant(branch_gate_args)
+    main_module._validate_args(branch_gate_args)
+    assert branch_gate_args.gec_mode == "branch_gate_v5"
+    assert branch_gate_args.evidence_anchor_mode == "full"
+    assert branch_gate_args.train_evidence_mode == "excluded"
+    assert branch_gate_args.pairwise_auc_weight == PAIRWISE_AUC_WEIGHT
+    assert branch_gate_args.ema_decay == 0.0
+    assert branch_gate_args.use_response_evidence
+    assert _resolve_pairwise_auc_weight(branch_gate_args) == PAIRWISE_AUC_WEIGHT
     missing_relation_parent = main_module.parse_args(
         ["--model_variant", "gec_relation_residual"]
     )
@@ -395,6 +470,20 @@ def main() -> None:
         assert "fixed by model_variant" in str(exc)
     else:
         raise AssertionError("pairwise weight must not become a free hyperparameter")
+    try:
+        _resolve_pairwise_auc_weight(
+            SimpleNamespace(
+                model_variant="gec_branch_gate",
+                gec_mode="branch_gate_v5",
+                pairwise_auc_weight=0.0,
+            )
+        )
+    except ValueError as exc:
+        assert "requires 0.5" in str(exc)
+    else:
+        raise AssertionError(
+            "branch_gate_v5 must use the fixed pairwise-AUC objective"
+        )
 
     checkpoint_pairwise = _checkpoint_args(
         SimpleNamespace(
@@ -446,6 +535,7 @@ def main() -> None:
 
     assert not _is_validation_improvement(0.700005, 0.700000, 1e-5)
     assert _is_validation_improvement(0.70002, 0.700000, 1e-5)
+    assert _is_validation_improvement(0.700005, 0.700000, 0.0)
 
     parent_metrics = {"auc": 0.8, "bce_loss": 0.4, "rmse": 0.35}
     accepted_candidate = _select_residual_candidate(
@@ -485,6 +575,14 @@ def main() -> None:
         {"auc": 0.8001, "bce_loss": 0.4001, "rmse": 0.3501},
     )
     assert threshold_boundary["accepted"] is True
+    assert _passes_residual_error_guards(
+        parent_metrics,
+        {"auc": 0.7, "bce_loss": 0.4001, "rmse": 0.3501},
+    )
+    assert not _passes_residual_error_guards(
+        parent_metrics,
+        {"auc": 0.9, "bce_loss": 0.4002, "rmse": 0.35},
+    )
     for invalid_candidate in (
         {"auc": float("nan"), "bce_loss": 0.4, "rmse": 0.35},
         {"auc": 0.8002, "bce_loss": float("inf"), "rmse": 0.35},

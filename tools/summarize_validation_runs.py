@@ -5,8 +5,8 @@ The script never opens a test split.  It reads each checkpoint's stored
 train/validation metrics and, when present, ``selection_manifest.json``.  The
 manifest keeps the immutable parent, trained candidate, and deployment-selected
 metrics distinct so an epoch-zero fallback is not mistaken for an active
-residual.  Both legacy v3 scalar residuals and v4 route/quality parameters are
-summarized.
+residual.  Legacy v3 scalar residuals, v4 route/quality parameters, and v5
+branch routes/scales are summarized.
 """
 
 from __future__ import annotations
@@ -23,6 +23,9 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 CHECKPOINTS = ROOT / "checkpoints"
 METRIC_NAMES = ("auc", "acc", "rmse", "bce_loss", "loss")
+RESIDUAL_MODEL_VARIANTS = frozenset(
+    {"gec_residual", "gec_relation_residual", "gec_branch_gate"}
+)
 
 
 def _tokens(value: str) -> List[str]:
@@ -216,9 +219,17 @@ def _tensor_json(value: torch.Tensor) -> str:
 
 
 def _residual_parameters(checkpoint: Mapping[str, Any]) -> Dict[str, object]:
-    """Return compact v3/v4 diagnostics from one candidate checkpoint."""
+    """Return compact v3/v4/v5 diagnostics from one checkpoint."""
     rho = _state_tensor(checkpoint, "evidence_residual.rho")
     route_raw = _state_tensor(checkpoint, "evidence_residual.route_raw")
+    state_route_raw = _state_tensor(
+        checkpoint,
+        "evidence_residual.state_route_raw",
+    )
+    propagation_route_raw = _state_tensor(
+        checkpoint,
+        "evidence_residual.propagation_route_raw",
+    )
     quality_weight = _state_tensor(
         checkpoint,
         "evidence_residual.quality_weight",
@@ -242,6 +253,67 @@ def _residual_parameters(checkpoint: Mapping[str, Any]) -> Dict[str, object]:
     )
     raw_support_quality = quality_hidden_weight is not None
     result: Dict[str, object] = {}
+    if (state_route_raw is None) != (propagation_route_raw is None):
+        raise ValueError(
+            "branch-gate checkpoint must contain both state_route_raw and "
+            "propagation_route_raw"
+        )
+    if state_route_raw is not None and propagation_route_raw is not None:
+        if state_route_raw.numel() != 1:
+            raise ValueError(
+                "branch-gate state_route_raw must contain exactly one value"
+            )
+        state_raw_value = float(state_route_raw.reshape(-1)[0].item())
+        state_route_value = float(
+            torch.tanh(state_route_raw.reshape(-1)[0]).item()
+        )
+        propagation_route = torch.tanh(propagation_route_raw)
+        propagation_scale = 1.0 + propagation_route
+        combined_raw = torch.cat(
+            (state_route_raw.reshape(1), propagation_route_raw.reshape(-1))
+        )
+        combined_route = torch.tanh(combined_raw)
+        combined_scale = 1.0 + combined_route
+        branch_names = [
+            "state",
+            *[
+                f"propagation_{index}"
+                for index in range(propagation_route_raw.numel())
+            ],
+        ]
+        result.update(
+            {
+                "kind": "branch_gate_v5",
+                "state_route_raw": state_raw_value,
+                "state_route": state_route_value,
+                "state_branch_scale": 1.0 + state_route_value,
+                "propagation_route_raw_json": _tensor_json(
+                    propagation_route_raw
+                ),
+                "propagation_route_json": _tensor_json(propagation_route),
+                "propagation_branch_scale_json": _tensor_json(
+                    propagation_scale
+                ),
+                "branch_route_raw_json": json.dumps(
+                    dict(zip(branch_names, combined_raw.tolist())),
+                    separators=(",", ":"),
+                ),
+                "branch_route_json": json.dumps(
+                    dict(zip(branch_names, combined_route.tolist())),
+                    separators=(",", ":"),
+                ),
+                "branch_scale_json": json.dumps(
+                    dict(zip(branch_names, combined_scale.tolist())),
+                    separators=(",", ":"),
+                ),
+                "route_abs_max": float(combined_route.abs().max().item()),
+                "route_l2": float(
+                    combined_route.square().sum().sqrt().item()
+                ),
+                "branch_scale_min": float(combined_scale.min().item()),
+                "branch_scale_max": float(combined_scale.max().item()),
+            }
+        )
     if rho is not None:
         rho_value = float(rho.reshape(-1)[0].item())
         result.update(
@@ -431,10 +503,7 @@ def _read_run(path: Path) -> Dict[str, object]:
         selection.get("reason"),
         selected_node.get("reason"),
     )
-    if not manifest and model_variant in {
-        "gec_residual",
-        "gec_relation_residual",
-    }:
+    if not manifest and model_variant in RESIDUAL_MODEL_VARIANTS:
         legacy_accepted = best_epoch > 0
         accepted_value = legacy_accepted
         selected_source = "candidate" if legacy_accepted else "parent"
@@ -449,7 +518,7 @@ def _read_run(path: Path) -> Dict[str, object]:
     residual_active_value = selected_node.get("residual_active")
     if (
         residual_active_value is None
-        and model_variant in {"gec_residual", "gec_relation_residual"}
+        and model_variant in RESIDUAL_MODEL_VARIANTS
         and selected_source is not None
     ):
         residual_active_value = str(selected_source) == "candidate"

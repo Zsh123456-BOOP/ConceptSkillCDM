@@ -26,6 +26,9 @@ MODEL_VARIANTS = (
     # Relation-quality, signed-evidence v4 plug-in.  It warm-starts the
     # complete v1 model and trains only the bounded adapter.
     "gec_relation_residual",
+    # Branch-scale v5 plug-in. It warm-starts the complete v1 model and
+    # learns only bounded rescaling of existing graph/evidence branches.
+    "gec_branch_gate",
     "no_response_evidence",
     "no_evidence_anchor",
     "no_evidence_propagation",
@@ -208,6 +211,7 @@ def _apply_model_variant(args: argparse.Namespace) -> None:
     args.gec_mode = {
         "gec_residual": "residual_v3",
         "gec_relation_residual": "relation_residual_v4",
+        "gec_branch_gate": "branch_gate_v5",
     }.get(args.model_variant, "v1")
     args.use_response_evidence = args.model_variant != "no_response_evidence"
     args.evidence_anchor_mode = {
@@ -217,7 +221,9 @@ def _apply_model_variant(args: argparse.Namespace) -> None:
         "no_graph_calibration": "direct_only",
     }.get(args.model_variant, "full")
     args.pairwise_auc_weight = (
-        PAIRWISE_AUC_WEIGHT if args.model_variant == "pairwise_auc" else 0.0
+        PAIRWISE_AUC_WEIGHT
+        if args.model_variant in {"pairwise_auc", "gec_branch_gate"}
+        else 0.0
     )
     args.ema_decay = EMA_DECAY if args.model_variant == "ema_bce" else 0.0
     if args.model_variant in {"no_message_passing", "no_graph_calibration"}:
@@ -309,7 +315,11 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit(
             "error: non-default --train_evidence_mode requires response evidence"
         )
-    residual_variants = {"gec_residual", "gec_relation_residual"}
+    residual_variants = {
+        "gec_residual",
+        "gec_relation_residual",
+        "gec_branch_gate",
+    }
     if args.model_variant in residual_variants:
         if str(args.train_evidence_mode) != "excluded":
             raise SystemExit(

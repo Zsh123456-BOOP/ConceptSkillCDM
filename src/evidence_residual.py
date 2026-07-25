@@ -678,3 +678,219 @@ class RelationQualitySignedResidual(nn.Module):
             "enabled": adjustment.detach().new_tensor(1.0),
         }
         return adjustment, details
+
+
+class GraphBranchScaleResidual(nn.Module):
+    """Learn bounded scale changes for the two frozen Full graph branches.
+
+    The Full model already contains a projected graph-state delta and one
+    contribution per graph-propagated evidence channel.  This adapter learns
+    only their *relative additive changes*:
+
+    ``adjustment = tanh(state_raw) * state_delta
+                  + sum_h tanh(propagation_raw[h]) * propagation_delta[h]``.
+
+    Consequently, zero-initialized raw routes reproduce Full exactly, a route
+    of ``-1`` removes its frozen Full contribution, and a route of ``+1``
+    doubles it.  Branch tensors and anchor weights are detached deliberately;
+    only the route parameters are trainable through this module.
+    """
+
+    def __init__(
+        self,
+        num_propagation_heads: int,
+        enabled: bool = True,
+    ) -> None:
+        super().__init__()
+        if isinstance(num_propagation_heads, bool) or int(
+            num_propagation_heads
+        ) != num_propagation_heads:
+            raise ValueError("num_propagation_heads must be a positive integer")
+        if int(num_propagation_heads) <= 0:
+            raise ValueError("num_propagation_heads must be a positive integer")
+
+        self.num_propagation_heads = int(num_propagation_heads)
+        self.enabled = bool(enabled)
+        self.state_route_raw = nn.Parameter(torch.zeros(()))
+        self.propagation_route_raw = nn.Parameter(
+            torch.zeros(self.num_propagation_heads)
+        )
+
+    def parameter_summary(self) -> Dict[str, Union[bool, int, float]]:
+        """Return compact diagnostics for checkpoint and activity manifests."""
+        with torch.no_grad():
+            state_route = torch.tanh(self.state_route_raw.detach())
+            propagation_route = torch.tanh(
+                self.propagation_route_raw.detach()
+            )
+            combined_route = torch.cat(
+                (state_route.reshape(1), propagation_route)
+            )
+            parameters = (self.state_route_raw, self.propagation_route_raw)
+            return {
+                "enabled": bool(self.enabled),
+                "num_propagation_heads": int(self.num_propagation_heads),
+                "num_parameters": int(
+                    sum(parameter.numel() for parameter in parameters)
+                ),
+                "num_trainable_parameters": int(
+                    sum(
+                        parameter.numel()
+                        for parameter in parameters
+                        if parameter.requires_grad
+                    )
+                ),
+                "all_parameters_finite": bool(
+                    all(
+                        torch.isfinite(parameter).all().item()
+                        for parameter in parameters
+                    )
+                ),
+                "state_route_raw": float(self.state_route_raw.detach().item()),
+                "effective_state_route": float(state_route.item()),
+                "propagation_route_raw_min": float(
+                    self.propagation_route_raw.detach().min().item()
+                ),
+                "propagation_route_raw_max": float(
+                    self.propagation_route_raw.detach().max().item()
+                ),
+                "effective_propagation_route_min": float(
+                    propagation_route.min().item()
+                ),
+                "effective_propagation_route_max": float(
+                    propagation_route.max().item()
+                ),
+                "route_abs_max": float(combined_route.abs().max().item()),
+                "route_l2": float(
+                    combined_route.square().sum().sqrt().item()
+                ),
+            }
+
+    def _validate_inputs(
+        self,
+        projected_state_delta: torch.Tensor,
+        evidence_anchor: torch.Tensor,
+        anchor_weights: torch.Tensor,
+    ) -> Tuple[int, int, int]:
+        for name, value in (
+            ("projected_state_delta", projected_state_delta),
+            ("evidence_anchor", evidence_anchor),
+            ("anchor_weights", anchor_weights),
+        ):
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(f"{name} must be a torch.Tensor")
+            if not value.dtype.is_floating_point:
+                raise ValueError(f"{name} must use a floating-point dtype")
+            if not bool(torch.isfinite(value).all()):
+                raise ValueError(f"{name} must contain only finite values")
+
+        if projected_state_delta.dim() != 2:
+            raise ValueError(
+                "projected_state_delta must have shape (batch, concepts); "
+                f"got {tuple(projected_state_delta.shape)}"
+            )
+        batch_size, concepts = projected_state_delta.shape
+        channels = 2 + self.num_propagation_heads
+        expected_anchor_shape = (batch_size, concepts, channels)
+        if tuple(evidence_anchor.shape) != expected_anchor_shape:
+            raise ValueError(
+                f"evidence_anchor must have shape {expected_anchor_shape}; "
+                f"got {tuple(evidence_anchor.shape)}"
+            )
+        expected_weight_shape = (concepts, channels)
+        if tuple(anchor_weights.shape) != expected_weight_shape:
+            raise ValueError(
+                f"anchor_weights must have shape {expected_weight_shape}; "
+                f"got {tuple(anchor_weights.shape)}"
+            )
+        if (
+            evidence_anchor.device != projected_state_delta.device
+            or anchor_weights.device != projected_state_delta.device
+        ):
+            raise ValueError(
+                "projected_state_delta, evidence_anchor, and anchor_weights "
+                "must be on the same device"
+            )
+        return int(batch_size), int(concepts), int(channels)
+
+    def forward(
+        self,
+        projected_state_delta: torch.Tensor,
+        evidence_anchor: torch.Tensor,
+        anchor_weights: torch.Tensor,
+        *,
+        return_details: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
+        """Return the additive change relative to the frozen Full model."""
+        batch_size, concepts, _ = self._validate_inputs(
+            projected_state_delta,
+            evidence_anchor,
+            anchor_weights,
+        )
+        dtype = projected_state_delta.dtype
+        device = projected_state_delta.device
+
+        if not bool(torch.isfinite(self.state_route_raw).item()):
+            raise ValueError("state_route_raw must be finite")
+        if not bool(torch.isfinite(self.propagation_route_raw).all()):
+            raise ValueError("propagation_route_raw must contain only finite values")
+
+        state_delta = projected_state_delta.detach()
+        propagation_contribution = (
+            evidence_anchor.detach()[..., 2:].to(dtype=dtype)
+            * anchor_weights.detach()[:, 2:].to(dtype=dtype).unsqueeze(0)
+        )
+        if not self.enabled:
+            adjustment = torch.zeros(
+                (batch_size, concepts),
+                device=device,
+                dtype=dtype,
+            )
+            state_route = adjustment.new_tensor(0.0)
+            propagation_route = adjustment.new_zeros(
+                self.num_propagation_heads
+            )
+        else:
+            state_route = torch.tanh(
+                self.state_route_raw.to(device=device, dtype=dtype)
+            )
+            propagation_route = torch.tanh(
+                self.propagation_route_raw.to(device=device, dtype=dtype)
+            )
+            adjustment = (
+                state_route * state_delta
+                + (
+                    propagation_contribution
+                    * propagation_route.reshape(1, 1, -1)
+                ).sum(dim=-1)
+            )
+
+        if not return_details:
+            return adjustment
+        state_adjustment = state_route * state_delta
+        propagation_adjustment_by_head = (
+            propagation_contribution
+            * propagation_route.reshape(1, 1, -1)
+        )
+        details = {
+            "adjustment": adjustment.detach(),
+            "state_adjustment": state_adjustment.detach(),
+            "propagation_adjustment": propagation_adjustment_by_head.sum(
+                dim=-1
+            ).detach(),
+            "propagation_adjustment_by_head": (
+                propagation_adjustment_by_head.detach()
+            ),
+            "propagation_channel_contribution": (
+                propagation_contribution.detach()
+            ),
+            "state_route": state_route.detach(),
+            "propagation_route": propagation_route.detach(),
+            "route": torch.cat(
+                (state_route.reshape(1), propagation_route)
+            ).detach(),
+            "enabled": adjustment.detach().new_tensor(
+                1.0 if self.enabled else 0.0
+            ),
+        }
+        return adjustment, details
