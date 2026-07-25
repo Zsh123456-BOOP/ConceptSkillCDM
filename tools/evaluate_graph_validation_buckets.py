@@ -157,6 +157,25 @@ def _required_role_checkpoint(
     return path
 
 
+def _diagnostic_candidate_checkpoint(
+    checkpoint_dir: Path,
+    manifest: Mapping[str, object],
+) -> Path:
+    """Prefer the unconstrained max-AUC candidate when it is recorded."""
+    raw_best = _role_checkpoint_path(
+        checkpoint_dir,
+        manifest,
+        "raw_best",
+    )
+    if raw_best is not None:
+        return raw_best
+    return _required_role_checkpoint(
+        checkpoint_dir,
+        manifest,
+        "candidate",
+    )
+
+
 def _bucket_masks(support: np.ndarray) -> Dict[str, np.ndarray]:
     return {
         "all": np.ones(support.shape, dtype=bool),
@@ -442,10 +461,9 @@ def main() -> None:
                     checkpoint_dir,
                     batch_size=max(1, int(args.batch_size)),
                     device=device,
-                    checkpoint_path=_required_role_checkpoint(
+                    checkpoint_path=_diagnostic_candidate_checkpoint(
                         checkpoint_dir,
                         manifest,
-                        "candidate",
                     ),
                     variant_label="gec_relation_residual_candidate",
                 )
@@ -462,10 +480,9 @@ def main() -> None:
                     checkpoint_dir,
                     batch_size=max(1, int(args.batch_size)),
                     device=device,
-                    checkpoint_path=_required_role_checkpoint(
+                    checkpoint_path=_diagnostic_candidate_checkpoint(
                         checkpoint_dir,
                         manifest,
-                        "candidate",
                     ),
                     variant_label="gec_branch_gate_candidate",
                 )

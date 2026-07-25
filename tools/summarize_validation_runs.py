@@ -159,6 +159,7 @@ def _role_checkpoint_path(
     defaults = {
         "parent": ("parent_fallback.pth", "fallback_parent.pth"),
         "candidate": ("candidate_best.pth",),
+        "raw_best": ("candidate_raw_best.pth",),
         "selected": ("selected_model.pth", "best_model.pth"),
     }
     return next(
@@ -439,7 +440,7 @@ def _read_run(path: Path) -> Dict[str, object]:
     )
     role_paths = {
         role: _role_checkpoint_path(path, manifest, role)
-        for role in ("parent", "candidate", "selected")
+        for role in ("parent", "candidate", "raw_best", "selected")
     }
     role_checkpoints = {
         role: (
@@ -468,6 +469,11 @@ def _read_run(path: Path) -> Dict[str, object]:
         manifest,
         "candidate",
         role_checkpoints["candidate"],
+    )
+    raw_best_metrics = _merged_role_metrics(
+        manifest,
+        "raw_best",
+        role_checkpoints["raw_best"],
     )
 
     selection = _mapping(manifest.get("selection"))
@@ -561,6 +567,7 @@ def _read_run(path: Path) -> Dict[str, object]:
         ),
         "parent_checkpoint_sha256": _role_sha(manifest, "parent"),
         "candidate_checkpoint_sha256": _role_sha(manifest, "candidate"),
+        "raw_best_checkpoint_sha256": _role_sha(manifest, "raw_best"),
         "selected_checkpoint_sha256": _role_sha(manifest, "selected"),
         "selected_residual_active": _optional_bool(residual_active_value),
         "zero_identity_verified": _optional_bool(
@@ -581,6 +588,7 @@ def _read_run(path: Path) -> Dict[str, object]:
     for role, metrics in (
         ("parent", parent_metrics),
         ("candidate", candidate_metrics),
+        ("raw_best", raw_best_metrics),
         ("selected", selected_metrics),
     ):
         _metric(row, f"{role}_val", metrics)
@@ -599,6 +607,7 @@ def _read_run(path: Path) -> Dict[str, object]:
     for name in METRIC_NAMES:
         parent_value = parent_metrics.get(name)
         candidate_value = candidate_metrics.get(name)
+        raw_best_value = raw_best_metrics.get(name)
         selected_value = selected_metrics.get(name)
         if parent_value is not None and candidate_value is not None:
             row[f"candidate_parent_{name}_delta"] = (
@@ -607,6 +616,10 @@ def _read_run(path: Path) -> Dict[str, object]:
         if parent_value is not None and selected_value is not None:
             row[f"selected_parent_{name}_delta"] = (
                 float(selected_value) - float(parent_value)
+            )
+        if parent_value is not None and raw_best_value is not None:
+            row[f"raw_best_parent_{name}_delta"] = (
+                float(raw_best_value) - float(parent_value)
             )
 
     _metric(row, "train", checkpoint.get("train_metrics", {}))
@@ -617,10 +630,16 @@ def _read_run(path: Path) -> Dict[str, object]:
     candidate_parameters = _residual_parameters(
         role_checkpoints["candidate"]
     )
+    raw_best_parameters = _residual_parameters(
+        role_checkpoints["raw_best"]
+    )
     selected_parameters = _residual_parameters(selected_checkpoint)
     _add_parameter_fields(row, "candidate", candidate_parameters)
+    _add_parameter_fields(row, "raw_best", raw_best_parameters)
     _add_parameter_fields(row, "selected", selected_parameters)
-    legacy_parameters = candidate_parameters or selected_parameters
+    legacy_parameters = (
+        raw_best_parameters or candidate_parameters or selected_parameters
+    )
     for name, value in legacy_parameters.items():
         row[f"residual_{name}"] = value
     # Preserve the original v3 column names for existing analysis notebooks.
@@ -690,8 +709,10 @@ def main() -> None:
                 "test_",
                 "parent_val_",
                 "candidate_val_",
+                "raw_best_val_",
                 "selected_val_",
                 "candidate_parent_",
+                "raw_best_parent_",
                 "selected_parent_",
             )
         )
