@@ -22,6 +22,8 @@ from src.residual_relation import (
     estimate_relations_from_residuals,
     score_queries,
     sorted_id_map,
+    topk_relation_estimate,
+    topk_relation_matrix,
 )
 
 
@@ -46,6 +48,39 @@ def _direction_frame() -> pd.DataFrame:
 
 
 def main() -> None:
+    dense_matrix = np.asarray(
+        (
+            (0.0, 0.2, -0.6, 0.1),
+            (0.1, 0.0, 0.4, -0.2),
+            (0.0, -0.3, 0.0, 0.7),
+            (0.0, 0.0, 0.0, 0.0),
+        )
+    )
+    sparse_matrix = topk_relation_matrix(dense_matrix, topk=2)
+    assert np.all(np.count_nonzero(sparse_matrix, axis=1) <= 2)
+    np.testing.assert_allclose(
+        np.abs(sparse_matrix).sum(axis=1),
+        np.abs(dense_matrix).sum(axis=1),
+        atol=1e-12,
+        rtol=0.0,
+    )
+    assert sparse_matrix[0, 2] < 0.0
+    assert sparse_matrix[2, 3] > 0.0
+    np.testing.assert_array_equal(
+        topk_relation_matrix(dense_matrix, topk=3),
+        dense_matrix,
+    )
+
+    # Each fold is pruned from its own coefficients.  A stronger edge in a
+    # different fold cannot determine this fold's retained support.
+    fold_a = dense_matrix.copy()
+    fold_b = dense_matrix.copy()
+    fold_b[0] = (0.0, 0.9, -0.1, 0.2)
+    fold_a_top1 = topk_relation_matrix(fold_a, topk=1)
+    fold_b_top1 = topk_relation_matrix(fold_b, topk=1)
+    assert np.flatnonzero(fold_a_top1[0]).tolist() == [2]
+    assert np.flatnonzero(fold_b_top1[0]).tolist() == [1]
+
     frame = _direction_frame()
     concept_map = sorted_id_map((0, 1, 2, 3))
     relation = build_relation(frame, concept_map)
@@ -253,6 +288,34 @@ def main() -> None:
         (before_scores.base_logit, after_scores.base_logit),
         (before_scores.raw_logit, after_scores.raw_logit),
         (before_scores.partial_logit, after_scores.partial_logit),
+    ):
+        np.testing.assert_allclose(left, right, atol=1e-12, rtol=0.0)
+
+    topk_before = topk_relation_estimate(before, topk=1)
+    topk_after = topk_relation_estimate(after, topk=1)
+    np.testing.assert_array_equal(topk_before.raw, topk_after.raw)
+    np.testing.assert_array_equal(topk_before.partial, topk_after.partial)
+    before_topk_scores = score_queries(
+        residual_before.iloc[[query_position]].reset_index(drop=True),
+        build_evidence_state(residual_before, concept_map),
+        concept_map,
+        {query_fold: topk_before},
+        {query_student: query_fold},
+        leave_one_out=True,
+    )
+    after_topk_scores = score_queries(
+        residual_after.iloc[[query_position]].reset_index(drop=True),
+        build_evidence_state(residual_after, concept_map),
+        concept_map,
+        {query_fold: topk_after},
+        {query_student: query_fold},
+        leave_one_out=True,
+    )
+    for left, right in (
+        (before_topk_scores.rate_evidence, after_topk_scores.rate_evidence),
+        (before_topk_scores.base_logit, after_topk_scores.base_logit),
+        (before_topk_scores.raw_logit, after_topk_scores.raw_logit),
+        (before_topk_scores.partial_logit, after_topk_scores.partial_logit),
     ):
         np.testing.assert_allclose(left, right, atol=1e-12, rtol=0.0)
 

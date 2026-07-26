@@ -36,7 +36,9 @@ from src.residual_relation import (  # noqa: E402
     score_queries,
     sorted_id_map,
     student_excluded_item_expectation,
+    topk_relation_estimate,
 )
+from src.config import DATASET_DEFAULTS  # noqa: E402
 
 
 DEFAULT_DATASETS = "assist_17,junyi,nips34,ednet_kt1,moocradar,xes3g5m"
@@ -171,6 +173,21 @@ def _relation_metrics(
     return result
 
 
+def _topk_relation_metrics(
+    full: RelationEstimate,
+) -> Dict[str, float]:
+    concepts = int(full.partial.shape[0])
+    possible_edges = max(1, concepts * (concepts - 1))
+    raw_edges = int(np.count_nonzero(np.abs(full.raw) > 1e-12))
+    partial_edges = int(np.count_nonzero(np.abs(full.partial) > 1e-12))
+    return {
+        "full_topk_raw_edges": raw_edges,
+        "full_topk_raw_density": raw_edges / possible_edges,
+        "full_topk_partial_edges": partial_edges,
+        "full_topk_partial_density": partial_edges / possible_edges,
+    }
+
+
 def probe_dataset(
     data_dir: Path,
     *,
@@ -191,6 +208,12 @@ def probe_dataset(
         valid = valid.iloc[:debug_max_valid_rows].copy()
 
     q_by_item = build_exercise_concepts(train)
+    try:
+        relation_topk = int(DATASET_DEFAULTS[data_dir.name]["graph_topk"])
+    except KeyError as error:
+        raise KeyError(
+            f"{data_dir.name}: graph_topk is missing from DATASET_DEFAULTS"
+        ) from error
     all_concepts = set()
     for concepts in q_by_item.values():
         all_concepts.update(concepts)
@@ -239,12 +262,25 @@ def probe_dataset(
             flush=True,
         )
 
+    topk_full = topk_relation_estimate(full, relation_topk)
+    topk_fold_relations = {
+        fold: topk_relation_estimate(relation, relation_topk)
+        for fold, relation in fold_relations.items()
+    }
     evidence = build_evidence_state(full_residuals, concept_map)
     train_scores = score_queries(
         full_residuals,
         evidence,
         concept_map,
         fold_relations,
+        assignment,
+        leave_one_out=True,
+    )
+    train_topk_scores = score_queries(
+        full_residuals,
+        evidence,
+        concept_map,
+        topk_fold_relations,
         assignment,
         leave_one_out=True,
     )
@@ -269,12 +305,21 @@ def probe_dataset(
         {student: 0 for student in seen_students},
         leave_one_out=False,
     )
+    valid_topk_scores = score_queries(
+        valid,
+        evidence,
+        concept_map,
+        {0: topk_full},
+        {student: 0 for student in seen_students},
+        leave_one_out=False,
+    )
 
     result: Dict[str, float] = {
         "dataset": data_dir.name,
         "seed": seed,
         "folds": folds,
         "min_pair_students": min_pair_students,
+        "relation_topk": relation_topk,
         "primary_base_definition": "item_logit+rate_evidence+residual_evidence",
         "train_rows": int(len(train)),
         "valid_seen_rows": int(len(valid)),
@@ -283,9 +328,12 @@ def probe_dataset(
     }
     result.update(_score_metrics(train_scores, "train_oof"))
     result.update(_score_metrics(valid_scores, "valid"))
+    result.update(_score_metrics(train_topk_scores, "train_oof_topk"))
+    result.update(_score_metrics(valid_topk_scores, "valid_topk"))
     result.update(
         _relation_metrics(full, fold_relations, min_pair_students)
     )
+    result.update(_topk_relation_metrics(topk_full))
     result["elapsed_seconds"] = float(time.perf_counter() - started)
     print(
         f"[{data_dir.name}] valid partial ΔAUC="

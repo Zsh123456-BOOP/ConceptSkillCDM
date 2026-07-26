@@ -63,6 +63,52 @@ class QueryScores:
     partial_logit: np.ndarray
 
 
+def topk_relation_matrix(matrix: np.ndarray, topk: int) -> np.ndarray:
+    """Keep each target row's strongest signed edges without changing its L1 mass."""
+
+    relation = np.asarray(matrix, dtype=np.float64)
+    if relation.ndim != 2 or relation.shape[0] != relation.shape[1]:
+        raise ValueError("relation matrix must be square")
+    if topk < 1:
+        raise ValueError("topk must be positive")
+    concepts = relation.shape[0]
+    result = relation.copy()
+    np.fill_diagonal(result, 0.0)
+    if topk >= concepts - 1:
+        return result
+
+    result.fill(0.0)
+    for target, row in enumerate(relation):
+        sources = np.flatnonzero((np.abs(row) > EPS) & (np.arange(concepts) != target))
+        if sources.size <= topk:
+            kept = sources
+        else:
+            order = np.lexsort((sources, -np.abs(row[sources])))
+            kept = sources[order[:topk]]
+        if kept.size == 0:
+            continue
+        original_l1 = float(np.abs(row[sources]).sum())
+        kept_l1 = float(np.abs(row[kept]).sum())
+        result[target, kept] = row[kept] * (original_l1 / kept_l1)
+    return result
+
+
+def topk_relation_estimate(
+    estimate: RelationEstimate,
+    topk: int,
+) -> RelationEstimate:
+    """Prune raw and partial matrices independently, preserving fit metadata."""
+
+    return RelationEstimate(
+        raw=topk_relation_matrix(estimate.raw, topk),
+        partial=topk_relation_matrix(estimate.partial, topk),
+        raw_students=estimate.raw_students,
+        partial_students=estimate.partial_students,
+        raw_weight=estimate.raw_weight,
+        partial_weight=estimate.partial_weight,
+    )
+
+
 def parse_concepts(value) -> Tuple[int, ...]:
     """Parse one ``cpt_seq`` value into a stable, duplicate-free tuple."""
 
