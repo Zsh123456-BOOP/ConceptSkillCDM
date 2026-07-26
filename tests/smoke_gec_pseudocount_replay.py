@@ -54,14 +54,11 @@ def main() -> None:
         * count
         / (count + 1.0)
     )
-    query_mask = torch.tensor([[True, False, False, False]])
-
     unchanged, zero_support = fuse_pseudocount(
         rate_evidence=rate,
         correct=correct,
         count=count,
         concept_rate=concept_rate,
-        query_mask=query_mask,
         graph=torch.zeros_like(real),
     )
     assert torch.equal(unchanged, rate)
@@ -72,7 +69,6 @@ def main() -> None:
         correct=correct,
         count=count,
         concept_rate=concept_rate,
-        query_mask=query_mask,
         graph=real,
     )
     assert torch.isfinite(fused).all()
@@ -80,19 +76,15 @@ def main() -> None:
     assert support[0, 0] > 0.0
     assert fused[0, 0] != rate[0, 0]
 
-    # Every concept attached to the current item is excluded as a graph source.
-    only_query_source = torch.zeros_like(real)
-    only_query_source[1, 0] = 1.0
-    excluded, excluded_support = fuse_pseudocount(
+    sparse_fused, sparse_support = fuse_pseudocount(
         rate_evidence=rate,
         correct=correct,
         count=count,
         concept_rate=concept_rate,
-        query_mask=query_mask,
-        graph=only_query_source,
+        graph=real.to_sparse_coo(),
     )
-    assert excluded_support[0, 1] == 0.0
-    assert excluded[0, 1] == rate[0, 1]
+    assert torch.allclose(sparse_fused, fused)
+    assert torch.allclose(sparse_support, support)
 
     print("OK: GEC pseudo-count replay contracts passed.")
 

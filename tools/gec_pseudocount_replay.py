@@ -136,12 +136,18 @@ def build_fixed_graphs(
         raise RuntimeError("random graph does not preserve column degree")
     if bool(torch.diagonal(randomized).any()):
         raise RuntimeError("random graph contains self-loops")
+    overlap = float((real_support & random_support).sum().item()) / float(
+        real_support.sum().item()
+    )
+    if overlap >= 0.75:
+        raise RuntimeError(f"random graph changed too few endpoints: overlap={overlap:.3f}")
     return {
         "none": zero,
         "exposure": exposure,
         "degree_random": randomized,
     }, {
         "graph_edges": float(real_support.sum().item()),
+        "random_edge_overlap": overlap,
         "random_successful_swaps": float(swaps),
     }
 
@@ -152,20 +158,22 @@ def fuse_pseudocount(
     correct: torch.Tensor,
     count: torch.Tensor,
     concept_rate: torch.Tensor,
-    query_mask: torch.Tensor,
     graph: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Add at most one graph-supported empirical-Bayes pseudo-response."""
     graph = graph.to(device=count.device, dtype=count.dtype)
-    if not bool((graph > 0.0).any()):
+    has_edges = graph._nnz() > 0 if graph.is_sparse else bool((graph > 0.0).any())
+    if not has_edges:
         return rate_evidence, torch.zeros_like(count)
 
-    allowed_source = (~query_mask.bool()).to(dtype=count.dtype)
+    def project(values: torch.Tensor) -> torch.Tensor:
+        if graph.is_sparse:
+            return torch.sparse.mm(graph, values.transpose(0, 1)).transpose(0, 1)
+        return values.matmul(graph.transpose(0, 1))
+
     reliability = count / (count + 1.0)
-    pseudo_support = (reliability * allowed_source).matmul(graph.transpose(0, 1))
-    graph_numerator = (rate_evidence * allowed_source).matmul(
-        graph.transpose(0, 1)
-    )
+    pseudo_support = project(reliability)
+    graph_numerator = project(rate_evidence)
     if float(pseudo_support.max().item()) > 1.0 + 1e-5:
         raise RuntimeError("graph pseudo-support exceeds one observation")
 
@@ -279,7 +287,14 @@ def load_validation_context(
         "loaded_args": loaded_args,
         "model": model,
         "loader": loader,
-        "graphs": {name: graph.to(device) for name, graph in graphs.items()},
+        "graphs": {
+            name: (
+                graph.to_sparse_coo().coalesce().to(device)
+                if graph.size(0) >= 192
+                else graph.to(device)
+            )
+            for name, graph in graphs.items()
+        },
         "graph_stats": graph_stats,
     }
 
@@ -329,10 +344,10 @@ def replay_batch(
             correct=correct,
             count=count,
             concept_rate=concept_rate,
-            query_mask=details["q_vector"] > 0,
             graph=graphs[graph_name],
         )
-        gate_input = torch.log1p(count + pseudo_support)
+        # Keep the frozen checkpoint gate exactly on its trained count input.
+        gate_input = torch.log1p(count)
         gate = torch.sigmoid(
             gate_parameters[0] + gate_parameters[1] * gate_input
         )
