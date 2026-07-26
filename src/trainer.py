@@ -45,6 +45,10 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "architecture",
     "use_response_evidence",
     "evidence_anchor_mode",
+    "evidence_propagation_mode",
+    "evidence_state_injection",
+    "anchor_multihead_prop",
+    "exposure_prior_pmi",
     "prediction_head",
     "graph_prior_mode",
     "graph_topk",
@@ -199,6 +203,18 @@ def _training_evidence_kwargs(
 
 def _collect_structural_switches(source: Any) -> Dict[str, Any]:
     switches = {key: _source_get(source, key) for key in STRUCTURAL_SWITCH_KEYS}
+    switches["evidence_propagation_mode"] = str(
+        _source_get(source, "evidence_propagation_mode", "legacy")
+    )
+    switches["evidence_state_injection"] = bool(
+        _source_get(source, "evidence_state_injection", True)
+    )
+    switches["anchor_multihead_prop"] = bool(
+        _source_get(source, "anchor_multihead_prop", True)
+    )
+    switches["exposure_prior_pmi"] = bool(
+        _source_get(source, "exposure_prior_pmi", False)
+    )
     switches["pairwise_auc_weight"] = _resolve_pairwise_auc_weight(source)
     switches["ema_decay"] = _resolve_ema_decay(source)
     switches["architecture"] = ARCHITECTURE_NAME
@@ -292,6 +308,9 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "anchor_multihead_prop": bool(
             _source_get(source, "anchor_multihead_prop", True)
         ),
+        "evidence_propagation_mode": str(
+            _source_get(source, "evidence_propagation_mode", "legacy")
+        ),
         "prediction_head": str(_source_get(source, "prediction_head", "irt2pl")),
         "knowledge_dim": int(_source_get(source, "knowledge_dim", 32)),
         "num_relation_heads": int(_source_get(source, "num_relation_heads", 4)),
@@ -330,6 +349,9 @@ def _runtime_facts(model: nn.Module) -> Dict[str, Any]:
         "response_evidence_enabled": bool(
             getattr(base_model, "use_response_evidence", False)
         ),
+        "evidence_propagation_mode": str(
+            getattr(base_model, "evidence_propagation_mode", "legacy")
+        ),
         "num_parameters": int(sum(parameter.numel() for parameter in base_model.parameters())),
         "num_trainable_parameters": int(
             sum(parameter.numel() for parameter in base_model.parameters() if parameter.requires_grad)
@@ -365,6 +387,8 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "evidence_anchor_mode",
         "evidence_state_injection",
         "anchor_multihead_prop",
+        "evidence_propagation_mode",
+        "exposure_prior_pmi",
         "prediction_head",
         "seed",
         "batch_size",
@@ -1446,6 +1470,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
             "checkpoint_sha256": checkpoint_sha256,
             "dataset_name": loaded_args.get("dataset_name"),
             "model_variant": loaded_args.get("model_variant"),
+            "evidence_propagation_mode": loaded_args.get(
+                "evidence_propagation_mode", "legacy"
+            ),
             "train_evidence_mode": loaded_args.get(
                 "train_evidence_mode", "excluded"
             ),
@@ -1530,6 +1557,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
         "architecture": ARCHITECTURE_NAME,
         "dataset_name": loaded_args.get("dataset_name"),
         "model_variant": loaded_args.get("model_variant"),
+        "evidence_propagation_mode": loaded_args.get(
+            "evidence_propagation_mode", "legacy"
+        ),
         "train_evidence_mode": loaded_args.get(
             "train_evidence_mode", "excluded"
         ),
@@ -1567,6 +1597,9 @@ def run_inference(args, logger) -> Tuple[Dict[str, float], Dict[str, Any]]:
             "test_results_sha256": _sha256_file(test_results_path),
             "dataset_name": loaded_args.get("dataset_name"),
             "model_variant": loaded_args.get("model_variant"),
+            "evidence_propagation_mode": loaded_args.get(
+                "evidence_propagation_mode", "legacy"
+            ),
             "train_evidence_mode": loaded_args.get(
                 "train_evidence_mode", "excluded"
             ),
