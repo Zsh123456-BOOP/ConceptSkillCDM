@@ -144,15 +144,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="One propagated anchor channel per relation head (production default).",
     )
     parser.add_argument(
-        "--evidence_propagation_mode",
-        choices=("legacy", "support_normalized"),
-        default="legacy",
-        help=(
-            "Legacy learned-graph evidence transport, or the fixed co-exposure "
-            "support normalization candidate."
-        ),
-    )
-    parser.add_argument(
         "--prediction_head",
         choices=("irt2pl", "ncd_mlp"),
         default="irt2pl",
@@ -299,16 +290,6 @@ def _validate_args(args: argparse.Namespace) -> None:
     ):
         raise SystemExit(
             "error: non-default --train_evidence_mode requires response evidence"
-        )
-    if (
-        str(args.evidence_propagation_mode) == "support_normalized"
-        and str(args.evidence_anchor_mode) == "full"
-        and str(args.graph_prior_mode) not in {"evidence", "exposure_only"}
-    ):
-        raise SystemExit(
-            "error: support-normalized evidence propagation requires the "
-            "train-only exposure prior; item_only and degree_random are "
-            "incompatible controls"
         )
 
 

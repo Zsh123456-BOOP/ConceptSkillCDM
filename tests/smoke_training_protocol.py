@@ -26,7 +26,6 @@ from src.trainer import (
     _build_data_identity,
     _build_optimizer,
     _checkpoint_args,
-    _collect_structural_switches,
     _clone_model_state,
     _claim_test_seal,
     _is_validation_improvement,
@@ -62,38 +61,6 @@ def main() -> None:
     main_module._validate_args(args)
     assert args.run_mode == "train"
     assert args.train_evidence_mode == "excluded"
-    assert args.evidence_propagation_mode == "legacy"
-    normalized_args = main_module.parse_args(
-        ["--evidence_propagation_mode", "support_normalized"]
-    )
-    assert normalized_args.evidence_propagation_mode == "support_normalized"
-    assert _config_hash(args) != _config_hash(normalized_args)
-    normalized_pmi_args = main_module.parse_args(
-        [
-            "--evidence_propagation_mode",
-            "support_normalized",
-            "--exposure_prior_pmi",
-            "True",
-        ]
-    )
-    assert _config_hash(normalized_args) != _config_hash(normalized_pmi_args)
-    incompatible_graph = main_module.parse_args(
-        [
-            "--model_variant",
-            "item_only",
-            "--evidence_propagation_mode",
-            "support_normalized",
-        ]
-    )
-    main_module._apply_model_variant(incompatible_graph)
-    try:
-        main_module._validate_args(incompatible_graph)
-    except SystemExit as exc:
-        assert "requires the train-only exposure prior" in str(exc)
-    else:
-        raise AssertionError("support normalization must reject a disabled exposure prior")
-    old_switches = _collect_structural_switches({})
-    assert old_switches["evidence_propagation_mode"] == "legacy"
     for mode in ("excluded", "neutralized", "self_included"):
         parsed_mode = main_module.parse_args(["--train_evidence_mode", mode])
         assert parsed_mode.train_evidence_mode == mode

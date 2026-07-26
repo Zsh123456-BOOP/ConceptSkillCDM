@@ -32,7 +32,6 @@ GRAPH_IRT_ARCHITECTURE = "graph_irt_v10"
 #   direct_only -> direct rate + difficulty residual (no graph transport)
 #   off         -> evidence feeds only the initial state (v9 behaviour)
 EVIDENCE_ANCHOR_MODES = ("full", "direct_only", "off")
-EVIDENCE_PROPAGATION_MODES = ("legacy", "support_normalized")
 _ANCHOR_CHANNELS = {"full": 3, "direct_only": 2, "off": 0}
 
 
@@ -54,7 +53,6 @@ class CognitiveDiagnosisModel(nn.Module):
         evidence_anchor_mode: str = "full",
         evidence_state_injection: bool = True,
         anchor_multihead_prop: bool = True,
-        evidence_propagation_mode: str = "legacy",
         prediction_head: str = "irt2pl",
         knowledge_dim: int = 32,
         num_relation_heads: int = 4,
@@ -96,23 +94,13 @@ class CognitiveDiagnosisModel(nn.Module):
         self.evidence_state_injection = bool(evidence_state_injection)
         # One propagated anchor channel per relation head.
         self.anchor_multihead_prop = bool(anchor_multihead_prop)
-        propagation_mode = str(evidence_propagation_mode).strip().lower()
-        if propagation_mode not in EVIDENCE_PROPAGATION_MODES:
-            raise ValueError(
-                "evidence_propagation_mode must be one of "
-                f"{EVIDENCE_PROPAGATION_MODES}, got {evidence_propagation_mode!r}"
-            )
-        self.evidence_propagation_mode = propagation_mode
         # Head probe: "irt2pl" (default single scalar 2PL) or "ncd_mlp"
         # (NCDM-style positive-weight monotone MLP over per-concept 2PL terms).
         self.prediction_head = str(prediction_head)
         if self.evidence_anchor_mode == "full":
-            if self.evidence_propagation_mode == "support_normalized":
-                self._anchor_channels = 3
-            else:
-                self._anchor_channels = 2 + (
-                    self.num_relation_heads if self.anchor_multihead_prop else 1
-                )
+            self._anchor_channels = 2 + (
+                self.num_relation_heads if self.anchor_multihead_prop else 1
+            )
         else:
             self._anchor_channels = _ANCHOR_CHANNELS[self.evidence_anchor_mode]
         # Count-conditioned anchor gates: sigmoid(a + b*log1p(n)) per channel.
@@ -429,58 +417,6 @@ class CognitiveDiagnosisModel(nn.Module):
         evidence = torch.stack((rate_evidence, residual_evidence), dim=-1)
         return evidence, count
 
-    @staticmethod
-    def _support_normalized_propagation(
-        rate_evidence: torch.Tensor,
-        source_count: torch.Tensor,
-        relation_matrix: torch.Tensor,
-    ) -> torch.Tensor:
-        """Transport evidence only across sources observed for this student.
-
-        ``relation_matrix[target, source]`` is train-only and label-free.
-        Self-loops are removed for this statistics path even when the state GNN
-        retains them.  The current weighted sum P0 is corrected toward the
-        available-source mean P1 only while the target concept itself is
-        scarce:
-
-            P = P0 + (P1 - P0) / (target_count + 1).
-
-        The source reliability is already contained once in ``rate_evidence``.
-        """
-        if rate_evidence.dim() != 2 or source_count.dim() != 2:
-            raise ValueError("rate_evidence and source_count must have shape (batch, concepts)")
-        if tuple(rate_evidence.shape) != tuple(source_count.shape):
-            raise ValueError(
-                "rate_evidence and source_count must have the same shape, got "
-                f"{tuple(rate_evidence.shape)} and {tuple(source_count.shape)}"
-            )
-        concept_count = int(rate_evidence.size(1))
-        if tuple(relation_matrix.shape) != (concept_count, concept_count):
-            raise ValueError(
-                "relation_matrix must have shape "
-                f"{(concept_count, concept_count)}, got {tuple(relation_matrix.shape)}"
-            )
-
-        relation = relation_matrix.to(
-            device=rate_evidence.device,
-            dtype=rate_evidence.dtype,
-        ).clamp(min=0.0)
-        relation = relation.clone()
-        relation.fill_diagonal_(0.0)
-        relation = relation / relation.sum(dim=-1, keepdim=True).clamp(min=1e-12)
-        receiver = relation.transpose(0, 1)
-
-        current = torch.matmul(rate_evidence, receiver)
-        available = (source_count > 0.0).to(dtype=rate_evidence.dtype)
-        available_mass = torch.matmul(available, receiver)
-        normalized = torch.where(
-            available_mass > 0.0,
-            current / available_mass.clamp(min=1e-12),
-            torch.zeros_like(current),
-        )
-        target_need = 1.0 / (source_count.to(dtype=rate_evidence.dtype) + 1.0)
-        return current + target_need * (normalized - current)
-
     def _compose_evidence_anchor(
         self,
         relation_matrices: torch.Tensor,
@@ -489,10 +425,14 @@ class CognitiveDiagnosisModel(nn.Module):
     ) -> Optional[torch.Tensor]:
         """Stack direct, residual, and graph-propagated evidence channels.
 
-        Legacy propagation uses the learned state graph.  Support-normalized
-        propagation instead uses the fixed train-only co-exposure prior and
-        corrects graph dilution only for targets with little direct evidence.
-        Both modes preserve the leave-one-out query boundary.
+        The propagated channel transports each row's leave-one-out rate
+        evidence over the learned row-stochastic concept graph, so concepts
+        without direct observations receive the evidence of their graph
+        neighbours.  Each channel is scaled by a learnable count-conditioned
+        gate (monotone in log evidence count), letting the anchor trust
+        evidence more where more observations back it.  All inputs are
+        train-only statistics; every map is linear in them, so the
+        leave-one-out contract is preserved exactly.
         """
         if response_evidence is None or self.evidence_anchor_mode == "off":
             return None
@@ -509,27 +449,7 @@ class CognitiveDiagnosisModel(nn.Module):
             gated(residual_evidence, 1, log_count),
         ]
         if self.evidence_anchor_mode == "full":
-            if self.evidence_propagation_mode == "support_normalized":
-                if self.exposure_prior_matrix is None:
-                    raise RuntimeError(
-                        "support-normalized evidence propagation requires an exposure prior"
-                    )
-                propagated = self._support_normalized_propagation(
-                    rate_evidence,
-                    loo_count,
-                    self.exposure_prior_matrix,
-                )
-                # The propagation formula already consumes source and target
-                # counts.  Keep only the learned intercept here; a second count
-                # slope would duplicate and potentially reverse that control.
-                channels.append(
-                    gated(
-                        propagated,
-                        2,
-                        torch.zeros_like(propagated),
-                    )
-                )
-            elif self.anchor_multihead_prop:
+            if self.anchor_multihead_prop:
                 for head in range(self.num_relation_heads):
                     receiver = relation_matrices[head].transpose(0, 1)
                     propagated = torch.matmul(
