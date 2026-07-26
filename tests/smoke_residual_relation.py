@@ -5,9 +5,13 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
+import torch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -19,12 +23,14 @@ from src.residual_relation import (
     build_evidence_state,
     build_exercise_concepts,
     build_relation,
+    build_residual_relation_bundle,
     estimate_relations_from_residuals,
     score_queries,
     sorted_id_map,
     topk_relation_estimate,
     topk_relation_matrix,
 )
+from src.dataset import create_dataloaders
 
 
 def _row(student, item, concepts, label):
@@ -44,6 +50,21 @@ def _direction_frame() -> pd.DataFrame:
             rows.append(_row(student, 100 + repeat, "0", high))
             rows.append(_row(student, 200 + repeat, "1", high))
             rows.append(_row(student, 300 + repeat, "2", 1 - high))
+    return pd.DataFrame(rows)
+
+
+def _bundle_frame() -> pd.DataFrame:
+    """Non-contiguous raw IDs with a true pair relation and independent ability."""
+
+    rows = []
+    for index in range(50):
+        student = 1001 + 17 * index
+        source = int((index // 2) % 2 == 0)
+        nuisance = int(index % 2 == 0)
+        for repeat in range(3):
+            rows.append(_row(student, 5001 + repeat, "101", source))
+            rows.append(_row(student, 6001 + repeat, "303", source))
+            rows.append(_row(student, 7001 + repeat, "909", nuisance))
     return pd.DataFrame(rows)
 
 
@@ -235,6 +256,131 @@ def main() -> None:
         for value in range(5)
     ]
     assert max(fold_sizes) - min(fold_sizes) <= 1
+
+    # The production bundle must align arbitrary raw IDs to the supplied
+    # internal maps and independently fit/top-k every complement fold.
+    bundle_frame = _bundle_frame()
+    raw_students = bundle_frame["stu_id"].unique().tolist()
+    student_map = {
+        raw_student: internal
+        for internal, raw_student in enumerate(reversed(raw_students))
+    }
+    bundle_concept_map = {101: 2, 303: 0, 909: 1, 1111: 3}
+    bundle = build_residual_relation_bundle(
+        bundle_frame,
+        student_map,
+        bundle_concept_map,
+        seed=42,
+        topk=1,
+    )
+    assert bundle["schema"] == "residual_relation_bundle.v1"
+    assert bundle["folds"] == 5
+    assert bundle["min_pair_students"] == 20
+    assert bundle["full_relation"].shape == (4, 4)
+    assert bundle["fold_relations"].shape == (5, 4, 4)
+    assert bundle["student_fold"].shape == (50,)
+    assert bundle["full_relation"].dtype == torch.float32
+    assert bundle["fold_relations"].dtype == torch.float32
+    assert bundle["student_fold"].dtype == torch.long
+    assert torch.isfinite(bundle["full_relation"]).all()
+    assert torch.isfinite(bundle["fold_relations"]).all()
+    assert torch.count_nonzero(bundle["fold_relations"][0]) > 0
+    assert torch.all(
+        torch.count_nonzero(bundle["fold_relations"], dim=2) <= 1
+    )
+
+    expected_assignment = assign_student_folds(raw_students, folds=5, seed=42)
+    for raw_student, internal_student in student_map.items():
+        assert (
+            bundle["student_fold"][internal_student].item()
+            == expected_assignment[raw_student]
+        )
+    expected_full = topk_relation_matrix(
+        build_relation(
+            bundle_frame,
+            bundle_concept_map,
+            min_pair_students=20,
+        ).partial,
+        topk=1,
+    )
+    np.testing.assert_allclose(
+        bundle["full_relation"].numpy(),
+        expected_full.astype(np.float32),
+        atol=0.0,
+        rtol=0.0,
+    )
+
+    # Flipping every label in one held-out fold cannot change that fold's
+    # relation because residual baselines, estimation, top-k, and L1 all use
+    # only its complement students.
+    held_out_bundle_students = {
+        student
+        for student, fold in expected_assignment.items()
+        if fold == 0
+    }
+    flipped_bundle_frame = bundle_frame.copy()
+    held_out_mask = flipped_bundle_frame["stu_id"].isin(
+        held_out_bundle_students
+    )
+    flipped_bundle_frame.loc[held_out_mask, "label"] = (
+        1.0 - flipped_bundle_frame.loc[held_out_mask, "label"]
+    )
+    flipped_bundle = build_residual_relation_bundle(
+        flipped_bundle_frame,
+        student_map,
+        bundle_concept_map,
+        seed=42,
+        topk=1,
+    )
+    torch.testing.assert_close(
+        bundle["fold_relations"][0],
+        flipped_bundle["fold_relations"][0],
+        atol=0.0,
+        rtol=0.0,
+    )
+    torch.testing.assert_close(
+        bundle["student_fold"],
+        flipped_bundle["student_fold"],
+        atol=0.0,
+        rtol=0.0,
+    )
+
+    # Default/off dataloading must not call the relation builder or consume
+    # NumPy/PyTorch global RNG state.
+    numpy_state_before = np.random.get_state()
+    torch_state_before = torch.random.get_rng_state().clone()
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        train_path = Path(temporary_directory) / "train.csv"
+        valid_path = Path(temporary_directory) / "valid.csv"
+        bundle_frame.to_csv(train_path, index=False)
+        bundle_frame.to_csv(valid_path, index=False)
+        with patch(
+            "src.dataset.build_residual_relation_bundle",
+            side_effect=AssertionError("off mode must not construct relations"),
+        ):
+            _, _, test_loader, off_info = create_dataloaders(
+                str(train_path),
+                str(valid_path),
+                None,
+                batch_size=32,
+                num_workers=0,
+                shuffle_train=True,
+                seed=42,
+                load_test=False,
+            )
+    assert test_loader is None
+    assert off_info["residual_relation_mode"] == "off"
+    assert off_info["residual_relation_bundle"] is None
+    numpy_state_after = np.random.get_state()
+    assert numpy_state_before[0] == numpy_state_after[0]
+    np.testing.assert_array_equal(numpy_state_before[1], numpy_state_after[1])
+    assert numpy_state_before[2:] == numpy_state_after[2:]
+    torch.testing.assert_close(
+        torch_state_before,
+        torch.random.get_rng_state(),
+        atol=0.0,
+        rtol=0.0,
+    )
 
     held_out = {student for student, fold in assignment.items() if fold == 0}
     complement = sorted(set(frame["stu_id"]) - held_out)

@@ -19,7 +19,7 @@ from typing import Dict, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
-from src.config import EVIDENCE_ANCHOR_DROPOUT
+from src.config import EVIDENCE_ANCHOR_DROPOUT, RESIDUAL_RELATION_MODES
 from src.model_graph import MultiHeadRelationLearning, StudentKnowledgeEncoder
 from src.model_regularization import get_regularization_components as _get_regularization_components
 from src.prediction_head import CognitiveDiagnosisHead, ExerciseDifficultyEncoder
@@ -75,6 +75,8 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_reg_warmup_epochs: int = 1,
         graph_reg_cap_ratio: float = 6.0,
         prediction_l2_lambda: float = 5e-5,
+        residual_relation_mode: str = "off",
+        residual_relation_bundle: Optional[Dict[str, object]] = None,
     ):
         super().__init__()
         self.num_students = int(num_students)
@@ -83,6 +85,18 @@ class CognitiveDiagnosisModel(nn.Module):
         self.knowledge_dim = int(knowledge_dim)
         self.num_relation_heads = int(num_relation_heads)
         self.use_response_evidence = bool(use_response_evidence)
+        relation_mode = str(residual_relation_mode).strip().lower()
+        if relation_mode not in RESIDUAL_RELATION_MODES:
+            raise ValueError(
+                "residual_relation_mode must be one of "
+                f"{RESIDUAL_RELATION_MODES}, got {residual_relation_mode!r}"
+            )
+        if relation_mode != "off" and not self.use_response_evidence:
+            raise ValueError(
+                "residual relation transport requires use_response_evidence=True"
+            )
+        self.residual_relation_mode = relation_mode
+        self._register_residual_relation(residual_relation_bundle)
         anchor_mode = str(evidence_anchor_mode).strip().lower()
         if anchor_mode not in EVIDENCE_ANCHOR_MODES:
             raise ValueError(
@@ -191,6 +205,99 @@ class CognitiveDiagnosisModel(nn.Module):
             prediction_head=self.prediction_head,
         )
         self.exercise_encoder = ExerciseDifficultyEncoder(num_exercises=self.num_exercises)
+
+    def _register_residual_relation(
+        self,
+        bundle: Optional[Dict[str, object]],
+    ) -> None:
+        """Register fixed cross-fitted relation matrices without checkpoint state."""
+        if self.residual_relation_mode == "off":
+            self.residual_relation_full = None
+            self.residual_relation_folds = None
+            self.residual_relation_student_fold = None
+            return
+        if bundle is None:
+            raise ValueError(
+                "residual_relation_bundle is required for residual_relation_mode="
+                f"{self.residual_relation_mode!r}"
+            )
+
+        required = ("full_relation", "fold_relations", "student_fold")
+        missing = [name for name in required if name not in bundle]
+        if missing:
+            raise ValueError(
+                f"residual_relation_bundle is missing fields: {missing}"
+            )
+        full_relation = torch.as_tensor(
+            bundle["full_relation"]
+        ).detach().float()
+        fold_relations = torch.as_tensor(
+            bundle["fold_relations"]
+        ).detach().float()
+        raw_student_fold = torch.as_tensor(
+            bundle["student_fold"]
+        ).detach()
+        expected_full = (self.num_concepts, self.num_concepts)
+        expected_folds = (5, self.num_concepts, self.num_concepts)
+        if tuple(full_relation.shape) != expected_full:
+            raise ValueError(
+                "full residual relation must have shape "
+                f"{expected_full}, got {tuple(full_relation.shape)}"
+            )
+        if tuple(fold_relations.shape) != expected_folds:
+            raise ValueError(
+                "fold residual relations must have shape "
+                f"{expected_folds}, got {tuple(fold_relations.shape)}"
+            )
+        if tuple(raw_student_fold.shape) != (self.num_students,):
+            raise ValueError(
+                "student_fold must have shape "
+                f"({self.num_students},), got {tuple(raw_student_fold.shape)}"
+            )
+        if not bool(torch.isfinite(full_relation).all()) or not bool(
+            torch.isfinite(fold_relations).all()
+        ):
+            raise ValueError("residual relation matrices must be finite")
+        full_diagonal = torch.diagonal(full_relation)
+        fold_diagonal = torch.diagonal(
+            fold_relations,
+            dim1=-2,
+            dim2=-1,
+        )
+        if bool((full_diagonal != 0.0).any()) or bool(
+            (fold_diagonal != 0.0).any()
+        ):
+            raise ValueError("residual relation matrices must have zero diagonal")
+        if bool((full_relation.abs().sum(dim=-1) > 1.0 + 1e-6).any()) or bool(
+            (fold_relations.abs().sum(dim=-1) > 1.0 + 1e-6).any()
+        ):
+            raise ValueError(
+                "residual relation matrices must have row L1 norm at most one"
+            )
+        if raw_student_fold.is_floating_point():
+            if not bool(torch.isfinite(raw_student_fold).all()) or not bool(
+                (raw_student_fold == raw_student_fold.round()).all()
+            ):
+                raise ValueError("student_fold must contain integer fold indices")
+        student_fold = raw_student_fold.long()
+        if bool(((student_fold < 0) | (student_fold >= 5)).any()):
+            raise ValueError("student_fold indices must lie in [0, 5)")
+
+        self.register_buffer(
+            "residual_relation_full",
+            full_relation,
+            persistent=False,
+        )
+        self.register_buffer(
+            "residual_relation_folds",
+            fold_relations,
+            persistent=False,
+        )
+        self.register_buffer(
+            "residual_relation_student_fold",
+            student_fold,
+            persistent=False,
+        )
 
     def _register_response_evidence(
         self,
@@ -417,6 +524,66 @@ class CognitiveDiagnosisModel(nn.Module):
         evidence = torch.stack((rate_evidence, residual_evidence), dim=-1)
         return evidence, count
 
+    def _apply_residual_relation_transport(
+        self,
+        response_evidence: Optional[torch.Tensor],
+        loo_count: Optional[torch.Tensor],
+        student_ids: torch.Tensor,
+        scope: Optional[str],
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """Adjust only the existing residual anchor with fixed signed relations.
+
+        Relation matrices use ``R[target, source]``.  ``student_oof`` groups
+        rows by their precomputed student fold, so no per-batch relation tensor
+        is materialized.
+        """
+        if self.residual_relation_mode == "off":
+            return response_evidence, None
+        if response_evidence is None or loo_count is None:
+            raise RuntimeError(
+                "residual relation transport requires response evidence and counts"
+            )
+        if scope not in {"full", "student_oof"}:
+            raise ValueError(
+                "residual_relation_scope must be 'full' or 'student_oof' "
+                f"for mode {self.residual_relation_mode!r}, got {scope!r}"
+            )
+
+        residual = response_evidence[..., 1]
+        if scope == "full":
+            relation = self.residual_relation_full.to(
+                device=residual.device,
+                dtype=residual.dtype,
+            )
+            transport = torch.matmul(residual, relation.transpose(0, 1))
+        else:
+            fold_index = self.residual_relation_student_fold[student_ids]
+            transport = torch.zeros_like(residual)
+            for fold in range(self.residual_relation_folds.size(0)):
+                row_index = torch.nonzero(
+                    fold_index == fold,
+                    as_tuple=False,
+                ).flatten()
+                if row_index.numel() == 0:
+                    continue
+                relation = self.residual_relation_folds[fold].to(
+                    device=residual.device,
+                    dtype=residual.dtype,
+                )
+                fold_residual = residual.index_select(0, row_index)
+                fold_transport = torch.matmul(
+                    fold_residual,
+                    relation.transpose(0, 1),
+                )
+                transport.index_copy_(0, row_index, fold_transport)
+
+        adjusted = response_evidence.clone()
+        adjusted[..., 1] = (
+            residual
+            + transport / (loo_count.to(dtype=residual.dtype) + 1.0)
+        ).clamp(min=-1.0, max=1.0)
+        return adjusted, transport
+
     def _compose_evidence_anchor(
         self,
         relation_matrices: torch.Tensor,
@@ -521,11 +688,12 @@ class CognitiveDiagnosisModel(nn.Module):
         outcome_to_neutralize: Optional[torch.Tensor] = None,
         return_details: bool = False,
         return_logits: bool = False,
+        residual_relation_scope: Optional[str] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, torch.Tensor]]]:
         """Run the sole Graph-IRT prediction path.
 
-        The public signature intentionally matches the previous model.  No
-        outcome label or label-derived lookup table is accepted here.
+        Existing arguments retain their previous positions.  The optional
+        relation scope only selects a fixed train-derived relation matrix.
         """
         q_vector = (
             self.q_matrix[exercise_ids]
@@ -545,6 +713,47 @@ class CognitiveDiagnosisModel(nn.Module):
             outcome_to_exclude,
             outcome_to_neutralize,
         )
+        resolved_relation_scope = residual_relation_scope
+        if self.residual_relation_mode != "off":
+            if outcome_to_neutralize is not None:
+                raise ValueError(
+                    "residual relation transport supports only excluded "
+                    "training-query outcomes"
+                )
+            has_excluded_outcome = outcome_to_exclude is not None
+            if resolved_relation_scope is None:
+                if self.training or has_excluded_outcome:
+                    raise ValueError(
+                        "residual_relation_scope may be omitted only for "
+                        "outcome-free evaluation"
+                    )
+                resolved_relation_scope = "full"
+            if self.training and not has_excluded_outcome:
+                raise ValueError(
+                    "training with residual relation transport requires "
+                    "outcome_to_exclude"
+                )
+            if has_excluded_outcome and resolved_relation_scope != "student_oof":
+                raise ValueError(
+                    "training-query outcomes require "
+                    "residual_relation_scope='student_oof'"
+                )
+            if (
+                resolved_relation_scope == "student_oof"
+                and not has_excluded_outcome
+            ):
+                raise ValueError(
+                    "student_oof residual relations require "
+                    "outcome_to_exclude"
+                )
+        adjusted_response_evidence, residual_relation_transport = (
+            self._apply_residual_relation_transport(
+                response_evidence,
+                loo_count,
+                student_ids,
+                resolved_relation_scope,
+            )
+        )
         knowledge_state, initial_state = self.knowledge_encoder(
             student_ids,
             relation_matrices,
@@ -557,7 +766,7 @@ class CognitiveDiagnosisModel(nn.Module):
         difficulty, discrimination = self.exercise_encoder(exercise_ids)
         evidence_anchor = self._compose_evidence_anchor(
             relation_matrices,
-            response_evidence,
+            adjusted_response_evidence,
             loo_count,
         )
         if (
@@ -625,6 +834,16 @@ class CognitiveDiagnosisModel(nn.Module):
                 if response_evidence is not None
                 else q_vector.detach().new_zeros((*q_vector.shape, 2))
             ),
+            "adjusted_response_evidence": (
+                adjusted_response_evidence.detach()
+                if adjusted_response_evidence is not None
+                else q_vector.detach().new_zeros((*q_vector.shape, 2))
+            ),
+            "residual_relation_transport": (
+                residual_relation_transport.detach()
+                if residual_relation_transport is not None
+                else q_vector.detach().new_zeros(q_vector.shape)
+            ),
             "evidence_anchor": (
                 evidence_anchor.detach()
                 if evidence_anchor is not None
@@ -691,9 +910,17 @@ class CognitiveDiagnosisModel(nn.Module):
                 )
                 concept_state = knowledge_state.squeeze(0)
                 concept_theta = self.diagnosis_head.theta_proj(concept_state).squeeze(-1)
+                adjusted_response_evidence, _ = (
+                    self._apply_residual_relation_transport(
+                        response_evidence,
+                        loo_count,
+                        student_ids,
+                        scope="full",
+                    )
+                )
                 evidence_anchor = self._compose_evidence_anchor(
                     relation_matrices,
-                    response_evidence,
+                    adjusted_response_evidence,
                     loo_count,
                 )
                 if evidence_anchor is not None:

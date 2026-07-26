@@ -16,6 +16,12 @@ import main as main_module
 
 
 def main() -> None:
+    assert runner.EXPERIMENT_CONFIGS["junyi"]["knowledge_dim"] == 64
+    assert runner.EXPERIMENT_CONFIGS["junyi"]["exposure_prior_pmi"] is True
+    assert runner.EXPERIMENT_CONFIGS["nips34"]["dropout"] == 0.10
+    assert runner.EXPERIMENT_CONFIGS["nips34"]["epochs"] == 120
+    assert runner.EXPERIMENT_CONFIGS["nips34"]["early_stop_patience"] == 15
+
     args = runner.parse_args(
         [
             "--datasets",
@@ -31,6 +37,8 @@ def main() -> None:
     jobs = runner.make_jobs(args, run_id="smoke")
     assert len(jobs) == 7
     assert {job.train_evidence_mode for job in jobs} == {"excluded"}
+    assert {job.residual_relation_mode for job in jobs} == {"off"}
+    assert all("_excluded_seed42_smoke" in str(job.save_dir) for job in jobs)
     by_name = {job.ablation.name: job for job in jobs}
     no_evidence_command = by_name["no_response_evidence"].cmd
     parsed_no_evidence = main_module.parse_args(
@@ -77,6 +85,36 @@ def main() -> None:
         )
         assert parsed_boundary.train_evidence_mode == job.train_evidence_mode
 
+    relation_args = runner.parse_args(
+        [
+            "--datasets",
+            "assist_09",
+            "--seeds",
+            "42",
+            "--ablations",
+            "full",
+            "--train_evidence_modes",
+            "excluded",
+            "--residual_relation_modes",
+            "partial_topk",
+            "--dry_run",
+        ]
+    )
+    relation_jobs = runner.make_jobs(relation_args, run_id="relation_smoke")
+    assert len(relation_jobs) == 1
+    relation_job = relation_jobs[0]
+    assert relation_job.residual_relation_mode == "partial_topk"
+    assert relation_job.params["residual_relation_mode"] == "partial_topk"
+    assert "_excluded_partial_topk_seed42_relation_smoke" in str(
+        relation_job.save_dir
+    )
+    parsed_relation = main_module.parse_args(
+        relation_job.cmd[relation_job.cmd.index("--dataset_name") :]
+    )
+    main_module._apply_model_variant(parsed_relation)
+    main_module._validate_args(parsed_relation)
+    assert parsed_relation.residual_relation_mode == "partial_topk"
+
     banned = ("no_A", "no_E", "personal", "ae_", "roadmap", "tutor")
     for job in jobs:
         command = " ".join(job.cmd)
@@ -118,6 +156,22 @@ def main() -> None:
         assert "requires --run_id" in str(exc)
     else:
         raise AssertionError("test phase must name an existing training run id")
+
+    invalid_relation = runner.parse_args(
+        [
+            "--datasets",
+            "assist_09",
+            "--residual_relation_modes",
+            "unknown",
+            "--dry_run",
+        ]
+    )
+    try:
+        runner.make_jobs(invalid_relation)
+    except ValueError as exc:
+        assert "Unknown residual relation mode" in str(exc)
+    else:
+        raise AssertionError("runner must reject an unknown residual relation mode")
 
     with tempfile.TemporaryDirectory() as directory:
         checkpoint_dir = Path(directory) / "checkpoint"

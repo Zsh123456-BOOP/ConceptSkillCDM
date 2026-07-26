@@ -61,6 +61,7 @@ def main() -> None:
     main_module._validate_args(args)
     assert args.run_mode == "train"
     assert args.train_evidence_mode == "excluded"
+    assert args.residual_relation_mode == "off"
     for mode in ("excluded", "neutralized", "self_included"):
         parsed_mode = main_module.parse_args(["--train_evidence_mode", mode])
         assert parsed_mode.train_evidence_mode == mode
@@ -75,6 +76,43 @@ def main() -> None:
     assert "max_test_batches" not in {
         action.dest for action in main_module.build_parser()._actions
     }
+    assert "residual_relation_mode" in parser_dests
+
+    relation_args = main_module.parse_args(
+        [
+            "--model_variant",
+            "full",
+            "--train_evidence_mode",
+            "excluded",
+            "--residual_relation_mode",
+            "partial_topk",
+            "--graph_topk",
+            "4",
+        ]
+    )
+    main_module._apply_model_variant(relation_args)
+    main_module._validate_args(relation_args)
+    assert relation_args.residual_relation_mode == "partial_topk"
+
+    invalid_relation_boundary = main_module.parse_args(
+        [
+            "--model_variant",
+            "full",
+            "--train_evidence_mode",
+            "neutralized",
+            "--residual_relation_mode",
+            "partial_topk",
+            "--graph_topk",
+            "4",
+        ]
+    )
+    main_module._apply_model_variant(invalid_relation_boundary)
+    try:
+        main_module._validate_args(invalid_relation_boundary)
+    except SystemExit as exc:
+        assert "requires --train_evidence_mode excluded" in str(exc)
+    else:
+        raise AssertionError("relation transport must require excluded training evidence")
 
     # Production objective is pure BCE for every structural variant.
     for variant in (
@@ -202,6 +240,16 @@ def main() -> None:
     )
     assert checkpoint_bce["pairwise_auc_weight"] == 0.0
     assert checkpoint_bce["train_evidence_mode"] == "neutralized"
+    checkpoint_relation = _checkpoint_args(
+        SimpleNamespace(
+            model_variant="full",
+            pairwise_auc_weight=0.0,
+            train_evidence_mode="excluded",
+            residual_relation_mode="partial_topk",
+            disable_self_loop=False,
+        )
+    )
+    assert checkpoint_relation["residual_relation_mode"] == "partial_topk"
 
     class _TinyModel(torch.nn.Module):
         def __init__(self):
@@ -242,6 +290,7 @@ def main() -> None:
         min_exer_interactions=0,
         pairwise_auc_weight=PAIRWISE_AUC_WEIGHT,
         ema_decay=0.0,
+        residual_relation_mode="off",
     )
     baseline_hash = _config_hash(hash_args)
     hash_args.epochs = 100
@@ -255,6 +304,18 @@ def main() -> None:
     hash_args.pairwise_auc_weight = PAIRWISE_AUC_WEIGHT
     hash_args.ema_decay = EMA_DECAY
     assert _config_hash(hash_args) != baseline_hash
+    hash_args.ema_decay = 0.0
+    hash_args.residual_relation_mode = "partial_topk"
+    assert _config_hash(hash_args) != baseline_hash
+    hash_args.residual_relation_mode = "off"
+    legacy_hash_args = SimpleNamespace(
+        **{
+            key: value
+            for key, value in vars(hash_args).items()
+            if key != "residual_relation_mode"
+        }
+    )
+    assert _config_hash(hash_args) == _config_hash(legacy_hash_args)
 
     trainer_source = (Path(ROOT) / "src" / "trainer.py").read_text(encoding="utf-8")
     for removed_token in (

@@ -23,6 +23,8 @@ import pandas as pd
 
 
 EPS = 1e-12
+RESIDUAL_RELATION_FOLDS = 5
+RESIDUAL_RELATION_MIN_PAIR_STUDENTS = 20
 
 
 @dataclass(frozen=True)
@@ -809,3 +811,189 @@ def build_cross_fitted_relations(
             min_pair_students=min_pair_students,
         )
     return full, by_fold, assignment
+
+
+def _validate_internal_id_map(
+    name: str,
+    id_map: Mapping,
+) -> None:
+    if not id_map:
+        raise ValueError(f"{name} must not be empty")
+    internal_ids = []
+    for raw_id, internal_id in id_map.items():
+        if pd.isna(raw_id):
+            raise ValueError(f"{name} contains a missing external ID")
+        if isinstance(internal_id, (bool, np.bool_)) or not isinstance(
+            internal_id,
+            (int, np.integer),
+        ):
+            raise ValueError(f"{name} internal IDs must be integers")
+        internal_ids.append(int(internal_id))
+    if sorted(internal_ids) != list(range(len(id_map))):
+        raise ValueError(
+            f"{name} internal IDs must be unique and contiguous from zero"
+        )
+
+
+def _relation_bundle_diagnostics(
+    full: np.ndarray,
+    fold_relations: np.ndarray,
+) -> Dict[str, float]:
+    """Summarize only the relation properties needed for run auditing."""
+
+    concept_count = int(full.shape[0])
+    possible_edges = concept_count * max(0, concept_count - 1)
+    denominator = float(possible_edges) if possible_edges else 1.0
+    full_edge_mask = np.abs(full) > EPS
+    full_edge_count = int(np.count_nonzero(full_edge_mask))
+    fold_edge_counts = np.count_nonzero(
+        np.abs(fold_relations) > EPS,
+        axis=(1, 2),
+    ).astype(np.float64)
+    diagnostics = {
+        "concept_count": float(concept_count),
+        "full_edge_count": float(full_edge_count),
+        "full_edge_density": float(full_edge_count / denominator),
+        "full_positive_edge_count": float(np.count_nonzero(full > EPS)),
+        "full_negative_edge_count": float(np.count_nonzero(full < -EPS)),
+        "fold_edge_count_mean": float(fold_edge_counts.mean()),
+        "fold_edge_density_mean": float(fold_edge_counts.mean() / denominator),
+    }
+
+    if full_edge_count:
+        full_sign = np.sign(full)
+        same_sign_count = np.sum(
+            (np.sign(fold_relations) == full_sign[None, :, :])
+            & full_edge_mask[None, :, :],
+            axis=0,
+        )
+        stable_edges = int(np.count_nonzero(same_sign_count >= 4))
+        diagnostics["full_sign_stable_ge4of5_share"] = float(
+            stable_edges / full_edge_count
+        )
+    else:
+        diagnostics["full_sign_stable_ge4of5_share"] = 0.0
+    return diagnostics
+
+
+def build_residual_relation_bundle(
+    train_df: pd.DataFrame,
+    stu_id_map: Mapping,
+    cpt_id_map: Mapping,
+    seed: int,
+    topk: int,
+) -> Dict:
+    """Build train-only full and student-cross-fitted partial relations.
+
+    Matrices follow ``relation[target, source]``.  Each fold relation is
+    estimated, top-k filtered, and L1-normalized solely from that fold's
+    complement students.  The full relation is estimated independently.
+    """
+    import torch
+
+    if not isinstance(train_df, pd.DataFrame):
+        raise TypeError("train_df must be a pandas DataFrame")
+    required = {"stu_id", "exer_id", "cpt_seq", "label"}
+    missing = sorted(required - set(train_df.columns))
+    if missing:
+        raise ValueError(f"training frame is missing columns: {missing}")
+    if train_df.empty:
+        raise ValueError("cannot build a residual relation from an empty frame")
+    if isinstance(topk, (bool, np.bool_)) or not isinstance(
+        topk,
+        (int, np.integer),
+    ) or int(topk) <= 0:
+        raise ValueError("residual relation topk must be a positive integer")
+    _validate_internal_id_map("stu_id_map", stu_id_map)
+    _validate_internal_id_map("cpt_id_map", cpt_id_map)
+
+    train_students = set(train_df["stu_id"].unique())
+    mapped_students = set(stu_id_map)
+    missing_students = train_students - mapped_students
+    extra_students = mapped_students - train_students
+    if missing_students or extra_students:
+        raise ValueError(
+            "stu_id_map keys must exactly match cleaned training students"
+        )
+    train_concepts = {
+        concept
+        for value in train_df["cpt_seq"].values
+        for concept in parse_concepts(value)
+    }
+    missing_concepts = train_concepts - set(cpt_id_map)
+    if missing_concepts:
+        raise ValueError(
+            "cpt_id_map is missing concepts present in cleaned training data"
+        )
+
+    labels = pd.to_numeric(train_df["label"], errors="coerce").to_numpy(
+        dtype=np.float64
+    )
+    if not np.isfinite(labels).all() or np.any((labels < 0.0) | (labels > 1.0)):
+        raise ValueError("training labels must be finite values in [0, 1]")
+
+    full_estimate, fold_estimates, assignment = build_cross_fitted_relations(
+        train_df,
+        dict(cpt_id_map),
+        folds=RESIDUAL_RELATION_FOLDS,
+        seed=int(seed),
+        min_pair_students=RESIDUAL_RELATION_MIN_PAIR_STUDENTS,
+    )
+    full = topk_relation_matrix(full_estimate.partial, int(topk))
+    folds = np.stack(
+        [
+            topk_relation_matrix(fold_estimates[fold].partial, int(topk))
+            for fold in range(RESIDUAL_RELATION_FOLDS)
+        ],
+        axis=0,
+    )
+
+    expected_shape = (len(cpt_id_map), len(cpt_id_map))
+    if full.shape != expected_shape or folds.shape != (
+        RESIDUAL_RELATION_FOLDS,
+        *expected_shape,
+    ):
+        raise RuntimeError("residual relation matrices are internally misaligned")
+    if not np.isfinite(full).all() or not np.isfinite(folds).all():
+        raise ValueError("residual relation matrices must contain only finite values")
+    if not np.allclose(np.diag(full), 0.0) or not np.allclose(
+        np.diagonal(folds, axis1=1, axis2=2),
+        0.0,
+    ):
+        raise RuntimeError("residual relation matrices must not contain self edges")
+    if np.any(np.abs(full).sum(axis=1) > 1.0 + 1e-8) or np.any(
+        np.abs(folds).sum(axis=2) > 1.0 + 1e-8
+    ):
+        raise RuntimeError("residual relation row L1 norm exceeds one")
+
+    student_fold = np.empty(len(stu_id_map), dtype=np.int64)
+    for raw_student, internal_student in stu_id_map.items():
+        if raw_student not in assignment:
+            raise RuntimeError(
+                f"student fold assignment is missing student {raw_student!r}"
+            )
+        student_fold[int(internal_student)] = int(assignment[raw_student])
+    if np.any(student_fold < 0) or np.any(
+        student_fold >= RESIDUAL_RELATION_FOLDS
+    ):
+        raise RuntimeError("student fold IDs are outside the fixed fold range")
+
+    diagnostics = _relation_bundle_diagnostics(full, folds)
+    if not all(np.isfinite(value) for value in diagnostics.values()):
+        raise RuntimeError("residual relation diagnostics must be finite scalars")
+    return {
+        "schema": "residual_relation_bundle.v1",
+        "mode": "partial_topk",
+        "seed": int(seed),
+        "topk": int(topk),
+        "folds": RESIDUAL_RELATION_FOLDS,
+        "min_pair_students": RESIDUAL_RELATION_MIN_PAIR_STUDENTS,
+        "full_relation": torch.from_numpy(
+            np.ascontiguousarray(full, dtype=np.float32)
+        ),
+        "fold_relations": torch.from_numpy(
+            np.ascontiguousarray(folds, dtype=np.float32)
+        ),
+        "student_fold": torch.from_numpy(student_fold),
+        "diagnostics": diagnostics,
+    }

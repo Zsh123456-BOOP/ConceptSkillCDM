@@ -17,6 +17,7 @@ TRAIN_EVIDENCE_MODES = (
     "neutralized",
     "self_included",
 )
+RESIDUAL_RELATION_MODES = ("off", "partial_topk")
 
 
 _BASE_DEFAULTS: Dict[str, Any] = {
@@ -122,7 +123,8 @@ DATASET_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "junyi": _dataset(
         "./data/junyi",
         batch_size=256,
-        knowledge_dim=128,
+        # Validation-selected Full baseline (2026-07-17).
+        knowledge_dim=64,
         num_relation_heads=2,
         dropout=0.40,
         # AdamW at 1e-3 beat Adam at 3e-3 in the 2026-07-16 optimizer probe
@@ -142,6 +144,7 @@ DATASET_DEFAULTS: Dict[str, Dict[str, Any]] = {
         graph_propagation_alpha=0.25,
         graph_prior_strength_init=0.45,
         graph_topk=24,
+        exposure_prior_pmi=True,
     ),
 }
 
@@ -215,6 +218,8 @@ DATASET_DEFAULTS["nips34"] = {
     # dim32 edges out dim64 (0.7895 vs 0.7890, 2026-07-16); raising alpha
     # above the inherited 0.02 hurts (-0.003 at 0.10).
     "knowledge_dim": 32,
+    # Validation-selected Full baseline (2026-07-17).
+    "dropout": 0.10,
     "graph_topk": 24,
 }
 

@@ -13,6 +13,7 @@ from src.config import (
     DATASET_DEFAULTS,
     EMA_DECAY,
     PAIRWISE_AUC_WEIGHT,
+    RESIDUAL_RELATION_MODES,
     TRAIN_EVIDENCE_MODES,
     apply_dataset_defaults,
     collect_explicit_arg_dests,
@@ -73,6 +74,15 @@ def build_parser() -> argparse.ArgumentParser:
         default="evidence",
         choices=GRAPH_PRIOR_MODES,
         help="Relation prior: observed evidence, one evidence source, or a row-degree-matched random control.",
+    )
+    parser.add_argument(
+        "--residual_relation_mode",
+        default="off",
+        choices=RESIDUAL_RELATION_MODES,
+        help=(
+            "Optional train-only cross-fitted relation used to refine the "
+            "existing residual-evidence channel."
+        ),
     )
 
     # Model
@@ -291,6 +301,23 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise SystemExit(
             "error: non-default --train_evidence_mode requires response evidence"
         )
+    if str(args.residual_relation_mode) != "off":
+        if str(args.model_variant) != "full":
+            raise SystemExit(
+                "error: residual relation is currently supported only with --model_variant full"
+            )
+        if str(args.train_evidence_mode) != "excluded":
+            raise SystemExit(
+                "error: residual relation requires --train_evidence_mode excluded"
+            )
+        if not bool(args.use_response_evidence):
+            raise SystemExit(
+                "error: residual relation requires response evidence"
+            )
+        if args.graph_topk is None or int(args.graph_topk) <= 0:
+            raise SystemExit(
+                "error: residual relation requires a positive --graph_topk"
+            )
 
 
 def _seed_everything(seed: int) -> None:
@@ -382,6 +409,7 @@ def main() -> None:
             "dataset": args.dataset_name,
             "model_variant": args.model_variant,
             "train_evidence_mode": args.train_evidence_mode,
+            "residual_relation_mode": args.residual_relation_mode,
             "seed": int(args.seed),
             "best_val_auc": float(best_val_auc),
             "best_epoch": int(best_epoch),
