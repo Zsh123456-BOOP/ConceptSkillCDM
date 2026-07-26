@@ -8,8 +8,9 @@ student-item-concept graph carries validation signal beyond the frozen logit.
 For every training query, all rows sharing its ``(student, item)`` pair are
 held out together in one of five label-independent folds.  Right and wrong
 student-item edges are built only from the other folds; item-concept edges come
-from the checkpoint Q matrix.  Validation queries use the complete training
-graph and never contribute response edges.
+from the checkpoint Q matrix.  Validation features average those same five
+train-only fold graphs, matching the graph density seen by the fitted
+coefficients, and validation responses never contribute edges.
 
 Each graph produces the normalized three-hop student-to-item score
 
@@ -311,13 +312,19 @@ def _cross_fitted_graph_features(
     q_matrix: sp.csr_matrix,
     folds: int,
     seed: int,
-) -> Dict[str, np.ndarray]:
+    validation_students: np.ndarray,
+    validation_exercises: np.ndarray,
+) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
     features = {
         "right": np.zeros(len(labels), dtype=np.float64),
         "wrong": np.zeros(len(labels), dtype=np.float64),
         "unsigned": np.zeros(len(labels), dtype=np.float64),
         "shuffle_right": np.zeros(len(labels), dtype=np.float64),
         "shuffle_wrong": np.zeros(len(labels), dtype=np.float64),
+    }
+    validation_features = {
+        name: np.zeros(len(validation_students), dtype=np.float64)
+        for name in features
     }
     pair_keys = students * int(num_exercises) + exercises
     for fold in range(folds):
@@ -328,6 +335,13 @@ def _cross_fitted_graph_features(
         fit_labels = labels[fit_mask]
         query_students = students[query_mask]
         query_exercises = exercises[query_mask]
+        combined_students = np.concatenate(
+            (query_students, validation_students)
+        )
+        combined_exercises = np.concatenate(
+            (query_exercises, validation_exercises)
+        )
+        query_count = len(query_students)
 
         fit_pairs = np.unique(
             fit_students * int(num_exercises) + fit_exercises
@@ -349,8 +363,8 @@ def _cross_fitted_graph_features(
             num_students=num_students,
             num_exercises=num_exercises,
             q_matrix=q_matrix,
-            query_students=query_students,
-            query_exercises=query_exercises,
+            query_students=combined_students,
+            query_exercises=combined_exercises,
         )
         shuffled_labels = _shuffle_labels_within_students(
             fit_students,
@@ -364,68 +378,26 @@ def _cross_fitted_graph_features(
             num_students=num_students,
             num_exercises=num_exercises,
             q_matrix=q_matrix,
-            query_students=query_students,
-            query_exercises=query_exercises,
+            query_students=combined_students,
+            query_exercises=combined_exercises,
             include_unsigned=False,
         )
-        features["right"][query_mask] = right
-        features["wrong"][query_mask] = wrong
-        features["unsigned"][query_mask] = unsigned
-        features["shuffle_right"][query_mask] = shuffle_right
-        features["shuffle_wrong"][query_mask] = shuffle_wrong
+        combined = {
+            "right": right,
+            "wrong": wrong,
+            "unsigned": unsigned,
+            "shuffle_right": shuffle_right,
+            "shuffle_wrong": shuffle_wrong,
+        }
+        for name, values in combined.items():
+            features[name][query_mask] = values[:query_count]
+            validation_features[name] += values[query_count:] / float(folds)
         print(
             f"graph cross-fit fold {fold + 1}/{folds}: "
             f"fit_rows={int(fit_mask.sum())} query_rows={int(query_mask.sum())}",
             flush=True,
         )
-    return features
-
-
-def _validation_graph_features(
-    students: np.ndarray,
-    exercises: np.ndarray,
-    labels: np.ndarray,
-    *,
-    num_students: int,
-    num_exercises: int,
-    q_matrix: sp.csr_matrix,
-    query_students: np.ndarray,
-    query_exercises: np.ndarray,
-    seed: int,
-) -> Dict[str, np.ndarray]:
-    right, wrong, unsigned = _signed_scores(
-        students,
-        exercises,
-        labels,
-        num_students=num_students,
-        num_exercises=num_exercises,
-        q_matrix=q_matrix,
-        query_students=query_students,
-        query_exercises=query_exercises,
-    )
-    shuffled_labels = _shuffle_labels_within_students(
-        students,
-        labels,
-        seed=seed + 7919,
-    )
-    shuffle_right, shuffle_wrong, _ = _signed_scores(
-        students,
-        exercises,
-        shuffled_labels,
-        num_students=num_students,
-        num_exercises=num_exercises,
-        q_matrix=q_matrix,
-        query_students=query_students,
-        query_exercises=query_exercises,
-        include_unsigned=False,
-    )
-    return {
-        "right": right,
-        "wrong": wrong,
-        "unsigned": unsigned,
-        "shuffle_right": shuffle_right,
-        "shuffle_wrong": shuffle_wrong,
-    }
+    return features, validation_features
 
 
 def _rms_scale(train_feature: np.ndarray) -> float:
@@ -638,7 +610,7 @@ def run_probe(
         f"unique_pairs={unique_pairs}",
         flush=True,
     )
-    train_features = _cross_fitted_graph_features(
+    train_features, valid_features = _cross_fitted_graph_features(
         train_students,
         train_exercises,
         train_labels,
@@ -648,20 +620,13 @@ def run_probe(
         q_matrix=q_matrix,
         folds=FOLDS,
         seed=seed,
+        validation_students=valid_students,
+        validation_exercises=valid_exercises,
     )
-    print("cross-fitted graph features: complete", flush=True)
-    valid_features = _validation_graph_features(
-        train_students,
-        train_exercises,
-        train_labels,
-        num_students=num_students,
-        num_exercises=num_exercises,
-        q_matrix=q_matrix,
-        query_students=valid_students,
-        query_exercises=valid_exercises,
-        seed=seed,
+    print(
+        "cross-fitted train features and validation fold ensemble: complete",
+        flush=True,
     )
-    print("validation train-only graph features: complete", flush=True)
 
     batch_size = int(loaded_args["batch_size"])
     frozen_train_labels, frozen_train_logits = _collect_frozen_logits(
@@ -749,7 +714,7 @@ def run_probe(
         }
 
     result: Dict[str, object] = {
-        "schema": "signed_hetero_frozen_probe_v1",
+        "schema": "signed_hetero_frozen_probe_v2_fold_ensemble",
         "dataset": str(loaded_args.get("dataset_name", data_dir.name)),
         "seed": int(seed),
         "folds": FOLDS,
@@ -769,7 +734,7 @@ def run_probe(
             "fold_unit": "student_item_pair",
             "pair_overlap_across_folds": 0,
             "training_query_edges_excluded": True,
-            "validation_edges_from_train_only": True,
+            "validation_graph": "mean_of_five_train_only_fold_graphs",
             "test_evaluated": False,
         },
     }
@@ -803,7 +768,7 @@ def _self_test() -> None:
     pair_keys = students * 3 + exercises
     for pair in np.unique(pair_keys):
         assert np.unique(row_fold[pair_keys == pair]).size == 1
-    features = _cross_fitted_graph_features(
+    features, validation_features = _cross_fitted_graph_features(
         students,
         exercises,
         labels,
@@ -813,9 +778,14 @@ def _self_test() -> None:
         q_matrix=q_matrix,
         folds=2,
         seed=42,
+        validation_students=np.asarray([0, 1], dtype=np.int64),
+        validation_exercises=np.asarray([2, 0], dtype=np.int64),
     )
     for values in features.values():
         assert values.shape == labels.shape
+        assert np.isfinite(values).all()
+    for values in validation_features.values():
+        assert values.shape == (2,)
         assert np.isfinite(values).all()
     right, wrong, _ = _pair_response_matrices(
         students,
