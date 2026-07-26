@@ -74,6 +74,40 @@ def _build_coexposure_prior(train_sc: pd.DataFrame, concept_ids: np.ndarray) -> 
     return prior
 
 
+def _build_item_prior(train_sc: pd.DataFrame, concept_ids: np.ndarray) -> np.ndarray:
+    """Row-stochastic concept co-occurrence prior from train items only."""
+    concept_index = {int(c): i for i, c in enumerate(concept_ids)}
+    C = len(concept_ids)
+    counts = np.zeros((C, C), dtype=np.float64)
+    for _, concepts in train_sc.groupby("exer_id")["cpt"]:
+        unique = sorted({concept_index[int(c)] for c in concepts if int(c) in concept_index})
+        if len(unique) < 2:
+            continue
+        idx = np.asarray(unique)
+        counts[np.ix_(idx, idx)] += 1.0
+    np.fill_diagonal(counts, 0.0)
+    row_sum = counts.sum(axis=1, keepdims=True)
+    return np.divide(counts, row_sum, out=np.zeros_like(counts), where=row_sum > 0)
+
+
+def _build_graph_prior(
+    train_sc: pd.DataFrame,
+    concept_ids: np.ndarray,
+    graph_source: str,
+) -> np.ndarray:
+    exposure = _build_coexposure_prior(train_sc, concept_ids)
+    if graph_source == "exposure":
+        return exposure
+    item = _build_item_prior(train_sc, concept_ids)
+    if graph_source == "item":
+        return item
+    if graph_source == "blend":
+        prior = item + exposure
+        row_sum = prior.sum(axis=1, keepdims=True)
+        return np.divide(prior, row_sum, out=np.zeros_like(prior), where=row_sum > 0)
+    raise ValueError(f"unknown graph_source: {graph_source!r}")
+
+
 def _safe_divide(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
     return np.divide(
         numerator,
@@ -90,6 +124,7 @@ def _propagated_evidence_scores(
     concept_rate: pd.Series,
     global_rate: float,
     query_source_policy: str = "self",
+    graph_source: str = "exposure",
 ) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray]:
     """Compare four one-hop propagation rules on one fixed co-exposure graph.
 
@@ -104,7 +139,7 @@ def _propagated_evidence_scores(
     concept_ids = np.sort(train_sc["cpt"].unique())
     concept_index = {int(c): i for i, c in enumerate(concept_ids)}
     C = len(concept_ids)
-    prior = _build_coexposure_prior(train_sc, concept_ids)
+    prior = _build_graph_prior(train_sc, concept_ids, graph_source)
 
     student_ids = np.sort(train_sc["stu_id"].unique())
     student_index = {int(s): i for i, s in enumerate(student_ids)}
@@ -233,6 +268,7 @@ def probe_dataset(
     data_dir: str,
     leak_mode: str = "none",
     query_source_policy: str = "self",
+    graph_source: str = "exposure",
 ) -> dict:
     """Score valid rows from sufficient statistics.
 
@@ -308,12 +344,14 @@ def probe_dataset(
         concept_rate,
         global_rate,
         query_source_policy=query_source_policy,
+        graph_source=graph_source,
     )
 
     results = {
         "rows": int(len(valid)),
         "global_rate": global_rate,
         "query_source_policy": query_source_policy,
+        "graph_source": graph_source,
         "auc_item": _auc(labels, valid_item_logit),
         "auc_evidence": _auc(labels, evidence_logit),
         "auc_evid_plus_item": float(
@@ -375,6 +413,12 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--graph_source",
+        default="exposure",
+        choices=("exposure", "item", "blend"),
+        help="Fixed train-only graph used by every propagation variant.",
+    )
+    parser.add_argument(
         "--output_csv",
         default=None,
         help="Optional path for one flat validation-summary row per dataset.",
@@ -384,7 +428,8 @@ def main() -> None:
     names = [token.strip() for token in args.datasets.split(",") if token.strip()]
     print(
         f"leak_mode={args.leak_mode} "
-        f"query_source_policy={args.query_source_policy}"
+        f"query_source_policy={args.query_source_policy} "
+        f"graph_source={args.graph_source}"
     )
     print(
         f"{'dataset':<14} {'rows':>8} {'P0+item':>9} {'P1+item':>9} "
@@ -401,6 +446,7 @@ def main() -> None:
             data_dir,
             leak_mode=args.leak_mode,
             query_source_policy=args.query_source_policy,
+            graph_source=args.graph_source,
         )
         records.append({"dataset": name, **r})
         print(
