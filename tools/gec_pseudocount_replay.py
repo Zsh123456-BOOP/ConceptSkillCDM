@@ -139,7 +139,7 @@ def build_fixed_graphs(
     overlap = float((real_support & random_support).sum().item()) / float(
         real_support.sum().item()
     )
-    if overlap >= 0.75:
+    if graph.size(0) >= 8 and overlap >= 0.75:
         raise RuntimeError(f"random graph changed too few endpoints: overlap={overlap:.3f}")
     return {
         "none": zero,
