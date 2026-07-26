@@ -77,6 +77,30 @@ def main() -> None:
         )
         assert parsed_boundary.train_evidence_mode == job.train_evidence_mode
 
+    normalized_args = runner.parse_args(
+        [
+            "--datasets",
+            "assist_09",
+            "--seeds",
+            "42",
+            "--ablations",
+            "full",
+            "--evidence_propagation_mode",
+            "support_normalized",
+            "--dry_run",
+        ]
+    )
+    normalized_job = runner.make_jobs(normalized_args, run_id="normalized_smoke")[0]
+    assert (
+        normalized_job.params["evidence_propagation_mode"]
+        == "support_normalized"
+    )
+    parsed_normalized = main_module.parse_args(
+        normalized_job.cmd[normalized_job.cmd.index("--dataset_name") :]
+    )
+    assert parsed_normalized.evidence_propagation_mode == "support_normalized"
+    assert "prop_support_normalized" in str(normalized_job.save_dir)
+
     banned = ("no_A", "no_E", "personal", "ae_", "roadmap", "tutor")
     for job in jobs:
         command = " ".join(job.cmd)

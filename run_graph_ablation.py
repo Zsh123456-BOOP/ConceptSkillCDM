@@ -94,6 +94,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--seeds", default=None, help="Comma-separated seeds.")
+    parser.add_argument(
+        "--evidence_propagation_mode",
+        choices=("legacy", "support_normalized"),
+        default="legacy",
+        help="Evidence-transport implementation passed to every selected job.",
+    )
     parser.add_argument("--gpus", default="0")
     parser.add_argument("--max_concurrent", type=int, default=1)
     parser.add_argument("--max_per_gpu", type=int, default=1)
@@ -158,10 +164,18 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
                     params.pop("seed", None)
                     params["model_variant"] = ablation.name
                     params["train_evidence_mode"] = train_evidence_mode
+                    params["evidence_propagation_mode"] = (
+                        args.evidence_propagation_mode
+                    )
 
+                    propagation_tag = (
+                        ""
+                        if args.evidence_propagation_mode == "legacy"
+                        else f"_prop_{args.evidence_propagation_mode}"
+                    )
                     tag = (
                         f"{dataset}_graph_irt_{ablation.name}_"
-                        f"{train_evidence_mode}_seed{seed}_{session}"
+                        f"{train_evidence_mode}{propagation_tag}_seed{seed}_{session}"
                     )
                     save_dir = Path("checkpoints") / tag
                     log_dir = Path("logs") / tag
