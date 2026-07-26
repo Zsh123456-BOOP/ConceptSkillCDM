@@ -12,14 +12,13 @@ from the checkpoint Q matrix.  Validation features average those same five
 train-only fold graphs, matching the graph density seen by the fitted
 coefficients, and validation responses never contribute edges.
 
-Each run selects exactly one normalized three-hop student-to-item path:
+Each graph produces the normalized three-hop student-to-item score
 
-    collaborative: B @ (B.T @ B)
-    concept:       B @ (Q @ Q.T)
+    B @ (B.T @ B + Q @ Q.T),
 
 where B and Q are the response and item-concept blocks after symmetric degree
-normalization in the combined tripartite graph.  The two paths are evaluated
-in separate runs rather than combined or tuned per dataset.  Because the
+normalization in the combined tripartite graph.  The score contains indirect
+student-item-student-item and student-item-concept-item paths.  Because the
 queried pair is absent from its fold graph, it cannot copy its own response.
 
 Only two non-negative coefficients are fitted on out-of-fold training rows:
@@ -229,14 +228,10 @@ def _three_hop_scores(
     q_matrix: sp.csr_matrix,
     query_students: np.ndarray,
     query_exercises: np.ndarray,
-    *,
-    path_mode: str,
 ) -> np.ndarray:
-    """Return one normalized three-hop path for the requested pairs."""
+    """Return the normalized A^3 student-item entries for requested pairs."""
     if response.shape[1] != q_matrix.shape[0]:
         raise ValueError("response item count and Q-matrix item count disagree")
-    if path_mode not in {"collaborative", "concept", "joint"}:
-        raise ValueError(f"unsupported path mode: {path_mode}")
     student_degree = np.asarray(response.sum(axis=1)).reshape(-1)
     item_degree = (
         np.asarray(response.sum(axis=0)).reshape(-1)
@@ -251,15 +246,9 @@ def _three_hop_scores(
     q_norm = sp.diags(_inverse_sqrt(item_degree)).dot(q_matrix)
     q_norm = q_norm.dot(sp.diags(_inverse_sqrt(concept_degree))).tocsr()
 
-    collaborative_paths = response_norm.T.dot(response_norm)
-    concept_paths = q_norm.dot(q_norm.T)
-    if path_mode == "collaborative":
-        item_paths = collaborative_paths
-    elif path_mode == "concept":
-        item_paths = concept_paths
-    else:
-        item_paths = collaborative_paths + concept_paths
-    item_paths = item_paths.tocsr()
+    item_paths = (
+        response_norm.T.dot(response_norm) + q_norm.dot(q_norm.T)
+    ).tocsr()
     three_hop = response_norm.dot(item_paths).tocsr()
     scores = np.asarray(
         three_hop[query_students, query_exercises]
@@ -279,7 +268,6 @@ def _signed_scores(
     q_matrix: sp.csr_matrix,
     query_students: np.ndarray,
     query_exercises: np.ndarray,
-    path_mode: str,
     include_unsigned: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     right, wrong, unsigned = _pair_response_matrices(
@@ -293,14 +281,12 @@ def _signed_scores(
         q_matrix,
         query_students,
         query_exercises,
-        path_mode=path_mode,
     )
     wrong_scores = _three_hop_scores(
         wrong,
         q_matrix,
         query_students,
         query_exercises,
-        path_mode=path_mode,
     )
     unsigned_scores = (
         _three_hop_scores(
@@ -308,7 +294,6 @@ def _signed_scores(
             q_matrix,
             query_students,
             query_exercises,
-            path_mode=path_mode,
         )
         if include_unsigned
         else np.empty(0, dtype=np.float64)
@@ -327,7 +312,6 @@ def _cross_fitted_graph_features(
     q_matrix: sp.csr_matrix,
     folds: int,
     seed: int,
-    path_mode: str,
     validation_students: np.ndarray,
     validation_exercises: np.ndarray,
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
@@ -381,7 +365,6 @@ def _cross_fitted_graph_features(
             q_matrix=q_matrix,
             query_students=combined_students,
             query_exercises=combined_exercises,
-            path_mode=path_mode,
         )
         shuffled_labels = _shuffle_labels_within_students(
             fit_students,
@@ -397,7 +380,6 @@ def _cross_fitted_graph_features(
             q_matrix=q_matrix,
             query_students=combined_students,
             query_exercises=combined_exercises,
-            path_mode=path_mode,
             include_unsigned=False,
         )
         combined = {
@@ -567,7 +549,6 @@ def run_probe(
     *,
     seed: int,
     device: torch.device,
-    path_mode: str,
 ) -> Dict[str, object]:
     checkpoint_path = checkpoint_dir / "best_model.pth"
     checkpoint = torch.load(
@@ -639,7 +620,6 @@ def run_probe(
         q_matrix=q_matrix,
         folds=FOLDS,
         seed=seed,
-        path_mode=path_mode,
         validation_students=valid_students,
         validation_exercises=valid_exercises,
     )
@@ -734,10 +714,9 @@ def run_probe(
         }
 
     result: Dict[str, object] = {
-        "schema": "signed_hetero_frozen_probe_v3_path_split",
+        "schema": "signed_hetero_frozen_probe_v2_fold_ensemble",
         "dataset": str(loaded_args.get("dataset_name", data_dir.name)),
         "seed": int(seed),
-        "path_mode": path_mode,
         "folds": FOLDS,
         "l2_weight": L2_WEIGHT,
         "checkpoint_dir": str(checkpoint_dir),
@@ -756,7 +735,6 @@ def run_probe(
             "pair_overlap_across_folds": 0,
             "training_query_edges_excluded": True,
             "validation_graph": "mean_of_five_train_only_fold_graphs",
-            "selected_three_hop_path": path_mode,
             "test_evaluated": False,
         },
     }
@@ -800,7 +778,6 @@ def _self_test() -> None:
         q_matrix=q_matrix,
         folds=2,
         seed=42,
-        path_mode="concept",
         validation_students=np.asarray([0, 1], dtype=np.int64),
         validation_exercises=np.asarray([2, 0], dtype=np.int64),
     )
@@ -818,86 +795,6 @@ def _self_test() -> None:
     )
     assert math.isclose(float(right[0, 0]), 0.5)
     assert math.isclose(float(wrong[0, 0]), 0.5)
-    query_students = np.asarray([0, 1, 2], dtype=np.int64)
-    query_exercises = np.asarray([2, 0, 1], dtype=np.int64)
-    collaborative_scores = _three_hop_scores(
-        right,
-        q_matrix,
-        query_students,
-        query_exercises,
-        path_mode="collaborative",
-    )
-    concept_scores = _three_hop_scores(
-        right,
-        q_matrix,
-        query_students,
-        query_exercises,
-        path_mode="concept",
-    )
-    joint_scores = _three_hop_scores(
-        right,
-        q_matrix,
-        query_students,
-        query_exercises,
-        path_mode="joint",
-    )
-    assert np.allclose(
-        joint_scores,
-        collaborative_scores + concept_scores,
-        atol=1e-12,
-        rtol=1e-12,
-    )
-    collaborative_only_response = sp.csr_matrix(
-        np.asarray([[1.0, 0.0], [1.0, 1.0]])
-    )
-    separate_concepts = sp.eye(2, format="csr")
-    collaborative_only = _three_hop_scores(
-        collaborative_only_response,
-        separate_concepts,
-        np.asarray([0], dtype=np.int64),
-        np.asarray([1], dtype=np.int64),
-        path_mode="collaborative",
-    )
-    concept_absent = _three_hop_scores(
-        collaborative_only_response,
-        separate_concepts,
-        np.asarray([0], dtype=np.int64),
-        np.asarray([1], dtype=np.int64),
-        path_mode="concept",
-    )
-    assert collaborative_only[0] > 0.0
-    assert math.isclose(float(concept_absent[0]), 0.0, abs_tol=1e-12)
-
-    concept_only_response = sp.eye(2, format="csr")
-    shared_concept = sp.csr_matrix(np.ones((2, 1), dtype=np.float64))
-    collaborative_absent = _three_hop_scores(
-        concept_only_response,
-        shared_concept,
-        np.asarray([0], dtype=np.int64),
-        np.asarray([1], dtype=np.int64),
-        path_mode="collaborative",
-    )
-    concept_only = _three_hop_scores(
-        concept_only_response,
-        shared_concept,
-        np.asarray([0], dtype=np.int64),
-        np.asarray([1], dtype=np.int64),
-        path_mode="concept",
-    )
-    assert math.isclose(float(collaborative_absent[0]), 0.0, abs_tol=1e-12)
-    assert concept_only[0] > 0.0
-    try:
-        _three_hop_scores(
-            right,
-            q_matrix,
-            query_students,
-            query_exercises,
-            path_mode="invalid",
-        )
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("invalid path mode was accepted")
     shuffled = _shuffle_labels_within_students(students, labels, seed=7)
     for student in np.unique(students):
         mask = students == student
@@ -924,20 +821,14 @@ def main() -> None:
     parser.add_argument("--output_json")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument(
-        "--path_mode",
-        choices=("collaborative", "concept"),
-    )
     parser.add_argument("--self_test", action="store_true")
     args = parser.parse_args()
 
     if args.self_test:
         _self_test()
         return
-    if not args.checkpoint_dir or not args.output_json or not args.path_mode:
-        parser.error(
-            "--checkpoint_dir, --output_json, and --path_mode are required"
-        )
+    if not args.checkpoint_dir or not args.output_json:
+        parser.error("--checkpoint_dir and --output_json are required")
 
     checkpoint_dir = _resolve_path(args.checkpoint_dir)
     output_json = _resolve_path(args.output_json)
@@ -947,12 +838,10 @@ def main() -> None:
         output_json,
         seed=args.seed,
         device=device,
-        path_mode=args.path_mode,
     )
     signed = result["candidates"]["signed"]
     print(
-        f"{result['dataset']} [{result['path_mode']}]: "
-        f"baseline={result['baseline']['auc']:.9f} "
+        f"{result['dataset']}: baseline={result['baseline']['auc']:.9f} "
         f"signed={signed['metrics']['auc']:.9f} "
         f"delta={signed['delta']['auc']:+.9f}"
     )
