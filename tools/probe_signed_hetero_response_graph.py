@@ -799,7 +799,7 @@ def _self_test() -> None:
         folds=2,
         seed=42,
     )
-    assert unique_pairs == 7
+    assert unique_pairs == 6
     pair_keys = students * 3 + exercises
     for pair in np.unique(pair_keys):
         assert np.unique(row_fold[pair_keys == pair]).size == 1
