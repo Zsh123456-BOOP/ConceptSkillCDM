@@ -24,7 +24,7 @@ from gpu_utils import (
     parse_int_csv,
     pick_gpu_with_slot_round_robin,
 )
-from src.config import RESIDUAL_RELATION_MODES, TRAIN_EVIDENCE_MODES
+from src.config import TRAIN_EVIDENCE_MODES
 
 
 @dataclass(frozen=True)
@@ -39,7 +39,6 @@ class JobSpec:
     seed: int
     ablation: AblationSpec
     train_evidence_mode: str
-    residual_relation_mode: str
     save_dir: Path
     log_dir: Path
     params: Dict[str, Any]
@@ -94,14 +93,6 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
             f"Available={','.join(TRAIN_EVIDENCE_MODES)}"
         ),
     )
-    parser.add_argument(
-        "--residual_relation_modes",
-        default="off",
-        help=(
-            "Comma-separated residual relation modes. "
-            f"Available={','.join(RESIDUAL_RELATION_MODES)}"
-        ),
-    )
     parser.add_argument("--seeds", default=None, help="Comma-separated seeds.")
     parser.add_argument("--gpus", default="0")
     parser.add_argument("--max_concurrent", type=int, default=1)
@@ -147,17 +138,6 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
         )
     if not train_evidence_modes:
         raise ValueError("At least one training evidence mode is required.")
-    residual_relation_modes = _csv_tokens(args.residual_relation_modes)
-    unknown_relation_modes = sorted(
-        set(residual_relation_modes) - set(RESIDUAL_RELATION_MODES)
-    )
-    if unknown_relation_modes:
-        raise ValueError(
-            "Unknown residual relation mode(s): "
-            f"{unknown_relation_modes}. Available={list(RESIDUAL_RELATION_MODES)}"
-        )
-    if not residual_relation_modes:
-        raise ValueError("At least one residual relation mode is required.")
     requested_run_id = run_id or args.run_id
     if args.run_mode == "test" and not requested_run_id:
         raise ValueError(
@@ -171,62 +151,53 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
             raise ValueError(f"Dataset {dataset!r} is not present in EXPERIMENT_CONFIGS.")
         for ablation in ablations:
             for train_evidence_mode in train_evidence_modes:
-                for residual_relation_mode in residual_relation_modes:
-                    for seed in seeds:
-                        params = dict(EXPERIMENT_CONFIGS[dataset])
-                        params.update(ablation.overrides)
-                        params.pop("num_gpus", None)
-                        params.pop("seed", None)
-                        params["model_variant"] = ablation.name
-                        params["train_evidence_mode"] = train_evidence_mode
-                        params["residual_relation_mode"] = residual_relation_mode
+                for seed in seeds:
+                    params = dict(EXPERIMENT_CONFIGS[dataset])
+                    params.update(ablation.overrides)
+                    params.pop("num_gpus", None)
+                    params.pop("seed", None)
+                    params["model_variant"] = ablation.name
+                    params["train_evidence_mode"] = train_evidence_mode
 
-                        relation_tag = (
-                            ""
-                            if residual_relation_mode == "off"
-                            else f"_{residual_relation_mode}"
-                        )
-                        tag = (
-                            f"{dataset}_graph_irt_{ablation.name}_"
-                            f"{train_evidence_mode}{relation_tag}_"
-                            f"seed{seed}_{session}"
-                        )
-                        save_dir = Path("checkpoints") / tag
-                        log_dir = Path("logs") / tag
-                        cmd = [
-                            sys.executable,
-                            "main.py",
-                            "--dataset_name",
-                            dataset,
-                            "--seed",
-                            str(seed),
-                            "--save_dir",
-                            str(save_dir),
-                            "--log_dir",
-                            str(log_dir),
-                            "--run_mode",
-                            str(args.run_mode),
-                        ]
-                        for key, value in params.items():
-                            _append_cli_arg(cmd, key, value)
-                        if args.generate_diagnosis:
-                            cmd.extend(("--generate_diagnosis", "True"))
-                        else:
-                            cmd.extend(("--generate_diagnosis", "False"))
+                    tag = (
+                        f"{dataset}_graph_irt_{ablation.name}_"
+                        f"{train_evidence_mode}_seed{seed}_{session}"
+                    )
+                    save_dir = Path("checkpoints") / tag
+                    log_dir = Path("logs") / tag
+                    cmd = [
+                        sys.executable,
+                        "main.py",
+                        "--dataset_name",
+                        dataset,
+                        "--seed",
+                        str(seed),
+                        "--save_dir",
+                        str(save_dir),
+                        "--log_dir",
+                        str(log_dir),
+                        "--run_mode",
+                        str(args.run_mode),
+                    ]
+                    for key, value in params.items():
+                        _append_cli_arg(cmd, key, value)
+                    if args.generate_diagnosis:
+                        cmd.extend(("--generate_diagnosis", "True"))
+                    else:
+                        cmd.extend(("--generate_diagnosis", "False"))
 
-                        jobs.append(
-                            JobSpec(
-                                dataset=dataset,
-                                seed=int(seed),
-                                ablation=ablation,
-                                train_evidence_mode=train_evidence_mode,
-                                residual_relation_mode=residual_relation_mode,
-                                save_dir=save_dir,
-                                log_dir=log_dir,
-                                params=params,
-                                cmd=cmd,
-                            )
+                    jobs.append(
+                        JobSpec(
+                            dataset=dataset,
+                            seed=int(seed),
+                            ablation=ablation,
+                            train_evidence_mode=train_evidence_mode,
+                            save_dir=save_dir,
+                            log_dir=log_dir,
+                            params=params,
+                            cmd=cmd,
                         )
+                    )
     return jobs
 
 
@@ -281,7 +252,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         f"Graph-IRT phase={args.run_mode}, jobs={len(jobs)}, "
         f"ablations={_csv_tokens(args.ablations)}, "
         f"train_evidence_modes={_csv_tokens(args.train_evidence_modes)}, "
-        f"residual_relation_modes={_csv_tokens(args.residual_relation_modes)}, "
         f"seeds={args.seeds or DEFAULT_SEEDS}, dry_run={args.dry_run}"
     )
     if args.dry_run:
@@ -311,8 +281,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 if code != 0:
                     failures.append(
                         f"{job.dataset}/{job.ablation.name}/"
-                        f"{job.train_evidence_mode}/{job.residual_relation_mode}/"
-                        f"seed{job.seed}: exit {code}"
+                        f"{job.train_evidence_mode}/seed{job.seed}: exit {code}"
                     )
             running = active
 
@@ -336,8 +305,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 env["CUDA_VISIBLE_DEVICES"] = str(gpu)
                 print(
                     f"[LAUNCH] {job.dataset}/{job.ablation.name}/"
-                    f"{job.train_evidence_mode}/{job.residual_relation_mode}/"
-                    f"seed{job.seed} gpu={gpu}\n"
+                    f"{job.train_evidence_mode}/seed{job.seed} gpu={gpu}\n"
                     f"         {' '.join(job.cmd)}"
                 )
                 process = subprocess.Popen(job.cmd, env=env)

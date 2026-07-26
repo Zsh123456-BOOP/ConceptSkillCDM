@@ -17,7 +17,6 @@ TRAIN_EVIDENCE_MODES = (
     "neutralized",
     "self_included",
 )
-RESIDUAL_RELATION_MODES = ("off", "partial_topk")
 
 
 _BASE_DEFAULTS: Dict[str, Any] = {

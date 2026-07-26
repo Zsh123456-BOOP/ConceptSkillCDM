@@ -129,7 +129,6 @@ CONFIG_HASH_KEYS = (
     "seed",
     "model_variant",
     "train_evidence_mode",
-    "residual_relation_mode",
     "knowledge_dim",
     "num_relation_heads",
     "num_gnn_layers",
@@ -172,13 +171,8 @@ def _config_hash(args) -> str:
     payload = {
         key: getattr(args, key)
         for key in CONFIG_HASH_KEYS
-        if key != "residual_relation_mode" and hasattr(args, key)
+        if hasattr(args, key)
     }
-    relation_mode = str(
-        getattr(args, "residual_relation_mode", "off")
-    ).strip().lower()
-    if relation_mode != "off":
-        payload["residual_relation_mode"] = relation_mode
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:16]
 
@@ -241,9 +235,6 @@ def append_summary_csv(
         "model_variant": getattr(args, "model_variant", "full"),
         "train_evidence_mode": getattr(
             args, "train_evidence_mode", "excluded"
-        ),
-        "residual_relation_mode": getattr(
-            args, "residual_relation_mode", "off"
         ),
         "seed": int(getattr(args, "seed", 0)),
         "git_sha": _git_sha(project_root),

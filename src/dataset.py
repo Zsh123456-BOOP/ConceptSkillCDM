@@ -7,11 +7,6 @@ import torch
 from scipy.sparse import csr_matrix
 from torch.utils.data import DataLoader, Dataset
 
-from src.config import RESIDUAL_RELATION_MODES
-from src.residual_relation import (
-    build_residual_relation_bundle,
-)
-
 
 class CognitiveDiagnosisDataset(Dataset):
     """认知诊断数据集类"""
@@ -585,8 +580,6 @@ def create_dataloaders(
         seed: int = 42,
         load_test: bool = True,
         exposure_prior_pmi: bool = False,
-        residual_relation_mode: str = "off",
-        residual_relation_topk: Optional[int] = None,
 ) -> Tuple[DataLoader, DataLoader, Optional[DataLoader], dict]:
     """
     创建训练、验证和测试的数据加载器，并执行统一的数据清洗
@@ -603,8 +596,6 @@ def create_dataloaders(
         logger: 可选的 logger，对清洗过程进行记录
         seed: 训练 DataLoader 的独立随机种子
         load_test: 是否读取测试集；训练/选模时必须为 False
-        residual_relation_mode: 残差关系模式；默认 off 完全不构图
-        residual_relation_topk: partial_topk 模式下每个目标概念保留的来源数
 
     Returns:
         (train_loader, val_loader, test_loader, info_dict) 元组
@@ -902,45 +893,6 @@ def create_dataloaders(
         f"global_rate={float(response_evidence_stats['global_correct'].item() / response_evidence_stats['global_count'].item()):.4f}"
     )
 
-    relation_mode = str(residual_relation_mode or "off").strip().lower()
-    if relation_mode not in RESIDUAL_RELATION_MODES:
-        raise ValueError(
-            "residual_relation_mode must be one of "
-            f"{list(RESIDUAL_RELATION_MODES)}, got {residual_relation_mode!r}"
-        )
-    residual_relation_bundle = None
-    if relation_mode == "partial_topk":
-        if (
-            isinstance(residual_relation_topk, bool)
-            or not isinstance(residual_relation_topk, (int, np.integer))
-            or int(residual_relation_topk) <= 0
-        ):
-            raise ValueError(
-                "residual_relation_topk must be positive in partial_topk mode"
-            )
-        log(
-            "[Residual Relation] building train-only cross-fitted "
-            f"partial_topk bundle: seed={int(seed)}, "
-            f"topk={int(residual_relation_topk)}"
-        )
-        residual_relation_bundle = build_residual_relation_bundle(
-            train_df=train_df,
-            stu_id_map=stu_id_map,
-            cpt_id_map=cpt_id_map,
-            seed=int(seed),
-            topk=int(residual_relation_topk),
-        )
-        diagnostics = residual_relation_bundle["diagnostics"]
-        log(
-            "[Residual Relation] built: "
-            f"full_edges={diagnostics['full_edge_count']:.0f}, "
-            f"density={diagnostics['full_edge_density']:.4f}, "
-            f"positive={diagnostics['full_positive_edge_count']:.0f}, "
-            f"negative={diagnostics['full_negative_edge_count']:.0f}, "
-            "sign_stable_4of5="
-            f"{diagnostics['full_sign_stable_ge4of5_share']:.2%}"
-        )
-
     # 3. 创建数据集（直接传 DataFrame，避免重复读盘）
     log("正在加载数据集...")
     train_dataset = CognitiveDiagnosisDataset(train_df, stu_id_map, exer_id_map, cpt_id_map)
@@ -1002,8 +954,6 @@ def create_dataloaders(
         'item_prior_matrix': item_prior_matrix,
         'exposure_prior_matrix': exposure_prior_matrix,
         'response_evidence_stats': response_evidence_stats,
-        'residual_relation_bundle': residual_relation_bundle,
-        'residual_relation_mode': relation_mode,
         'graph_prior_stats': graph_prior_stats,
         'exposure_prior_disabled': bool(prior_mode in {"item_only", "degree_random"}),
         'item_prior_disabled': bool(prior_mode == "exposure_only"),
