@@ -39,6 +39,7 @@ PROPAGATION_VARIANTS = (
     "p1_available",
     "p2_source_confidence",
     "p3_target_scarcity",
+    "p4_scarcity_correction",
 )
 
 
@@ -220,11 +221,16 @@ def _propagated_evidence_scores(
     source_confidence = pair_effective_count / (pair_effective_count + 1.0)
     p2 = source_mean * source_confidence
     p3 = p2 / (pair_target_count + 1.0)
+    # Normalize only the part added beyond the current weighted sum, and only
+    # while the target itself is scarce.  This returns smoothly to P0 as direct
+    # target evidence accumulates instead of suppressing the whole graph term.
+    p4 = p0 + (p1 - p0) / (pair_target_count + 1.0)
     pair_propagation = {
         "p0_current": p0,
         "p1_available": p1,
         "p2_source_confidence": p2,
         "p3_target_scarcity": p3,
+        "p4_scarcity_correction": p4,
     }
 
     row_scores: dict[str, np.ndarray] = {}
@@ -390,6 +396,10 @@ def probe_dataset(
         results["auc_p3_target_scarcity_plus_item_all"]
         - results["auc_p0_current_plus_item_all"]
     )
+    results["delta_p4_minus_p0"] = (
+        results["auc_p4_scarcity_correction_plus_item_all"]
+        - results["auc_p0_current_plus_item_all"]
+    )
     return results
 
 
@@ -433,7 +443,7 @@ def main() -> None:
     )
     print(
         f"{'dataset':<14} {'rows':>8} {'P0+item':>9} {'P1+item':>9} "
-        f"{'P2+item':>9} {'P3+item':>9} {'P1-P0':>8} {'P3-P0':>8} "
+        f"{'P4+item':>9} {'P1-P0':>8} {'P4-P0':>8} "
         f"{'n<3%':>7} {'multi%':>7}"
     )
     records = []
@@ -453,10 +463,9 @@ def main() -> None:
             f"{name:<14} {r['rows']:>8} "
             f"{r['auc_p0_current_plus_item_all']:>9.5f} "
             f"{r['auc_p1_available_plus_item_all']:>9.5f} "
-            f"{r['auc_p2_source_confidence_plus_item_all']:>9.5f} "
-            f"{r['auc_p3_target_scarcity_plus_item_all']:>9.5f} "
+            f"{r['auc_p4_scarcity_correction_plus_item_all']:>9.5f} "
             f"{r['delta_p1_available_minus_p0_current']:>+8.5f} "
-            f"{r['delta_p3_minus_p0']:>+8.5f} "
+            f"{r['delta_p4_minus_p0']:>+8.5f} "
             f"{100.0 * r['n_lt_3_row_share']:>6.1f}% "
             f"{100.0 * r['multi_concept_row_share']:>6.1f}%"
         )
