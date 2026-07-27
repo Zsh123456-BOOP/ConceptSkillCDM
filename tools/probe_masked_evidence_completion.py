@@ -262,10 +262,9 @@ def _assign_pair_folds(
         np.int64
     )
     annotated["_fold"] = annotated["_pair_key"].map(pair_to_fold).astype(np.int16)
-    for pair in grouped["_pair_key"].to_numpy(dtype=np.int64):
-        row_folds = annotated.loc[annotated["_pair_key"] == pair, "_fold"].unique()
-        if len(row_folds) != 1:
-            raise RuntimeError("a repeated student-item pair was split across folds")
+    folds_per_pair = annotated.groupby("_pair_key", sort=False)["_fold"].nunique()
+    if int(folds_per_pair.max()) != 1:
+        raise RuntimeError("a repeated student-item pair was split across folds")
     return annotated, grouped
 
 
