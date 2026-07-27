@@ -211,6 +211,25 @@ def main() -> None:
             <= details["mec_completion_weight"] + 1e-7
         ).all()
     )
+    assert torch.allclose(
+        details["mec_rate_delta"],
+        completed - evidence[..., 0],
+        atol=1e-7,
+        rtol=0.0,
+    )
+
+    # Diagnostics expose the effective post-clamp change, not a raw proposal.
+    boundary_evidence = evidence.clone()
+    boundary_evidence[0, 0, 0] = 4.0
+    boundary_completed, boundary_details = completion(
+        boundary_evidence,
+        count,
+        prior,
+        global_rate,
+        q_mask,
+    )
+    assert boundary_completed[0, 0].item() == 4.0
+    assert boundary_details["mec_rate_delta"][0, 0].item() == 0.0
 
     # R[0,2] is active while R[0,3] is zero: direction and locality matter.
     source_two_changed = evidence.clone()

@@ -202,12 +202,13 @@ class MaskedEvidenceCompletion(nn.Module):
             * scarcity
             * 0.5
         )
-        rate_delta = completion_weight * torch.tanh(
+        proposed_delta = completion_weight * torch.tanh(
             self.net(features).squeeze(-1)
         )
         completed_rate = (
-            response_evidence[..., 0] + rate_delta
+            response_evidence[..., 0] + proposed_delta
         ).clamp(min=-4.0, max=4.0)
+        rate_delta = completed_rate - response_evidence[..., 0]
         applicable = (completion_weight > 0.0).to(dtype=dtype)
         abstain = query * (1.0 - applicable)
         details = {
