@@ -32,6 +32,8 @@ def main() -> None:
             "full,no_response_evidence,pairwise_auc,no_message_passing,"
             "no_graph_calibration,mec,mec_state_graph,"
             "item_only,exposure_only,degree_random",
+            "--warm_start_run_id",
+            "baseline_smoke",
             "--dry_run",
         ]
     )
@@ -58,6 +60,14 @@ def main() -> None:
     assert by_name["no_graph_calibration"].params["graph_propagation_alpha"] == 0.0
     assert by_name["mec"].params["graph_propagation_alpha"] == 0.0
     assert by_name["mec_state_graph"].params["graph_propagation_alpha"] > 0.0
+    assert by_name["mec"].params["learning_rate"] == 0.003
+    assert by_name["mec_state_graph"].params["optimizer"] == "adamw"
+    assert "no_graph_calibration" in by_name["mec"].params[
+        "warm_start_checkpoint"
+    ]
+    assert "no_evidence_propagation" in by_name["mec_state_graph"].params[
+        "warm_start_checkpoint"
+    ]
     assert by_name["item_only"].params["graph_prior_mode"] == "item_only"
     assert by_name["exposure_only"].params["graph_prior_mode"] == "exposure_only"
     assert by_name["degree_random"].params["graph_prior_mode"] == "degree_random"
@@ -156,6 +166,24 @@ def main() -> None:
             assert "choose a new --run_id" in str(exc)
         else:
             raise AssertionError("training must refuse an existing run directory")
+
+        warm_path = Path(directory) / "warm" / "best_model.pth"
+        missing_warm_job = replace(
+            by_name["mec_state_graph"],
+            params={
+                **by_name["mec_state_graph"].params,
+                "warm_start_checkpoint": str(warm_path),
+            },
+        )
+        try:
+            runner._require_mec_warm_starts([missing_warm_job])
+        except FileNotFoundError as exc:
+            assert "matched warm-start" in str(exc)
+        else:
+            raise AssertionError("MEC must reject a missing matched baseline")
+        warm_path.parent.mkdir(parents=True)
+        warm_path.write_bytes(b"smoke")
+        runner._require_mec_warm_starts([missing_warm_job])
     print("OK: Graph-IRT ablation runner contract passed.")
 
 

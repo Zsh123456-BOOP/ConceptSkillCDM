@@ -45,6 +45,18 @@ class JobSpec:
     cmd: List[str]
 
 
+MEC_STAGE2_OVERRIDES: Dict[str, Any] = {
+    "optimizer": "adamw",
+    "learning_rate": 0.003,
+    "weight_decay": 0.0001,
+    "epochs": 30,
+    "patience": 3,
+    "early_stop_patience": 8,
+    "min_epochs": 8,
+    "debug_graph_diag": False,
+}
+
+
 ABLATIONS: Dict[str, AblationSpec] = {
     "full": AblationSpec("full", {}),
     "no_response_evidence": AblationSpec("no_response_evidence", {}),
@@ -57,8 +69,17 @@ ABLATIONS: Dict[str, AblationSpec] = {
     "no_graph_calibration": AblationSpec(
         "no_graph_calibration", {"graph_propagation_alpha": 0.0}
     ),
-    "mec": AblationSpec("mec", {"graph_propagation_alpha": 0.0}),
-    "mec_state_graph": AblationSpec("mec_state_graph", {}),
+    "mec": AblationSpec(
+        "mec",
+        {
+            "graph_propagation_alpha": 0.0,
+            **MEC_STAGE2_OVERRIDES,
+        },
+    ),
+    "mec_state_graph": AblationSpec(
+        "mec_state_graph",
+        dict(MEC_STAGE2_OVERRIDES),
+    ),
     "item_only": AblationSpec("item_only", {"graph_prior_mode": "item_only"}),
     "exposure_only": AblationSpec(
         "exposure_only", {"graph_prior_mode": "exposure_only"}
@@ -101,6 +122,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max_per_gpu", type=int, default=1)
     parser.add_argument("--poll_interval", type=int, default=10)
     parser.add_argument("--run_id", default=None)
+    parser.add_argument(
+        "--warm_start_run_id",
+        default=None,
+        help=(
+            "Existing matched baseline run id required for MEC training. "
+            "mec uses no_graph_calibration; mec_state_graph uses "
+            "no_evidence_propagation."
+        ),
+    )
     parser.add_argument(
         "--run_mode",
         choices=("train", "test"),
@@ -160,6 +190,34 @@ def make_jobs(args: argparse.Namespace, run_id: Optional[str] = None) -> List[Jo
                     params.pop("seed", None)
                     params["model_variant"] = ablation.name
                     params["train_evidence_mode"] = train_evidence_mode
+                    if (
+                        args.run_mode == "train"
+                        and ablation.name in {"mec", "mec_state_graph"}
+                    ):
+                        warm_start_run_id = getattr(
+                            args,
+                            "warm_start_run_id",
+                            None,
+                        )
+                        if not warm_start_run_id:
+                            raise ValueError(
+                                "MEC training requires --warm_start_run_id"
+                            )
+                        source_variant = (
+                            "no_graph_calibration"
+                            if ablation.name == "mec"
+                            else "no_evidence_propagation"
+                        )
+                        source_tag = (
+                            f"{dataset}_graph_irt_{source_variant}_"
+                            f"{train_evidence_mode}_seed{seed}_"
+                            f"{warm_start_run_id}"
+                        )
+                        params["warm_start_checkpoint"] = str(
+                            Path("checkpoints")
+                            / source_tag
+                            / "best_model.pth"
+                        )
 
                     tag = (
                         f"{dataset}_graph_irt_{ablation.name}_"
@@ -240,6 +298,26 @@ def _require_fresh_training_dirs(jobs: Sequence[JobSpec]) -> None:
         )
 
 
+def _require_mec_warm_starts(jobs: Sequence[JobSpec]) -> None:
+    missing = [
+        str(job.params["warm_start_checkpoint"])
+        for job in jobs
+        if job.ablation.name in {"mec", "mec_state_graph"}
+        and not Path(str(job.params.get("warm_start_checkpoint", ""))).is_file()
+    ]
+    if missing:
+        preview = "\n  ".join(missing[:10])
+        suffix = (
+            f"\n  ... and {len(missing) - 10} more"
+            if len(missing) > 10
+            else ""
+        )
+        raise FileNotFoundError(
+            "MEC matched warm-start checkpoints are missing:\n  "
+            f"{preview}{suffix}"
+        )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
     jobs = make_jobs(args)
@@ -264,6 +342,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     if args.run_mode == "test":
         _require_existing_test_checkpoints(jobs)
     else:
+        _require_mec_warm_starts(jobs)
         _require_fresh_training_dirs(jobs)
 
     running: List[tuple[subprocess.Popen, int, JobSpec]] = []

@@ -144,21 +144,21 @@ def main() -> None:
     assert torch.allclose(neutral_a, neutral_b, atol=1e-7, rtol=0.0)
 
     q_vector = model_a.q_matrix[exercise_ids]
-    _, excluded_count, _ = model_a._build_response_evidence(
+    _, excluded_count, _, _, _ = model_a._build_response_evidence(
         student_ids,
         exercise_ids,
         q_vector,
         torch.tensor([frame.loc[0, "label"]]),
         None,
     )
-    _, neutral_count, _ = model_a._build_response_evidence(
+    _, neutral_count, _, _, _ = model_a._build_response_evidence(
         student_ids,
         exercise_ids,
         q_vector,
         None,
         torch.tensor([frame.loc[0, "label"]]),
     )
-    _, included_count, _ = model_a._build_response_evidence(
+    _, included_count, _, _, _ = model_a._build_response_evidence(
         student_ids,
         exercise_ids,
         q_vector,

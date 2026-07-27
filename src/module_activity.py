@@ -65,7 +65,8 @@ def compute_module_activity(
     difficulty_values: List[float] = []
     graph_state_deltas: List[float] = []
     relation_identity_deltas: List[float] = []
-    mec_anchor_values: List[float] = []
+    mec_rate_delta_values: List[float] = []
+    mec_pseudo_count_values: List[float] = []
 
     sample_count = 0
     with torch.no_grad():
@@ -87,7 +88,17 @@ def compute_module_activity(
             difficulty_values.extend(_as_values(details.get("irt_b")))
             graph_state_deltas.extend(_as_values(details.get("knowledge_state_graph_delta")))
             relation_identity_deltas.extend(_as_values(details.get("relation_identity_delta")))
-            mec_anchor_values.extend(_as_values(details.get("mec_anchor")))
+            q_mask = details.get("q_vector")
+            rate_delta = details.get("mec_rate_delta")
+            pseudo_count = details.get("mec_pseudo_count")
+            if (
+                isinstance(q_mask, torch.Tensor)
+                and isinstance(rate_delta, torch.Tensor)
+                and isinstance(pseudo_count, torch.Tensor)
+            ):
+                queried = q_mask > 0
+                mec_rate_delta_values.extend(_as_values(rate_delta[queried]))
+                mec_pseudo_count_values.extend(_as_values(pseudo_count[queried]))
             sample_count += take
 
     relation_learning = _relation_learning(base_model)
@@ -108,9 +119,10 @@ def compute_module_activity(
         "mec_enabled": bool(
             getattr(base_model, "evidence_completion", None) is not None
         ),
-        "mec_anchor_abs_mean": _mean(
-            [abs(value) for value in mec_anchor_values]
+        "mec_rate_delta_abs_mean": _mean(
+            [abs(value) for value in mec_rate_delta_values]
         ),
+        "mec_pseudo_count_mean": _mean(mec_pseudo_count_values),
     }
 
     if results["graph_enabled"]:
@@ -180,7 +192,7 @@ def compute_module_activity(
         and results["irt_discrimination_mean"] > 0.0
     )
     results["mec_active"] = bool(
-        results["mec_enabled"] and results["mec_anchor_abs_mean"] > 1e-8
+        results["mec_enabled"] and results["mec_rate_delta_abs_mean"] > 1e-8
     )
     if was_training:
         model.train()
@@ -236,7 +248,8 @@ def format_activity_report(
             "",
             "2. Masked evidence completion:",
             f"   - Status: {mec_status}",
-            f"   - Anchor |mean|: {activity.get('mec_anchor_abs_mean', 0.0):.6f}",
+            f"   - Rate correction |mean|: {activity.get('mec_rate_delta_abs_mean', 0.0):.6f}",
+            f"   - Pseudo-count mean: {activity.get('mec_pseudo_count_mean', 0.0):.6f}",
             "",
             "3. IRT head:",
             f"   - Status: {'LIVE' if activity.get('irt_active') else 'INACTIVE'}",

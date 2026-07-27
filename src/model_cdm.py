@@ -31,10 +31,10 @@ GRAPH_IRT_ARCHITECTURE = "graph_irt_v10"
 # How response evidence anchors theta before the single 2PL readout.
 #   full        -> direct rate + difficulty residual + graph-propagated rate
 #   direct_only -> direct rate + difficulty residual (no graph transport)
-#   mec         -> direct rate + difficulty residual + non-Q evidence completion
+#   mec         -> target-completed direct rate + difficulty residual
 #   off         -> evidence feeds only the initial state (v9 behaviour)
 EVIDENCE_ANCHOR_MODES = ("full", "direct_only", "mec", "off")
-_ANCHOR_CHANNELS = {"full": 3, "direct_only": 2, "mec": 3, "off": 0}
+_ANCHOR_CHANNELS = {"full": 3, "direct_only": 2, "mec": 2, "off": 0}
 
 
 class CognitiveDiagnosisModel(nn.Module):
@@ -113,12 +113,9 @@ class CognitiveDiagnosisModel(nn.Module):
             self._anchor_channels = _ANCHOR_CHANNELS[self.evidence_anchor_mode]
         # Count-conditioned anchor gates: sigmoid(a + b*log1p(n)) per channel.
         # a=2 starts near fully-open (~0.88) so the initial behaviour matches an
-        # ungated anchor; b learns how trust responds to observation counts. The
-        # third column is retained for checkpoint compatibility and unused.
-        gated_channels = (
-            2 if self.evidence_anchor_mode == "mec" else self._anchor_channels
-        )
-        gate_init = torch.zeros(max(1, gated_channels), 3)
+        # ungated anchor; b learns how trust responds to observation counts.
+        # Column 2 remains reserved in each per-channel parameter row.
+        gate_init = torch.zeros(max(1, self._anchor_channels), 3)
         gate_init[:, 0] = 2.0
         self.anchor_gate = nn.Parameter(gate_init)
         self.lambda_graph_entropy = max(0.0, float(lambda_graph_entropy))
@@ -214,11 +211,25 @@ class CognitiveDiagnosisModel(nn.Module):
             # initializing the treatment-only MLP must not advance the global
             # RNG used by data shuffling and row-level anchor dropout.
             with torch.random.fork_rng(devices=[], enabled=True):
+                completion_relation = self.item_prior_matrix
+                if self.exposure_prior_matrix is not None:
+                    completion_relation = (
+                        completion_relation + self.exposure_prior_matrix
+                    )
+                if graph_topk is not None and int(graph_topk) < self.num_concepts:
+                    values, indices = torch.topk(
+                        completion_relation,
+                        k=max(1, int(graph_topk)),
+                        dim=-1,
+                    )
+                    sparse_relation = torch.zeros_like(completion_relation)
+                    completion_relation = sparse_relation.scatter(
+                        dim=-1,
+                        index=indices,
+                        src=values,
+                    )
                 self.evidence_completion = MaskedEvidenceCompletion(
-                    num_concepts=self.num_concepts,
-                    global_response_count=float(
-                        self.response_global_count.item()
-                    ),
+                    relation_matrix=completion_relation,
                 )
 
     def _register_response_evidence(
@@ -335,6 +346,8 @@ class CognitiveDiagnosisModel(nn.Module):
         Optional[torch.Tensor],
         Optional[torch.Tensor],
         Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
     ]:
         """Return response evidence under an explicit training-query boundary.
 
@@ -347,7 +360,7 @@ class CognitiveDiagnosisModel(nn.Module):
         and the deliberately self-included training control.
         """
         if not self.use_response_evidence:
-            return None, None, None
+            return None, None, None, None, None
         if outcome_to_exclude is not None and outcome_to_neutralize is not None:
             raise ValueError(
                 "a query outcome cannot be both excluded and neutralized"
@@ -428,12 +441,14 @@ class CognitiveDiagnosisModel(nn.Module):
                 global_rate = (
                     self.response_global_correct + neutral_shift.reshape(-1)
                 ) / self.response_global_count
-            global_rate = global_rate.unsqueeze(1)
         else:
             global_rate = self.response_global_correct / self.response_global_count
 
         # One empirical-Bayes pseudo-observation is fixed by the architecture;
         # there is no dataset-specific smoothing knob to tune.
+        global_rate = global_rate.reshape(-1, 1)
+        if global_rate.size(0) == 1:
+            global_rate = global_rate.expand(count.size(0), 1)
         concept_rate = (concept_correct + global_rate) / (concept_count + 1.0)
         posterior = (correct + concept_rate) / (count + 1.0)
         reliability = count / (count + 1.0)
@@ -448,16 +463,15 @@ class CognitiveDiagnosisModel(nn.Module):
             residual_sum / count.clamp(min=1.0) * reliability
         ).clamp(min=-1.0, max=1.0)
         evidence = torch.stack((rate_evidence, residual_evidence), dim=-1)
-        return evidence, count, correct
+        return evidence, count, correct, concept_rate, global_rate
 
     def _compose_evidence_anchor(
         self,
         relation_matrices: torch.Tensor,
         response_evidence: Optional[torch.Tensor],
         loo_count: Optional[torch.Tensor],
-        completion_anchor: Optional[torch.Tensor] = None,
     ) -> Optional[torch.Tensor]:
-        """Stack the direct, residual, and optional completion/graph channels.
+        """Stack the direct, residual, and optional graph channels.
 
         The propagated channel transports each row's leave-one-out rate
         evidence over the learned row-stochastic concept graph, so concepts
@@ -482,11 +496,7 @@ class CognitiveDiagnosisModel(nn.Module):
             gated(rate_evidence, 0, log_count),
             gated(residual_evidence, 1, log_count),
         ]
-        if self.evidence_anchor_mode == "mec":
-            if completion_anchor is None:
-                raise ValueError("MEC mode requires a completion anchor")
-            channels.append(completion_anchor.to(dtype=rate_evidence.dtype))
-        elif self.evidence_anchor_mode == "full":
+        if self.evidence_anchor_mode == "full":
             if self.anchor_multihead_prop:
                 for head in range(self.num_relation_heads):
                     receiver = relation_matrices[head].transpose(0, 1)
@@ -580,7 +590,13 @@ class CognitiveDiagnosisModel(nn.Module):
             if self.relation_learning is None
             else self.relation_learning()
         )
-        response_evidence, loo_count, response_correct = (
+        (
+            response_evidence,
+            loo_count,
+            response_correct,
+            concept_rate,
+            global_rate,
+        ) = (
             self._build_response_evidence(
                 student_ids,
                 exercise_ids,
@@ -589,16 +605,21 @@ class CognitiveDiagnosisModel(nn.Module):
                 outcome_to_neutralize,
             )
         )
-        completion_anchor = (
-            self.evidence_completion(
+        completion_details: Dict[str, torch.Tensor] = {}
+        anchor_response_evidence = response_evidence
+        if self.evidence_completion is not None:
+            completed_rate, completion_details = self.evidence_completion(
                 response_evidence,
                 loo_count,
                 response_correct,
+                concept_rate,
+                global_rate,
                 q_vector,
             )
-            if self.evidence_completion is not None
-            else None
-        )
+            anchor_response_evidence = torch.stack(
+                (completed_rate, response_evidence[..., 1]),
+                dim=-1,
+            )
         knowledge_state, initial_state = self.knowledge_encoder(
             student_ids,
             relation_matrices,
@@ -611,9 +632,8 @@ class CognitiveDiagnosisModel(nn.Module):
         difficulty, discrimination = self.exercise_encoder(exercise_ids)
         evidence_anchor = self._compose_evidence_anchor(
             relation_matrices,
-            response_evidence,
+            anchor_response_evidence,
             loo_count,
-            completion_anchor,
         )
         if (
             evidence_anchor is not None
@@ -683,11 +703,13 @@ class CognitiveDiagnosisModel(nn.Module):
             "evidence_anchor": (
                 evidence_anchor.detach()
                 if evidence_anchor is not None
-                else q_vector.detach().new_zeros((*q_vector.shape, 3))
+                else q_vector.detach().new_zeros(
+                    (*q_vector.shape, self._anchor_channels)
+                )
             ),
             "mec_anchor": (
-                completion_anchor.detach()
-                if completion_anchor is not None
+                completion_details["mec_rate_delta"].detach()
+                if completion_details
                 else q_vector.detach().new_zeros(q_vector.shape)
             ),
             "response_evidence_leave_one_out": q_vector.detach().new_tensor(
@@ -701,6 +723,12 @@ class CognitiveDiagnosisModel(nn.Module):
             "irt_logit": irt_logit.detach(),
             "logits": total_logit.detach(),
         }
+        details.update(
+            {
+                key: value.detach()
+                for key, value in completion_details.items()
+            }
+        )
         if head_details is not None:
             details.update(head_details)
         return output, details
@@ -740,7 +768,13 @@ class CognitiveDiagnosisModel(nn.Module):
                     device=device,
                     dtype=self.q_matrix.dtype,
                 )
-                response_evidence, loo_count, response_correct = (
+                (
+                    response_evidence,
+                    loo_count,
+                    response_correct,
+                    concept_rate,
+                    global_rate,
+                ) = (
                     self._build_response_evidence(
                         student_ids,
                         None,
@@ -749,16 +783,20 @@ class CognitiveDiagnosisModel(nn.Module):
                         outcome_to_neutralize=None,
                     )
                 )
-                completion_anchor = (
-                    self.evidence_completion(
+                anchor_response_evidence = response_evidence
+                if self.evidence_completion is not None:
+                    completed_rate, _ = self.evidence_completion(
                         response_evidence,
                         loo_count,
                         response_correct,
+                        concept_rate,
+                        global_rate,
                         diagnosis_q,
                     )
-                    if self.evidence_completion is not None
-                    else None
-                )
+                    anchor_response_evidence = torch.stack(
+                        (completed_rate, response_evidence[..., 1]),
+                        dim=-1,
+                    )
                 knowledge_state = self.knowledge_encoder(
                     student_ids,
                     relation_matrices,
@@ -770,9 +808,8 @@ class CognitiveDiagnosisModel(nn.Module):
                 concept_theta = self.diagnosis_head.theta_proj(concept_state).squeeze(-1)
                 evidence_anchor = self._compose_evidence_anchor(
                     relation_matrices,
-                    response_evidence,
+                    anchor_response_evidence,
                     loo_count,
-                    completion_anchor,
                 )
                 if evidence_anchor is not None:
                     anchor_weights = self.diagnosis_head.evidence_anchor_weights()

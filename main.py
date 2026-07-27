@@ -168,6 +168,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--save_dir", default="./checkpoints")
     parser.add_argument("--log_dir", default="./logs")
     parser.add_argument("--save_interval", type=int, default=10)
+    parser.add_argument(
+        "--warm_start_checkpoint",
+        default=None,
+        help=(
+            "Matched direct-evidence checkpoint required only while training "
+            "the MEC variants."
+        ),
+    )
     parser.add_argument("--debug_graph_diag", action="store_true")
     parser.add_argument("--diag_batches", type=int, default=2)
     parser.add_argument(
@@ -302,6 +310,17 @@ def _validate_args(args: argparse.Namespace) -> None:
     ):
         raise SystemExit(
             "error: non-default --train_evidence_mode requires response evidence"
+        )
+    is_mec = str(args.model_variant) in {"mec", "mec_state_graph"}
+    trains = str(args.run_mode) in {"train", "train_test"}
+    if is_mec and trains and not args.warm_start_checkpoint:
+        raise SystemExit(
+            "error: MEC training requires --warm_start_checkpoint from its "
+            "matched direct-evidence baseline"
+        )
+    if not is_mec and args.warm_start_checkpoint:
+        raise SystemExit(
+            "error: --warm_start_checkpoint is only valid for MEC variants"
         )
 
 

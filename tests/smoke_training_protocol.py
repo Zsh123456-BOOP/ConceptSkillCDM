@@ -21,6 +21,7 @@ import main as main_module
 from src.config import EMA_DECAY, PAIRWISE_AUC_WEIGHT
 from src.experiment_utils import _config_hash
 from src.dataset import create_dataloaders
+from src.evidence_completion import MEC_SCHEMA
 from src.model import GRAPH_IRT_ARCHITECTURE
 from src.trainer import (
     _build_data_identity,
@@ -131,7 +132,18 @@ def main() -> None:
         "mec_lambda",
         "mec_mask_rate",
         "mec_hidden",
+        "mec_pseudo_count_cap",
+        "mec_temperature",
+        "mec_consistency_weight",
     } & parser_dests
+    missing_warm = main_module.parse_args(["--model_variant", "mec"])
+    main_module._apply_model_variant(missing_warm)
+    try:
+        main_module._validate_args(missing_warm)
+    except SystemExit as exc:
+        assert "requires --warm_start_checkpoint" in str(exc)
+    else:
+        raise AssertionError("MEC training must require a matched baseline")
     boundary_labels = torch.tensor([0.0, 1.0])
     assert set(_training_evidence_kwargs(boundary_labels, "excluded")) == {
         "outcome_to_exclude"
@@ -234,10 +246,15 @@ def main() -> None:
             evidence_anchor_mode="mec",
             disable_graph_module=True,
             disable_self_loop=False,
+            warm_start_checkpoint="/tmp/source/best_model.pth",
         )
     )
     assert checkpoint_mec["disable_graph_module"] is True
     assert checkpoint_mec["evidence_anchor_mode"] == "mec"
+    assert checkpoint_mec["mec_schema"] == MEC_SCHEMA
+    assert checkpoint_mec["warm_start_checkpoint"] == os.path.realpath(
+        "/tmp/source/best_model.pth"
+    )
 
     class _TinyModel(torch.nn.Module):
         def __init__(self):

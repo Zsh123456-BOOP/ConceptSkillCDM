@@ -58,8 +58,43 @@ def evaluate(checkpoint_dir: str, batch_size: int, device: torch.device) -> dict
             student_ids = student_ids.to(device)
             exercise_ids = exercise_ids.to(device)
             q_vec = q_matrix[exercise_ids]
-            resp, loo_count = model._build_response_evidence(student_ids, None, q_vec, None)
-            anchor = model._compose_evidence_anchor(model.relation_learning(), resp, loo_count)
+            (
+                resp,
+                loo_count,
+                response_correct,
+                concept_rate,
+                global_rate,
+            ) = model._build_response_evidence(
+                student_ids,
+                exercise_ids,
+                q_vec,
+                None,
+                None,
+            )
+            anchor_evidence = resp
+            if model.evidence_completion is not None:
+                completed_rate, _ = model.evidence_completion(
+                    resp,
+                    loo_count,
+                    response_correct,
+                    concept_rate,
+                    global_rate,
+                    q_vec,
+                )
+                anchor_evidence = torch.stack(
+                    (completed_rate, resp[..., 1]),
+                    dim=-1,
+                )
+            relations = (
+                model.identity_relations
+                if model.relation_learning is None
+                else model.relation_learning()
+            )
+            anchor = model._compose_evidence_anchor(
+                relations,
+                anchor_evidence,
+                loo_count,
+            )
             if anchor is None:
                 return {"dataset": loaded_args.get("dataset_name"), "channels": {}, "rows": 0}
             # per-concept contribution then Q-masked to the row's concepts

@@ -19,6 +19,7 @@ from torch.utils.data import DataLoader
 
 from src.config import EMA_DECAY, PAIRWISE_AUC_WEIGHT, TRAIN_EVIDENCE_MODES
 from src.dataset import CognitiveDiagnosisDataset, create_dataloaders
+from src.evidence_completion import MEC_SCHEMA
 from src.experiment_utils import (
     _config_hash,
     append_summary_csv,
@@ -40,6 +41,7 @@ ARCHITECTURE_NAME = GRAPH_IRT_ARCHITECTURE
 STRICT_CHECKPOINT_LOADING = True
 MONITOR_NAME = "val_auc"
 MONITOR_MODE = "max"
+MEC_VARIANTS: Tuple[str, ...] = ("mec", "mec_state_graph")
 
 STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "architecture",
@@ -58,6 +60,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "ema_decay",
     "train_evidence_mode",
     "num_gnn_layers",
+    "mec_schema",
 )
 
 _REG_COMPONENT_KEYS: Tuple[str, ...] = (
@@ -325,6 +328,242 @@ def _build_model(source: Any, info_dict: Dict[str, Any], device: torch.device) -
     return CognitiveDiagnosisModel(**_model_kwargs(source, info_dict)).to(device)
 
 
+def _is_mec_variant(source: Any) -> bool:
+    return str(_source_get(source, "model_variant", "")) in MEC_VARIANTS
+
+
+def _assert_same_info_tensor(
+    name: str,
+    current_info: Dict[str, Any],
+    source_info: Dict[str, Any],
+) -> None:
+    current = current_info.get(name)
+    source = source_info.get(name)
+    if current is None or source is None:
+        if current is not source:
+            raise RuntimeError(
+                f"MEC warm start {name} availability differs from the current data"
+            )
+        return
+    current_tensor = torch.as_tensor(current).detach().cpu()
+    source_tensor = torch.as_tensor(source).detach().cpu()
+    if (
+        tuple(current_tensor.shape) != tuple(source_tensor.shape)
+        or current_tensor.dtype != source_tensor.dtype
+        or not torch.equal(current_tensor, source_tensor)
+    ):
+        raise RuntimeError(
+            f"MEC warm start {name} differs from the current train-only data"
+        )
+
+
+def _load_and_freeze_mec_warm_start(
+    model: CognitiveDiagnosisModel,
+    args: Any,
+    info_dict: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Strictly inherit a matched direct-evidence checkpoint for MEC stage 2."""
+    if not _is_mec_variant(args):
+        return {}
+    source_path = os.path.realpath(
+        str(_source_get(args, "warm_start_checkpoint", ""))
+    )
+    if not source_path or not os.path.isfile(source_path):
+        raise FileNotFoundError(
+            f"MEC requires an existing --warm_start_checkpoint, got {source_path!r}"
+        )
+    checkpoint = torch.load(source_path, map_location="cpu", weights_only=False)
+    _require_graph_irt_checkpoint(checkpoint, source_path)
+    source_args = checkpoint.get("args", {})
+    source_info = checkpoint.get("info_dict")
+    if not isinstance(source_info, dict):
+        raise RuntimeError("MEC warm-start checkpoint is missing info_dict")
+
+    candidate_variant = str(_source_get(args, "model_variant", ""))
+    expected_source_variant = {
+        "mec": "no_graph_calibration",
+        "mec_state_graph": "no_evidence_propagation",
+    }[candidate_variant]
+    if str(source_args.get("model_variant", "")) != expected_source_variant:
+        raise RuntimeError(
+            "MEC warm start must use the matched direct-evidence ablation: "
+            f"candidate={candidate_variant!r}, "
+            f"expected source={expected_source_variant!r}"
+        )
+    if str(source_args.get("evidence_anchor_mode", "")) != "direct_only":
+        raise RuntimeError("MEC warm start must have evidence_anchor_mode='direct_only'")
+
+    for key in ("dataset_name", "seed", "train_evidence_mode"):
+        current = _source_get(args, key)
+        source = source_args.get(key)
+        if current != source:
+            raise RuntimeError(
+                f"MEC warm-start mismatch for {key}: current={current!r}, "
+                f"source={source!r}"
+            )
+    structural_keys = (
+        "knowledge_dim",
+        "num_relation_heads",
+        "num_gnn_layers",
+        "dropout",
+        "graph_topk",
+        "disable_self_loop",
+        "allow_self_loop",
+        "graph_identity_residual",
+        "graph_dropout",
+        "graph_tau_init",
+        "graph_propagation_alpha",
+        "graph_prior_strength_init",
+        "gnn_residual_weight",
+        "prediction_head",
+        "evidence_state_injection",
+        "anchor_multihead_prop",
+        "disable_graph_module",
+        "graph_prior_mode",
+        "min_stu_interactions",
+        "min_exer_interactions",
+    )
+    for key in structural_keys:
+        current = (
+            _resolve_allow_self_loop(args)
+            if key == "allow_self_loop"
+            else _source_get(args, key)
+        )
+        source = (
+            _resolve_allow_self_loop(source_args)
+            if key == "allow_self_loop"
+            else source_args.get(key)
+        )
+        if current != source:
+            raise RuntimeError(
+                f"MEC warm-start structural mismatch for {key}: "
+                f"current={current!r}, source={source!r}"
+            )
+
+    if source_info.get("data_identity") != info_dict.get("data_identity"):
+        raise RuntimeError("MEC warm start train/validation data identity differs")
+    for key in ("num_students", "num_exercises", "num_concepts"):
+        if int(source_info.get(key, -1)) != int(info_dict.get(key, -2)):
+            raise RuntimeError(f"MEC warm-start mismatch for {key}")
+    for key in ("stu_id_map", "exer_id_map", "cpt_id_map"):
+        if source_info.get(key) != info_dict.get(key):
+            raise RuntimeError(f"MEC warm-start mismatch for {key}")
+    for name in ("q_matrix", "item_prior_matrix", "exposure_prior_matrix"):
+        _assert_same_info_tensor(name, info_dict, source_info)
+    current_stats = info_dict.get("response_evidence_stats", {})
+    source_stats = source_info.get("response_evidence_stats", {})
+    if set(current_stats) != set(source_stats):
+        raise RuntimeError("MEC warm-start response-statistic keys differ")
+    for name in current_stats:
+        current_value = torch.as_tensor(current_stats[name]).detach().cpu()
+        source_value = torch.as_tensor(source_stats[name]).detach().cpu()
+        if (
+            tuple(current_value.shape) != tuple(source_value.shape)
+            or current_value.dtype != source_value.dtype
+            or not torch.equal(current_value, source_value)
+        ):
+            raise RuntimeError(
+                f"MEC warm-start response statistic differs: {name}"
+            )
+
+    current_state = model.state_dict()
+    source_state = _strip_module_prefix(checkpoint["model_state_dict"])
+    extra_keys = sorted(set(current_state) - set(source_state))
+    missing_source = sorted(set(source_state) - set(current_state))
+    if missing_source or any(
+        not key.startswith("evidence_completion.") for key in extra_keys
+    ):
+        raise RuntimeError(
+            "MEC warm-start state contract failed: "
+            f"candidate_only={extra_keys}, source_only={missing_source}"
+        )
+    merged_state = dict(current_state)
+    for key, value in source_state.items():
+        target = current_state[key]
+        if tuple(value.shape) != tuple(target.shape):
+            raise RuntimeError(
+                f"MEC warm-start tensor shape mismatch for {key}: "
+                f"source={tuple(value.shape)}, current={tuple(target.shape)}"
+            )
+        merged_state[key] = value.to(device=target.device, dtype=target.dtype)
+    model.load_state_dict(merged_state, strict=True)
+
+    for parameter in model.parameters():
+        parameter.requires_grad_(False)
+    completion = getattr(model, "evidence_completion", None)
+    if completion is None:
+        raise RuntimeError("MEC variant did not construct evidence_completion")
+    for parameter in completion.parameters():
+        parameter.requires_grad_(True)
+    trainable_names = [
+        name for name, parameter in model.named_parameters() if parameter.requires_grad
+    ]
+    if not trainable_names or any(
+        not name.startswith("evidence_completion.") for name in trainable_names
+    ):
+        raise RuntimeError(
+            f"MEC trainable-parameter contract failed: {trainable_names}"
+        )
+    model.mec_frozen_training = True
+    return {
+        "schema": "mec_warm_start_v1",
+        "source_checkpoint": source_path,
+        "source_checkpoint_sha256": _sha256_file(source_path),
+        "source_variant": expected_source_variant,
+        "source_epoch": int(checkpoint.get("epoch", 0)),
+        "source_val_auc": float(
+            checkpoint.get(
+                "val_auc",
+                checkpoint.get("val_metrics", {}).get("auc", float("nan")),
+            )
+        ),
+        "source_val_metrics": checkpoint.get("val_metrics", {}),
+        "trainable_parameters": trainable_names,
+    }
+
+
+def _assert_mec_zero_init_equivalence(
+    model: nn.Module,
+    val_loader: DataLoader,
+    device: torch.device,
+) -> float:
+    """Check that zero-initialized pseudo-evidence leaves logits unchanged."""
+    base_model = _get_base_model(model)
+    completion = getattr(base_model, "evidence_completion", None)
+    if completion is None:
+        return 0.0
+    was_training = model.training
+    model.eval()
+    student_ids, exercise_ids, _ = next(iter(val_loader))
+    student_ids = student_ids.to(device)
+    exercise_ids = exercise_ids.to(device)
+    try:
+        with torch.no_grad():
+            candidate_logits = model(
+                student_ids,
+                exercise_ids,
+                return_logits=True,
+            )
+            base_model.evidence_completion = None
+            baseline_logits = model(
+                student_ids,
+                exercise_ids,
+                return_logits=True,
+            )
+    finally:
+        base_model.evidence_completion = completion
+        model.train(was_training)
+    max_abs = float(
+        (candidate_logits - baseline_logits).detach().abs().max().item()
+    )
+    if max_abs > 1e-7:
+        raise RuntimeError(
+            "MEC zero initialization changed matched baseline logits: "
+            f"max_abs={max_abs:.3e}"
+        )
+    return max_abs
+
+
 def _runtime_facts(model: nn.Module) -> Dict[str, Any]:
     base_model = _get_base_model(model)
     relation_learning = getattr(base_model, "relation_learning", None)
@@ -409,8 +648,10 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "pairwise_auc_weight",
         "ema_decay",
         "graph_prior_mode",
+        "exposure_prior_pmi",
         "min_stu_interactions",
         "min_exer_interactions",
+        "warm_start_checkpoint",
     )
     clean = {
         key: getattr(args, key)
@@ -423,6 +664,15 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
     clean["allow_self_loop"] = _resolve_allow_self_loop(args)
     clean["pairwise_auc_weight"] = _resolve_pairwise_auc_weight(args)
     clean["ema_decay"] = _resolve_ema_decay(args)
+    clean["mec_schema"] = (
+        MEC_SCHEMA
+        if str(_source_get(args, "model_variant", "")) in MEC_VARIANTS
+        else None
+    )
+    if clean.get("warm_start_checkpoint"):
+        clean["warm_start_checkpoint"] = os.path.realpath(
+            str(clean["warm_start_checkpoint"])
+        )
     return clean
 
 
@@ -637,7 +887,17 @@ def _run_epoch(
             "training pairwise_auc_weight must be fixed at either "
             f"0.0 or {PAIRWISE_AUC_WEIGHT}"
         )
-    model.train(is_train)
+    base_model = _get_base_model(model)
+    mec_frozen_training = bool(
+        is_train and getattr(base_model, "mec_frozen_training", False)
+    )
+    if mec_frozen_training:
+        # Keep every inherited stochastic layer deterministic while preserving
+        # autograd through the trainable pseudo-evidence module.
+        model.eval()
+        base_model.evidence_completion.train()
+    else:
+        model.train(is_train)
     max_batches = None if max_batches is None else max(1, int(max_batches))
 
     total_loss = 0.0
@@ -681,7 +941,7 @@ def _run_epoch(
                     effective_pairwise_weight,
                 )
             )
-            if is_train:
+            if is_train and not mec_frozen_training:
                 reg_terms = _regularization_terms(model, details, bce_loss)
                 reg_loss = reg_terms["total"]
             else:
@@ -966,6 +1226,7 @@ def _save_checkpoint(
     diagnostics: Optional[Dict[str, Any]] = None,
     best_val_auc: Optional[float] = None,
     model_state_dict: Optional[Dict[str, torch.Tensor]] = None,
+    warm_start_provenance: Optional[Dict[str, Any]] = None,
 ) -> None:
     payload: Dict[str, Any] = {
         "architecture": ARCHITECTURE_NAME,
@@ -981,7 +1242,12 @@ def _save_checkpoint(
         "graph_irt_diagnostics": diagnostics or {},
         "args": _checkpoint_args(args),
         "info_dict": info_dict,
+        "mec_schema": (
+            MEC_SCHEMA if _is_mec_variant(args) else None
+        ),
     }
+    if warm_start_provenance:
+        payload["warm_start_provenance"] = warm_start_provenance
     if train_metrics is not None:
         payload["train_metrics"] = train_metrics
     if best_val_auc is not None:
@@ -1022,12 +1288,26 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     )
 
     model = _build_model(args, info_dict, device)
+    warm_start_provenance = _load_and_freeze_mec_warm_start(
+        model,
+        args,
+        info_dict,
+    )
     if bool(getattr(args, "multi_gpu", False)) and torch.cuda.device_count() > 1:
         raw_ids = getattr(args, "gpu_ids", None)
         device_ids = list(range(torch.cuda.device_count())) if raw_ids else None
         model = nn.DataParallel(model, device_ids=device_ids)
         logger.info("%s DataParallel enabled on %d GPUs", run_tag, torch.cuda.device_count())
     _log_runtime_facts(model, logger, run_tag)
+    if warm_start_provenance:
+        logger.info(
+            "%s MEC stage 2: source=%s epoch=%d AUC=%.6f; "
+            "only evidence_completion.* is trainable",
+            run_tag,
+            warm_start_provenance["source_checkpoint"],
+            warm_start_provenance["source_epoch"],
+            warm_start_provenance["source_val_auc"],
+        )
 
     pairwise_auc_weight = _resolve_pairwise_auc_weight(args)
     ema_decay = _resolve_ema_decay(args)
@@ -1072,14 +1352,14 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         )
 
     best_val_auc = float("-inf")
-    best_epoch = 0
+    best_epoch = -1
     patience_counter = 0
     history: Dict[str, Any] = {
         "architecture": ARCHITECTURE_NAME,
         "ema_decay": ema_decay,
         "train": [],
         "val": [],
-        "best_epoch": 0,
+        "best_epoch": -1,
         "best_val_auc": float("-inf"),
         "monitor": monitor,
     }
@@ -1088,6 +1368,65 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
     last_diag: Dict[str, Any] = {}
     graph_uniform_streak = 0
     graph_low_grad_streak = 0
+
+    if warm_start_provenance:
+        zero_init_max_abs = _assert_mec_zero_init_equivalence(
+            model,
+            val_loader,
+            device,
+        )
+        initial_val = validate(
+            model,
+            val_loader,
+            device,
+            logger,
+            0,
+            max_batches=getattr(args, "max_val_batches", None),
+        )
+        if getattr(args, "max_val_batches", None) is None:
+            source_metrics = warm_start_provenance.get("source_val_metrics", {})
+            for key in ("auc", "bce_loss", "rmse"):
+                if key not in source_metrics:
+                    continue
+                delta = abs(float(initial_val[key]) - float(source_metrics[key]))
+                if delta > 1e-7:
+                    raise RuntimeError(
+                        "MEC epoch-0 metric differs from its matched source: "
+                        f"{key} delta={delta:.3e}"
+                    )
+        warm_start_provenance["zero_init_logit_max_abs"] = zero_init_max_abs
+        history["initial_val"] = initial_val
+        best_val_auc = float(initial_val["auc"])
+        best_epoch = 0
+        _save_checkpoint(
+            path=os.path.join(args.save_dir, "best_model.pth"),
+            epoch=0,
+            model=model,
+            optimizer=optimizer,
+            args=args,
+            info_dict=info_dict,
+            monitor=monitor,
+            val_metrics=initial_val,
+            diagnostics=last_diag,
+            best_val_auc=best_val_auc,
+            warm_start_provenance=warm_start_provenance,
+        )
+        with open(
+            os.path.join(args.save_dir, "diag_best.json"),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            json.dump(last_diag, handle, indent=2)
+        logger.info(
+            "%s Epoch [000/%d] | matched baseline Val BCE=%.4f "
+            "AUC=%.6f RMSE=%.4f | max|Δlogit|=%.3e",
+            run_tag,
+            int(args.epochs),
+            initial_val["bce_loss"],
+            initial_val["auc"],
+            initial_val["rmse"],
+            zero_init_max_abs,
+        )
 
     last_epoch = 0
     for epoch in range(1, int(args.epochs) + 1):
@@ -1207,6 +1546,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 diagnostics=last_diag,
                 best_val_auc=best_val_auc,
                 model_state_dict=ema_state,
+                warm_start_provenance=warm_start_provenance,
             )
             with open(os.path.join(args.save_dir, "diag_best.json"), "w", encoding="utf-8") as handle:
                 json.dump(last_diag, handle, indent=2)
@@ -1228,6 +1568,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
                 train_metrics=train_metrics,
                 diagnostics=last_diag,
                 model_state_dict=ema_state,
+                warm_start_provenance=warm_start_provenance,
             )
             logger.info("%s Checkpoint saved: %s", run_tag, checkpoint_path)
             try:
@@ -1254,7 +1595,7 @@ def train_one_experiment(args, logger) -> Tuple[float, int]:
         json.dump(history, handle, indent=4)
 
     best_model_path = os.path.join(args.save_dir, "best_model.pth")
-    if best_epoch <= 0 or not os.path.exists(best_model_path):
+    if best_epoch < 0 or not os.path.exists(best_model_path):
         raise RuntimeError("training finished without a validation-selected best checkpoint")
     best_checkpoint = torch.load(best_model_path, map_location="cpu", weights_only=False)
     _require_graph_irt_checkpoint(best_checkpoint, best_model_path)
@@ -1303,6 +1644,14 @@ def _require_graph_irt_checkpoint(checkpoint: Dict[str, Any], model_path: str) -
             f"Refusing checkpoint {model_path}: expected architecture={ARCHITECTURE_NAME!r}, "
             f"found {architecture!r}. Legacy checkpoints must be evaluated with the legacy code."
         )
+    loaded_args = checkpoint.get("args", {})
+    if str(loaded_args.get("evidence_anchor_mode", "")) == "mec":
+        schema = checkpoint.get("mec_schema", loaded_args.get("mec_schema"))
+        if schema != MEC_SCHEMA:
+            raise RuntimeError(
+                f"Refusing legacy MEC checkpoint {model_path}: "
+                f"expected mec_schema={MEC_SCHEMA!r}, found {schema!r}."
+            )
 
 
 def _write_json_atomic(path: str, payload: Dict[str, Any]) -> None:
