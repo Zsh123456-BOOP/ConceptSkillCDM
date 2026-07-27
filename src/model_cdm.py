@@ -100,8 +100,6 @@ class CognitiveDiagnosisModel(nn.Module):
             raise ValueError(
                 "disable_graph_module requires a non-propagating evidence anchor"
             )
-        if self.evidence_anchor_mode == "mec" and not self.disable_graph_module:
-            raise ValueError("MEC is a graph-free evidence anchor")
         # One propagated anchor channel per relation head.
         self.anchor_multihead_prop = bool(anchor_multihead_prop)
         # Head probe: "irt2pl" (default single scalar 2PL) or "ncd_mlp"

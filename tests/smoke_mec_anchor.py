@@ -181,16 +181,76 @@ def main() -> None:
 
     graph_common = dict(common)
     graph_common["disable_graph_module"] = False
-    try:
-        CognitiveDiagnosisModel(
-            **graph_common,
-            evidence_anchor_mode="mec",
-        )
-    except ValueError as exc:
-        assert "graph-free" in str(exc)
-    else:
-        raise AssertionError("MEC must reject a live graph module")
-    print("OK: MEC is graph-free, Q-masked, lightweight, and single-logit.")
+    graph_common["graph_propagation_alpha"] = 0.2
+    torch.manual_seed(23)
+    state_baseline = CognitiveDiagnosisModel(
+        **graph_common,
+        evidence_anchor_mode="direct_only",
+    ).eval()
+    state_baseline_rng = torch.random.get_rng_state().clone()
+    torch.manual_seed(23)
+    state_mec = CognitiveDiagnosisModel(
+        **graph_common,
+        evidence_anchor_mode="mec",
+    ).eval()
+    state_mec_rng = torch.random.get_rng_state().clone()
+    assert torch.equal(state_baseline_rng, state_mec_rng)
+    assert state_baseline.relation_learning is not None
+    assert state_mec.relation_learning is not None
+    assert len(state_baseline.knowledge_encoder.gnn_layers) == 2
+    assert len(state_mec.knowledge_encoder.gnn_layers) == 2
+    assert state_mec.knowledge_encoder.propagation_alpha == 0.2
+    state_baseline_parameters = sum(
+        parameter.numel() for parameter in state_baseline.parameters()
+    )
+    state_mec_parameters = sum(
+        parameter.numel() for parameter in state_mec.parameters()
+    )
+    assert (
+        state_mec_parameters - state_baseline_parameters
+        == 401 + q_matrix.size(1)
+    )
+    state_baseline_logits = state_baseline(
+        student_ids,
+        exercise_ids,
+        outcome_to_exclude=labels,
+        return_logits=True,
+    )
+    state_mec_logits = state_mec(
+        student_ids,
+        exercise_ids,
+        outcome_to_exclude=labels,
+        return_logits=True,
+    )
+    assert torch.equal(state_baseline_logits, state_mec_logits)
+
+    state_mec.eval()
+    state_mec.zero_grad(set_to_none=True)
+    state_train_logits = state_mec(
+        student_ids,
+        exercise_ids,
+        outcome_to_exclude=labels,
+        return_logits=True,
+    )
+    F.binary_cross_entropy_with_logits(state_train_logits, labels).backward()
+    assert state_mec.evidence_completion.net[-1].weight.grad is not None
+    assert float(
+        state_mec.evidence_completion.net[-1].weight.grad.abs().sum().item()
+    ) > 0.0
+    assert any(
+        parameter.grad is not None
+        and float(parameter.grad.abs().sum().item()) > 0.0
+        for parameter in state_mec.knowledge_encoder.gnn_layers.parameters()
+    )
+    assert any(
+        parameter.grad is not None
+        and float(parameter.grad.abs().sum().item()) > 0.0
+        for parameter in state_mec.relation_learning.parameters()
+    )
+    print(
+        "OK: MEC is Q-masked, lightweight, single-logit, and compatible "
+        "with either a disabled graph or latent-state graph."
+    )
 
 
 if __name__ == "__main__":

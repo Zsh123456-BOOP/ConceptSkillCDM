@@ -33,6 +33,7 @@ MODEL_VARIANTS = (
     # (state message passing AND the anchor's propagated-evidence channel).
     "no_graph_calibration",
     "mec",
+    "mec_state_graph",
     "item_only",
     "exposure_only",
     "degree_random",
@@ -199,6 +200,7 @@ def _apply_model_variant(args: argparse.Namespace) -> None:
         "no_evidence_propagation": "direct_only",
         "no_graph_calibration": "direct_only",
         "mec": "mec",
+        "mec_state_graph": "mec",
     }.get(args.model_variant, "full")
     args.pairwise_auc_weight = (
         PAIRWISE_AUC_WEIGHT if args.model_variant == "pairwise_auc" else 0.0

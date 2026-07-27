@@ -81,6 +81,7 @@ def main() -> None:
         "full",
         "no_message_passing",
         "mec",
+        "mec_state_graph",
         "item_only",
         "exposure_only",
         "degree_random",
@@ -94,6 +95,13 @@ def main() -> None:
     main_module._apply_model_variant(mec_args)
     assert mec_args.evidence_anchor_mode == "mec"
     assert mec_args.disable_graph_module
+    mec_state_args = main_module.parse_args(
+        ["--model_variant", "mec_state_graph"]
+    )
+    main_module._apply_model_variant(mec_state_args)
+    assert mec_state_args.evidence_anchor_mode == "mec"
+    assert not mec_state_args.disable_graph_module
+    assert mec_state_args.graph_propagation_alpha == 0.20
     no_graph_args = main_module.parse_args(
         ["--model_variant", "no_graph_calibration"]
     )
