@@ -300,7 +300,7 @@ def _require_fresh_training_dirs(jobs: Sequence[JobSpec]) -> None:
 
 def _require_mec_warm_starts(jobs: Sequence[JobSpec]) -> None:
     missing = [
-        str(job.params["warm_start_checkpoint"])
+        str(job.params.get("warm_start_checkpoint", ""))
         for job in jobs
         if job.ablation.name in {"mec", "mec_state_graph"}
         and not Path(str(job.params.get("warm_start_checkpoint", ""))).is_file()
