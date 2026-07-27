@@ -8,12 +8,13 @@ train-only evidence predict the removed responses better than simple backoff
 controls?
 
 Student-item groups are assigned to five label-independent folds within each
-student.  For fold f, every response from fold f is absent from the sufficient
-statistics used to evaluate that fold.  Models are trained only on the other
-four folds; their training features additionally remove the queried
-student-item group.  Repeated responses therefore stay together and a
-multi-concept response cannot survive through another concept in the same Q
-row.
+student.  Each qualification rotation uses three folds only as response
+context, one fold as probe supervision, and one fold for evaluation.  Both the
+supervision and evaluation responses are therefore absent from their input
+statistics.  Repeated responses stay together, and a multi-concept response
+cannot survive through another concept in the same Q row.  The validation
+model is fitted on five-fold out-of-fold features, never leave-one-out target
+statistics.
 
 The main probe is deliberately tiny: fixed pooled evidence features feed a
 19->16->8->1 MLP with fewer than 500 trainable parameters.  It has no student
@@ -682,12 +683,25 @@ def _run_cross_fitted_probe(
         name: np.zeros(len(groups), dtype=np.float64) for name in CANDIDATES
     }
     fold_audit: Dict[str, object] = {}
-    for fold in range(FOLDS):
-        context = train[train["_fold"] != fold].reset_index(drop=True)
-        fit_groups = groups[groups["_fold"] != fold].reset_index(drop=True)
-        held_groups = groups[groups["_fold"] == fold].reset_index(drop=True)
+    for evaluation_fold in range(FOLDS):
+        supervision_fold = (evaluation_fold + 1) % FOLDS
+        context_folds = tuple(
+            fold
+            for fold in range(FOLDS)
+            if fold not in {evaluation_fold, supervision_fold}
+        )
+        context = train[train["_fold"].isin(context_folds)].reset_index(drop=True)
+        fit_groups = groups[
+            groups["_fold"] == supervision_fold
+        ].reset_index(drop=True)
+        held_groups = groups[
+            groups["_fold"] == evaluation_fold
+        ].reset_index(drop=True)
         if len(context) == 0 or len(fit_groups) == 0 or len(held_groups) == 0:
-            raise RuntimeError(f"fold {fold} is empty")
+            raise RuntimeError(
+                f"rotation {evaluation_fold} has an empty context, "
+                "supervision fold, or evaluation fold"
+            )
         stats = _build_stats(
             context,
             student_map=student_map,
@@ -698,7 +712,7 @@ def _run_cross_fitted_probe(
             stats,
             fit_groups,
             q_matrix,
-            exclude_query_group=True,
+            exclude_query_group=False,
         )
         held_features, _ = _build_features(
             stats,
@@ -716,7 +730,7 @@ def _run_cross_fitted_probe(
             fit_attempts,
             held_features,
             device=device,
-            seed=seed + 101 * fold,
+            seed=seed + 101 * evaluation_fold,
             epochs=epochs,
             linear=False,
         )
@@ -726,17 +740,17 @@ def _run_cross_fitted_probe(
             fit_attempts,
             held_features,
             device=device,
-            seed=seed + 101 * fold + 1,
+            seed=seed + 101 * evaluation_fold + 1,
             epochs=epochs,
             linear=True,
         )
         shuffled_fit = _shuffle_profile(
             fit_features,
-            seed=seed + 1009 * (fold + 1),
+            seed=seed + 1009 * (evaluation_fold + 1),
         )
         shuffled_held = _shuffle_profile(
             held_features,
-            seed=seed + 2003 * (fold + 1),
+            seed=seed + 2003 * (evaluation_fold + 1),
         )
         shuffled, shuffle_audit = _fit_predict(
             shuffled_fit,
@@ -744,7 +758,7 @@ def _run_cross_fitted_probe(
             fit_attempts,
             shuffled_held,
             device=device,
-            seed=seed + 101 * fold + 2,
+            seed=seed + 101 * evaluation_fold + 2,
             epochs=epochs,
             linear=False,
         )
@@ -757,17 +771,22 @@ def _run_cross_fitted_probe(
         predictions["student_mean"][held_indices] = torch.sigmoid(
             torch.from_numpy(held_features[:, 12])
         ).numpy()
-        fold_audit[str(fold)] = {
+        fold_audit[str(evaluation_fold)] = {
+            "context_folds": list(context_folds),
             "context_rows": int(len(context)),
-            "fit_pairs": int(len(fit_groups)),
-            "heldout_pairs": int(len(held_groups)),
+            "supervision_fold": int(supervision_fold),
+            "supervision_pairs": int(len(fit_groups)),
+            "evaluation_fold": int(evaluation_fold),
+            "evaluation_pairs": int(len(held_groups)),
             "mec": mec_audit,
             "backoff_linear": backoff_audit,
             "profile_shuffle": shuffle_audit,
         }
         print(
-            f"masked fold {fold + 1}/{FOLDS}: "
-            f"context_rows={len(context)} heldout_pairs={len(held_groups)}",
+            f"masked rotation {evaluation_fold + 1}/{FOLDS}: "
+            f"context_rows={len(context)} "
+            f"supervision_pairs={len(fit_groups)} "
+            f"evaluation_pairs={len(held_groups)}",
             flush=True,
         )
     return predictions, fold_audit
@@ -786,20 +805,41 @@ def _fit_full_and_predict_valid(
     seed: int,
     epochs: int,
 ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray], Dict[str, object]]:
-    stats = _build_stats(
+    train_features = np.zeros(
+        (len(groups), len(FEATURE_NAMES)),
+        dtype=np.float32,
+    )
+    feature_audit: Dict[str, object] = {}
+    for fold in range(FOLDS):
+        context = train[train["_fold"] != fold].reset_index(drop=True)
+        fold_groups = groups[groups["_fold"] == fold].reset_index(drop=True)
+        stats = _build_stats(
+            context,
+            student_map=student_map,
+            exercise_map=exercise_map,
+            q_tensor=q_tensor,
+        )
+        fold_features, _ = _build_features(
+            stats,
+            fold_groups,
+            q_matrix,
+            exclude_query_group=False,
+        )
+        fold_indices = fold_groups["_group_index"].to_numpy(dtype=np.int64)
+        train_features[fold_indices] = fold_features
+        feature_audit[str(fold)] = {
+            "context_rows": int(len(context)),
+            "supervision_pairs": int(len(fold_groups)),
+        }
+
+    full_stats = _build_stats(
         train,
         student_map=student_map,
         exercise_map=exercise_map,
         q_tensor=q_tensor,
     )
-    train_features, _ = _build_features(
-        stats,
-        groups,
-        q_matrix,
-        exclude_query_group=True,
-    )
     valid_features, valid_meta = _build_features(
-        stats,
+        full_stats,
         valid,
         q_matrix,
         exclude_query_group=False,
@@ -846,6 +886,7 @@ def _fit_full_and_predict_valid(
         torch.from_numpy(valid_features[:, 12])
     ).numpy()
     return predictions, valid_meta, {
+        "cross_fitted_feature_construction": feature_audit,
         "mec": mec_audit,
         "backoff_linear": backoff_audit,
         "profile_shuffle": shuffle_audit,
@@ -945,7 +986,7 @@ def run_probe(
     ) / max(best_control_bce, EPS)
 
     result: Dict[str, object] = {
-        "schema": "masked_evidence_completion_qualification_v1",
+        "schema": "masked_evidence_completion_qualification_v2",
         "dataset": str(loaded_args.get("dataset_name", data_dir.name)),
         "seed": int(seed),
         "folds": FOLDS,
@@ -974,8 +1015,9 @@ def run_probe(
         "audit": {
             "fold_unit": "student_item_pair_within_student",
             "repeated_pair_split_across_folds": False,
-            "heldout_fold_absent_from_fold_statistics": True,
-            "training_query_group_excluded_from_query_features": True,
+            "evaluation_fold_absent_from_rotation_statistics": True,
+            "supervision_fold_absent_from_rotation_statistics": True,
+            "validation_fit_uses_cross_fitted_training_features": True,
             "all_q_concepts_excluded_from_student_profile": True,
             "student_or_concept_embeddings_used": False,
             "graph_used": False,
