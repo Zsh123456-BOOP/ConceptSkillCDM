@@ -17,11 +17,16 @@ model is fitted on five-fold out-of-fold features, never leave-one-out target
 statistics.
 
 The main probe is deliberately tiny: fixed pooled evidence features feed a
-19->16->8->1 MLP with fewer than 500 trainable parameters.  It has no student
-or concept embeddings, attention, graph, low-rank interaction, prediction
-branch on the frozen CD model, or validation-tuned hyperparameters.  Controls
-include item-only rate, student evidence mean, a linear backoff model, and the
-same MLP after profile-to-query alignment is shuffled within item-rate strata.
+19->16->8->1 MLP with fewer than 500 trainable parameters.  Two relation
+qualification candidates append the same six target-conditioned summaries to
+that complete 19-feature profile and use identical 25->16->8->1 MLPs.  One
+uses the checkpoint's fixed item/exposure relation and the other a row-degree-
+and-weight-matched random relation.  It has no student or concept embeddings,
+attention, learned graph, low-rank interaction, prediction branch on the
+frozen CD model, or validation-tuned hyperparameters.  Controls include
+item-only rate, student evidence mean, a linear backoff model, and the same
+profile MLP after profile-to-query alignment is shuffled within item-rate
+strata.
 
 Only train.csv and valid.csv are accepted through a checkpoint's train-only
 metadata.  There is intentionally no test-split option.
@@ -86,10 +91,20 @@ FEATURE_NAMES = (
     "log_q_size",
     "source_available",
 )
+RELATION_FEATURE_NAMES = (
+    "related_rate",
+    "related_residual",
+    "related_rate_std",
+    "related_support",
+    "related_agreement",
+    "target_prior_gap",
+)
 PROFILE_FEATURES = tuple(range(14))
 BACKOFF_FEATURES = (12, 14, 15, 16, 17, 18)
 CANDIDATES = (
     "mec",
+    "current_relation",
+    "random_relation",
     "backoff_linear",
     "profile_shuffle",
     "item_only",
@@ -154,6 +169,98 @@ def _sha256(path: Path) -> str:
                 break
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _parameter_sha256(model: nn.Module) -> str:
+    digest = hashlib.sha256()
+    for parameter in model.parameters():
+        digest.update(
+            parameter.detach().cpu().contiguous().numpy().tobytes()
+        )
+    return digest.hexdigest()
+
+
+def _build_probe_relations(
+    info: Mapping[str, object],
+    loaded_args: Mapping[str, object],
+    *,
+    seed: int,
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, object]]:
+    item = torch.as_tensor(info["item_prior_matrix"]).detach().cpu().float()
+    exposure_value = info.get("exposure_prior_matrix")
+    exposure = (
+        torch.zeros_like(item)
+        if exposure_value is None
+        else torch.as_tensor(exposure_value).detach().cpu().float()
+    )
+    if item.dim() != 2 or item.size(0) != item.size(1):
+        raise ValueError("checkpoint relation priors must be square")
+    if tuple(exposure.shape) != tuple(item.shape):
+        raise ValueError("item and exposure relation priors must share shape")
+    relation = item + exposure
+    if not bool(torch.isfinite(relation).all()) or bool((relation < 0).any()):
+        raise ValueError("checkpoint relation priors must be finite and non-negative")
+
+    concept_count = int(relation.size(0))
+    graph_topk = loaded_args.get("graph_topk")
+    if graph_topk is not None and int(graph_topk) < concept_count:
+        values, indices = torch.topk(
+            relation,
+            k=max(1, int(graph_topk)),
+            dim=-1,
+        )
+        relation = torch.zeros_like(relation).scatter(1, indices, values)
+    row_sum = relation.sum(dim=1, keepdim=True)
+    relation = torch.where(
+        row_sum > 0.0,
+        relation / row_sum.clamp(min=1e-12),
+        torch.zeros_like(relation),
+    )
+
+    random_relation = torch.zeros_like(relation)
+    generator = torch.Generator().manual_seed(int(seed) + 7919 + concept_count * 1009)
+    for target in range(concept_count):
+        weights = relation[target][relation[target] > 0.0]
+        degree = int(weights.numel())
+        if degree <= 0:
+            continue
+        candidates = torch.arange(concept_count)
+        if not bool(relation[target, target] > 0.0):
+            candidates = candidates[candidates != target]
+        if degree > int(candidates.numel()):
+            raise RuntimeError("relation degree exceeds available random sources")
+        columns = candidates[
+            torch.randperm(int(candidates.numel()), generator=generator)[:degree]
+        ]
+        shuffled_weights = weights[
+            torch.randperm(degree, generator=generator)
+        ]
+        random_relation[target, columns] = shuffled_weights
+
+    degree_match = torch.equal(
+        (relation > 0.0).sum(dim=1),
+        (random_relation > 0.0).sum(dim=1),
+    )
+    weight_match = all(
+        torch.allclose(
+            torch.sort(relation[row][relation[row] > 0.0]).values,
+            torch.sort(random_relation[row][random_relation[row] > 0.0]).values,
+        )
+        for row in range(concept_count)
+    )
+    if not degree_match or not weight_match:
+        raise RuntimeError("random relation failed row degree/weight matching")
+    return (
+        relation.numpy().astype(np.float64),
+        random_relation.numpy().astype(np.float64),
+        {
+            "graph_topk": None if graph_topk is None else int(graph_topk),
+            "target_rows_source_columns": True,
+            "row_degree_matched": bool(degree_match),
+            "row_weight_multiset_matched": bool(weight_match),
+            "random_seed": int(seed) + 7919 + concept_count * 1009,
+        },
+    )
 
 
 def _logit(values: np.ndarray) -> np.ndarray:
@@ -502,6 +609,119 @@ def _build_features(
     }
 
 
+def _build_relation_features(
+    stats: EvidenceStats,
+    queries: pd.DataFrame,
+    q_matrix: np.ndarray,
+    relation: np.ndarray,
+    *,
+    exclude_query_group: bool,
+) -> np.ndarray:
+    """Build the production MEC's six target-conditioned relation summaries."""
+    students, exercises, attempts, correct = _query_arrays(queries)
+    features = np.zeros(
+        (len(queries), len(RELATION_FEATURE_NAMES)),
+        dtype=np.float64,
+    )
+    receiver = np.asarray(relation, dtype=np.float64).T
+    if relation.shape != (q_matrix.shape[1], q_matrix.shape[1]):
+        raise ValueError("relation shape must match the checkpoint concept count")
+
+    for start in range(0, len(queries), FEATURE_BATCH_SIZE):
+        stop = min(len(queries), start + FEATURE_BATCH_SIZE)
+        student = students[start:stop]
+        exercise = exercises[start:stop]
+        trials = attempts[start:stop]
+        successes = correct[start:stop]
+        q_mask = q_matrix[exercise] > 0
+        q_size = q_mask.sum(axis=1).astype(np.float64)
+
+        counts = stats.student_concept_count[student]
+        correct_sum = stats.student_concept_correct[student]
+        residual_sum = stats.student_concept_residual_sum[student]
+        source_reliability = counts / (counts + 1.0) * (~q_mask)
+
+        if exclude_query_group:
+            global_count = stats.global_count - trials
+            global_correct = stats.global_correct - successes
+        else:
+            global_count = np.full(stop - start, stats.global_count)
+            global_correct = np.full(stop - start, stats.global_correct)
+        global_rate = global_correct / global_count
+        concept_count = np.broadcast_to(
+            stats.concept_count,
+            q_mask.shape,
+        ).astype(np.float64, copy=True)
+        concept_correct = np.broadcast_to(
+            stats.concept_correct,
+            q_mask.shape,
+        ).astype(np.float64, copy=True)
+        if exclude_query_group:
+            concept_count -= trials[:, None] * q_mask
+            concept_correct -= successes[:, None] * q_mask
+        concept_count = np.maximum(concept_count, 0.0)
+        concept_correct = np.maximum(concept_correct, 0.0)
+        concept_prior = (concept_correct + global_rate[:, None]) / (
+            concept_count + 1.0
+        )
+
+        source_prior = (
+            stats.concept_correct[None, :] + global_rate[:, None]
+        ) / (stats.concept_count[None, :] + 1.0)
+        posterior = (correct_sum + source_prior) / (counts + 1.0)
+        reliability = counts / (counts + 1.0)
+        rate = np.clip(
+            (_logit(posterior) - _logit(source_prior)) * reliability,
+            -4.0,
+            4.0,
+        )
+        residual = np.clip(
+            residual_sum / np.maximum(counts, 1.0) * reliability,
+            -1.0,
+            1.0,
+        )
+        support = np.clip(source_reliability @ receiver, 0.0, 1.0)
+        denominator = np.maximum(support, EPS)
+
+        def related_mean(values: np.ndarray) -> np.ndarray:
+            return (source_reliability * values) @ receiver / denominator
+
+        rate_mean = related_mean(rate)
+        residual_mean = related_mean(residual)
+        rate_std = np.sqrt(
+            np.maximum(related_mean(np.square(rate)) - np.square(rate_mean), 0.0)
+        )
+        rate_abs_mean = related_mean(np.abs(rate))
+        agreement = np.clip(
+            np.abs(rate_mean) / np.maximum(rate_abs_mean, EPS),
+            0.0,
+            1.0,
+        ) * (support > 0.0)
+        prior_gap = np.clip(
+            _logit(concept_prior) - _logit(global_rate)[:, None],
+            -4.0,
+            4.0,
+        )
+        target_features = np.stack(
+            (
+                rate_mean / 4.0,
+                residual_mean,
+                rate_std / 4.0,
+                support,
+                agreement,
+                prior_gap / 4.0,
+            ),
+            axis=-1,
+        )
+        features[start:stop] = (
+            target_features * q_mask[:, :, None]
+        ).sum(axis=1) / q_size[:, None]
+
+    if not np.isfinite(features).all():
+        raise RuntimeError("relation evidence features contain non-finite values")
+    return features.astype(np.float32)
+
+
 def _shuffle_profile(
     features: np.ndarray,
     *,
@@ -570,6 +790,7 @@ def _fit_predict(
         if linear
         else OffsetMLP(train_x.shape[1])
     )
+    initial_parameter_sha256 = _parameter_sha256(model)
     model = model.to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -630,6 +851,8 @@ def _fit_predict(
     return probabilities, {
         "final_weighted_bce": float(final_loss),
         "parameter_count": parameter_count,
+        "input_dim": int(train_x.shape[1]),
+        "initial_parameter_sha256": initial_parameter_sha256,
     }
 
 
@@ -674,6 +897,8 @@ def _run_cross_fitted_probe(
     exercise_map: Mapping[object, int],
     q_tensor: torch.Tensor,
     q_matrix: np.ndarray,
+    current_relation: np.ndarray,
+    random_relation: np.ndarray,
     device: torch.device,
     seed: int,
     epochs: int,
@@ -719,6 +944,58 @@ def _run_cross_fitted_probe(
             q_matrix,
             exclude_query_group=False,
         )
+        fit_current = np.concatenate(
+            (
+                fit_features,
+                _build_relation_features(
+                    stats,
+                    fit_groups,
+                    q_matrix,
+                    current_relation,
+                    exclude_query_group=False,
+                ),
+            ),
+            axis=1,
+        )
+        held_current = np.concatenate(
+            (
+                held_features,
+                _build_relation_features(
+                    stats,
+                    held_groups,
+                    q_matrix,
+                    current_relation,
+                    exclude_query_group=False,
+                ),
+            ),
+            axis=1,
+        )
+        fit_random = np.concatenate(
+            (
+                fit_features,
+                _build_relation_features(
+                    stats,
+                    fit_groups,
+                    q_matrix,
+                    random_relation,
+                    exclude_query_group=False,
+                ),
+            ),
+            axis=1,
+        )
+        held_random = np.concatenate(
+            (
+                held_features,
+                _build_relation_features(
+                    stats,
+                    held_groups,
+                    q_matrix,
+                    random_relation,
+                    exclude_query_group=False,
+                ),
+            ),
+            axis=1,
+        )
         fit_successes = fit_groups["correct"].to_numpy(dtype=np.float64)
         fit_attempts = fit_groups["attempts"].to_numpy(dtype=np.float64)
         held_indices = held_groups["_group_index"].to_numpy(dtype=np.int64)
@@ -743,6 +1020,32 @@ def _run_cross_fitted_probe(
             epochs=epochs,
             linear=True,
         )
+        relation_seed = seed + 101 * evaluation_fold + 3
+        current_prediction, current_audit = _fit_predict(
+            fit_current,
+            fit_successes,
+            fit_attempts,
+            held_current,
+            device=device,
+            seed=relation_seed,
+            epochs=epochs,
+            linear=False,
+        )
+        random_prediction, random_audit = _fit_predict(
+            fit_random,
+            fit_successes,
+            fit_attempts,
+            held_random,
+            device=device,
+            seed=relation_seed,
+            epochs=epochs,
+            linear=False,
+        )
+        if (
+            current_audit["initial_parameter_sha256"]
+            != random_audit["initial_parameter_sha256"]
+        ):
+            raise RuntimeError("relation controls did not share initialization")
         shuffled_fit = _shuffle_profile(
             fit_features,
             seed=seed + 1009 * (evaluation_fold + 1),
@@ -762,6 +1065,8 @@ def _run_cross_fitted_probe(
             linear=False,
         )
         predictions["mec"][held_indices] = mec
+        predictions["current_relation"][held_indices] = current_prediction
+        predictions["random_relation"][held_indices] = random_prediction
         predictions["backoff_linear"][held_indices] = backoff
         predictions["profile_shuffle"][held_indices] = shuffled
         predictions["item_only"][held_indices] = torch.sigmoid(
@@ -778,6 +1083,8 @@ def _run_cross_fitted_probe(
             "evaluation_fold": int(evaluation_fold),
             "evaluation_pairs": int(len(held_groups)),
             "mec": mec_audit,
+            "current_relation": current_audit,
+            "random_relation": random_audit,
             "backoff_linear": backoff_audit,
             "profile_shuffle": shuffle_audit,
         }
@@ -800,6 +1107,8 @@ def _fit_full_and_predict_valid(
     exercise_map: Mapping[object, int],
     q_tensor: torch.Tensor,
     q_matrix: np.ndarray,
+    current_relation: np.ndarray,
+    random_relation: np.ndarray,
     device: torch.device,
     seed: int,
     epochs: int,
@@ -808,6 +1117,11 @@ def _fit_full_and_predict_valid(
         (len(groups), len(FEATURE_NAMES)),
         dtype=np.float32,
     )
+    train_current_relation = np.zeros(
+        (len(groups), len(RELATION_FEATURE_NAMES)),
+        dtype=np.float32,
+    )
+    train_random_relation = np.zeros_like(train_current_relation)
     feature_audit: Dict[str, object] = {}
     for fold in range(FOLDS):
         context = train[train["_fold"] != fold].reset_index(drop=True)
@@ -826,6 +1140,20 @@ def _fit_full_and_predict_valid(
         )
         fold_indices = fold_groups["_group_index"].to_numpy(dtype=np.int64)
         train_features[fold_indices] = fold_features
+        train_current_relation[fold_indices] = _build_relation_features(
+            stats,
+            fold_groups,
+            q_matrix,
+            current_relation,
+            exclude_query_group=False,
+        )
+        train_random_relation[fold_indices] = _build_relation_features(
+            stats,
+            fold_groups,
+            q_matrix,
+            random_relation,
+            exclude_query_group=False,
+        )
         feature_audit[str(fold)] = {
             "context_rows": int(len(context)),
             "supervision_pairs": int(len(fold_groups)),
@@ -841,6 +1169,20 @@ def _fit_full_and_predict_valid(
         full_stats,
         valid,
         q_matrix,
+        exclude_query_group=False,
+    )
+    valid_current_relation = _build_relation_features(
+        full_stats,
+        valid,
+        q_matrix,
+        current_relation,
+        exclude_query_group=False,
+    )
+    valid_random_relation = _build_relation_features(
+        full_stats,
+        valid,
+        q_matrix,
+        random_relation,
         exclude_query_group=False,
     )
     successes = groups["correct"].to_numpy(dtype=np.float64)
@@ -866,6 +1208,32 @@ def _fit_full_and_predict_valid(
         epochs=epochs,
         linear=True,
     )
+    relation_seed = seed + 5004
+    predictions["current_relation"], current_audit = _fit_predict(
+        np.concatenate((train_features, train_current_relation), axis=1),
+        successes,
+        attempts,
+        np.concatenate((valid_features, valid_current_relation), axis=1),
+        device=device,
+        seed=relation_seed,
+        epochs=epochs,
+        linear=False,
+    )
+    predictions["random_relation"], random_audit = _fit_predict(
+        np.concatenate((train_features, train_random_relation), axis=1),
+        successes,
+        attempts,
+        np.concatenate((valid_features, valid_random_relation), axis=1),
+        device=device,
+        seed=relation_seed,
+        epochs=epochs,
+        linear=False,
+    )
+    if (
+        current_audit["initial_parameter_sha256"]
+        != random_audit["initial_parameter_sha256"]
+    ):
+        raise RuntimeError("relation controls did not share initialization")
     shuffled_train = _shuffle_profile(train_features, seed=seed + 7001)
     shuffled_valid = _shuffle_profile(valid_features, seed=seed + 7002)
     predictions["profile_shuffle"], shuffle_audit = _fit_predict(
@@ -887,6 +1255,8 @@ def _fit_full_and_predict_valid(
     return predictions, valid_meta, {
         "cross_fitted_feature_construction": feature_audit,
         "mec": mec_audit,
+        "current_relation": current_audit,
+        "random_relation": random_audit,
         "backoff_linear": backoff_audit,
         "profile_shuffle": shuffle_audit,
     }
@@ -918,6 +1288,11 @@ def run_probe(
     exercise_map = info["exer_id_map"]
     q_tensor = info["q_matrix"].detach().cpu().float()
     q_matrix = q_tensor.numpy().astype(np.float64)
+    current_relation, random_relation, relation_audit = _build_probe_relations(
+        info,
+        loaded_args,
+        seed=seed,
+    )
     train = _filter_and_map(
         train_source,
         student_map,
@@ -949,6 +1324,8 @@ def run_probe(
         exercise_map=exercise_map,
         q_tensor=q_tensor,
         q_matrix=q_matrix,
+        current_relation=current_relation,
+        random_relation=random_relation,
         device=device,
         seed=seed,
         epochs=epochs,
@@ -967,6 +1344,8 @@ def run_probe(
         exercise_map=exercise_map,
         q_tensor=q_tensor,
         q_matrix=q_matrix,
+        current_relation=current_relation,
+        random_relation=random_relation,
         device=device,
         seed=seed,
         epochs=epochs,
@@ -977,22 +1356,28 @@ def run_probe(
         valid_predictions,
         valid_meta,
     )
+    # Preserve the original B1 qualification meaning: the two new
+    # relation-augmented candidates are treatments, not controls for ``mec``.
     best_control_bce = min(
-        oof_metrics[name]["bce_loss"] for name in CANDIDATES if name != "mec"
+        oof_metrics[name]["bce_loss"]
+        for name in CANDIDATES
+        if name not in {"mec", "current_relation", "random_relation"}
     )
     relative_bce_reduction = (
         best_control_bce - oof_metrics["mec"]["bce_loss"]
     ) / max(best_control_bce, EPS)
 
     result: Dict[str, object] = {
-        "schema": "masked_evidence_completion_qualification_v2",
+        "schema": "masked_evidence_completion_qualification_v3",
         "dataset": str(loaded_args.get("dataset_name", data_dir.name)),
         "seed": int(seed),
         "folds": FOLDS,
         "epochs": int(epochs),
         "feature_names": list(FEATURE_NAMES),
+        "relation_feature_names": list(RELATION_FEATURE_NAMES),
         "checkpoint_dir": str(checkpoint_dir),
         "checkpoint_epoch": int(checkpoint.get("epoch", 0)),
+        "checkpoint_sha256": _sha256(checkpoint_path),
         "train_csv_sha256": _sha256(train_path),
         "valid_csv_sha256": _sha256(valid_path),
         "rows": {
@@ -1010,6 +1395,7 @@ def run_probe(
         "fit_audit": {
             "cross_fitted": fold_audit,
             "full_train": full_fit_audit,
+            "relation": relation_audit,
         },
         "audit": {
             "fold_unit": "student_item_pair_within_student",
@@ -1019,7 +1405,8 @@ def run_probe(
             "validation_fit_uses_cross_fitted_training_features": True,
             "all_q_concepts_excluded_from_student_profile": True,
             "student_or_concept_embeddings_used": False,
-            "graph_used": False,
+            "fixed_relation_used": True,
+            "learned_graph_used": False,
             "frozen_cdm_logits_used": False,
             "validation_used_for_tuning": False,
             "test_evaluated": False,
@@ -1123,6 +1510,54 @@ def _self_test() -> None:
     assert np.isfinite(features_before).all()
     assert meta["min_target_count"].shape == (1,)
 
+    relation, random_relation, relation_audit = _build_probe_relations(
+        {
+            "item_prior_matrix": torch.tensor(
+                [
+                    [0.0, 0.7, 0.3],
+                    [0.2, 0.0, 0.8],
+                    [0.4, 0.6, 0.0],
+                ]
+            ),
+            "exposure_prior_matrix": torch.zeros(3, 3),
+        },
+        {"graph_topk": 2},
+        seed=42,
+    )
+    assert relation_audit["row_degree_matched"]
+    assert relation_audit["row_weight_multiset_matched"]
+    relation_before = _build_relation_features(
+        stats,
+        target,
+        q_matrix,
+        relation,
+        exclude_query_group=True,
+    )
+    relation_after = _build_relation_features(
+        flipped_stats,
+        flipped_groups,
+        q_matrix,
+        relation,
+        exclude_query_group=True,
+    )
+    assert np.allclose(relation_before, relation_after, atol=1e-6, rtol=1e-6)
+    q_only_relation = np.asarray(
+        [
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.5, 0.5, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    q_only_features = _build_relation_features(
+        stats,
+        target,
+        q_matrix,
+        q_only_relation,
+        exclude_query_group=True,
+    )
+    assert np.allclose(q_only_features[0, :5], 0.0)
+
     random_features = np.random.RandomState(42).normal(size=(32, len(FEATURE_NAMES))).astype(
         np.float32
     )
@@ -1141,6 +1576,45 @@ def _self_test() -> None:
     assert probabilities.shape == (8,)
     assert np.isfinite(probabilities).all()
     assert audit["parameter_count"] < 500
+    relation_inputs = np.concatenate(
+        (
+            random_features,
+            np.random.RandomState(43).normal(
+                size=(32, len(RELATION_FEATURE_NAMES))
+            ).astype(np.float32),
+        ),
+        axis=1,
+    )
+    random_inputs = relation_inputs.copy()
+    random_inputs[:, -len(RELATION_FEATURE_NAMES) :] *= -1.0
+    _, current_audit = _fit_predict(
+        relation_inputs[:24],
+        successes[:24],
+        attempts[:24],
+        relation_inputs[24:],
+        device=torch.device("cpu"),
+        seed=44,
+        epochs=1,
+        linear=False,
+    )
+    _, random_audit = _fit_predict(
+        random_inputs[:24],
+        successes[:24],
+        attempts[:24],
+        random_inputs[24:],
+        device=torch.device("cpu"),
+        seed=44,
+        epochs=1,
+        linear=False,
+    )
+    assert current_audit["input_dim"] == len(FEATURE_NAMES) + len(
+        RELATION_FEATURE_NAMES
+    )
+    assert (
+        current_audit["initial_parameter_sha256"]
+        == random_audit["initial_parameter_sha256"]
+    )
+    assert current_audit["parameter_count"] == random_audit["parameter_count"]
     print("masked evidence completion probe self-test: PASS")
 
 
@@ -1174,6 +1648,8 @@ def main() -> None:
         f"{result['dataset']}: "
         f"OOF MEC BCE={result['oof']['metrics']['mec']['bce_loss']:.6f}; "
         f"valid MEC AUC={validation_all['mec']['auc']:.9f}; "
+        f"relation AUC={validation_all['current_relation']['auc']:.9f}; "
+        f"random AUC={validation_all['random_relation']['auc']:.9f}; "
         f"backoff AUC={validation_all['backoff_linear']['auc']:.9f}",
         flush=True,
     )
