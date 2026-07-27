@@ -186,15 +186,38 @@ def _resolve_ema_decay(source: Any) -> float:
 
 
 def _resolve_rate_evidence_mode(source: Any) -> str:
-    """Resolve the evidence-rate transform, including legacy checkpoints."""
-    mode = str(
-        _source_get(source, "rate_evidence_mode", "reliability_scaled")
-    ).strip().lower()
+    """Return the rate transform fixed by the named model variant.
+
+    Legacy checkpoints predate this field and therefore fall back to the
+    production transform.  The new candidate must record its transform
+    explicitly so that a mislabeled checkpoint cannot silently run the
+    production formula.
+    """
+    variant = str(_source_get(source, "model_variant", "full"))
+    supplied = _source_get(source, "rate_evidence_mode")
+    if supplied is None:
+        if variant == "lea_rate_single_gate":
+            raise ValueError(
+                "lea_rate_single_gate requires an explicit "
+                "rate_evidence_mode='posterior_gap'"
+            )
+        supplied = "reliability_scaled"
+    mode = str(supplied).strip().lower()
     if mode not in RATE_EVIDENCE_MODES:
         raise ValueError(
             f"rate_evidence_mode must be one of {RATE_EVIDENCE_MODES}, got {mode!r}"
         )
-    return mode
+    expected = (
+        "posterior_gap"
+        if variant == "lea_rate_single_gate"
+        else "reliability_scaled"
+    )
+    if mode != expected:
+        raise ValueError(
+            "rate_evidence_mode is fixed by model_variant: "
+            f"variant={variant!r} requires {expected!r}, got {mode!r}"
+        )
+    return expected
 
 
 def _training_evidence_kwargs(

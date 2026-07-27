@@ -261,6 +261,25 @@ def main() -> None:
     )
     assert legacy_switches["rate_evidence_mode"] == "reliability_scaled"
     assert _resolve_rate_evidence_mode({}) == "reliability_scaled"
+    for conflicting_rate_source in (
+        {
+            "model_variant": "lea_rate_single_gate",
+            "rate_evidence_mode": "reliability_scaled",
+        },
+        {
+            "model_variant": "full",
+            "rate_evidence_mode": "posterior_gap",
+        },
+        {"model_variant": "lea_rate_single_gate"},
+    ):
+        try:
+            _resolve_rate_evidence_mode(conflicting_rate_source)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "model_variant must uniquely determine rate_evidence_mode"
+            )
     checkpoint_mec = _checkpoint_args(
         SimpleNamespace(
             model_variant="mec",
