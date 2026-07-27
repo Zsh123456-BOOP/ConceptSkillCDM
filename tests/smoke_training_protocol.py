@@ -29,10 +29,12 @@ from src.trainer import (
     _checkpoint_args,
     _clone_model_state,
     _claim_test_seal,
+    _collect_structural_switches,
     _is_validation_improvement,
     _prediction_loss,
     _resolve_ema_decay,
     _resolve_pairwise_auc_weight,
+    _resolve_rate_evidence_mode,
     _temporary_model_state,
     _training_evidence_kwargs,
     _update_ema_state,
@@ -73,6 +75,7 @@ def main() -> None:
     parser_dests = {action.dest for action in main_module.build_parser()._actions}
     assert "pairwise_auc_weight" not in parser_dests
     assert "ema_decay" not in parser_dests
+    assert "rate_evidence_mode" not in parser_dests
     assert "max_test_batches" not in {
         action.dest for action in main_module.build_parser()._actions
     }
@@ -81,6 +84,7 @@ def main() -> None:
     for variant in (
         "full",
         "no_message_passing",
+        "lea_rate_single_gate",
         "mec",
         "mec_state_graph",
         "item_only",
@@ -92,6 +96,16 @@ def main() -> None:
         assert variant_args.pairwise_auc_weight == 0.0
         assert variant_args.ema_decay == 0.0
         assert variant_args.use_response_evidence
+    lea_args = main_module.parse_args(
+        ["--model_variant", "lea_rate_single_gate"]
+    )
+    main_module._apply_model_variant(lea_args)
+    assert lea_args.evidence_anchor_mode == "direct_only"
+    assert lea_args.rate_evidence_mode == "posterior_gap"
+    assert not lea_args.disable_graph_module
+    assert lea_args.graph_propagation_alpha == 0.20
+    assert lea_args.warm_start_checkpoint is None
+    main_module._validate_args(lea_args)
     mec_args = main_module.parse_args(["--model_variant", "mec"])
     main_module._apply_model_variant(mec_args)
     assert mec_args.evidence_anchor_mode == "mec"
@@ -108,6 +122,7 @@ def main() -> None:
     )
     main_module._apply_model_variant(no_graph_args)
     assert no_graph_args.evidence_anchor_mode == "direct_only"
+    assert no_graph_args.rate_evidence_mode == "reliability_scaled"
     assert no_graph_args.disable_graph_module
     no_evidence_args = main_module.parse_args(
         ["--model_variant", "no_response_evidence"]
@@ -238,6 +253,14 @@ def main() -> None:
     )
     assert checkpoint_bce["pairwise_auc_weight"] == 0.0
     assert checkpoint_bce["train_evidence_mode"] == "neutralized"
+    assert checkpoint_bce["rate_evidence_mode"] == "reliability_scaled"
+    checkpoint_lea = _checkpoint_args(lea_args)
+    assert checkpoint_lea["rate_evidence_mode"] == "posterior_gap"
+    legacy_switches = _collect_structural_switches(
+        SimpleNamespace(model_variant="full")
+    )
+    assert legacy_switches["rate_evidence_mode"] == "reliability_scaled"
+    assert _resolve_rate_evidence_mode({}) == "reliability_scaled"
     checkpoint_mec = _checkpoint_args(
         SimpleNamespace(
             model_variant="mec",
@@ -297,6 +320,16 @@ def main() -> None:
         ema_decay=0.0,
     )
     baseline_hash = _config_hash(hash_args)
+    explicit_legacy_hash_args = SimpleNamespace(
+        **vars(hash_args),
+        rate_evidence_mode="reliability_scaled",
+    )
+    assert _config_hash(explicit_legacy_hash_args) == baseline_hash
+    posterior_hash_args = SimpleNamespace(
+        **vars(hash_args),
+        rate_evidence_mode="posterior_gap",
+    )
+    assert _config_hash(posterior_hash_args) != baseline_hash
     hash_args.epochs = 100
     assert _config_hash(hash_args) != baseline_hash
     hash_args.epochs = 120

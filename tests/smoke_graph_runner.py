@@ -29,8 +29,9 @@ def main() -> None:
             "--seeds",
             "42",
             "--ablations",
-            "full,no_response_evidence,pairwise_auc,no_message_passing,"
-            "no_graph_calibration,mec,mec_state_graph,"
+            "full,no_response_evidence,no_evidence_propagation,"
+            "pairwise_auc,no_message_passing,"
+            "no_graph_calibration,lea_rate_single_gate,mec,mec_state_graph,"
             "item_only,exposure_only,degree_random",
             "--warm_start_run_id",
             "baseline_smoke",
@@ -39,7 +40,7 @@ def main() -> None:
     )
     assert args.run_mode == "train"
     jobs = runner.make_jobs(args, run_id="smoke")
-    assert len(jobs) == 10
+    assert len(jobs) == 12
     assert {job.train_evidence_mode for job in jobs} == {"excluded"}
     by_name = {job.ablation.name: job for job in jobs}
     no_evidence_command = by_name["no_response_evidence"].cmd
@@ -56,6 +57,27 @@ def main() -> None:
     )
     main_module._apply_model_variant(parsed)
     assert parsed.pairwise_auc_weight == 0.5
+    lea_command = by_name["lea_rate_single_gate"].cmd
+    parsed_lea = main_module.parse_args(
+        lea_command[lea_command.index("--dataset_name") :]
+    )
+    main_module._apply_model_variant(parsed_lea)
+    assert parsed_lea.evidence_anchor_mode == "direct_only"
+    assert parsed_lea.rate_evidence_mode == "posterior_gap"
+    assert not parsed_lea.disable_graph_module
+    assert by_name["lea_rate_single_gate"].params["graph_propagation_alpha"] > 0.0
+    assert "warm_start_checkpoint" not in by_name["lea_rate_single_gate"].params
+    lea_matched = {
+        key: value
+        for key, value in by_name["lea_rate_single_gate"].params.items()
+        if key != "model_variant"
+    }
+    direct_matched = {
+        key: value
+        for key, value in by_name["no_evidence_propagation"].params.items()
+        if key != "model_variant"
+    }
+    assert lea_matched == direct_matched
     assert by_name["no_message_passing"].params["graph_propagation_alpha"] == 0.0
     assert by_name["no_graph_calibration"].params["graph_propagation_alpha"] == 0.0
     assert by_name["mec"].params["graph_propagation_alpha"] == 0.0

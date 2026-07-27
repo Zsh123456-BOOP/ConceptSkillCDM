@@ -130,6 +130,7 @@ CONFIG_HASH_KEYS = (
     "model_variant",
     "mec_schema",
     "train_evidence_mode",
+    "rate_evidence_mode",
     "knowledge_dim",
     "num_relation_heads",
     "num_gnn_layers",
@@ -174,6 +175,9 @@ def _config_hash(args) -> str:
         for key in CONFIG_HASH_KEYS
         if hasattr(args, key)
     }
+    payload["rate_evidence_mode"] = getattr(
+        args, "rate_evidence_mode", "reliability_scaled"
+    )
     encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:16]
 

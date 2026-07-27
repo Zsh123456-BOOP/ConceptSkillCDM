@@ -28,6 +28,7 @@ from src.experiment_utils import (
     select_device,
 )
 from src.model import CognitiveDiagnosisModel, GRAPH_IRT_ARCHITECTURE
+from src.model_cdm import RATE_EVIDENCE_MODES
 from src.module_activity import (
     compute_module_activity,
     format_activity_brief,
@@ -47,6 +48,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "architecture",
     "use_response_evidence",
     "evidence_anchor_mode",
+    "rate_evidence_mode",
     "disable_graph_module",
     "prediction_head",
     "graph_prior_mode",
@@ -183,6 +185,18 @@ def _resolve_ema_decay(source: Any) -> float:
     return expected
 
 
+def _resolve_rate_evidence_mode(source: Any) -> str:
+    """Resolve the evidence-rate transform, including legacy checkpoints."""
+    mode = str(
+        _source_get(source, "rate_evidence_mode", "reliability_scaled")
+    ).strip().lower()
+    if mode not in RATE_EVIDENCE_MODES:
+        raise ValueError(
+            f"rate_evidence_mode must be one of {RATE_EVIDENCE_MODES}, got {mode!r}"
+        )
+    return mode
+
+
 def _training_evidence_kwargs(
     labels: torch.Tensor,
     mode: str,
@@ -203,6 +217,7 @@ def _training_evidence_kwargs(
 
 def _collect_structural_switches(source: Any) -> Dict[str, Any]:
     switches = {key: _source_get(source, key) for key in STRUCTURAL_SWITCH_KEYS}
+    switches["rate_evidence_mode"] = _resolve_rate_evidence_mode(source)
     switches["pairwise_auc_weight"] = _resolve_pairwise_auc_weight(source)
     switches["ema_decay"] = _resolve_ema_decay(source)
     switches["architecture"] = ARCHITECTURE_NAME
@@ -290,6 +305,7 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "evidence_anchor_mode": str(
             _source_get(source, "evidence_anchor_mode", "full")
         ),
+        "rate_evidence_mode": _resolve_rate_evidence_mode(source),
         "evidence_state_injection": bool(
             _source_get(source, "evidence_state_injection", True)
         ),
@@ -418,22 +434,22 @@ def _load_and_freeze_mec_warm_start(
         "prediction_head",
         "evidence_state_injection",
         "anchor_multihead_prop",
+        "rate_evidence_mode",
         "disable_graph_module",
         "graph_prior_mode",
         "min_stu_interactions",
         "min_exer_interactions",
     )
     for key in structural_keys:
-        current = (
-            _resolve_allow_self_loop(args)
-            if key == "allow_self_loop"
-            else _source_get(args, key)
-        )
-        source = (
-            _resolve_allow_self_loop(source_args)
-            if key == "allow_self_loop"
-            else source_args.get(key)
-        )
+        if key == "allow_self_loop":
+            current = _resolve_allow_self_loop(args)
+            source = _resolve_allow_self_loop(source_args)
+        elif key == "rate_evidence_mode":
+            current = _resolve_rate_evidence_mode(args)
+            source = _resolve_rate_evidence_mode(source_args)
+        else:
+            current = _source_get(args, key)
+            source = source_args.get(key)
         if current != source:
             raise RuntimeError(
                 f"MEC warm-start structural mismatch for {key}: "
@@ -609,6 +625,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "train_evidence_mode",
         "use_response_evidence",
         "evidence_anchor_mode",
+        "rate_evidence_mode",
         "evidence_state_injection",
         "anchor_multihead_prop",
         "disable_graph_module",
@@ -661,6 +678,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
     if "data_dir" in clean:
         clean["data_dir"] = os.path.realpath(str(clean["data_dir"]))
     clean["architecture"] = ARCHITECTURE_NAME
+    clean["rate_evidence_mode"] = _resolve_rate_evidence_mode(args)
     clean["allow_self_loop"] = _resolve_allow_self_loop(args)
     clean["pairwise_auc_weight"] = _resolve_pairwise_auc_weight(args)
     clean["ema_decay"] = _resolve_ema_decay(args)

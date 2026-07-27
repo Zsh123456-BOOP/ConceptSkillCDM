@@ -35,6 +35,7 @@ GRAPH_IRT_ARCHITECTURE = "graph_irt_v10"
 #   off         -> evidence feeds only the initial state (v9 behaviour)
 EVIDENCE_ANCHOR_MODES = ("full", "direct_only", "mec", "off")
 _ANCHOR_CHANNELS = {"full": 3, "direct_only": 2, "mec": 2, "off": 0}
+RATE_EVIDENCE_MODES = ("reliability_scaled", "posterior_gap")
 
 
 class CognitiveDiagnosisModel(nn.Module):
@@ -78,6 +79,7 @@ class CognitiveDiagnosisModel(nn.Module):
         graph_reg_warmup_epochs: int = 1,
         graph_reg_cap_ratio: float = 6.0,
         prediction_l2_lambda: float = 5e-5,
+        rate_evidence_mode: str = "reliability_scaled",
     ):
         super().__init__()
         self.num_students = int(num_students)
@@ -92,6 +94,13 @@ class CognitiveDiagnosisModel(nn.Module):
                 f"evidence_anchor_mode must be one of {EVIDENCE_ANCHOR_MODES}, got {evidence_anchor_mode!r}"
             )
         self.evidence_anchor_mode = anchor_mode if self.use_response_evidence else "off"
+        normalized_rate_mode = str(rate_evidence_mode).strip().lower()
+        if normalized_rate_mode not in RATE_EVIDENCE_MODES:
+            raise ValueError(
+                "rate_evidence_mode must be one of "
+                f"{RATE_EVIDENCE_MODES}, got {rate_evidence_mode!r}"
+            )
+        self.rate_evidence_mode = normalized_rate_mode
         # When False, response statistics skip the initial-state projection
         # and reach theta exclusively through the anchor (production default).
         self.evidence_state_injection = bool(evidence_state_injection)
@@ -455,10 +464,10 @@ class CognitiveDiagnosisModel(nn.Module):
         eps = 1e-4
         concept_logit = torch.logit(concept_rate.clamp(min=eps, max=1.0 - eps))
         posterior_logit = torch.logit(posterior.clamp(min=eps, max=1.0 - eps))
-        rate_evidence = ((posterior_logit - concept_logit) * reliability).clamp(
-            min=-4.0,
-            max=4.0,
-        )
+        rate_evidence = posterior_logit - concept_logit
+        if self.rate_evidence_mode == "reliability_scaled":
+            rate_evidence = rate_evidence * reliability
+        rate_evidence = rate_evidence.clamp(min=-4.0, max=4.0)
         residual_evidence = (
             residual_sum / count.clamp(min=1.0) * reliability
         ).clamp(min=-1.0, max=1.0)
