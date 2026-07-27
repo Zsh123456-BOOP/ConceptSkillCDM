@@ -45,6 +45,7 @@ STRUCTURAL_SWITCH_KEYS: Tuple[str, ...] = (
     "architecture",
     "use_response_evidence",
     "evidence_anchor_mode",
+    "disable_graph_module",
     "prediction_head",
     "graph_prior_mode",
     "graph_topk",
@@ -292,6 +293,9 @@ def _model_kwargs(source: Any, info_dict: Dict[str, Any]) -> Dict[str, Any]:
         "anchor_multihead_prop": bool(
             _source_get(source, "anchor_multihead_prop", True)
         ),
+        "disable_graph_module": bool(
+            _source_get(source, "disable_graph_module", False)
+        ),
         "prediction_head": str(_source_get(source, "prediction_head", "irt2pl")),
         "knowledge_dim": int(_source_get(source, "knowledge_dim", 32)),
         "num_relation_heads": int(_source_get(source, "num_relation_heads", 4)),
@@ -330,6 +334,9 @@ def _runtime_facts(model: nn.Module) -> Dict[str, Any]:
         "response_evidence_enabled": bool(
             getattr(base_model, "use_response_evidence", False)
         ),
+        "mec_enabled": bool(
+            getattr(base_model, "evidence_completion", None) is not None
+        ),
         "num_parameters": int(sum(parameter.numel() for parameter in base_model.parameters())),
         "num_trainable_parameters": int(
             sum(parameter.numel() for parameter in base_model.parameters() if parameter.requires_grad)
@@ -339,14 +346,14 @@ def _runtime_facts(model: nn.Module) -> Dict[str, Any]:
 
 def _log_runtime_facts(model: nn.Module, logger, context: str) -> Dict[str, Any]:
     facts = _runtime_facts(model)
-    if not facts["graph_enabled"]:
-        raise RuntimeError("Graph-IRT requires relation_learning to be present.")
     logger.info(
-        "%s Architecture=%s | concept_graph=%s | response_evidence=%s | params=%s trainable=%s",
+        "%s Architecture=%s | concept_graph=%s | response_evidence=%s | "
+        "mec=%s | params=%s trainable=%s",
         context,
         facts["architecture"],
         facts["graph_enabled"],
         facts["response_evidence_enabled"],
+        facts["mec_enabled"],
         f"{facts['num_parameters']:,}",
         f"{facts['num_trainable_parameters']:,}",
     )
@@ -365,6 +372,7 @@ def _checkpoint_args(args: Any) -> Dict[str, Any]:
         "evidence_anchor_mode",
         "evidence_state_injection",
         "anchor_multihead_prop",
+        "disable_graph_module",
         "prediction_head",
         "seed",
         "batch_size",

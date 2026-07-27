@@ -65,6 +65,7 @@ def compute_module_activity(
     difficulty_values: List[float] = []
     graph_state_deltas: List[float] = []
     relation_identity_deltas: List[float] = []
+    mec_anchor_values: List[float] = []
 
     sample_count = 0
     with torch.no_grad():
@@ -86,6 +87,7 @@ def compute_module_activity(
             difficulty_values.extend(_as_values(details.get("irt_b")))
             graph_state_deltas.extend(_as_values(details.get("knowledge_state_graph_delta")))
             relation_identity_deltas.extend(_as_values(details.get("relation_identity_delta")))
+            mec_anchor_values.extend(_as_values(details.get("mec_anchor")))
             sample_count += take
 
     relation_learning = _relation_learning(base_model)
@@ -103,6 +105,12 @@ def compute_module_activity(
         "irt_difficulty_mean": _mean(difficulty_values),
         "knowledge_state_graph_delta": _mean(graph_state_deltas),
         "relation_identity_delta": _mean(relation_identity_deltas),
+        "mec_enabled": bool(
+            getattr(base_model, "evidence_completion", None) is not None
+        ),
+        "mec_anchor_abs_mean": _mean(
+            [abs(value) for value in mec_anchor_values]
+        ),
     }
 
     if results["graph_enabled"]:
@@ -171,6 +179,9 @@ def compute_module_activity(
         and np.isfinite(results["irt_discrimination_mean"])
         and results["irt_discrimination_mean"] > 0.0
     )
+    results["mec_active"] = bool(
+        results["mec_enabled"] and results["mec_anchor_abs_mean"] > 1e-8
+    )
     if was_training:
         model.train()
     return _to_serializable(results)
@@ -180,7 +191,10 @@ def format_activity_brief(activity: Dict[str, Any]) -> str:
     """Format a compact checkpoint-time activity summary."""
     graph_mode = str(activity.get("graph_mode", "DISABLED"))
     irt_mode = "LIVE" if activity.get("irt_active") else "INACTIVE"
-    return f"ConceptGraph[{graph_mode}] IRT[{irt_mode}]"
+    mec_mode = "LIVE" if activity.get("mec_active") else (
+        "INIT" if activity.get("mec_enabled") else "OFF"
+    )
+    return f"ConceptGraph[{graph_mode}] MEC[{mec_mode}] IRT[{irt_mode}]"
 
 
 def format_activity_report(
@@ -190,6 +204,11 @@ def format_activity_report(
     epoch: int = 0,
 ) -> str:
     """Format the final Graph-IRT activity report."""
+    mec_status = (
+        "LIVE"
+        if activity.get("mec_active")
+        else ("INIT" if activity.get("mec_enabled") else "OFF")
+    )
     lines = [
         "=" * 60,
         "             GRAPH-IRT ACTIVITY REPORT",
@@ -215,7 +234,11 @@ def format_activity_report(
     lines.extend(
         [
             "",
-            "2. IRT head:",
+            "2. Masked evidence completion:",
+            f"   - Status: {mec_status}",
+            f"   - Anchor |mean|: {activity.get('mec_anchor_abs_mean', 0.0):.6f}",
+            "",
+            "3. IRT head:",
             f"   - Status: {'LIVE' if activity.get('irt_active') else 'INACTIVE'}",
             f"   - Logit |mean|: {activity.get('irt_logit_abs_mean', 0.0):.4f}",
             f"   - Theta |mean|: {activity.get('irt_theta_abs_mean', 0.0):.4f}",

@@ -1,11 +1,12 @@
 #!/usr/bin/env python
-"""Evaluate the graph 2x2 checkpoints on validation evidence-count subsets.
+"""Evaluate matched checkpoints on validation evidence-count subsets.
 
 The tool never opens ``test.csv``.  Each validation row is assigned the
-minimum train-only student-concept response count among the concepts attached
-to its exercise.  It reports metrics for all rows and the overlapping
-diagnostic subsets ``n=0`` and ``n<3``, then computes same-dataset/same-seed
-paired contrasts across the four graph variants.
+minimum and maximum train-only student-concept response counts among the
+concepts attached to its exercise.  It reports all rows, ``n=0``, ``n<3``,
+and ``all_q_zero`` before computing same-dataset/same-seed paired contrasts.
+The default remains the graph 2x2; ``--variant_pair`` selects one matched
+baseline/candidate comparison.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict, List, Mapping, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -70,6 +71,7 @@ CONTRASTS: Tuple[Tuple[str, Mapping[str, float]], ...] = (
         },
     ),
 )
+SAMPLE_COLUMNS = ("rows", "positives", "negatives")
 
 
 def _resolve(value: str) -> Path:
@@ -77,11 +79,25 @@ def _resolve(value: str) -> Path:
     return path if path.is_absolute() else ROOT / path
 
 
-def _bucket_masks(support: np.ndarray) -> Dict[str, np.ndarray]:
+def _bucket_masks(
+    minimum_support: np.ndarray,
+    maximum_support: Optional[np.ndarray] = None,
+) -> Dict[str, np.ndarray]:
+    minimum = np.asarray(minimum_support, dtype=np.float64)
+    maximum = (
+        minimum
+        if maximum_support is None
+        else np.asarray(maximum_support, dtype=np.float64)
+    )
+    if minimum.shape != maximum.shape:
+        raise ValueError(
+            "minimum and maximum support arrays must have the same shape"
+        )
     return {
-        "all": np.ones(support.shape, dtype=bool),
-        "n=0": support == 0,
-        "n<3": support < 3,
+        "all": np.ones(minimum.shape, dtype=bool),
+        "n=0": minimum == 0,
+        "n<3": minimum < 3,
+        "all_q_zero": maximum == 0,
     }
 
 
@@ -166,7 +182,8 @@ def _read_validation(
 
     labels: List[float] = []
     probabilities: List[float] = []
-    supports: List[float] = []
+    minimum_supports: List[float] = []
+    maximum_supports: List[float] = []
     with torch.no_grad():
         for student_ids, exercise_ids, y in loader:
             logits = model(
@@ -177,18 +194,25 @@ def _read_validation(
             probs = torch.sigmoid(logits).cpu()
             q_rows = q_matrix[exercise_ids] > 0
             row_counts = counts[student_ids]
-            support = torch.where(
+            minimum_support = torch.where(
                 q_rows,
                 row_counts,
                 torch.full_like(row_counts, float("inf")),
             ).min(dim=1).values
+            maximum_support = torch.where(
+                q_rows,
+                row_counts,
+                torch.zeros_like(row_counts),
+            ).max(dim=1).values
             labels.extend(y.reshape(-1).tolist())
             probabilities.extend(probs.tolist())
-            supports.extend(support.tolist())
+            minimum_supports.extend(minimum_support.tolist())
+            maximum_supports.extend(maximum_support.tolist())
 
     label_array = np.asarray(labels, dtype=np.float64)
     prob_array = np.asarray(probabilities, dtype=np.float64)
-    support_array = np.asarray(supports, dtype=np.float64)
+    minimum_support_array = np.asarray(minimum_supports, dtype=np.float64)
+    maximum_support_array = np.asarray(maximum_supports, dtype=np.float64)
     identity = {
         "run_dir": str(checkpoint_dir),
         "dataset": str(loaded_args.get("dataset_name", "")),
@@ -198,7 +222,10 @@ def _read_validation(
         "best_epoch": int(checkpoint.get("epoch", 0)),
     }
     rows: List[Dict[str, object]] = []
-    for bucket, mask in _bucket_masks(support_array).items():
+    for bucket, mask in _bucket_masks(
+        minimum_support_array,
+        maximum_support_array,
+    ).items():
         subset_labels = label_array[mask]
         subset_probs = prob_array[mask]
         rows.append(
@@ -217,7 +244,21 @@ def _read_validation(
     return rows
 
 
-def _paired_contrasts(frame: pd.DataFrame) -> pd.DataFrame:
+def _paired_contrasts(
+    frame: pd.DataFrame,
+    *,
+    variants: Sequence[str] = VARIANTS,
+    contrasts: Sequence[Tuple[str, Mapping[str, float]]] = CONTRASTS,
+) -> pd.DataFrame:
+    variants_required = tuple(str(value) for value in variants)
+    contrasts = tuple(contrasts)
+    if not variants_required:
+        raise ValueError("at least one model variant is required")
+    frame = frame[frame["model_variant"].isin(variants_required)].copy()
+    if frame.empty:
+        raise ValueError(
+            f"no validation rows for variants={list(variants_required)}"
+        )
     duplicate = frame.duplicated(
         ["dataset", "seed", "bucket", "model_variant"],
         keep=False,
@@ -229,15 +270,32 @@ def _paired_contrasts(frame: pd.DataFrame) -> pd.DataFrame:
     records: List[Dict[str, object]] = []
     group_columns = ["dataset", "bucket"]
     for (dataset, bucket), group in frame.groupby(group_columns, sort=True):
-        variants = set(group["model_variant"])
-        absent = sorted(set(VARIANTS) - variants)
+        present_variants = set(group["model_variant"])
+        absent = sorted(set(variants_required) - present_variants)
         if absent:
-            raise ValueError(f"{dataset}/{bucket} is missing graph variants: {absent}")
+            raise ValueError(f"{dataset}/{bucket} is missing model variants: {absent}")
+        sample_tables = {
+            column: group.pivot(
+                index="seed",
+                columns="model_variant",
+                values=column,
+            ).reindex(columns=variants_required)
+            for column in SAMPLE_COLUMNS
+        }
+        for column, table in sample_tables.items():
+            if table.isna().any().any():
+                raise ValueError(
+                    f"{dataset}/{bucket} has incomplete {column} sample cells"
+                )
+            if not table.eq(table.iloc[:, 0], axis=0).all().all():
+                raise ValueError(
+                    f"{dataset}/{bucket} has variant-dependent {column} counts"
+                )
         for metric in ("auc", "bce_loss", "rmse"):
             table = group.pivot(index="seed", columns="model_variant", values=metric)
-            table = table.reindex(columns=VARIANTS)
+            table = table.reindex(columns=variants_required)
             total_seed_cells = int(len(table))
-            for contrast, weights in CONTRASTS:
+            for contrast, weights in contrasts:
                 values = sum(table[cell] * coefficient for cell, coefficient in weights.items())
                 values = values[np.isfinite(values)]
                 records.append(
@@ -274,8 +332,32 @@ def main() -> None:
     )
     parser.add_argument("--batch_size", type=int, default=2048)
     parser.add_argument("--no_cuda", action="store_true")
+    parser.add_argument(
+        "--variant_pair",
+        default="",
+        help=(
+            "Optional comma-separated baseline,candidate pair. The paired "
+            "contrast is reported as candidate minus baseline; omit to retain "
+            "the graph 2x2 contrasts."
+        ),
+    )
     parser.add_argument("--output_csv", required=True)
     args = parser.parse_args()
+
+    requested_pair = tuple(_tokens(args.variant_pair))
+    if requested_pair and len(requested_pair) != 2:
+        raise ValueError("--variant_pair requires exactly baseline,candidate")
+    selected_variants = requested_pair or VARIANTS
+    selected_contrasts = (
+        (
+            (
+                f"{requested_pair[1]}-minus-{requested_pair[0]}",
+                {requested_pair[1]: 1.0, requested_pair[0]: -1.0},
+            ),
+        )
+        if requested_pair
+        else CONTRASTS
+    )
 
     checkpoint_dirs = _candidate_dirs(
         _tokens(args.run_ids),
@@ -293,21 +375,36 @@ def main() -> None:
             batch_size=max(1, int(args.batch_size)),
             device=device,
         )
-        rows.extend(evaluated)
         identity = evaluated[0]
+        if identity["model_variant"] not in selected_variants:
+            print(
+                f"[{index}/{len(checkpoint_dirs)}] skipped "
+                f"{identity['dataset']} seed={identity['seed']} "
+                f"variant={identity['model_variant']}"
+            )
+            continue
+        rows.extend(evaluated)
         print(
             f"[{index}/{len(checkpoint_dirs)}] "
             f"{identity['dataset']} seed={identity['seed']} "
             f"variant={identity['model_variant']}"
         )
 
+    if not rows:
+        raise ValueError(
+            f"no checkpoints matched variants={list(selected_variants)}"
+        )
     frame = pd.DataFrame(rows).sort_values(
         ["dataset", "seed", "model_variant", "bucket"]
     )
     output = _resolve(args.output_csv)
     output.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(output, index=False)
-    contrasts = _paired_contrasts(frame)
+    contrasts = _paired_contrasts(
+        frame,
+        variants=selected_variants,
+        contrasts=selected_contrasts,
+    )
     contrast_output = output.with_name(f"{output.stem}_paired_contrasts.csv")
     contrasts.to_csv(contrast_output, index=False)
     print(f"rows={len(frame)} -> {output}")

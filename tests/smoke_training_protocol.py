@@ -80,6 +80,7 @@ def main() -> None:
     for variant in (
         "full",
         "no_message_passing",
+        "mec",
         "item_only",
         "exposure_only",
         "degree_random",
@@ -89,6 +90,16 @@ def main() -> None:
         assert variant_args.pairwise_auc_weight == 0.0
         assert variant_args.ema_decay == 0.0
         assert variant_args.use_response_evidence
+    mec_args = main_module.parse_args(["--model_variant", "mec"])
+    main_module._apply_model_variant(mec_args)
+    assert mec_args.evidence_anchor_mode == "mec"
+    assert mec_args.disable_graph_module
+    no_graph_args = main_module.parse_args(
+        ["--model_variant", "no_graph_calibration"]
+    )
+    main_module._apply_model_variant(no_graph_args)
+    assert no_graph_args.evidence_anchor_mode == "direct_only"
+    assert no_graph_args.disable_graph_module
     no_evidence_args = main_module.parse_args(
         ["--model_variant", "no_response_evidence"]
     )
@@ -108,6 +119,11 @@ def main() -> None:
     assert ema_args.use_response_evidence
     assert _resolve_ema_decay(ema_args) == EMA_DECAY
     assert "no_response_graph" not in main_module.MODEL_VARIANTS
+    assert not {
+        "mec_lambda",
+        "mec_mask_rate",
+        "mec_hidden",
+    } & parser_dests
     boundary_labels = torch.tensor([0.0, 1.0])
     assert set(_training_evidence_kwargs(boundary_labels, "excluded")) == {
         "outcome_to_exclude"
@@ -202,6 +218,18 @@ def main() -> None:
     )
     assert checkpoint_bce["pairwise_auc_weight"] == 0.0
     assert checkpoint_bce["train_evidence_mode"] == "neutralized"
+    checkpoint_mec = _checkpoint_args(
+        SimpleNamespace(
+            model_variant="mec",
+            pairwise_auc_weight=0.0,
+            train_evidence_mode="excluded",
+            evidence_anchor_mode="mec",
+            disable_graph_module=True,
+            disable_self_loop=False,
+        )
+    )
+    assert checkpoint_mec["disable_graph_module"] is True
+    assert checkpoint_mec["evidence_anchor_mode"] == "mec"
 
     class _TinyModel(torch.nn.Module):
         def __init__(self):

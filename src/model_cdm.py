@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 
 from src.config import EVIDENCE_ANCHOR_DROPOUT
+from src.evidence_completion import MaskedEvidenceCompletion
 from src.model_graph import MultiHeadRelationLearning, StudentKnowledgeEncoder
 from src.model_regularization import get_regularization_components as _get_regularization_components
 from src.prediction_head import CognitiveDiagnosisHead, ExerciseDifficultyEncoder
@@ -30,9 +31,10 @@ GRAPH_IRT_ARCHITECTURE = "graph_irt_v10"
 # How response evidence anchors theta before the single 2PL readout.
 #   full        -> direct rate + difficulty residual + graph-propagated rate
 #   direct_only -> direct rate + difficulty residual (no graph transport)
+#   mec         -> direct rate + difficulty residual + non-Q evidence completion
 #   off         -> evidence feeds only the initial state (v9 behaviour)
-EVIDENCE_ANCHOR_MODES = ("full", "direct_only", "off")
-_ANCHOR_CHANNELS = {"full": 3, "direct_only": 2, "off": 0}
+EVIDENCE_ANCHOR_MODES = ("full", "direct_only", "mec", "off")
+_ANCHOR_CHANNELS = {"full": 3, "direct_only": 2, "mec": 3, "off": 0}
 
 
 class CognitiveDiagnosisModel(nn.Module):
@@ -53,6 +55,7 @@ class CognitiveDiagnosisModel(nn.Module):
         evidence_anchor_mode: str = "full",
         evidence_state_injection: bool = True,
         anchor_multihead_prop: bool = True,
+        disable_graph_module: bool = False,
         prediction_head: str = "irt2pl",
         knowledge_dim: int = 32,
         num_relation_heads: int = 4,
@@ -92,6 +95,13 @@ class CognitiveDiagnosisModel(nn.Module):
         # When False, response statistics skip the initial-state projection
         # and reach theta exclusively through the anchor (production default).
         self.evidence_state_injection = bool(evidence_state_injection)
+        self.disable_graph_module = bool(disable_graph_module)
+        if self.disable_graph_module and self.evidence_anchor_mode == "full":
+            raise ValueError(
+                "disable_graph_module requires a non-propagating evidence anchor"
+            )
+        if self.evidence_anchor_mode == "mec" and not self.disable_graph_module:
+            raise ValueError("MEC is a graph-free evidence anchor")
         # One propagated anchor channel per relation head.
         self.anchor_multihead_prop = bool(anchor_multihead_prop)
         # Head probe: "irt2pl" (default single scalar 2PL) or "ncd_mlp"
@@ -107,7 +117,10 @@ class CognitiveDiagnosisModel(nn.Module):
         # a=2 starts near fully-open (~0.88) so the initial behaviour matches an
         # ungated anchor; b learns how trust responds to observation counts. The
         # third column is retained for checkpoint compatibility and unused.
-        gate_init = torch.zeros(max(1, self._anchor_channels), 3)
+        gated_channels = (
+            2 if self.evidence_anchor_mode == "mec" else self._anchor_channels
+        )
+        gate_init = torch.zeros(max(1, gated_channels), 3)
         gate_init[:, 0] = 2.0
         self.anchor_gate = nn.Parameter(gate_init)
         self.lambda_graph_entropy = max(0.0, float(lambda_graph_entropy))
@@ -158,28 +171,34 @@ class CognitiveDiagnosisModel(nn.Module):
         self.register_buffer("identity_relations", identity, persistent=False)
 
         relation_dropout = float(dropout if graph_dropout is None else graph_dropout)
-        self.relation_learning = MultiHeadRelationLearning(
-            num_concepts=self.num_concepts,
-            num_heads=self.num_relation_heads,
-            dropout=relation_dropout,
-            tau_init=float(graph_tau_init),
-            topk=graph_topk,
-            allow_self_loop=allow_self_loop,
-            identity_residual=graph_identity_residual,
-            prior_matrix=self.item_prior_matrix,
-            exposure_prior_matrix=exposure_prior,
-            prior_strength_init=graph_prior_strength_init,
+        self.relation_learning = (
+            None
+            if self.disable_graph_module
+            else MultiHeadRelationLearning(
+                num_concepts=self.num_concepts,
+                num_heads=self.num_relation_heads,
+                dropout=relation_dropout,
+                tau_init=float(graph_tau_init),
+                topk=graph_topk,
+                allow_self_loop=allow_self_loop,
+                identity_residual=graph_identity_residual,
+                prior_matrix=self.item_prior_matrix,
+                exposure_prior_matrix=exposure_prior,
+                prior_strength_init=graph_prior_strength_init,
+            )
         )
 
         self.knowledge_encoder = StudentKnowledgeEncoder(
             num_students=self.num_students,
             num_concepts=self.num_concepts,
             knowledge_dim=self.knowledge_dim,
-            num_gnn_layers=num_gnn_layers,
+            num_gnn_layers=0 if self.disable_graph_module else num_gnn_layers,
             num_relation_heads=self.num_relation_heads,
             dropout=dropout,
             gnn_residual_weight=gnn_residual_weight,
-            propagation_alpha=graph_propagation_alpha,
+            propagation_alpha=(
+                0.0 if self.disable_graph_module else graph_propagation_alpha
+            ),
             use_response_evidence=(
                 self.use_response_evidence and self.evidence_state_injection
             ),
@@ -191,6 +210,18 @@ class CognitiveDiagnosisModel(nn.Module):
             prediction_head=self.prediction_head,
         )
         self.exercise_encoder = ExerciseDifficultyEncoder(num_exercises=self.num_exercises)
+        self.evidence_completion = None
+        if self.evidence_anchor_mode == "mec":
+            # Keep matched seed-42 runs paired beyond identical initial logits:
+            # initializing the treatment-only MLP must not advance the global
+            # RNG used by data shuffling and row-level anchor dropout.
+            with torch.random.fork_rng(devices=[], enabled=True):
+                self.evidence_completion = MaskedEvidenceCompletion(
+                    num_concepts=self.num_concepts,
+                    global_response_count=float(
+                        self.response_global_count.item()
+                    ),
+                )
 
     def _register_response_evidence(
         self,
@@ -302,7 +333,11 @@ class CognitiveDiagnosisModel(nn.Module):
         q_vector: torch.Tensor,
         outcome_to_exclude: Optional[torch.Tensor],
         outcome_to_neutralize: Optional[torch.Tensor],
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
+    ) -> Tuple[
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+        Optional[torch.Tensor],
+    ]:
         """Return response evidence under an explicit training-query boundary.
 
         ``outcome_to_exclude`` subtracts the current label, count, and residual
@@ -314,7 +349,7 @@ class CognitiveDiagnosisModel(nn.Module):
         and the deliberately self-included training control.
         """
         if not self.use_response_evidence:
-            return None, None
+            return None, None, None
         if outcome_to_exclude is not None and outcome_to_neutralize is not None:
             raise ValueError(
                 "a query outcome cannot be both excluded and neutralized"
@@ -415,15 +450,16 @@ class CognitiveDiagnosisModel(nn.Module):
             residual_sum / count.clamp(min=1.0) * reliability
         ).clamp(min=-1.0, max=1.0)
         evidence = torch.stack((rate_evidence, residual_evidence), dim=-1)
-        return evidence, count
+        return evidence, count, correct
 
     def _compose_evidence_anchor(
         self,
         relation_matrices: torch.Tensor,
         response_evidence: Optional[torch.Tensor],
         loo_count: Optional[torch.Tensor],
+        completion_anchor: Optional[torch.Tensor] = None,
     ) -> Optional[torch.Tensor]:
-        """Stack direct, residual, and graph-propagated evidence channels.
+        """Stack the direct, residual, and optional completion/graph channels.
 
         The propagated channel transports each row's leave-one-out rate
         evidence over the learned row-stochastic concept graph, so concepts
@@ -448,7 +484,11 @@ class CognitiveDiagnosisModel(nn.Module):
             gated(rate_evidence, 0, log_count),
             gated(residual_evidence, 1, log_count),
         ]
-        if self.evidence_anchor_mode == "full":
+        if self.evidence_anchor_mode == "mec":
+            if completion_anchor is None:
+                raise ValueError("MEC mode requires a completion anchor")
+            channels.append(completion_anchor.to(dtype=rate_evidence.dtype))
+        elif self.evidence_anchor_mode == "full":
             if self.anchor_multihead_prop:
                 for head in range(self.num_relation_heads):
                     receiver = relation_matrices[head].transpose(0, 1)
@@ -537,13 +577,29 @@ class CognitiveDiagnosisModel(nn.Module):
                 f"concept_vector must have shape (batch, {self.num_concepts}), got {tuple(q_vector.shape)}"
             )
 
-        relation_matrices = self.relation_learning()
-        response_evidence, loo_count = self._build_response_evidence(
-            student_ids,
-            exercise_ids,
-            q_vector,
-            outcome_to_exclude,
-            outcome_to_neutralize,
+        relation_matrices = (
+            self.identity_relations
+            if self.relation_learning is None
+            else self.relation_learning()
+        )
+        response_evidence, loo_count, response_correct = (
+            self._build_response_evidence(
+                student_ids,
+                exercise_ids,
+                q_vector,
+                outcome_to_exclude,
+                outcome_to_neutralize,
+            )
+        )
+        completion_anchor = (
+            self.evidence_completion(
+                response_evidence,
+                loo_count,
+                response_correct,
+                q_vector,
+            )
+            if self.evidence_completion is not None
+            else None
         )
         knowledge_state, initial_state = self.knowledge_encoder(
             student_ids,
@@ -559,6 +615,7 @@ class CognitiveDiagnosisModel(nn.Module):
             relation_matrices,
             response_evidence,
             loo_count,
+            completion_anchor,
         )
         if (
             evidence_anchor is not None
@@ -610,7 +667,7 @@ class CognitiveDiagnosisModel(nn.Module):
             dtype=relation_matrices.dtype,
         )
         relation_identity_delta = (
-            (relation_matrices - identity).pow(2).sum(dim=-1).clamp(min=1e-12).sqrt().mean()
+            (relation_matrices - identity).pow(2).sum(dim=-1).sqrt().mean()
         )
         graph_state_delta = (knowledge_state - initial_state).pow(2).mean().sqrt()
         details: Dict[str, torch.Tensor] = {
@@ -629,6 +686,11 @@ class CognitiveDiagnosisModel(nn.Module):
                 evidence_anchor.detach()
                 if evidence_anchor is not None
                 else q_vector.detach().new_zeros((*q_vector.shape, 3))
+            ),
+            "mec_anchor": (
+                completion_anchor.detach()
+                if completion_anchor is not None
+                else q_vector.detach().new_zeros(q_vector.shape)
             ),
             "response_evidence_leave_one_out": q_vector.detach().new_tensor(
                 float(outcome_to_exclude is not None)
@@ -659,7 +721,7 @@ class CognitiveDiagnosisModel(nn.Module):
         )
 
     def get_student_diagnosis(self, student_id: int) -> Dict[str, torch.Tensor]:
-        """Return graph-encoded concept mastery for one known student."""
+        """Return unconditional mastery; query-conditioned MEC is zero here."""
         if student_id < 0 or student_id >= self.num_students:
             raise IndexError(
                 f"student_id must be in [0, {self.num_students}), got {student_id}"
@@ -670,17 +732,34 @@ class CognitiveDiagnosisModel(nn.Module):
             with torch.no_grad():
                 device = next(self.parameters()).device
                 student_ids = torch.tensor([student_id], device=device, dtype=torch.long)
-                relation_matrices = self.relation_learning()
-                response_evidence, loo_count = self._build_response_evidence(
-                    student_ids,
-                    None,
-                    torch.ones(
-                        (1, self.num_concepts),
-                        device=device,
-                        dtype=self.q_matrix.dtype,
-                    ),
-                    outcome_to_exclude=None,
-                    outcome_to_neutralize=None,
+                relation_matrices = (
+                    self.identity_relations
+                    if self.relation_learning is None
+                    else self.relation_learning()
+                )
+                diagnosis_q = torch.ones(
+                    (1, self.num_concepts),
+                    device=device,
+                    dtype=self.q_matrix.dtype,
+                )
+                response_evidence, loo_count, response_correct = (
+                    self._build_response_evidence(
+                        student_ids,
+                        None,
+                        diagnosis_q,
+                        outcome_to_exclude=None,
+                        outcome_to_neutralize=None,
+                    )
+                )
+                completion_anchor = (
+                    self.evidence_completion(
+                        response_evidence,
+                        loo_count,
+                        response_correct,
+                        diagnosis_q,
+                    )
+                    if self.evidence_completion is not None
+                    else None
                 )
                 knowledge_state = self.knowledge_encoder(
                     student_ids,
@@ -695,6 +774,7 @@ class CognitiveDiagnosisModel(nn.Module):
                     relation_matrices,
                     response_evidence,
                     loo_count,
+                    completion_anchor,
                 )
                 if evidence_anchor is not None:
                     anchor_weights = self.diagnosis_head.evidence_anchor_weights()

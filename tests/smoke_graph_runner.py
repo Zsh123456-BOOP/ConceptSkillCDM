@@ -29,13 +29,14 @@ def main() -> None:
             "--seeds",
             "42",
             "--ablations",
-            "full,no_response_evidence,pairwise_auc,no_message_passing,item_only,exposure_only,degree_random",
+            "full,no_response_evidence,pairwise_auc,no_message_passing,"
+            "no_graph_calibration,mec,item_only,exposure_only,degree_random",
             "--dry_run",
         ]
     )
     assert args.run_mode == "train"
     jobs = runner.make_jobs(args, run_id="smoke")
-    assert len(jobs) == 7
+    assert len(jobs) == 9
     assert {job.train_evidence_mode for job in jobs} == {"excluded"}
     by_name = {job.ablation.name: job for job in jobs}
     no_evidence_command = by_name["no_response_evidence"].cmd
@@ -53,6 +54,8 @@ def main() -> None:
     main_module._apply_model_variant(parsed)
     assert parsed.pairwise_auc_weight == 0.5
     assert by_name["no_message_passing"].params["graph_propagation_alpha"] == 0.0
+    assert by_name["no_graph_calibration"].params["graph_propagation_alpha"] == 0.0
+    assert by_name["mec"].params["graph_propagation_alpha"] == 0.0
     assert by_name["item_only"].params["graph_prior_mode"] == "item_only"
     assert by_name["exposure_only"].params["graph_prior_mode"] == "exposure_only"
     assert by_name["degree_random"].params["graph_prior_mode"] == "degree_random"
