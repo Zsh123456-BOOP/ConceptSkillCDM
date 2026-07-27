@@ -66,7 +66,10 @@ def compute_module_activity(
     graph_state_deltas: List[float] = []
     relation_identity_deltas: List[float] = []
     mec_rate_delta_values: List[float] = []
-    mec_pseudo_count_values: List[float] = []
+    mec_completion_weight_values: List[float] = []
+    mec_scarcity_values: List[float] = []
+    mec_applicable_values: List[float] = []
+    mec_abstain_values: List[float] = []
 
     sample_count = 0
     with torch.no_grad():
@@ -90,15 +93,26 @@ def compute_module_activity(
             relation_identity_deltas.extend(_as_values(details.get("relation_identity_delta")))
             q_mask = details.get("q_vector")
             rate_delta = details.get("mec_rate_delta")
-            pseudo_count = details.get("mec_pseudo_count")
+            completion_weight = details.get("mec_completion_weight")
+            scarcity = details.get("mec_target_scarcity")
+            applicable = details.get("mec_applicable")
+            abstain = details.get("mec_abstain")
             if (
                 isinstance(q_mask, torch.Tensor)
                 and isinstance(rate_delta, torch.Tensor)
-                and isinstance(pseudo_count, torch.Tensor)
+                and isinstance(completion_weight, torch.Tensor)
+                and isinstance(scarcity, torch.Tensor)
+                and isinstance(applicable, torch.Tensor)
+                and isinstance(abstain, torch.Tensor)
             ):
                 queried = q_mask > 0
                 mec_rate_delta_values.extend(_as_values(rate_delta[queried]))
-                mec_pseudo_count_values.extend(_as_values(pseudo_count[queried]))
+                mec_completion_weight_values.extend(
+                    _as_values(completion_weight[queried])
+                )
+                mec_scarcity_values.extend(_as_values(scarcity[queried]))
+                mec_applicable_values.extend(_as_values(applicable[queried]))
+                mec_abstain_values.extend(_as_values(abstain[queried]))
             sample_count += take
 
     relation_learning = _relation_learning(base_model)
@@ -122,7 +136,10 @@ def compute_module_activity(
         "mec_rate_delta_abs_mean": _mean(
             [abs(value) for value in mec_rate_delta_values]
         ),
-        "mec_pseudo_count_mean": _mean(mec_pseudo_count_values),
+        "mec_completion_weight_mean": _mean(mec_completion_weight_values),
+        "mec_target_scarcity_mean": _mean(mec_scarcity_values),
+        "mec_applicable_fraction": _mean(mec_applicable_values),
+        "mec_abstain_fraction": _mean(mec_abstain_values),
     }
 
     if results["graph_enabled"]:
@@ -194,6 +211,14 @@ def compute_module_activity(
     results["mec_active"] = bool(
         results["mec_enabled"] and results["mec_rate_delta_abs_mean"] > 1e-8
     )
+    if not results["mec_enabled"]:
+        results["mec_mode"] = "OFF"
+    elif results["mec_active"]:
+        results["mec_mode"] = "LIVE"
+    elif results["mec_applicable_fraction"] > 0.0:
+        results["mec_mode"] = "INIT"
+    else:
+        results["mec_mode"] = "ABSTAIN"
     if was_training:
         model.train()
     return _to_serializable(results)
@@ -203,9 +228,7 @@ def format_activity_brief(activity: Dict[str, Any]) -> str:
     """Format a compact checkpoint-time activity summary."""
     graph_mode = str(activity.get("graph_mode", "DISABLED"))
     irt_mode = "LIVE" if activity.get("irt_active") else "INACTIVE"
-    mec_mode = "LIVE" if activity.get("mec_active") else (
-        "INIT" if activity.get("mec_enabled") else "OFF"
-    )
+    mec_mode = str(activity.get("mec_mode", "OFF"))
     return f"ConceptGraph[{graph_mode}] MEC[{mec_mode}] IRT[{irt_mode}]"
 
 
@@ -216,11 +239,7 @@ def format_activity_report(
     epoch: int = 0,
 ) -> str:
     """Format the final Graph-IRT activity report."""
-    mec_status = (
-        "LIVE"
-        if activity.get("mec_active")
-        else ("INIT" if activity.get("mec_enabled") else "OFF")
-    )
+    mec_status = str(activity.get("mec_mode", "OFF"))
     lines = [
         "=" * 60,
         "             GRAPH-IRT ACTIVITY REPORT",
@@ -249,7 +268,10 @@ def format_activity_report(
             "2. Masked evidence completion:",
             f"   - Status: {mec_status}",
             f"   - Rate correction |mean|: {activity.get('mec_rate_delta_abs_mean', 0.0):.6f}",
-            f"   - Pseudo-count mean: {activity.get('mec_pseudo_count_mean', 0.0):.6f}",
+            f"   - Completion weight mean: {activity.get('mec_completion_weight_mean', 0.0):.6f}",
+            f"   - Target scarcity mean: {activity.get('mec_target_scarcity_mean', 0.0):.6f}",
+            f"   - Applicable fraction: {activity.get('mec_applicable_fraction', 0.0):.1%}",
+            f"   - Abstain fraction: {activity.get('mec_abstain_fraction', 0.0):.1%}",
             "",
             "3. IRT head:",
             f"   - Status: {'LIVE' if activity.get('irt_active') else 'INACTIVE'}",

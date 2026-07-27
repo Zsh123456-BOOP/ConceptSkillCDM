@@ -527,7 +527,7 @@ def _assert_mec_zero_init_equivalence(
     val_loader: DataLoader,
     device: torch.device,
 ) -> float:
-    """Check that zero-initialized pseudo-evidence leaves logits unchanged."""
+    """Check that zero-initialized rate correction leaves logits unchanged."""
     base_model = _get_base_model(model)
     completion = getattr(base_model, "evidence_completion", None)
     if completion is None:
@@ -893,7 +893,7 @@ def _run_epoch(
     )
     if mec_frozen_training:
         # Keep every inherited stochastic layer deterministic while preserving
-        # autograd through the trainable pseudo-evidence module.
+        # autograd through the trainable rate-correction module.
         model.eval()
         base_model.evidence_completion.train()
     else:

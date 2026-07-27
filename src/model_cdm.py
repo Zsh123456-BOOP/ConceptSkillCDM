@@ -444,8 +444,8 @@ class CognitiveDiagnosisModel(nn.Module):
         else:
             global_rate = self.response_global_correct / self.response_global_count
 
-        # One empirical-Bayes pseudo-observation is fixed by the architecture;
-        # there is no dataset-specific smoothing knob to tune.
+        # Hierarchical smoothing is fixed by the architecture; there is no
+        # dataset-specific smoothing knob to tune.
         global_rate = global_rate.reshape(-1, 1)
         if global_rate.size(0) == 1:
             global_rate = global_rate.expand(count.size(0), 1)
@@ -593,7 +593,7 @@ class CognitiveDiagnosisModel(nn.Module):
         (
             response_evidence,
             loo_count,
-            response_correct,
+            _response_correct,
             concept_rate,
             global_rate,
         ) = (
@@ -611,7 +611,6 @@ class CognitiveDiagnosisModel(nn.Module):
             completed_rate, completion_details = self.evidence_completion(
                 response_evidence,
                 loo_count,
-                response_correct,
                 concept_rate,
                 global_rate,
                 q_vector,
@@ -771,7 +770,7 @@ class CognitiveDiagnosisModel(nn.Module):
                 (
                     response_evidence,
                     loo_count,
-                    response_correct,
+                    _response_correct,
                     concept_rate,
                     global_rate,
                 ) = (
@@ -788,7 +787,6 @@ class CognitiveDiagnosisModel(nn.Module):
                     completed_rate, _ = self.evidence_completion(
                         response_evidence,
                         loo_count,
-                        response_correct,
                         concept_rate,
                         global_rate,
                         diagnosis_q,

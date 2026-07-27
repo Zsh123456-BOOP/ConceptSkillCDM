@@ -1,32 +1,35 @@
-"""Target-conditioned pseudo-evidence for sparse response histories."""
+"""Target-conditioned rate correction for sparse response histories."""
 
 from __future__ import annotations
 
+import math
 from typing import Dict, Tuple
 
 import torch
 import torch.nn as nn
 
 
-MEC_SCHEMA = "target_pseudocount_v2"
+MEC_SCHEMA = "target_rate_correction_v3"
 
 
 class MaskedEvidenceCompletion(nn.Module):
-    """Complete the direct rate channel with fixed, label-free relations.
+    """Correct the direct rate channel with fixed, label-free relations.
 
     For each queried concept, the module pools only non-Q concepts through a
-    fixed item/exposure relation.  A shared 6->4->1 network predicts the
-    probability of at most one pseudo response.  The resulting rate correction
-    is centered at the current posterior, so zero initialization reproduces the
-    matched direct-evidence model exactly.
+    fixed item/exposure relation. A shared 9->8->1 network predicts a bounded
+    rate correction. The final layer is zero-initialized, so the module starts
+    exactly at the matched direct-evidence model.
     """
 
     FEATURE_NAMES: Tuple[str, ...] = (
         "related_rate",
         "related_residual",
+        "rate_gap",
+        "residual_gap",
         "related_rate_std",
         "related_support",
         "related_agreement",
+        "target_log_count",
         "target_prior_gap",
     )
 
@@ -34,8 +37,7 @@ class MaskedEvidenceCompletion(nn.Module):
         self,
         *,
         relation_matrix: torch.Tensor,
-        hidden_dim: int = 4,
-        delta_limit: float = 2.0,
+        hidden_dim: int = 8,
     ):
         super().__init__()
         relation = torch.as_tensor(relation_matrix).detach().float()
@@ -49,8 +51,6 @@ class MaskedEvidenceCompletion(nn.Module):
             raise ValueError("relation_matrix must be finite and non-negative")
         if int(hidden_dim) <= 0:
             raise ValueError("hidden_dim must be positive")
-        if float(delta_limit) <= 0.0:
-            raise ValueError("delta_limit must be positive")
 
         row_sum = relation.sum(dim=1, keepdim=True)
         relation = torch.where(
@@ -59,7 +59,6 @@ class MaskedEvidenceCompletion(nn.Module):
             torch.zeros_like(relation),
         )
         self.num_concepts = int(relation.size(0))
-        self.delta_limit = float(delta_limit)
         self.register_buffer("relation_matrix", relation)
         self.net = nn.Sequential(
             nn.Linear(len(self.FEATURE_NAMES), int(hidden_dim)),
@@ -74,7 +73,6 @@ class MaskedEvidenceCompletion(nn.Module):
         self,
         response_evidence: torch.Tensor,
         response_count: torch.Tensor,
-        response_correct: torch.Tensor,
         concept_prior: torch.Tensor,
         global_rate: torch.Tensor,
         q_mask: torch.Tensor,
@@ -88,7 +86,6 @@ class MaskedEvidenceCompletion(nn.Module):
             )
         for name, value in (
             ("response_count", response_count),
-            ("response_correct", response_correct),
             ("concept_prior", concept_prior),
             ("q_mask", q_mask),
         ):
@@ -111,7 +108,7 @@ class MaskedEvidenceCompletion(nn.Module):
         global_rate: torch.Tensor,
         q_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Return target-wise features, support, and agreement.
+        """Return target-wise features, related support, and agreement.
 
         Matrix products keep memory at O(B*C + C*C); no B*C*C tensor is built.
         Relation rows are targets and columns are candidate source concepts.
@@ -131,13 +128,15 @@ class MaskedEvidenceCompletion(nn.Module):
             weighted = source_reliability * values
             return torch.matmul(weighted, receiver) / denominator
 
-        rate_mean = related_mean(rate)
-        residual_mean = related_mean(residual)
+        related_rate = related_mean(rate)
+        related_residual = related_mean(residual)
         rate_second = related_mean(rate.square())
-        rate_std = (rate_second - rate_mean.square()).clamp(min=0.0).sqrt()
+        related_rate_std = (
+            rate_second - related_rate.square()
+        ).clamp(min=0.0).sqrt()
         rate_abs_mean = related_mean(rate.abs())
         agreement = (
-            rate_mean.abs() / rate_abs_mean.clamp(min=1e-8)
+            related_rate.abs() / rate_abs_mean.clamp(min=1e-8)
         ).clamp(0.0, 1.0)
         agreement = agreement * (support > 0.0).to(dtype=dtype)
 
@@ -152,11 +151,14 @@ class MaskedEvidenceCompletion(nn.Module):
 
         features = torch.stack(
             (
-                rate_mean / 4.0,
-                residual_mean,
-                rate_std / 4.0,
+                related_rate / 4.0,
+                related_residual,
+                (related_rate - rate) / 4.0,
+                related_residual - residual,
+                related_rate_std / 4.0,
                 support,
                 agreement,
+                torch.log1p(count) / math.log(4.0),
                 prior_gap / 4.0,
             ),
             dim=-1,
@@ -167,7 +169,6 @@ class MaskedEvidenceCompletion(nn.Module):
         self,
         response_evidence: torch.Tensor,
         response_count: torch.Tensor,
-        response_correct: torch.Tensor,
         concept_prior: torch.Tensor,
         global_rate: torch.Tensor,
         q_mask: torch.Tensor,
@@ -175,7 +176,6 @@ class MaskedEvidenceCompletion(nn.Module):
         self._validate_inputs(
             response_evidence,
             response_count,
-            response_correct,
             concept_prior,
             global_rate,
             q_mask,
@@ -189,53 +189,35 @@ class MaskedEvidenceCompletion(nn.Module):
         )
         dtype = response_evidence.dtype
         query = (q_mask > 0).to(dtype=dtype)
-        # Conflicting related evidence is less trustworthy, but never receives
-        # more than one pseudo observation.
-        pseudo_count = (
-            support * (0.5 + 0.5 * agreement) * query
-        ).clamp(0.0, 1.0)
-
         count = response_count.to(dtype=dtype).clamp(min=0.0)
-        correct = response_correct.to(dtype=dtype).clamp(min=0.0)
-        correct = torch.minimum(correct, count)
-        prior = concept_prior.to(dtype=dtype).clamp(min=1e-4, max=1.0 - 1e-4)
-        base_posterior = ((correct + prior) / (count + 1.0)).clamp(
-            min=1e-4,
-            max=1.0 - 1e-4,
+        query_has_any_direct = (
+            (count * query).sum(dim=-1, keepdim=True) > 0.0
+        ).to(dtype=dtype)
+        scarcity = 2.0 / (count + 2.0)
+        completion_weight = (
+            query
+            * query_has_any_direct
+            * support
+            * (0.5 + 0.5 * agreement)
+            * scarcity
+            * 0.5
         )
-        base_logit = torch.logit(base_posterior)
-        delta = self.delta_limit * torch.tanh(self.net(features).squeeze(-1))
-        pseudo_probability = torch.sigmoid(base_logit + delta)
-        reference_probability = torch.sigmoid(
-            base_logit + torch.zeros_like(delta)
-        )
-
-        completed_count = count + pseudo_count
-        completed_correct = correct + pseudo_count * pseudo_probability
-        reference_correct = correct + pseudo_count * reference_probability
-        completed_posterior = (
-            (completed_correct + prior) / (completed_count + 1.0)
-        ).clamp(min=1e-4, max=1.0 - 1e-4)
-        reference_posterior = (
-            (reference_correct + prior) / (completed_count + 1.0)
-        ).clamp(min=1e-4, max=1.0 - 1e-4)
-        rate_delta = (
-            (
-                torch.logit(completed_posterior)
-                - torch.logit(reference_posterior)
-            )
-            * query
+        rate_delta = completion_weight * torch.tanh(
+            self.net(features).squeeze(-1)
         )
         completed_rate = (
             response_evidence[..., 0] + rate_delta
         ).clamp(min=-4.0, max=4.0)
+        applicable = (completion_weight > 0.0).to(dtype=dtype)
+        abstain = query * (1.0 - applicable)
         details = {
             "mec_rate_delta": rate_delta,
-            "mec_pseudo_count": pseudo_count,
-            "mec_pseudo_probability": pseudo_probability * query,
+            "mec_completion_weight": completion_weight,
             "mec_related_support": support * query,
             "mec_related_agreement": agreement * query,
-            "mec_completed_count": completed_count,
-            "mec_completed_correct": completed_correct,
+            "mec_target_scarcity": scarcity * query,
+            "mec_query_has_any_direct": query_has_any_direct * query,
+            "mec_applicable": applicable,
+            "mec_abstain": abstain,
         }
         return completed_rate, details

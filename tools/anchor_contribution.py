@@ -61,7 +61,7 @@ def evaluate(checkpoint_dir: str, batch_size: int, device: torch.device) -> dict
             (
                 resp,
                 loo_count,
-                response_correct,
+                _response_correct,
                 concept_rate,
                 global_rate,
             ) = model._build_response_evidence(
@@ -76,7 +76,6 @@ def evaluate(checkpoint_dir: str, batch_size: int, device: torch.device) -> dict
                 completed_rate, _ = model.evidence_completion(
                     resp,
                     loo_count,
-                    response_correct,
                     concept_rate,
                     global_rate,
                     q_vec,

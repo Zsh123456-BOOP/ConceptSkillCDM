@@ -1,4 +1,4 @@
-"""Smoke checks for target-conditioned pseudo-evidence completion."""
+"""Smoke checks for target-conditioned rate correction."""
 
 from __future__ import annotations
 
@@ -79,9 +79,6 @@ def _module_inputs():
     count = torch.tensor(
         [[4.0, 2.0, 3.0, 1.0], [1.0, 2.0, 4.0, 3.0]]
     )
-    correct = torch.tensor(
-        [[3.0, 0.0, 2.0, 0.0], [1.0, 2.0, 0.0, 2.0]]
-    )
     prior = torch.tensor(
         [[0.55, 0.45, 0.60, 0.40], [0.55, 0.45, 0.60, 0.40]]
     )
@@ -89,7 +86,7 @@ def _module_inputs():
     q_mask = torch.tensor(
         [[1.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 1.0]]
     )
-    return evidence, count, correct, prior, global_rate, q_mask
+    return evidence, count, prior, global_rate, q_mask
 
 
 def _activate(module: MaskedEvidenceCompletion) -> None:
@@ -102,14 +99,24 @@ def _activate(module: MaskedEvidenceCompletion) -> None:
 
 def main() -> None:
     completion = MaskedEvidenceCompletion(relation_matrix=_relation())
-    assert sum(parameter.numel() for parameter in completion.parameters()) == 33
+    assert sum(parameter.numel() for parameter in completion.parameters()) == 89
+    assert completion.FEATURE_NAMES == (
+        "related_rate",
+        "related_residual",
+        "rate_gap",
+        "residual_gap",
+        "related_rate_std",
+        "related_support",
+        "related_agreement",
+        "target_log_count",
+        "target_prior_gap",
+    )
     assert "relation_matrix" not in dict(completion.named_parameters())
 
-    evidence, count, correct, prior, global_rate, q_mask = _module_inputs()
+    evidence, count, prior, global_rate, q_mask = _module_inputs()
     completed, initial = completion(
         evidence,
         count,
-        correct,
         prior,
         global_rate,
         q_mask,
@@ -121,18 +128,16 @@ def main() -> None:
     )
     assert bool(
         (
-            (initial["mec_pseudo_count"] >= 0.0)
-            & (initial["mec_pseudo_count"] <= 1.0)
+            (initial["mec_completion_weight"] >= 0.0)
+            & (initial["mec_completion_weight"] <= 0.5)
         ).all()
     )
 
-    # Every current-Q concept is excluded as a source.
+    # Every current-Q concept is excluded from the related-evidence pool.
     changed_q_evidence = evidence.clone()
     changed_q_count = count.clone()
-    changed_q_correct = correct.clone()
     changed_q_evidence[q_mask.bool()] *= -1.0
     changed_q_count[q_mask.bool()] += 10.0
-    changed_q_correct[q_mask.bool()] = changed_q_count[q_mask.bool()]
     features, support, agreement = completion.build_features(
         evidence,
         count,
@@ -149,7 +154,24 @@ def main() -> None:
             q_mask,
         )
     )
-    assert torch.equal(features[q_mask.bool()], changed_features[q_mask.bool()])
+    pooled_feature_indices = (0, 1, 4, 5, 6, 8)
+    for index in pooled_feature_indices:
+        assert torch.equal(
+            features[..., index][q_mask.bool()],
+            changed_features[..., index][q_mask.bool()],
+        )
+    assert not torch.equal(
+        features[..., 2][q_mask.bool()],
+        changed_features[..., 2][q_mask.bool()],
+    )
+    assert not torch.equal(
+        features[..., 3][q_mask.bool()],
+        changed_features[..., 3][q_mask.bool()],
+    )
+    assert not torch.equal(
+        features[..., 7][q_mask.bool()],
+        changed_features[..., 7][q_mask.bool()],
+    )
     assert torch.equal(support[q_mask.bool()], changed_support[q_mask.bool()])
     assert torch.equal(
         agreement[q_mask.bool()],
@@ -160,7 +182,6 @@ def main() -> None:
     completed, details = completion(
         evidence,
         count,
-        correct,
         prior,
         global_rate,
         q_mask,
@@ -172,19 +193,23 @@ def main() -> None:
     )
     assert bool(
         (
-            (details["mec_pseudo_probability"] >= 0.0)
-            & (details["mec_pseudo_probability"] <= 1.0)
+            (details["mec_completion_weight"] >= 0.0)
+            & (details["mec_completion_weight"] <= 0.5)
         ).all()
     )
-    assert torch.allclose(
-        details["mec_completed_count"],
-        count + details["mec_pseudo_count"],
+    assert torch.equal(
+        details["mec_applicable"],
+        (details["mec_completion_weight"] > 0.0).to(evidence.dtype),
     )
-    assert torch.allclose(
-        details["mec_completed_correct"],
-        correct
-        + details["mec_pseudo_count"]
-        * details["mec_pseudo_probability"],
+    assert torch.equal(
+        details["mec_abstain"],
+        q_mask * (1.0 - details["mec_applicable"]),
+    )
+    assert bool(
+        (
+            details["mec_rate_delta"].abs()
+            <= details["mec_completion_weight"] + 1e-7
+        ).all()
     )
 
     # R[0,2] is active while R[0,3] is zero: direction and locality matter.
@@ -193,7 +218,6 @@ def main() -> None:
     _, source_two_details = completion(
         source_two_changed,
         count,
-        correct,
         prior,
         global_rate,
         q_mask,
@@ -203,70 +227,98 @@ def main() -> None:
     _, source_three_details = completion(
         source_three_changed,
         count,
-        correct,
         prior,
         global_rate,
         q_mask,
     )
     assert not torch.equal(
-        details["mec_pseudo_probability"][0, 0],
-        source_two_details["mec_pseudo_probability"][0, 0],
+        details["mec_rate_delta"][0, 0],
+        source_two_details["mec_rate_delta"][0, 0],
     )
     assert torch.equal(
-        details["mec_pseudo_probability"][0, 0],
-        source_three_details["mec_pseudo_probability"][0, 0],
+        details["mec_rate_delta"][0, 0],
+        source_three_details["mec_rate_delta"][0, 0],
     )
     assert not torch.equal(
-        details["mec_pseudo_probability"][0, 0],
-        details["mec_pseudo_probability"][0, 1],
+        details["mec_rate_delta"][0, 0],
+        details["mec_rate_delta"][0, 1],
     )
 
     no_source_completed, no_source_details = completion(
         evidence,
         count,
-        correct,
         prior,
         global_rate,
         torch.ones_like(q_mask),
     )
     assert torch.equal(
-        no_source_details["mec_pseudo_count"],
+        no_source_details["mec_completion_weight"],
         torch.zeros_like(q_mask),
     )
+    assert torch.equal(no_source_details["mec_abstain"], torch.ones_like(q_mask))
     assert torch.equal(no_source_completed, evidence[..., 0])
     single = MaskedEvidenceCompletion(relation_matrix=torch.ones(1, 1))
+    _activate(single)
     single_completed, single_details = single(
         torch.zeros(1, 1, 2),
-        torch.zeros(1, 1),
         torch.zeros(1, 1),
         torch.full((1, 1), 0.5),
         torch.full((1, 1), 0.5),
         torch.ones(1, 1),
     )
     assert torch.equal(single_completed, torch.zeros(1, 1))
-    assert torch.equal(single_details["mec_pseudo_count"], torch.zeros(1, 1))
+    assert torch.equal(
+        single_details["mec_completion_weight"],
+        torch.zeros(1, 1),
+    )
+    assert torch.equal(single_details["mec_abstain"], torch.ones(1, 1))
 
-    # A bounded pseudo observation is dominated as real target count grows.
+    # Related evidence alone cannot activate MEC when every Q count is zero.
+    all_q_zero_count = count[:1].clone()
+    all_q_zero_count[q_mask[:1].bool()] = 0.0
+    all_q_zero_completed, all_q_zero_details = completion(
+        evidence[:1],
+        all_q_zero_count,
+        prior[:1],
+        global_rate[:1],
+        q_mask[:1],
+    )
+    assert bool(
+        (
+            all_q_zero_details["mec_related_support"][q_mask[:1].bool()]
+            > 0
+        ).all()
+    )
+    assert torch.equal(
+        all_q_zero_details["mec_completion_weight"],
+        torch.zeros_like(all_q_zero_count),
+    )
+    assert torch.equal(
+        all_q_zero_details["mec_rate_delta"],
+        torch.zeros_like(all_q_zero_count),
+    )
+    assert torch.equal(all_q_zero_completed, evidence[:1, :, 0])
+
+    # The direct correction is explicitly reduced as target evidence grows.
     dominance = MaskedEvidenceCompletion(relation_matrix=_relation())
     _activate(dominance)
-    perturbations = []
+    completion_weights = []
     for target_count in (0.0, 10.0, 100.0):
         local_count = count[:1].clone()
-        local_correct = correct[:1].clone()
         local_count[0, 0] = target_count
-        local_correct[0, 0] = 0.5 * target_count
         local_evidence = evidence[:1].clone()
         local_evidence[0, 0, 0] = 0.0
-        local_completed, _ = dominance(
+        _, local_details = dominance(
             local_evidence,
             local_count,
-            local_correct,
             prior[:1],
             global_rate[:1],
             q_mask[:1],
         )
-        perturbations.append(abs(float(local_completed[0, 0].item())))
-    assert perturbations[0] > perturbations[1] > perturbations[2]
+        completion_weights.append(
+            float(local_details["mec_completion_weight"][0, 0].item())
+        )
+    assert completion_weights[0] > completion_weights[1] > completion_weights[2]
 
     q_matrix, stats = _response_fixture()
     common = dict(
@@ -302,7 +354,7 @@ def main() -> None:
     assert (
         sum(parameter.numel() for parameter in mec.parameters())
         - sum(parameter.numel() for parameter in baseline.parameters())
-        == 33
+        == 89
     )
     assert set(mec.state_dict()) - set(baseline.state_dict()) == {
         "evidence_completion.relation_matrix",
@@ -354,6 +406,7 @@ def main() -> None:
         **graph_common,
         evidence_anchor_mode="mec",
     ).eval()
+    _activate(graph_mec.evidence_completion)
     _, before = graph_mec(
         student_ids,
         exercise_ids,
@@ -372,15 +425,15 @@ def main() -> None:
         return_details=True,
     )
     assert torch.equal(
-        before["mec_pseudo_count"],
-        after["mec_pseudo_count"],
+        before["mec_completion_weight"],
+        after["mec_completion_weight"],
     )
     assert torch.equal(
-        before["mec_pseudo_probability"],
-        after["mec_pseudo_probability"],
+        before["mec_rate_delta"],
+        after["mec_rate_delta"],
     )
 
-    # Flipping the current label cannot enter its own pseudo-evidence query.
+    # Flipping the current label cannot enter its own correction query.
     _, flipped_stats = _response_fixture(first_label=0.0)
     flipped_common = dict(common)
     flipped_common["response_evidence_stats"] = flipped_stats
@@ -394,6 +447,8 @@ def main() -> None:
         **flipped_common,
         evidence_anchor_mode="mec",
     ).eval()
+    _activate(original_model.evidence_completion)
+    _activate(flipped_model.evidence_completion)
     original_logit, original_details = original_model(
         torch.tensor([0]),
         torch.tensor([0]),
@@ -410,12 +465,12 @@ def main() -> None:
     )
     assert torch.allclose(original_logit, flipped_logit, atol=1e-7, rtol=0.0)
     assert torch.equal(
-        original_details["mec_pseudo_count"],
-        flipped_details["mec_pseudo_count"],
+        original_details["mec_completion_weight"],
+        flipped_details["mec_completion_weight"],
     )
     assert torch.allclose(
-        original_details["mec_pseudo_probability"],
-        flipped_details["mec_pseudo_probability"],
+        original_details["mec_rate_delta"],
+        flipped_details["mec_rate_delta"],
         atol=1e-7,
         rtol=0.0,
     )
@@ -533,7 +588,7 @@ def main() -> None:
             if not key.startswith("evidence_completion."):
                 assert torch.equal(before_value, after_state[key]), key
     print(
-        "OK: MEC-v2 is target-conditioned, Q-isolated, bounded, "
+        "OK: MEC-v3 is target-conditioned, Q-isolated, bounded, "
         "baseline-preserving, and remains a single two-channel 2PL path."
     )
 
