@@ -128,6 +128,7 @@ CONFIG_HASH_KEYS = (
     "dataset_name",
     "seed",
     "model_variant",
+    "mec_schema",
     "train_evidence_mode",
     "knowledge_dim",
     "num_relation_heads",

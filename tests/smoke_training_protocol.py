@@ -308,6 +308,10 @@ def main() -> None:
     hash_args.pairwise_auc_weight = PAIRWISE_AUC_WEIGHT
     hash_args.ema_decay = EMA_DECAY
     assert _config_hash(hash_args) != baseline_hash
+    hash_args.mec_schema = "target_pseudocount_v2"
+    legacy_mec_hash = _config_hash(hash_args)
+    hash_args.mec_schema = MEC_SCHEMA
+    assert _config_hash(hash_args) != legacy_mec_hash
 
     trainer_source = (Path(ROOT) / "src" / "trainer.py").read_text(encoding="utf-8")
     for removed_token in (
