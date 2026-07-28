@@ -14,10 +14,12 @@ consume only the complete training statistics.  No validation/test outcome is
 registered or accepted by the model.
 """
 
+import math
 from typing import Dict, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from src.config import EVIDENCE_ANCHOR_DROPOUT
 from src.evidence_completion import MaskedEvidenceCompletion
@@ -35,7 +37,29 @@ GRAPH_IRT_ARCHITECTURE = "graph_irt_v10"
 #   off         -> evidence feeds only the initial state (v9 behaviour)
 EVIDENCE_ANCHOR_MODES = ("full", "direct_only", "mec", "off")
 _ANCHOR_CHANNELS = {"full": 3, "direct_only": 2, "mec": 2, "off": 0}
-RATE_EVIDENCE_MODES = ("reliability_scaled", "posterior_gap")
+RATE_EVIDENCE_MODES = (
+    "reliability_scaled",
+    "posterior_gap",
+    "bounded_low_count_v1",
+)
+_BOUNDED_RATE_Q1_INIT = 0.8
+_BOUNDED_RATE_Q2_INIT = 0.1
+_BOUNDED_RATE_Q1_LOGIT = math.log(
+    _BOUNDED_RATE_Q1_INIT / (1.0 - _BOUNDED_RATE_Q1_INIT)
+)
+_BOUNDED_RATE_Q2_LOGIT = math.log(
+    _BOUNDED_RATE_Q2_INIT / (1.0 - _BOUNDED_RATE_Q2_INIT)
+)
+_BOUNDED_RATE_DECAY_INIT = (
+    (_BOUNDED_RATE_Q1_LOGIT - _BOUNDED_RATE_Q2_LOGIT)
+    / (math.log(3.0) - math.log(2.0))
+)
+_BOUNDED_RATE_ALPHA_INIT = (
+    _BOUNDED_RATE_Q1_LOGIT + _BOUNDED_RATE_DECAY_INIT * math.log(2.0)
+)
+_BOUNDED_RATE_BETA_RAW_INIT = math.log(
+    math.expm1(_BOUNDED_RATE_DECAY_INIT)
+)
 
 
 class CognitiveDiagnosisModel(nn.Module):
@@ -101,6 +125,14 @@ class CognitiveDiagnosisModel(nn.Module):
                 f"{RATE_EVIDENCE_MODES}, got {rate_evidence_mode!r}"
             )
         self.rate_evidence_mode = normalized_rate_mode
+        if (
+            self.rate_evidence_mode == "bounded_low_count_v1"
+            and self.evidence_anchor_mode != "direct_only"
+        ):
+            raise ValueError(
+                "bounded_low_count_v1 rate evidence requires "
+                "evidence_anchor_mode='direct_only'"
+            )
         # When False, response statistics skip the initial-state projection
         # and reach theta exclusively through the anchor (production default).
         self.evidence_state_injection = bool(evidence_state_injection)
@@ -120,12 +152,19 @@ class CognitiveDiagnosisModel(nn.Module):
             )
         else:
             self._anchor_channels = _ANCHOR_CHANNELS[self.evidence_anchor_mode]
-        # Count-conditioned anchor gates: sigmoid(a + b*log1p(n)) per channel.
-        # a=2 starts near fully-open (~0.88) so the initial behaviour matches an
-        # ungated anchor; b learns how trust responds to observation counts.
+        # Legacy anchor gates use sigmoid(a + b*log1p(n)) per channel.  The
+        # bounded-low-count variant reuses the rate row as its alpha/raw-beta
+        # interpolation parameters, so it does not introduce a second gate.
+        # Other rows start near fully-open with a=2 (~0.88).
         # Column 2 remains reserved in each per-channel parameter row.
         gate_init = torch.zeros(max(1, self._anchor_channels), 3)
         gate_init[:, 0] = 2.0
+        if self.rate_evidence_mode == "bounded_low_count_v1":
+            # The rate row becomes a bounded low-count interpolation gate:
+            # q(1)=0.8 and q(2)=0.1 focus the correction on the one-response
+            # regime while softplus(raw_beta) keeps it decreasing with count.
+            gate_init[0, 0] = _BOUNDED_RATE_ALPHA_INIT
+            gate_init[0, 1] = _BOUNDED_RATE_BETA_RAW_INIT
         self.anchor_gate = nn.Parameter(gate_init)
         self.lambda_graph_entropy = max(0.0, float(lambda_graph_entropy))
         self.graph_entropy_min = float(graph_entropy_min)
@@ -485,11 +524,11 @@ class CognitiveDiagnosisModel(nn.Module):
         The propagated channel transports each row's leave-one-out rate
         evidence over the learned row-stochastic concept graph, so concepts
         without direct observations receive the evidence of their graph
-        neighbours.  Each channel is scaled by a learnable count-conditioned
-        gate (monotone in log evidence count), letting the anchor trust
-        evidence more where more observations back it.  All inputs are
-        train-only statistics; every map is linear in them, so the
-        leave-one-out contract is preserved exactly.
+        neighbours.  Legacy channels use a learnable count-conditioned gate;
+        the bounded-low-count rate variant instead interpolates between the
+        legacy reliability and the raw posterior gap with one decaying gate.
+        All inputs are train-only statistics and preserve the leave-one-out
+        query boundary.
         """
         if response_evidence is None or self.evidence_anchor_mode == "off":
             return None
@@ -497,12 +536,30 @@ class CognitiveDiagnosisModel(nn.Module):
         residual_evidence = response_evidence[..., 1]
         log_count = torch.log1p(loo_count.to(dtype=rate_evidence.dtype))
 
-        def gated(channel: torch.Tensor, index: int, counts: torch.Tensor) -> torch.Tensor:
+        def gated(
+            channel: torch.Tensor,
+            index: int,
+            counts: torch.Tensor,
+        ) -> torch.Tensor:
             logit = self.anchor_gate[index, 0] + self.anchor_gate[index, 1] * counts
             return channel * torch.sigmoid(logit)
 
+        if self.rate_evidence_mode == "bounded_low_count_v1":
+            reliability = loo_count.to(dtype=rate_evidence.dtype)
+            reliability = reliability / (reliability + 1.0)
+            alpha = self.anchor_gate[0, 0].to(dtype=rate_evidence.dtype)
+            decay = F.softplus(
+                self.anchor_gate[0, 1].to(dtype=rate_evidence.dtype)
+            )
+            low_count_gate = torch.sigmoid(alpha - decay * log_count)
+            rate_scale = reliability + (1.0 - reliability) * low_count_gate
+            has_support = (loo_count > 0).to(dtype=rate_evidence.dtype)
+            rate_channel = rate_evidence * rate_scale * has_support
+        else:
+            rate_channel = gated(rate_evidence, 0, log_count)
+
         channels = [
-            gated(rate_evidence, 0, log_count),
+            rate_channel,
             gated(residual_evidence, 1, log_count),
         ]
         if self.evidence_anchor_mode == "full":

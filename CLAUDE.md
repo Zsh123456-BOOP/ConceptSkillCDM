@@ -78,6 +78,8 @@ At training time `_build_response_evidence` (in `model_cdm.py`) subtracts the *c
 - `no_graph_calibration` — removes state message passing *and* the anchor's propagated channel (module-B ablation).
 - `no_evidence_anchor` — evidence feeds only the initial state; θ has no anchor channels (v9 behaviour).
 - `no_evidence_propagation` — anchor keeps direct rate + residual channels but drops the graph-propagated channel.
+- `lea_rate_single_gate` — diagnostic direct-only anchor using the unsuppressed posterior-logit gap.
+- `lea_rate_bounded_gate` — diagnostic direct-only anchor whose single rate gate adds a bounded, count-decaying low-support correction.
 - `pairwise_auc` — diagnostic: adds the historical pairwise-AUC surrogate back (it never helped on test).
 - `ema_bce` — same objective plus a fixed 0.9 per-epoch weight EMA for validation/checkpoint selection (inference stays single-model).
 - `no_message_passing` — sets `graph_propagation_alpha=0`; output state equals the initial state.

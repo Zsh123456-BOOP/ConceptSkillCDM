@@ -63,6 +63,7 @@ ABLATIONS: Dict[str, AblationSpec] = {
     "no_evidence_anchor": AblationSpec("no_evidence_anchor", {}),
     "no_evidence_propagation": AblationSpec("no_evidence_propagation", {}),
     "lea_rate_single_gate": AblationSpec("lea_rate_single_gate", {}),
+    "lea_rate_bounded_gate": AblationSpec("lea_rate_bounded_gate", {}),
     "pairwise_auc": AblationSpec("pairwise_auc", {}),
     "no_message_passing": AblationSpec(
         "no_message_passing", {"graph_propagation_alpha": 0.0}

@@ -31,7 +31,8 @@ def main() -> None:
             "--ablations",
             "full,no_response_evidence,no_evidence_propagation,"
             "pairwise_auc,no_message_passing,"
-            "no_graph_calibration,lea_rate_single_gate,mec,mec_state_graph,"
+            "no_graph_calibration,lea_rate_single_gate,"
+            "lea_rate_bounded_gate,mec,mec_state_graph,"
             "item_only,exposure_only,degree_random",
             "--warm_start_run_id",
             "baseline_smoke",
@@ -40,7 +41,7 @@ def main() -> None:
     )
     assert args.run_mode == "train"
     jobs = runner.make_jobs(args, run_id="smoke")
-    assert len(jobs) == 12
+    assert len(jobs) == 13
     assert {job.train_evidence_mode for job in jobs} == {"excluded"}
     by_name = {job.ablation.name: job for job in jobs}
     no_evidence_command = by_name["no_response_evidence"].cmd
@@ -78,6 +79,27 @@ def main() -> None:
         if key != "model_variant"
     }
     assert lea_matched == direct_matched
+    bounded_command = by_name["lea_rate_bounded_gate"].cmd
+    parsed_bounded = main_module.parse_args(
+        bounded_command[bounded_command.index("--dataset_name") :]
+    )
+    main_module._apply_model_variant(parsed_bounded)
+    assert parsed_bounded.evidence_anchor_mode == "direct_only"
+    assert parsed_bounded.rate_evidence_mode == "bounded_low_count_v1"
+    assert not parsed_bounded.disable_graph_module
+    assert (
+        by_name["lea_rate_bounded_gate"].params["graph_propagation_alpha"]
+        > 0.0
+    )
+    assert "warm_start_checkpoint" not in by_name[
+        "lea_rate_bounded_gate"
+    ].params
+    bounded_matched = {
+        key: value
+        for key, value in by_name["lea_rate_bounded_gate"].params.items()
+        if key != "model_variant"
+    }
+    assert bounded_matched == direct_matched
     assert by_name["no_message_passing"].params["graph_propagation_alpha"] == 0.0
     assert by_name["no_graph_calibration"].params["graph_propagation_alpha"] == 0.0
     assert by_name["mec"].params["graph_propagation_alpha"] == 0.0

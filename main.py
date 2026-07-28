@@ -25,6 +25,7 @@ MODEL_VARIANTS = (
     "no_evidence_anchor",
     "no_evidence_propagation",
     "lea_rate_single_gate",
+    "lea_rate_bounded_gate",
     # Diagnostic: adds the historical pairwise-AUC surrogate back on top of
     # the pure-BCE production objective (it never earned its keep on test).
     "pairwise_auc",
@@ -208,15 +209,15 @@ def _apply_model_variant(args: argparse.Namespace) -> None:
         "no_evidence_anchor": "off",
         "no_evidence_propagation": "direct_only",
         "lea_rate_single_gate": "direct_only",
+        "lea_rate_bounded_gate": "direct_only",
         "no_graph_calibration": "direct_only",
         "mec": "mec",
         "mec_state_graph": "mec",
     }.get(args.model_variant, "full")
-    args.rate_evidence_mode = (
-        "posterior_gap"
-        if args.model_variant == "lea_rate_single_gate"
-        else "reliability_scaled"
-    )
+    args.rate_evidence_mode = {
+        "lea_rate_single_gate": "posterior_gap",
+        "lea_rate_bounded_gate": "bounded_low_count_v1",
+    }.get(args.model_variant, "reliability_scaled")
     args.pairwise_auc_weight = (
         PAIRWISE_AUC_WEIGHT if args.model_variant == "pairwise_auc" else 0.0
     )

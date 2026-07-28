@@ -194,12 +194,17 @@ def _resolve_rate_evidence_mode(source: Any) -> str:
     production formula.
     """
     variant = str(_source_get(source, "model_variant", "full"))
+    candidate_modes = {
+        "lea_rate_single_gate": "posterior_gap",
+        "lea_rate_bounded_gate": "bounded_low_count_v1",
+    }
+    expected = candidate_modes.get(variant, "reliability_scaled")
     supplied = _source_get(source, "rate_evidence_mode")
     if supplied is None:
-        if variant == "lea_rate_single_gate":
+        if variant in candidate_modes:
             raise ValueError(
-                "lea_rate_single_gate requires an explicit "
-                "rate_evidence_mode='posterior_gap'"
+                f"{variant} requires an explicit "
+                f"rate_evidence_mode={expected!r}"
             )
         supplied = "reliability_scaled"
     mode = str(supplied).strip().lower()
@@ -207,11 +212,6 @@ def _resolve_rate_evidence_mode(source: Any) -> str:
         raise ValueError(
             f"rate_evidence_mode must be one of {RATE_EVIDENCE_MODES}, got {mode!r}"
         )
-    expected = (
-        "posterior_gap"
-        if variant == "lea_rate_single_gate"
-        else "reliability_scaled"
-    )
     if mode != expected:
         raise ValueError(
             "rate_evidence_mode is fixed by model_variant: "

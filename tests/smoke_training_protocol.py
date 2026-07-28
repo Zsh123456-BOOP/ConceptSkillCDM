@@ -85,6 +85,7 @@ def main() -> None:
         "full",
         "no_message_passing",
         "lea_rate_single_gate",
+        "lea_rate_bounded_gate",
         "mec",
         "mec_state_graph",
         "item_only",
@@ -106,6 +107,16 @@ def main() -> None:
     assert lea_args.graph_propagation_alpha == 0.20
     assert lea_args.warm_start_checkpoint is None
     main_module._validate_args(lea_args)
+    bounded_args = main_module.parse_args(
+        ["--model_variant", "lea_rate_bounded_gate"]
+    )
+    main_module._apply_model_variant(bounded_args)
+    assert bounded_args.evidence_anchor_mode == "direct_only"
+    assert bounded_args.rate_evidence_mode == "bounded_low_count_v1"
+    assert not bounded_args.disable_graph_module
+    assert bounded_args.graph_propagation_alpha == 0.20
+    assert bounded_args.warm_start_checkpoint is None
+    main_module._validate_args(bounded_args)
     mec_args = main_module.parse_args(["--model_variant", "mec"])
     main_module._apply_model_variant(mec_args)
     assert mec_args.evidence_anchor_mode == "mec"
@@ -256,6 +267,8 @@ def main() -> None:
     assert checkpoint_bce["rate_evidence_mode"] == "reliability_scaled"
     checkpoint_lea = _checkpoint_args(lea_args)
     assert checkpoint_lea["rate_evidence_mode"] == "posterior_gap"
+    checkpoint_bounded = _checkpoint_args(bounded_args)
+    assert checkpoint_bounded["rate_evidence_mode"] == "bounded_low_count_v1"
     legacy_switches = _collect_structural_switches(
         SimpleNamespace(model_variant="full")
     )
@@ -270,7 +283,16 @@ def main() -> None:
             "model_variant": "full",
             "rate_evidence_mode": "posterior_gap",
         },
+        {
+            "model_variant": "lea_rate_bounded_gate",
+            "rate_evidence_mode": "posterior_gap",
+        },
+        {
+            "model_variant": "full",
+            "rate_evidence_mode": "bounded_low_count_v1",
+        },
         {"model_variant": "lea_rate_single_gate"},
+        {"model_variant": "lea_rate_bounded_gate"},
     ):
         try:
             _resolve_rate_evidence_mode(conflicting_rate_source)
@@ -349,6 +371,14 @@ def main() -> None:
         rate_evidence_mode="posterior_gap",
     )
     assert _config_hash(posterior_hash_args) != baseline_hash
+    bounded_hash_args = SimpleNamespace(
+        **vars(hash_args),
+        rate_evidence_mode="bounded_low_count_v1",
+    )
+    assert _config_hash(bounded_hash_args) not in {
+        baseline_hash,
+        _config_hash(posterior_hash_args),
+    }
     hash_args.epochs = 100
     assert _config_hash(hash_args) != baseline_hash
     hash_args.epochs = 120
