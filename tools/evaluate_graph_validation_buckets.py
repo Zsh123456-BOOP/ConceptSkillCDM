@@ -3,8 +3,9 @@
 
 The tool never opens ``test.csv``.  Each validation row is assigned the
 minimum and maximum train-only student-concept response counts among the
-concepts attached to its exercise.  It reports all rows, ``n=0``, ``n<3``,
-and ``all_q_zero`` before computing same-dataset/same-seed paired contrasts.
+concepts attached to its exercise.  It reports all rows, exact low-count
+subsets, aggregate low-count subsets, and ``all_q_zero`` before computing
+same-dataset/same-seed paired contrasts.
 The default remains the graph 2x2; ``--variant_pair`` selects one matched
 baseline/candidate comparison.
 """
@@ -96,6 +97,9 @@ def _bucket_masks(
     return {
         "all": np.ones(minimum.shape, dtype=bool),
         "n=0": minimum == 0,
+        "n=1": minimum == 1,
+        "n=2": minimum == 2,
+        "0<n<3": (minimum > 0) & (minimum < 3),
         "n<3": minimum < 3,
         "all_q_zero": maximum == 0,
     }

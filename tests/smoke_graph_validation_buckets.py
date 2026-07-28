@@ -27,6 +27,9 @@ def main() -> None:
     masks = _bucket_masks(minimum_support, maximum_support)
     assert masks["all"].tolist() == [True] * 5
     assert masks["n=0"].tolist() == [True, True, False, False, False]
+    assert masks["n=1"].tolist() == [False, False, False, False, False]
+    assert masks["n=2"].tolist() == [False, False, True, False, False]
+    assert masks["0<n<3"].tolist() == [False, False, True, False, False]
     assert masks["n<3"].tolist() == [True, True, True, False, False]
     assert masks["all_q_zero"].tolist() == [
         True,
@@ -53,7 +56,7 @@ def main() -> None:
     }
     for seed in (42, 43):
         for variant in VARIANTS:
-            for bucket in ("all", "n=0", "n<3", "all_q_zero"):
+            for bucket in masks:
                 offset = offsets[variant]
                 rows.append(
                     {
@@ -95,7 +98,7 @@ def main() -> None:
         ("no_graph_calibration", 0.00),
         ("mec", 0.02),
     ):
-        for bucket in ("all", "n=0", "n<3", "all_q_zero"):
+        for bucket in masks:
             pair_rows.append(
                 {
                     "run_dir": variant,
